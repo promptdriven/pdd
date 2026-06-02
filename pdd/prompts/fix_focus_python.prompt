@@ -1,0 +1,67 @@
+<pdd-reason>Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction. Zero I/O. Phase-1 diagnosis uses one lightweight llm_invoke call when fast-path traceback parsing finds no targets or when fast-path targets do not match product-code slices; all other functions are pure AST/stdlib.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "build_skeleton", "signature": "(code: str) -> str", "returns": "str"},
+      {"name": "extract_function_names_from_traceback", "signature": "(error: str) -> list[str]", "returns": "list[str]"},
+      {"name": "prepare_focused_inputs", "signature": "(code: str, unit_test: str, error: str, strength: float, temperature: float, time: float, verbose: bool, language: Optional[str]) -> Optional[FocusedInputs]", "returns": "Optional[FocusedInputs]"},
+      {"name": "reconstruct_code", "signature": "(original_code: str, fixed_focused_code: str, slices: list[FunctionSlice]) -> str", "returns": "str"},
+      {"name": "is_large", "signature": "(code: str, unit_test: str) -> bool", "returns": "bool"}
+    ],
+    "models": [
+      {"name": "DiagnosisResult", "fields": ["function_names: list[str]"]},
+      {"name": "FunctionSlice", "fields": ["name: str", "qualname: str", "start_line: int", "end_line: int", "source: str", "indent: int"]},
+      {"name": "FocusedInputs", "fields": ["focused_code: str", "focused_tests: str", "slices: list[FunctionSlice]"]}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python Software Engineer. Your goal is to write a utility Python module `fix_focus` that provides static analysis helpers for focused code repair.
+
+### Role and Scope:
+This module provides AST-based helpers that `fix_error_loop` and `fix_main` use when a dev unit is too large for effective full-file LLM repair. It uses the Python standard library (`ast`, `re`, `textwrap`) and `pydantic` for `DiagnosisResult`. The one external dependency is `llm_invoke` (imported lazily inside `_diagnose_broken_functions` to avoid circular imports): that function makes a single lightweight LLM call when fast-path traceback parsing cannot identify failing functions, or when fast-path names are found but do not match any product-code slices. `_diagnose_broken_functions` must skip the LLM call and return `[]` when `ast.parse(code)` raises `SyntaxError`, so a syntax-broken large file never sends the unchanged full file as a fake skeleton. All public functions degrade silently on parse errors, returning safe empty values rather than raising exceptions.
+
+### Non-Responsibilities:
+- Does not read or write files.
+- Does not orchestrate fix attempts or retries.
+- Does not own the threshold logic exposed to callers (that is `is_large()`).
+
+### Public API:
+
+1. **`DiagnosisResult` model:** A Pydantic v2 model with `function_names: list[str]` — the names of functions the LLM believes are broken. Returned by the internal Phase-1 LLM diagnosis call; callers pass `function_names` to the slice extraction logic.
+
+2. **`FunctionSlice` dataclass:** Holds `name` (simple name), `qualname` (e.g. `ClassName.method` or plain `function`), `start_line`, `end_line` (1-indexed, inclusive), `source` (dedented source, valid as standalone top-level Python), and `indent` (original indentation in the source file, in spaces).
+
+3. **`FocusedInputs` dataclass:** Holds `focused_code` (concatenated formatted slices for the LLM), `focused_tests` (relevant subset of the test file, or full file as fallback), and `slices: list[FunctionSlice]` (the matched slices, for reconstruction).
+
+4. **`is_large(code: str, unit_test: str) -> bool`:** Returns `True` when focused repair should be considered (either file exceeds its threshold).
+
+5. **`build_skeleton(code: str) -> str`:** Parse `code` with `ast.parse`; return a string containing only function and method definitions with their signatures, decorators, docstrings, and type annotations — bodies replaced by `...`. If parsing fails, return `code` unchanged.
+
+6. **`extract_function_names_from_traceback(error: str) -> list[str]`:** Parse a Python traceback string and return unique function names from traceback frames. Returns `[]` if the result would be 0 names (nothing parseable) or more than 3 names (too ambiguous for fast-path). Never raises.
+
+7. **`prepare_focused_inputs(...) -> Optional[FocusedInputs]`:** Main entry point. Identifies failing functions via fast-path traceback parsing (`extract_function_names_from_traceback`); if that returns no names, falls back to `_diagnose_broken_functions` which calls `llm_invoke` with a lightweight strength/time cap to get a `DiagnosisResult`. If fast-path names exist but do not match any product-code slices (for example assertion failures whose traceback only names `test_*` functions), it must run Phase 1 once before returning `None`. Then extracts matching code slices, narrows the test file to only the failing tests (using `_extract_test_slices`), and returns a `FocusedInputs`. Returns `None` on any failure so callers fall back to full-file repair silently.
+
+8. **`reconstruct_code(original_code, fixed_focused_code, slices) -> str`:** Parses the LLM's fixed output, matches updated functions by qualified name (falling back to simple name), reindents dedented slices to their original indentation, and splices them into `original_code`. Returns `original_code` unchanged if anything fails. Never raises.
+
+### Key Design Details:
+- `_get_all_functions()` uses a two-level class-aware recursive traversal (top-level functions and methods of top-level classes) rather than `ast.walk`, so it correctly tracks `qualname` and `indent` for methods.
+- Method slices are wrapped in a minimal class stub (e.g. `class ClassName:\n    def method(...)`) when building `focused_code`, so the LLM receives valid Python and the round-trip through `_get_all_functions` on the fixed output correctly recovers the qualified name.
+- `_extract_test_slices()` parses pytest FAILED/ERROR lines to identify target test names, then uses AST to extract only those top-level functions/classes plus module-level imports and fixtures. For `Class::method` failures, it emits a minimal class containing the target method plus setup/teardown, fixtures, class attributes, and non-test helper methods; it also adds referenced non-collecting top-level support definitions such as `TestBase` so the focused test context remains syntactically and semantically complete. If the dependency-preserving slice is not meaningfully smaller, it returns the full test file.
+- `_diagnose_broken_functions()` parses the code before building the skeleton; on `SyntaxError` it returns `[]` without calling `llm_invoke`, allowing callers to fall back to full-file repair rather than sending an unskeletonized large source payload.
+- Reconstruction uses `textwrap.indent` to reindent dedented slices back to their original level before splicing.
+
+### Dependencies:
+<pdd-dependency>
+    <include select="def:llm_invoke">pdd/prompts/llm_invoke_python.prompt</include>
+</pdd-dependency>
+<python_preamble>
+    <include>context/python_preamble.prompt</include>
+</python_preamble>
+
+### Deliverables:
+- Code: `pdd/fix_focus.py`

@@ -135,6 +135,41 @@ These tags are processed by the preprocessor (like `<include>`) and removed befo
 - Re-generations of established modules
 - Modules following common project patterns
 
+### When to Pin, Exclude, or Review for Critical Modules
+
+For high-risk modules — typically `auth`, `payments`, and `compliance` — the
+automatic top-similarity example is not enough evidence on its own. For these,
+explicitly choose **at least one** of:
+
+- **`<pin>module_name</pin>`** — pin a vetted "golden" example so regeneration
+  cannot silently drift to a different prior implementation.
+- **`<exclude>old_module</exclude>`** — block any superseded or known-bad
+  implementation from being retrieved.
+- **`pdd ... --review-examples`** — interactively approve each `<pin>` tag in the
+  prompt **before** cloud/local generation runs. `generation.grounding.reviewed`
+  is `true` only when every cloud `examplesUsed` entry was pre-approved via a
+  matching `<pin>` (module/slug/id). Cloud-selected examples that were not
+  pinned and pre-approved are still recorded in the manifest but leave
+  `reviewed` false.
+
+These decisions land in the evidence manifest (`generation.grounding`, see
+`docs/evidence_manifest.md`), so reviewers can audit exactly which examples
+shaped a critical module's generation.
+
+To enforce this in CI, declare a policy in `.pdd/grounding_policy.yaml`:
+
+```yaml
+grounding:
+  require_review_for_critical_modules: true
+  require_pinned_examples_for:
+    - auth
+    - payments
+    - compliance
+```
+
+See `docs/grounding_policy.md` for the full schema and behavior, including how
+local / no-cloud runs are reported (`mode: unavailable`) instead of failing.
+
 ---
 
 ## Anatomy of a Good PDD Prompt
@@ -1020,6 +1055,17 @@ Validation is **lenient**:
 - `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`: Metadata tags (processed by sync tool)
 - `<pdd>...</pdd>`: Human-only comments (removed by preprocessor, never reach LLM)
 - Unlike `<pdd>...</pdd>` comments, `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` are not human-only comments. The standard prompt preprocessor does not remove them, so they may be visible during generation and are also consumed by architecture sync.
+
+### `contract_summary` in architecture.json
+
+When you run `pdd sync-architecture`, each module entry may include a generated
+`contract_summary` object (see `pdd/schemas/architecture_contract_summary.schema.json`).
+It is derived from `<contract_rules>`, linked user stories, test coverage, and the
+latest `.pdd/evidence/devunits/<module-slug>.latest.json` manifest (slug from
+`infer_module_identity`, with path segments normalized like `frontend-page`). Fields include
+`rules`, `critical`, `stories`, `capabilities`, `coverage_status`, `evidence_status`,
+`waived`, `unchecked`, and optional `rules_detail`. Legacy prompts without contract
+sections are left unchanged.
 
 ### Example: Complete Prompt with Metadata Tags
 

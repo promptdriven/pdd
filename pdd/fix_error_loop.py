@@ -1,29 +1,22 @@
-#!/usr/bin/env python3
+from __future__ import annotations
+
 import os
-import sys
-import subprocess
+import re
+import shlex
 import shutil
-import json
-from datetime import datetime
+import subprocess
+import sys
+import time as time_module
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Any, Optional, Tuple
 
 import requests
 from rich import print as rprint
 from rich.console import Console
-from rich.panel import Panel
 
-# Relative import from an internal module.
-from .get_language import get_language
-from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
-from . import DEFAULT_TIME  # Import DEFAULT_TIME
-from .python_env_detector import detect_host_python_executable
+from . import DEFAULT_TIME
 from .agentic_fix import run_agentic_fix
-from .agentic_langtest import default_verify_cmd_for
-from .get_test_command import get_test_command_for_file
-from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
-# Moved import to top level to allow mocking in tests
-from .pytest_output import run_pytest_and_capture_output
+from .core.cloud import CloudConfig, get_cloud_request_timeout
 from .failure_classification import (
     FailureKind,
     classify_failure,
@@ -31,12 +24,209 @@ from .failure_classification import (
     failure_classification_hint,
     format_signature_hint,
 )
+from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from .fix_focus import FocusedInputs, is_large, prepare_focused_inputs, reconstruct_code
+from .get_language import get_language
+from .get_test_command import TestCommand, get_test_command_for_file
+from .pytest_output import run_pytest_and_capture_output
+from .python_env_detector import detect_host_python_executable
 
 console = Console()
 
+
 def escape_brackets(text: str) -> str:
-    """Escape square brackets so Rich doesn't misinterpret them."""
+    """Escape Rich markup brackets in console text."""
     return text.replace("[", "\\[").replace("]", "\\]")
+
+
+def _normalize_agentic_result(result: tuple[Any, ...]) -> tuple[bool, str, float, str, list[str]]:
+    """
+    Normalizes the return shape from the agentic fix to ensure a consistent internal state.
+    Returns: (success, message, cost, model, changed_files)
+    """
+    if len(result) == 2:
+        return bool(result[0]), str(result[1]), 0.0, "agentic-cli", []
+    if len(result) == 3:
+        return bool(result[0]), str(result[1]), float(result[2] or 0.0), "agentic-cli", []
+    if len(result) == 4:
+        return bool(result[0]), str(result[1]), float(result[2] or 0.0), str(result[3] or "agentic-cli"), []
+    if len(result) >= 5:
+        changed_files = result[4] if isinstance(result[4], list) else []
+        return bool(result[0]), str(result[1]), float(result[2] or 0.0), str(result[3] or "agentic-cli"), changed_files
+    return False, "Invalid agentic result", 0.0, "agentic-cli", []
+
+
+def _safe_run_agentic_fix(
+    prompt_file: str,
+    code_file: str,
+    unit_test_file: str,
+    error_log_file: str,
+    *,
+    verbose: bool = False,
+    protect_tests: bool = False,
+) -> tuple[bool, str, float, str, list[str]]:
+    """Run agentic fallback and normalize the agent return contract."""
+    return _normalize_agentic_result(
+        run_agentic_fix(
+            prompt_file=prompt_file,
+            code_file=code_file,
+            unit_test_file=unit_test_file,
+            error_log_file=error_log_file,
+            cwd=None,
+            verbose=verbose,
+            protect_tests=protect_tests,
+        )
+    )
+
+
+def _strip_ansi(text: str) -> str:
+    return re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", text)
+
+
+def _counts_from_output(output: str, returncode: int = 0) -> tuple[int, int, int]:
+    clean = _strip_ansi(output)
+    failures = len(re.findall(r"(?m)^\s*(?:FAILED|FAILURES?)\b", clean))
+    errors = len(re.findall(r"(?m)^\s*(?:ERROR|ERRORS?)\b", clean))
+    warnings = len(re.findall(r"(?i)\bwarning[s]?\b", clean))
+    summary = re.search(r"(?i)(\d+)\s+failed", clean)
+    if summary:
+        failures = max(failures, int(summary.group(1)))
+    summary = re.search(r"(?i)(\d+)\s+error", clean)
+    if summary:
+        errors = max(errors, int(summary.group(1)))
+    summary = re.search(r"(?i)(\d+)\s+warning", clean)
+    if summary:
+        warnings = max(warnings, int(summary.group(1)))
+    if returncode != 0 and failures == 0 and errors == 0:
+        if re.search(r"(?i)(syntaxerror|importerror|modulenotfounderror|error collecting)", clean):
+            errors = 1
+        else:
+            failures = 1
+    return failures, errors, warnings
+
+
+def run_pytest_on_file(
+    test_file: str,
+    verification_program: str | None = None,
+    test_files: list[str] | None = None,
+) -> Tuple[int, int, int, str]:
+    """
+    Runs pytest (or the relevant verification program) on the given test file
+    and extracts failures, errors, warnings, and the output text.
+
+    Returns: (failures, errors, warnings, output_log)
+    """
+    del verification_program
+    # Filter the primary test file out of extra_files: run_pytest_and_capture_output
+    # already prepends the primary path, so passing it again causes double-execution.
+    extra = (
+        [f for f in test_files if Path(f).resolve() != Path(test_file).resolve()]
+        if test_files
+        else None
+    )
+    try:
+        result = run_pytest_and_capture_output(test_file, extra_files=extra or None)
+    except TypeError:
+        result = run_pytest_and_capture_output(test_file)
+    test_results = result.get("test_results") or []
+    if test_results:
+        failures = sum(int(item.get("failures", 0) or 0) for item in test_results)
+        errors = sum(int(item.get("errors", 0) or 0) for item in test_results)
+        warnings = sum(int(item.get("warnings", 0) or 0) for item in test_results)
+        logs = "\n".join(
+            str(item.get("standard_output", "") or "") + "\n" + str(item.get("standard_error", "") or "")
+            for item in test_results
+        )
+        return failures, errors, warnings, logs
+    logs = str(result.get("standard_output", "") or "") + "\n" + str(result.get("standard_error", "") or "")
+    return (*_counts_from_output(logs, int(result.get("returncode", 0) or 0)), logs)
+
+
+def format_log_for_output(*args: Any) -> str:
+    """Formats iteration logs into structured XML."""
+    if len(args) == 1 and isinstance(args[0], dict):
+        parts: list[str] = []
+        for entry in args[0].get("iterations", []):
+            number = entry.get("number", "")
+            pytest_output = entry.get("initial_test_output") or entry.get("post_test_output", "")
+            fix_attempt = entry.get("fix_attempt", "")
+            if entry.get("model_name"):
+                fix_attempt = f"Model: {entry['model_name']}\n{fix_attempt}"
+            parts.append(f"<pytest_output iteration={number}>\n{pytest_output}\n</pytest_output>")
+            parts.append(f"<fix_attempt iteration={number}>\n{fix_attempt}\n</fix_attempt>")
+            parts.append(f"<verification_output iteration={number}>\n{entry.get('verification', '')}\n</verification_output>")
+            if entry.get("post_test_output") is not None:
+                parts.append(f"=== Final Pytest Run ===\n{entry.get('post_test_output', '')}")
+        return "\n".join(parts) + ("\n" if parts else "")
+    if len(args) not in {4, 5}:
+        raise TypeError("format_log_for_output expects a log dict or iteration/test/fix/verification values")
+    iteration, test_output, fix_output, verification_output = args[:4]
+    model_name = args[4] if len(args) == 5 else None
+    model_line = f"Model: {model_name}\n" if model_name else ""
+    return (
+        f"<iteration number=\"{iteration}\">\n"
+        f"<pytest_output iteration={iteration}>\n{test_output}\n</pytest_output>\n"
+        f"<fix_attempt iteration={iteration}>\n{model_line}{fix_output}\n</fix_attempt>\n"
+        f"<verification_output iteration={iteration}>\n{verification_output}\n</verification_output>\n"
+        f"</iteration>\n"
+    )
+
+
+def _create_backups(code_file: str, unit_test_file: str, attempt: int) -> tuple[Path, Path]:
+    code_path = Path(code_file)
+    test_path = Path(unit_test_file)
+    backup_root = Path(".pdd") / "backups" / code_path.stem / f"{int(time_module.time() * 1000)}_{attempt}"
+    backup_root.mkdir(parents=True, exist_ok=True)
+    code_backup = backup_root / f"code_{attempt}_{code_path.name}"
+    test_backup = backup_root / f"test_{attempt}_{test_path.name}"
+    shutil.copy(code_file, code_backup)
+    shutil.copy(unit_test_file, test_backup)
+    return code_backup, test_backup
+
+
+def _run_verification_program(verification_program: str, code_file: str) -> tuple[bool, str]:
+    if not verification_program:
+        return True, ""
+    executable = detect_host_python_executable()
+    cmd = [executable, verification_program]
+    if Path(verification_program).resolve() == Path(code_file).resolve():
+        cmd = [executable, "-m", "py_compile", code_file]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=120)
+        return proc.returncode == 0, (proc.stdout or "") + "\n" + (proc.stderr or "")
+    except Exception as exc:
+        return False, f"Verification exception: {exc}"
+
+
+def _run_non_python_initial_verification(unit_test_file: str, code_file: str) -> tuple[bool, str]:
+    language = get_language(os.path.splitext(code_file)[1]) or "unknown"
+    test_command = get_test_command_for_file(unit_test_file, language)
+    if not test_command:
+        return False, f"No test command found for {language}"
+    if isinstance(test_command, TestCommand):
+        command = test_command.command
+        cwd = test_command.cwd
+    else:
+        command = str(test_command)
+        cwd = None
+    command = command.replace("{file}", shlex.quote(unit_test_file)).replace("{test}", shlex.quote(unit_test_file))
+    try:
+        proc = subprocess.run(
+            command,
+            shell=True,
+            cwd=str(cwd) if cwd is not None else None,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=120,
+        )
+        return proc.returncode == 0, (proc.stdout or "") + "\n" + (proc.stderr or "")
+    except Exception as exc:
+        return False, f"Non-Python verification exception: {exc}"
+
+
+def _cloud_value(data: dict[str, Any], snake: str, camel: str, default: Any) -> Any:
+    return data.get(snake, data.get(camel, default))
 
 
 def cloud_fix_errors(
@@ -55,1032 +245,354 @@ def cloud_fix_errors(
 ) -> Tuple[bool, bool, str, str, str, float, str]:
     """
     Call the cloud fixCode endpoint to fix errors in code and unit tests.
-
-    This function has the same interface as fix_errors_from_unit_tests to allow
-    seamless switching between local and cloud execution in the fix loop.
-
-    Args:
-        unit_test: Unit test code string
-        code: Source code string
-        prompt: Prompt that generated the code
-        error: Error messages/logs from test failures
-        error_file: Path to write error analysis (not used in cloud, but kept for interface compatibility)
-        strength: Model strength parameter [0,1]
-        temperature: Model temperature parameter [0,1]
-        verbose: Enable verbose logging
-        time: Time budget for thinking effort
-        code_file_ext: File extension to determine language (e.g., ".py", ".java")
-        protect_tests: If True, prevents LLM from modifying unit tests
-
-    Returns:
-        Tuple of:
-        - update_unit_test: Whether unit test was updated
-        - update_code: Whether code was updated
-        - fixed_unit_test: Fixed unit test code
-        - fixed_code: Fixed source code
-        - analysis: Analysis/explanation of fixes
-        - total_cost: Cost of the operation
-        - model_name: Name of model used
-
-    Raises:
-        RuntimeError: When cloud execution fails with non-recoverable error
     """
-    jwt_token = CloudConfig.get_jwt_token(verbose=verbose)
-
-    if not jwt_token:
-        raise RuntimeError("Cloud authentication failed - no JWT token available")
-
-    err_body = error
+    del error_file
+    global requests
+    if requests is None:
+        try:
+            import requests as requests_module
+        except ImportError as exc:
+            raise RuntimeError("The 'requests' library is required for cloud execution.") from exc
+        requests = requests_module
+    token = CloudConfig.get_jwt_token(verbose=verbose)
+    if not token:
+        raise RuntimeError("Cloud authentication failed: no JWT token available")
     if failure_classification:
-        err_body = f"[PDD failure classification] {failure_classification}\n\n{error}"
-
-    # Build cloud payload
+        error = f"[PDD failure classification] {failure_classification}\n{error}"
     payload = {
         "unitTest": unit_test,
         "code": code,
         "prompt": prompt,
-        "errors": err_body,
-        "language": get_language(code_file_ext),
+        "errors": error,
+        "language": get_language(code_file_ext) or "python",
         "strength": strength,
         "temperature": temperature,
-        "time": time if time is not None else 0.25,
+        "time": time,
         "verbose": verbose,
-        "protectTests": protect_tests
+        "protectTests": protect_tests,
+        "codeFileExt": code_file_ext,
     }
-
-    headers = {
-        "Authorization": f"Bearer {jwt_token}",
-        "Content-Type": "application/json"
-    }
-    cloud_url = CloudConfig.get_endpoint_url("fixCode")
-
-    if verbose:
-        console.print(Panel(f"Calling cloud fix at {cloud_url}", title="[blue]Cloud LLM[/blue]", expand=False))
-
     try:
         response = requests.post(
-            cloud_url,
+            CloudConfig.get_endpoint_url("fixCode"),
             json=payload,
-            headers=headers,
-            timeout=get_cloud_request_timeout()
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            timeout=get_cloud_request_timeout(),
         )
         response.raise_for_status()
-
-        response_data = response.json()
-        fixed_unit_test = response_data.get("fixedUnitTest", "")
-        fixed_code = response_data.get("fixedCode", "")
-        analysis = response_data.get("analysis", "")
-        total_cost = float(response_data.get("totalCost", 0.0))
-        model_name = response_data.get("modelName", "cloud_model")
-        update_unit_test = response_data.get("updateUnitTest", False)
-        update_code = response_data.get("updateCode", False)
-
-        if verbose:
-            console.print(f"[cyan]Cloud fix completed. Model: {model_name}, Cost: ${total_cost:.6f}[/cyan]")
-
-        return update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name
-
-    except requests.exceptions.Timeout:
-        raise RuntimeError(f"Cloud fix timed out after {get_cloud_timeout()}s")
-
-    except requests.exceptions.HTTPError as e:
-        status_code = e.response.status_code if e.response else 0
-        err_content = e.response.text[:200] if e.response else "No response content"
-
-        # Non-recoverable errors
-        if status_code == 402:
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        if getattr(response, "status_code", None) == 402:
             try:
-                error_data = e.response.json()
-                current_balance = error_data.get("currentBalance", "unknown")
-                estimated_cost = error_data.get("estimatedCost", "unknown")
-                raise RuntimeError(f"Insufficient credits. Balance: {current_balance}, estimated cost: {estimated_cost}")
-            except json.JSONDecodeError:
-                raise RuntimeError(f"Insufficient credits: {err_content}")
-        elif status_code == 401:
-            raise RuntimeError(f"Authentication failed: {err_content}")
-        elif status_code == 403:
-            raise RuntimeError(f"Access denied: {err_content}")
-        elif status_code == 400:
-            raise RuntimeError(f"Invalid request: {err_content}")
-        else:
-            # 5xx or other errors - raise for caller to handle
-            raise RuntimeError(f"Cloud HTTP error ({status_code}): {err_content}")
-
-    except requests.exceptions.RequestException as e:
-        raise RuntimeError(f"Cloud network error: {e}")
-
-    except json.JSONDecodeError:
-        raise RuntimeError("Cloud returned invalid JSON response")
-
-
-# ---------- Normalize any agentic return shape to a 4-tuple ----------
-def _normalize_agentic_result(result):
-    """
-    Normalize run_agentic_fix result into: (success: bool, msg: str, cost: float, model: str, changed_files: List[str])
-    Handles older 2/3/4-tuple shapes used by tests/monkeypatches.
-    """
-    if isinstance(result, tuple):
-        if len(result) == 5:
-            ok, msg, cost, model, changed_files = result
-            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), list(changed_files or [])
-        if len(result) == 4:
-            ok, msg, cost, model = result
-            return bool(ok), str(msg), float(cost), str(model or "agentic-cli"), []
-        if len(result) == 3:
-            ok, msg, cost = result
-            return bool(ok), str(msg), float(cost), "agentic-cli", []
-        if len(result) == 2:
-            ok, msg = result
-            return bool(ok), str(msg), 0.0, "agentic-cli", []
-    # Fallback (shouldn't happen)
-    return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
-
-def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file, cwd=None):
-    """
-    Call (possibly monkeypatched) run_agentic_fix and normalize its return.
-    """
-    res = run_agentic_fix(
-        prompt_file=prompt_file,
-        code_file=code_file,
-        unit_test_file=unit_test_file,
-        error_log_file=error_log_file,
-        cwd=cwd,
+                details = response.json()
+            except Exception:
+                details = {}
+            raise RuntimeError(
+                "Insufficient credits for cloud execution "
+                f"(balance={details.get('currentBalance', 'unknown')}, "
+                f"estimated={details.get('estimatedCost', 'unknown')})"
+            ) from exc
+        raise RuntimeError(f"Cloud execution failed: {exc}") from exc
+    data = response.json()
+    return (
+        bool(_cloud_value(data, "update_unit_test", "updateUnitTest", False)),
+        bool(_cloud_value(data, "update_code", "updateCode", False)),
+        str(_cloud_value(data, "fixed_unit_test", "fixedUnitTest", unit_test)),
+        str(_cloud_value(data, "fixed_code", "fixedCode", code)),
+        str(data.get("analysis", "")),
+        float(_cloud_value(data, "total_cost", "totalCost", 0.0) or 0.0),
+        str(_cloud_value(data, "model_name", "modelName", "cloud-model")),
     )
-    return _normalize_agentic_result(res)
-# ---------------------------------------------------------------------
 
 
-def run_pytest_on_file(test_file: str, extra_files: list[str] | None = None) -> tuple[int, int, int, str]:
+def _best_is_better(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+    return (int(candidate["errs"]), int(candidate["fails"]), int(candidate["warns"])) < (
+        int(current["errs"]),
+        int(current["fails"]),
+        int(current["warns"]),
+    )
+
+
+def fix_error_loop(
+    unit_test_file: str,
+    code_file: str,
+    prompt_file: str,
+    prompt: str,
+    verification_program: str,
+    strength: float,
+    temperature: float,
+    max_attempts: int,
+    budget: float,
+    error_log_file: str = "error_log.txt",
+    verbose: bool = False,
+    time: float = DEFAULT_TIME,
+    agentic_fallback: bool = True,
+    protect_tests: bool = False,
+    use_cloud: bool = False,
+    test_files: list[str] | None = None,
+    failure_aware_retries: bool = True,
+    no_local_fallback: bool = False,
+) -> tuple[bool, str, str, int, float, str]:
     """
-    Run pytest on the specified test file using the subprocess-based runner.
-    Returns a tuple: (failures, errors, warnings, logs)
-
-    Args:
-        test_file: Primary test file path.
-        extra_files: Optional additional test files to run together (Bug #360).
+    Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
     """
-    # Use the subprocess-based runner to avoid module caching issues
-    output_data = run_pytest_and_capture_output(test_file, extra_files=extra_files)
-    
-    # Extract results
-    results = output_data.get("test_results", [{}])[0]
-    
-    failures = results.get("failures", 0)
-    errors = results.get("errors", 0)
-    warnings = results.get("warnings", 0)
-    
-    # Combine stdout/stderr for the log
-    logs = (results.get("standard_output", "") or "") + "\n" + (results.get("standard_error", "") or "")
-    
-    return failures, errors, warnings, logs
-
-def format_log_for_output(log_structure):
-    """
-    Format the structured log into a human-readable text format with XML tags.
-    """
-    formatted_text = ""
-    
-    # Initial test output (only for first iteration)
-    if log_structure["iterations"] and "initial_test_output" in log_structure["iterations"][0]:
-        formatted_text += "<pytest_output iteration=1>\n"
-        formatted_text += f"{log_structure['iterations'][0]['initial_test_output']}\n"
-        formatted_text += "</pytest_output>\n\n"
-    
-    for i, iteration in enumerate(log_structure["iterations"]):
-        formatted_text += f"=== Attempt iteration {iteration['number']} ===\n\n"
-        
-        # Fix attempt with XML tags
-        if iteration.get("fix_attempt"):
-            formatted_text += f"<fix_attempt iteration={iteration['number']}>\n"
-            if iteration.get("model_name"):
-                formatted_text += f"Model: {iteration['model_name']}\n"
-            formatted_text += f"{iteration['fix_attempt']}\n"
-            formatted_text += "</fix_attempt>\n\n"
-        
-        # Verification with XML tags
-        if iteration.get("verification"):
-            formatted_text += f"<verification_output iteration={iteration['number']}>\n"
-            formatted_text += f"{iteration['verification']}\n"
-            formatted_text += "</verification_output>\n\n"
-        
-        # Post-fix test results (except for last iteration to avoid duplication)
-        if i < len(log_structure["iterations"]) - 1 and iteration.get("post_test_output"):
-            formatted_text += f"<pytest_output iteration={iteration['number']+1}>\n"
-            formatted_text += f"{iteration['post_test_output']}\n"
-            formatted_text += "</pytest_output>\n\n"
-    
-    # Final run (using last iteration's post-test output)
-    if log_structure["iterations"] and log_structure["iterations"][-1].get("post_test_output"):
-        formatted_text += "=== Final Pytest Run ===\n"
-        formatted_text += f"{log_structure['iterations'][-1]['post_test_output']}\n"
-    
-    return formatted_text
-
-def fix_error_loop(unit_test_file: str,
-                   code_file: str,
-                   prompt_file: str,
-                   prompt: str,
-                   verification_program: str,
-                   strength: float,
-                   temperature: float,
-                   max_attempts: int,
-                   budget: float,
-                   error_log_file: str = "error_log.txt",
-                   verbose: bool = False,
-                   time: float = DEFAULT_TIME,
-                   agentic_fallback: bool = True,
-                   protect_tests: bool = False,
-                   use_cloud: bool = False,
-                   test_files: list[str] | None = None,
-                   failure_aware_retries: bool = True):
-    """
-    Attempt to fix errors in a unit test and corresponding code using repeated iterations,
-    counting only the number of times we actually call the LLM fix function.
-    The tests are re-run in the same iteration after a fix to see if we've succeeded,
-    so that 'attempts' matches the number of fix attempts (not the total test runs).
-
-    This updated version uses structured logging to avoid redundant entries.
-
-    Hybrid Cloud Support:
-        When use_cloud=True, the LLM fix calls are routed to the cloud fixCode endpoint
-        while local test execution (pytest, verification programs) stays local. This allows
-        the loop to pass local test results to the cloud for analysis and fixes.
-
-    Inputs:
-        unit_test_file: Path to the file containing unit tests.
-        code_file: Path to the file containing the code under test.
-        prompt: Prompt that generated the code under test.
-        verification_program: Path to a Python program that verifies the code still works.
-        strength: float [0,1] representing LLM fix strength.
-        temperature: float [0,1] representing LLM temperature.
-        max_attempts: Maximum number of fix attempts.
-        budget: Maximum cost allowed for the fixing process.
-        error_log_file: Path to file to log errors (default: "error_log.txt").
-        verbose: Enable verbose logging (default: False).
-        time: Time parameter for the fix_errors_from_unit_tests call.
-        agentic_fallback: Whether to trigger cli agentic fallback when fix fails.
-        protect_tests: When True, prevents the LLM from modifying test files.
-        use_cloud: If True, use cloud LLM for fix calls while keeping test execution local.
-        test_files: Optional list of ALL test files to run together (Bug #360).
-            When provided, pytest runs all files together to detect test isolation
-            failures that only manifest when multiple test files interact.
-        failure_aware_retries: When True (default), shorten the loop for syntax/import
-            failures that do not change signature, and for timeout/flaky patterns without
-            improvement. Set False for legacy behavior (always up to max_attempts).
-    Outputs:
-        success: Boolean indicating if the overall process succeeded.
-        final_unit_test: String contents of the final unit test file.
-        final_code: String contents of the final code file.
-        total_attempts: Number of fix attempts actually made.
-        total_cost: Total cost accumulated.
-        model_name: Name of the LLM model used.
-    """
-    # Check if unit_test_file and code_file exist.
-    if not os.path.isfile(unit_test_file):
-        rprint(f"[red]Error:[/red] Unit test file '{unit_test_file}' does not exist.")
-        return False, "", "", 0, 0.0, ""
-    if not os.path.isfile(code_file):
-        rprint(f"[red]Error:[/red] Code file '{code_file}' does not exist.")
-        return False, "", "", 0, 0.0, ""
-    if verbose:
-        rprint("[cyan]Starting fix error loop process.[/cyan]")
-
-    # Bug #360: Compute extra test files to run alongside the primary file.
-    # This ensures test isolation failures (tests that only fail when run together)
-    # are detected by the fix loop, not just in the post-fix combined run.
-    extra_files = None
-    if test_files:
-        resolved_unit = str(Path(unit_test_file).resolve())
-        extra_files = [f for f in test_files if str(Path(f).resolve()) != resolved_unit]
-        if not extra_files:
-            extra_files = None
-
-    # Remove existing error log file if it exists.
-    if os.path.exists(error_log_file):
-        try:
-            os.remove(error_log_file)
-            if verbose:
-                rprint(f"[green]Removed old error log file:[/green] {error_log_file}")
-        except OSError as e:
-            # Ignore errors if file cannot be removed (e.g. race condition, or mocked exists=True but file missing)
-            if verbose:
-                rprint(f"[yellow]Warning:[/yellow] Could not remove old error log file '{error_log_file}': {e}")
-        except Exception as e:
-            rprint(f"[red]Error:[/red] Could not remove error log file: {e}")
-            return False, "", "", 0, 0.0, ""
-
-    # Initialize structured log
-    log_structure = {
-        "iterations": []
-    }
-
-    # We use fix_attempts to track how many times we actually call the LLM:
-    fix_attempts = 0
     total_cost = 0.0
+    total_attempts = 0
     model_name = ""
-    # Initialize these variables now
-    final_unit_test = ""
-    final_code = ""
-    best_iteration_info = {
-        "attempt": None,
-        "fails": sys.maxsize,
-        "errors": sys.maxsize,
-        "warnings": sys.maxsize,
-        "unit_test_backup": None,
-        "code_backup": None
-    }
+    unit_test_content = ""
+    code_content = ""
+    last_attempt = 0
 
-    # For differentiating backup filenames:
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    def call_agentic() -> tuple[bool, str, str, int, float, str]:
+        nonlocal total_cost, model_name, unit_test_content, code_content, total_attempts
+        if not agentic_fallback:
+            return False, unit_test_content, code_content, total_attempts, total_cost, model_name
+        success, _message, cost, agent_model, _changed = _safe_run_agentic_fix(
+            prompt_file,
+            code_file,
+            unit_test_file,
+            error_log_file,
+            verbose=verbose,
+            protect_tests=protect_tests,
+        )
+        total_cost += cost
+        total_attempts = max(total_attempts, 1)
+        model_name = agent_model or model_name
+        for path, target in ((unit_test_file, "test"), (code_file, "code")):
+            try:
+                content = Path(path).read_text(encoding="utf-8")
+            except Exception:
+                continue
+            if target == "test":
+                unit_test_content = content
+            else:
+                code_content = content
+        return success, unit_test_content, code_content, total_attempts, total_cost, model_name
 
-    # We do up to max_attempts fix attempts or until budget is exceeded
-    iteration = 0
-    # Determine if target is Python (moved before try block for use in exception handler)
-    is_python = str(code_file).lower().endswith(".py")
-    # Run an initial test to determine starting state
+    if not os.path.isfile(unit_test_file) or not os.path.isfile(code_file):
+        missing = unit_test_file if not os.path.isfile(unit_test_file) else code_file
+        console.print(f"[red]Missing required file: {escape_brackets(missing)}[/red]")
+        return False, "", "", 0, 0.0, ""
+
     try:
-        if is_python:
-            initial_fails, initial_errors, initial_warnings, pytest_output = run_pytest_on_file(unit_test_file, extra_files=extra_files)
-        else:
-            # For non-Python files, run the verification program to get an initial error state
-            rprint(f"[cyan]Non-Python target detected. Running verification program to get initial state...[/cyan]")
-            lang = get_language(os.path.splitext(code_file)[1])
-            test_cmd_result = get_test_command_for_file(unit_test_file, lang)
-            if not test_cmd_result:
-                # No verify command available (e.g., Java without maven/gradle).
-                # Trigger agentic fallback directly.
-                rprint(f"[cyan]No verification command for {lang}. Triggering agentic fallback directly...[/cyan]")
-                error_log_path = Path(error_log_file)
-                error_log_path.parent.mkdir(parents=True, exist_ok=True)
-                if not error_log_path.exists() or error_log_path.stat().st_size == 0:
-                    with open(error_log_path, "w") as f:
-                        f.write(f"No verification command available for language: {lang}\n")
-                        f.write("Agentic fix will attempt to resolve the issue.\n")
+        unit_test_content = Path(unit_test_file).read_text(encoding="utf-8")
+        code_content = Path(code_file).read_text(encoding="utf-8")
+    except Exception as exc:
+        console.print(f"[red]Error reading files: {escape_brackets(str(exc))}[/red]")
+        Path(error_log_file).write_text(f"Initial file read error: {exc}\n", encoding="utf-8")
+        return call_agentic()
 
-                rprint(f"[cyan]Attempting agentic fix fallback (prompt_file={prompt_file!r})...[/cyan]")
-                success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
-                    prompt_file=prompt_file,
-                    code_file=code_file,
-                    unit_test_file=unit_test_file,
-                    error_log_file=error_log_file,
-                    cwd=None,  # Use project root (cwd), not prompt file's parent
+    ext = os.path.splitext(code_file)[1]
+    if ext != ".py":
+        passed, output = _run_non_python_initial_verification(unit_test_file, code_file)
+        Path(error_log_file).write_text(format_log_for_output(0, output, "non-python initial verification", output, "N/A"), encoding="utf-8")
+        if passed:
+            return True, unit_test_content, code_content, 0, 0.0, "N/A"
+        return call_agentic()
+
+    try:
+        fails, errs, warns, output_log = run_pytest_on_file(unit_test_file, verification_program, test_files)
+    except Exception as exc:
+        Path(error_log_file).write_text(f"Initial pytest exception: {exc}\n", encoding="utf-8")
+        return call_agentic()
+    if fails == 0 and errs == 0:
+        return True, unit_test_content, code_content, 0, 0.0, ""
+    Path(error_log_file).write_text(format_log_for_output(0, output_log, "initial pytest run", output_log), encoding="utf-8")
+    best_state: dict[str, Any] = {"fails": fails, "errs": errs, "warns": warns, "code": code_content, "test": unit_test_content, "iteration": 0}
+    current_state = dict(best_state)
+    consecutive_timeouts_without_improvement = 0
+    consecutive_assertion_logic_without_progress = 0
+    if failure_aware_retries and classify_failure(output_log) == FailureKind.SYNTAX_IMPORT:
+        last_syntax_signature = extract_failure_signature(output_log)
+    else:
+        last_syntax_signature = ""
+    _cloud_no_fallback_break = False
+
+    for attempt in range(1, max_attempts + 1):
+        last_attempt = attempt
+        if total_cost >= budget:
+            console.print("[yellow]Budget exceeded. Stopping iterative loop.[/yellow]")
+            break
+        total_attempts += 1
+        try:
+            code_backup, test_backup = _create_backups(code_file, unit_test_file, attempt)
+            code_content = Path(code_file).read_text(encoding="utf-8")
+            unit_test_content = Path(unit_test_file).read_text(encoding="utf-8")
+        except Exception as exc:
+            with open(error_log_file, "a", encoding="utf-8") as log_file:
+                log_file.write(format_log_for_output(attempt, output_log, f"Preparation failed: {exc}", ""))
+            break
+        focused_inputs: Optional[FocusedInputs] = None
+        if is_large(code_content, unit_test_content):
+            try:
+                focused_inputs = prepare_focused_inputs(
+                    code_content,
+                    unit_test_content,
+                    output_log,
+                    strength,
+                    temperature,
+                    time,
+                    verbose,
+                    "python",
                 )
-                if not success:
-                    rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
-                if agent_changed_files:
-                    rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-                    for f in agent_changed_files:
-                        rprint(f"  • {f}")
-                final_unit_test = ""
-                final_code = ""
-                try:
-                    with open(unit_test_file, "r") as f:
-                        final_unit_test = f.read()
-                except Exception:
-                    pass
-                try:
-                    with open(code_file, "r") as f:
-                        final_code = f.read()
-                except Exception:
-                    pass
-                return success, final_unit_test, final_code, 1, agent_cost, agent_model
-
-            verify_cmd = test_cmd_result.command
-            effective_cwd = str(test_cmd_result.cwd) if test_cmd_result.cwd is not None else str(Path(unit_test_file).parent)
-            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, shell=True, stdin=subprocess.DEVNULL, cwd=effective_cwd)
-            pytest_output = (verify_result.stdout or "") + "\n" + (verify_result.stderr or "")
-            if verify_result.returncode == 0:
-                initial_fails, initial_errors, initial_warnings = 0, 0, 0
-            else:
-                initial_fails, initial_errors, initial_warnings = 1, 0, 0 # Treat any failure as one "fail"
-
-        # Store initial state for statistics
-        stats = {
-            "initial_fails": initial_fails,
-            "initial_errors": initial_errors, 
-            "initial_warnings": initial_warnings,
-            "final_fails": 0,  # Initialize to 0
-            "final_errors": 0,  # Initialize to 0
-            "final_warnings": 0,  # Initialize to 0
-            "best_iteration": None,
-            "iterations_info": []
-        }
-    except Exception as e:
-        rprint(f"[red]Error running initial test/verification:[/red] {e}")
-        # Instead of returning early, trigger agentic fallback if enabled (Issue #266)
-        if agentic_fallback:
-            rprint("[cyan]Initial test failed with exception. Triggering agentic fallback...[/cyan]")
-            error_log_path = Path(error_log_file)
-            error_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(error_log_path, "w") as f:
-                f.write(f"Initial test/verification failed with exception:\n{e}\n")
-
-            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
-                prompt_file=prompt_file,
-                code_file=code_file,
-                unit_test_file=unit_test_file,
-                error_log_file=error_log_file,
-                cwd=None,
-            )
-            if not success:
-                rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
-            if agent_changed_files:
-                rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-                for f in agent_changed_files:
-                    rprint(f"  • {f}")
-            final_unit_test = ""
-            final_code = ""
-            try:
-                with open(unit_test_file, "r") as f:
-                    final_unit_test = f.read()
             except Exception:
-                pass
-            try:
-                with open(code_file, "r") as f:
-                    final_code = f.read()
-            except Exception:
-                pass
-            return success, final_unit_test, final_code, 1, agent_cost, agent_model
-        else:
-            # Agentic fallback disabled, return failure
-            return False, "", "", fix_attempts, total_cost, model_name
-
-    # If target is not a Python file, trigger agentic fallback if tests fail
-    if not is_python:
-        if initial_fails > 0 or initial_errors > 0:
-            rprint("[cyan]Non-Python target failed initial verification. Triggering agentic fallback...[/cyan]")
-            error_log_path = Path(error_log_file)
-            error_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(error_log_path, "w") as f:
-                f.write(pytest_output)
-            
-            rprint(f"[cyan]Attempting agentic fix fallback (prompt_file={prompt_file!r})...[/cyan]")
-            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
-                prompt_file=prompt_file,
-                code_file=code_file,
-                unit_test_file=unit_test_file,
-                error_log_file=error_log_file,
-                cwd=None,  # Use project root (cwd), not prompt file's parent
-            )
-            if not success:
-                rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
-            if agent_changed_files:
-                rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-                for f in agent_changed_files:
-                    rprint(f"  • {f}")
-            final_unit_test = ""
-            final_code = ""
-            try:
-                with open(unit_test_file, "r") as f:
-                    final_unit_test = f.read()
-            except Exception:
-                pass
-            try:
-                with open(code_file, "r") as f:
-                    final_code = f.read()
-            except Exception:
-                pass
-            return success, final_unit_test, final_code, 1, agent_cost, agent_model
-        else:
-            # Non-python tests passed, so we are successful.
-            rprint("[green]Non-Python tests passed. No fix needed.[/green]")
-            try:
-                with open(unit_test_file, "r") as f:
-                    final_unit_test = f.read()
-                with open(code_file, "r") as f:
-                    final_code = f.read()
-            except Exception as e:
-                rprint(f"[yellow]Warning: Could not read final files: {e}[/yellow]")
-            return True, final_unit_test, final_code, 0, 0.0, "N/A"
-
-    fails, errors, warnings = initial_fails, initial_errors, initial_warnings
-    
-    # Determine success state immediately
-    success = (fails == 0 and errors == 0)
-
-    # Track if tests were initially passing
-    initially_passing = success
-
-    # Consecutive timeout/flaky iterations without improvement (failure-aware early exit)
-    timeout_flaky_streak = 0
-    assertion_logic_streak = 0
-
-    while fix_attempts < max_attempts and total_cost < budget:
-        iteration += 1
-
-        # Add this iteration to the structured log
-        if iteration == 1:
-            # For first iteration, include the initial test output
-            iteration_data = {
-                "number": iteration,
-                "initial_test_output": pytest_output,
-                "fix_attempt": None,
-                "verification": None,
-                "post_test_output": None
-            }
-        else:
-            # For subsequent iterations, don't duplicate test output
-            iteration_data = {
-                "number": iteration,
-                "fix_attempt": None,
-                "verification": None,
-                "post_test_output": None
-            }
-        log_structure["iterations"].append(iteration_data)
-            
-        # If tests pass initially, no need to fix anything
-        if success:
-            rprint("[green]All tests already pass with no warnings! No fixes needed on this iteration.[/green]")
-            stats["final_fails"] = 0  # Explicitly set to 0
-            stats["final_errors"] = 0  # Explicitly set to 0
-            stats["final_warnings"] = 0  # Explicitly set to 0
-            stats["best_iteration"] = 0
-            
-            # Update structured log
-            log_structure["iterations"][-1]["post_test_output"] = pytest_output
-
-            # Write formatted log to file
-            error_log_path = Path(error_log_file)
-            error_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(error_log_path, "w") as elog:
-                elog.write(format_log_for_output(log_structure))
-            
-            # Set success to True (already determined)
-            # Read the actual fixed files to return the successful state
-            try:
-                with open(unit_test_file, "r") as f:
-                    final_unit_test = f.read()
-                with open(code_file, "r") as f:  
-                    final_code = f.read()
-            except Exception as e:
-                rprint(f"[yellow]Warning: Could not read fixed files: {e}[/yellow]")
-                # Keep empty strings as fallback
-            break
-        
-        iteration_header = f"=== Attempt iteration {iteration} ==="
-        rprint(f"[bold blue]{iteration_header}[/bold blue]")
-        
-        # Print to console (escaped):
-        rprint(f"[magenta]Pytest output:[/magenta]\n{escape_brackets(pytest_output)}")
-        if verbose:
-            rprint(f"[cyan]Iteration summary: {fails} failed, {errors} errors, {warnings} warnings[/cyan]")
-
-        # Track this iteration's stats
-        iteration_stats = {
-            "iteration": iteration,
-            "fails": fails,
-            "errors": errors,
-            "warnings": warnings
-        }
-        stats["iterations_info"].append(iteration_stats)
-
-        # If tests are fully successful, we break out:
-        if fails == 0 and errors == 0:
-            rprint("[green]All tests passed! Exiting loop.[/green]")
-            success = True  # Set success flag
-            stats["final_fails"] = 0  # Explicitly set to 0
-            stats["final_errors"] = 0  # Explicitly set to 0
-            stats["final_warnings"] = 0  # Explicitly set to 0
-            break
-
-        kind_this_iteration = classify_failure(pytest_output)
-        sig_before_fix = extract_failure_signature(pytest_output)
-        failure_hint = failure_classification_hint(kind_this_iteration)
-
-        # We only attempt to fix if test is failing or has warnings:
-        # Let's create backups in .pdd/backups/ to avoid polluting code/test directories
-        code_name = os.path.basename(code_file)
-        code_basename = os.path.splitext(code_name)[0]
-        unit_test_name = os.path.basename(unit_test_file)
-        unit_test_ext = os.path.splitext(unit_test_name)[1]
-        code_ext = os.path.splitext(code_name)[1]
-
-        backup_dir = Path.cwd() / '.pdd' / 'backups' / code_basename / timestamp
-        backup_dir.mkdir(parents=True, exist_ok=True)
-
-        unit_test_backup = str(backup_dir / f"test_{iteration}_{errors}_{fails}_{warnings}{unit_test_ext}")
-        code_backup = str(backup_dir / f"code_{iteration}_{errors}_{fails}_{warnings}{code_ext}")
+                focused_inputs = None
+        target_code = focused_inputs.focused_code if focused_inputs else code_content
+        target_test = focused_inputs.focused_tests if focused_inputs else unit_test_content
+        classification = failure_classification_hint(classify_failure(output_log)) if failure_aware_retries else None
+        effective_protect_tests = protect_tests or bool(focused_inputs)
+        # Track whether *this* attempt's fix came from the cloud path (vs a
+        # local fallback) so the success log line can prove the cloud path.
+        attempt_used_cloud = False
         try:
-            shutil.copy(unit_test_file, unit_test_backup)
-            shutil.copy(code_file, code_backup)
-            if verbose:
-                rprint(f"[green]Created backup for unit test:[/green] {unit_test_backup}")
-                rprint(f"[green]Created backup for code file:[/green] {code_backup}")
-        except Exception as e:
-            rprint(f"[red]Error creating backup files:[/red] {e}")
-            success = False
-            break  # Exit loop but continue to agentic fallback (Issue #266)
-
-        # Update best iteration if needed:
-        if (errors < best_iteration_info["errors"] or
-            (errors == best_iteration_info["errors" ] and fails < best_iteration_info["fails"]) or
-            (errors == best_iteration_info["errors"] and fails == best_iteration_info["fails"] and warnings < best_iteration_info["warnings"])):
-            best_iteration_info = {
-                "attempt": iteration,
-                "fails": fails,
-                "errors": errors,
-                "warnings": warnings,
-                "unit_test_backup": unit_test_backup,
-                "code_backup": code_backup
-            }
-
-        # Read file contents:
-        try:
-            with open(unit_test_file, "r") as f:
-                unit_test_contents = f.read()
-            with open(code_file, "r") as f:
-                code_contents = f.read()
-        except Exception as e:
-            rprint(f"[red]Error reading input files:[/red] {e}")
-            success = False
-            break  # Exit loop but continue to agentic fallback (Issue #266)
-
-        # Call fix (cloud or local based on use_cloud parameter):
-        try:
-            # Format the log for the LLM - includes local test results
-            formatted_log = format_log_for_output(log_structure)
-
             if use_cloud:
-                # Use cloud LLM for fix - local test results passed via formatted_log
-                try:
-                    updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
-                        unit_test=unit_test_contents,
-                        code=code_contents,
-                        prompt=prompt,
-                        error=formatted_log,  # Pass local test results to cloud
-                        error_file=error_log_file,
-                        strength=strength,
-                        temperature=temperature,
-                        verbose=verbose,
-                        time=time,
-                        code_file_ext=os.path.splitext(code_file)[1],
-                        protect_tests=protect_tests,
-                        failure_classification=failure_hint,
-                    )
-                except RuntimeError as cloud_err:
-                    # Cloud failed - fall back to local if it's a recoverable error
-                    if "Insufficient credits" in str(cloud_err) or "Authentication failed" in str(cloud_err) or "Access denied" in str(cloud_err):
-                        # Non-recoverable errors - stop the loop
-                        rprint(f"[red]Cloud fix error (non-recoverable):[/red] {cloud_err}")
-                        break
-                    # Recoverable errors - fall back to local
-                    rprint(f"[yellow]Cloud fix failed, falling back to local:[/yellow] {cloud_err}")
-                    updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
-                        unit_test_contents,
-                        code_contents,
-                        prompt,
-                        formatted_log,
-                        error_log_file,
-                        strength,
-                        temperature,
-                        verbose=verbose,
-                        time=time,
-                        protect_tests=protect_tests,
-                        language=get_language(os.path.splitext(code_file)[1]),
-                        failure_classification=failure_hint,
-                    )
-            else:
-                # Use local LLM for fix
-                updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
-                    unit_test_contents,
-                    code_contents,
+                update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
+                    target_test,
+                    target_code,
                     prompt,
-                    formatted_log,  # Use formatted log instead of reading the file
+                    output_log,
                     error_log_file,
                     strength,
                     temperature,
-                    verbose=verbose,
-                    time=time,  # Pass time parameter
-                    protect_tests=protect_tests,
-                    language=get_language(os.path.splitext(code_file)[1]),
-                    failure_classification=failure_hint,
+                    verbose,
+                    time,
+                    ext,
+                    effective_protect_tests,
+                    classification,
                 )
-
-            # Update the fix attempt in the structured log
-            log_structure["iterations"][-1]["fix_attempt"] = analysis
-            log_structure["iterations"][-1]["model_name"] = model_name
-        except Exception as e:
-            rprint(f"[red]Error during fix call:[/red] {e}")
-            break
-
-        fix_attempts += 1  # We used one fix attempt
-        total_cost += cost
-        if verbose:
-            rprint(f"[cyan]Iteration {iteration} Fix Cost: ${cost:.6f}, Cumulative Total Cost: ${total_cost:.6f}[/cyan]")
-        if total_cost > budget:
-            rprint(f"[red]Exceeded the budget of ${budget:.6f}. Ending fixing loop.[/red]")
-            break
-
-        # Update unit test file if needed.
-        if updated_unit_test and not protect_tests:
-            try:
-                # Ensure we have valid content even if the returned fixed_unit_test is empty
-                content_to_write = fixed_unit_test if fixed_unit_test else unit_test_contents
-                with open(unit_test_file, "w") as f:
-                    f.write(content_to_write)
-                if verbose:
-                    rprint("[green]Unit test file updated.[/green]")
-            except Exception as e:
-                rprint(f"[red]Error writing updated unit test:[/red] {e}")
-                break
-        elif updated_unit_test and protect_tests:
-            if verbose:
-                rprint("[yellow]Unit test update skipped (protect_tests=True).[/yellow]")
-
-        # Update code file and run verification if needed.
-        if updated_code:
-            try:
-                # Ensure we have valid content even if the returned fixed_code is empty
-                content_to_write = fixed_code if fixed_code else code_contents
-                with open(code_file, "w") as f:
-                    f.write(content_to_write)
-                if verbose:
-                    rprint("[green]Code file updated.[/green]")
-            except Exception as e:
-                rprint(f"[red]Error writing updated code file:[/red] {e}")
-                break
-
-            # Run the verification:
-            try:
-                verify_cmd = [detect_host_python_executable(), verification_program]
-                verify_result = subprocess.run(verify_cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
-                # Safely handle None for stdout or stderr:
-                verify_stdout = verify_result.stdout or ""
-                verify_stderr = verify_result.stderr or ""
-                verify_output = verify_stdout + "\n" + verify_stderr
-                
-                # Update verification in structured log
-                log_structure["iterations"][-1]["verification"] = verify_output
-            except Exception as e:
-                rprint(f"[red]Error running verification program:[/red] {e}")
-                verify_output = f"Verification program error: {e}"
-                log_structure["iterations"][-1]["verification"] = verify_output
-
-            rprint(f"[blue]Verification program output:[/blue]\n{escape_brackets(verify_output)}")
-
-            if verify_result.returncode != 0:
-                rprint("[red]Verification failed. Restoring last working code file from backup.[/red]")
+                attempt_used_cloud = True
+            else:
+                update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
+                    target_test, target_code, prompt, output_log, error_log_file,
+                    strength=strength,
+                    temperature=temperature,
+                    time=time,
+                    verbose=verbose,
+                    protect_tests=effective_protect_tests,
+                    language="python",
+                    failure_classification=classification,
+                )
+        except Exception as exc:
+            if use_cloud:
+                if no_local_fallback:
+                    with open(error_log_file, "a", encoding="utf-8") as log_file:
+                        log_file.write(format_log_for_output(attempt, output_log, f"Cloud fix failed (no local fallback): {exc}", ""))
+                    _cloud_no_fallback_break = True
+                    break
                 try:
-                    shutil.copy(code_backup, code_file)
-                    log_structure["iterations"][-1]["verification"] += f"\nRestored code file from backup: {code_backup}, because verification program failed to run."
-                except Exception as e:
-                    rprint(f"[red]Error restoring backup code file:[/red] {e}")
-                    break
-
-        post_fix_pytest_output = None
-
-        # Run pytest for the next iteration
-        try:
-            fails, errors, warnings, pytest_output = run_pytest_on_file(unit_test_file, extra_files=extra_files)
-            post_fix_pytest_output = pytest_output
-            
-            # Update post-test output in structured log
-            log_structure["iterations"][-1]["post_test_output"] = pytest_output
-
-            # Write updated structured log to file after each iteration
-            error_log_path = Path(error_log_file)
-            error_log_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(error_log_path, "w") as elog:
-                elog.write(format_log_for_output(log_structure))
-            
-            # Update iteration stats with post-fix results
-            stats["iterations_info"][-1].update({
-                "post_fix_fails": fails,
-                "post_fix_errors": errors,
-                "post_fix_warnings": warnings,
-                "improved": (fails < iteration_stats["fails"] or 
-                            errors < iteration_stats["errors"] or 
-                            warnings < iteration_stats["warnings"])
-            })
-            
-            # Update success status based on latest results
-            success = (fails == 0 and errors == 0)
-            
-            # Update final stats
-            stats["final_fails"] = fails
-            stats["final_errors"] = errors
-            stats["final_warnings"] = warnings
-
-        except Exception as e:
-            rprint(f"[red]Error running pytest for next iteration:[/red] {e}")
-            success = False
-            break  # Exit loop but continue to agentic fallback (Issue #266)
-
-        # Failure-aware early exit (reduces wasted LLM retries).
-        # Keep this outside the pytest try/except so failures here are not mislabeled
-        # as pytest execution errors.
-        if failure_aware_retries and not success and post_fix_pytest_output is not None:
-            improved = stats["iterations_info"][-1].get("improved", False)
-            old_total_failures = iteration_stats["fails"] + iteration_stats["errors"]
-            new_total_failures = fails + errors
-            failures_decreased = (new_total_failures < old_total_failures)
-
-            sig_after_fix = extract_failure_signature(post_fix_pytest_output)
-            kind_after_fix = classify_failure(post_fix_pytest_output)
-            if kind_after_fix == FailureKind.TIMEOUT_FLAKY:
-                if not improved:
-                    timeout_flaky_streak += 1
-                else:
-                    timeout_flaky_streak = 0
-                if timeout_flaky_streak >= 2:
-                    rprint(
-                        "[yellow]Stopping after "
-                        f"{fix_attempts} attempt(s): failures look like timeouts/flaky tests. "
-                        "Consider isolating this test or increasing timeout, rather than more code changes.[/yellow]"
+                    update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
+                        unit_test=target_test,
+                        code=target_code,
+                        prompt=prompt,
+                        error=output_log,
+                        error_file=error_log_file,
+                        strength=strength,
+                        temperature=temperature,
+                        time=time,
+                        verbose=verbose,
+                        protect_tests=effective_protect_tests,
+                        language="python",
+                        failure_classification=classification,
                     )
+                except Exception as local_exc:
+                    with open(error_log_file, "a", encoding="utf-8") as log_file:
+                        log_file.write(format_log_for_output(attempt, output_log, f"Fix call failed: {exc}; local fallback failed: {local_exc}", ""))
                     break
             else:
-                timeout_flaky_streak = 0
-
-            if kind_after_fix == FailureKind.ASSERTION_LOGIC:
-                if not failures_decreased:
-                    assertion_logic_streak += 1
-                else:
-                    assertion_logic_streak = 0
-                if assertion_logic_streak >= 3:
-                    rprint(
-                        "[yellow]Stopping after "
-                        f"{fix_attempts} attempt(s): assertion/logic failures are stagnant. "
-                        "Consider increasing strength/temperature, simplifying the prompt, or manual fixes.[/yellow]"
-                    )
+                with open(error_log_file, "a", encoding="utf-8") as log_file:
+                    log_file.write(format_log_for_output(attempt, output_log, f"Fix call failed: {exc}", ""))
+                break
+        total_cost += cost
+        if focused_inputs and update_code:
+            fixed_code = reconstruct_code(code_content, fixed_code, focused_inputs.slices)
+        if focused_inputs:
+            # focused_tests is only a failing-test subset; never write the partial result back
+            fixed_test = unit_test_content
+        next_code = fixed_code if update_code else code_content
+        next_test = fixed_test if update_test and not protect_tests else unit_test_content
+        Path(code_file).write_text(next_code, encoding="utf-8")
+        if not protect_tests:
+            Path(unit_test_file).write_text(next_test, encoding="utf-8")
+        verification_ok, verification_output = _run_verification_program(verification_program, code_file)
+        if not verification_ok:
+            shutil.copy(str(test_backup), unit_test_file)
+            shutil.copy(str(code_backup), code_file)
+            next_code = Path(code_file).read_text(encoding="utf-8")
+            next_test = Path(unit_test_file).read_text(encoding="utf-8")
+            verification_output += "\nRestored previous code/test backup after verification failure."
+        try:
+            new_fails, new_errs, new_warns, new_log = run_pytest_on_file(unit_test_file, verification_program, test_files)
+        except Exception as exc:
+            with open(error_log_file, "a", encoding="utf-8") as log_file:
+                log_file.write(format_log_for_output(attempt, output_log, analysis, f"Pytest exception: {exc}", model_name))
+            break
+        with open(error_log_file, "a", encoding="utf-8") as log_file:
+            log_file.write(format_log_for_output(attempt, output_log, analysis, verification_output + "\n" + new_log, model_name))
+        if new_fails == 0 and new_errs == 0:
+            if attempt_used_cloud:
+                console.print(
+                    f"[cyan]Cloud fix completed. Model: {model_name}, Cost: ${total_cost:.6f}[/cyan]"
+                )
+            return True, next_test, next_code, total_attempts, total_cost, model_name
+        prev_total = int(current_state["fails"]) + int(current_state["errs"])
+        current_state = {"fails": new_fails, "errs": new_errs, "warns": new_warns, "code": next_code, "test": next_test, "iteration": attempt}
+        improved = _best_is_better(current_state, best_state)
+        if improved:
+            best_state = dict(current_state)
+        if failure_aware_retries:
+            kind = classify_failure(new_log)
+            if kind == FailureKind.TIMEOUT_FLAKY:
+                consecutive_timeouts_without_improvement = 0 if improved else consecutive_timeouts_without_improvement + 1
+                if consecutive_timeouts_without_improvement >= 2:
+                    console.print("[yellow]Timeout/flaky failure did not improve after consecutive attempts. Isolate tests, increase timeout, or investigate manually.[/yellow]")
                     break
             else:
-                assertion_logic_streak = 0
-
-            if kind_after_fix == FailureKind.SYNTAX_IMPORT:
-                if (
-                    fix_attempts >= 1
-                    and sig_before_fix
-                    and sig_after_fix == sig_before_fix
-                ):
-                    loc = format_signature_hint(sig_after_fix)
-                    rprint(
-                        "[yellow]Stopping after "
-                        f"{fix_attempts} attempt(s): still seeing a syntax/import error at {loc}. "
-                        "This may require fixing imports/env or adding missing files.[/yellow]"
-                    )
+                consecutive_timeouts_without_improvement = 0
+            if kind == FailureKind.ASSERTION_LOGIC:
+                new_total = int(new_fails) + int(new_errs)
+                if new_total < prev_total:
+                    consecutive_assertion_logic_without_progress = 0
+                else:
+                    consecutive_assertion_logic_without_progress += 1
+                if consecutive_assertion_logic_without_progress >= 3:
+                    console.print("[yellow]Assertion/logic failures stagnant after consecutive attempts. Consider raising strength/temperature, simplifying the prompt, or manual fixes.[/yellow]")
                     break
+            else:
+                consecutive_assertion_logic_without_progress = 0
+            if kind == FailureKind.SYNTAX_IMPORT:
+                sig = extract_failure_signature(new_log)
+                if attempt >= 1 and sig and sig == last_syntax_signature:
+                    console.print(f"[yellow]Unchanged syntax/import failure {escape_brackets(format_signature_hint(sig))}. Imports, environment, or missing files may need manual fixes.[/yellow]")
+                    break
+                last_syntax_signature = sig
+        output_log = new_log
+        code_content = next_code
+        unit_test_content = next_test
 
-    # Possibly restore best iteration if the final run is not as good:
-    if best_iteration_info["attempt"] is not None and not success:
-        is_better_final = False
-        if stats["final_errors"] < best_iteration_info["errors"]:
-            is_better_final = True
-        elif stats["final_errors"] == best_iteration_info["errors"] and stats["final_fails"] < best_iteration_info["fails"]:
-            is_better_final = True
-        elif (stats["final_errors"] == best_iteration_info["errors"] and 
-              stats["final_fails"] == best_iteration_info["fails"] and 
-              stats["final_warnings"] < best_iteration_info["warnings"]):
-            is_better_final = True
-        
-        if not is_better_final:
-            # restore
-            if verbose:
-                rprint(f"[cyan]Restoring best iteration ({best_iteration_info['attempt']}) from backups.[/cyan]")
-            try:
-                if best_iteration_info["unit_test_backup"]:
-                    shutil.copy(best_iteration_info["unit_test_backup"], unit_test_file)
-                if best_iteration_info["code_backup"]:
-                    shutil.copy(best_iteration_info["code_backup"], code_file)
-                
-                # Update final stats with best iteration stats
-                stats["final_fails"] = best_iteration_info["fails"]
-                stats["final_errors"] = best_iteration_info["errors"]
-                stats["final_warnings"] = best_iteration_info["warnings"]
-                stats["best_iteration"] = best_iteration_info["attempt"]
-                
-                # Check if the best iteration had passing tests
-                success = (best_iteration_info["fails"] == 0 and 
-                          best_iteration_info["errors" ] == 0 and 
-                          best_iteration_info["warnings"] == 0)
-            except Exception as e:
-                rprint(f"[red]Error restoring best iteration backups:[/red] {e}")
-        else:
-            # Current iteration is the best
-            stats["best_iteration"] = "final"
-    else:
-        stats["best_iteration"] = "final"
+    if best_state["iteration"] != current_state.get("iteration", last_attempt):
+        Path(code_file).write_text(str(best_state["code"]), encoding="utf-8")
+        if not protect_tests:
+            Path(unit_test_file).write_text(str(best_state["test"]), encoding="utf-8")
+        code_content = str(best_state["code"])
+        unit_test_content = str(best_state["test"])
+    if agentic_fallback and total_cost < budget and not _cloud_no_fallback_break:
+        return call_agentic()
+    return False, str(best_state["test"]), str(best_state["code"]), total_attempts, total_cost, model_name
 
-    # Read final file contents for non-initially-passing tests
-    # (Initially passing tests have files read at lines 344-348)
-    try:
-        if not initially_passing:
-            with open(unit_test_file, "r") as f:
-                final_unit_test = f.read()
-            with open(code_file, "r") as f:
-                final_code = f.read()
-    except Exception as e:
-        rprint(f"[red]Error reading final files:[/red] {e}")
-        final_unit_test, final_code = "", ""
 
-    # Print summary statistics
-    rprint("\n[bold cyan]Summary Statistics:[/bold cyan]")
-    rprint(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings")
-    rprint(f"Final state: {stats['final_fails']} fails, {stats['final_errors']} errors, {stats['final_warnings']} warnings")
-    rprint(f"Best iteration: {stats['best_iteration']}")
-    rprint(f"Success: {success}")
-    
-    # Calculate improvements
-    stats["improvement"] = {
-        "fails_reduced": initial_fails - stats['final_fails'],
-        "errors_reduced": initial_errors - stats['final_errors'],
-        "warnings_reduced": initial_warnings - stats['final_warnings'],
-        "percent_improvement": 100 if (initial_fails + initial_errors + initial_warnings) == 0 else 
-                              (1 - (stats['final_fails'] + stats['final_errors'] + stats['final_warnings']) / 
-                                   (initial_fails + initial_errors + initial_warnings)) * 100
-    }
-    
-    rprint(f"Improvement: {stats['improvement']['fails_reduced']} fails, {stats['improvement']['errors_reduced']} errors, {stats['improvement']['warnings_reduced']} warnings")
-    rprint(f"Overall improvement: {stats['improvement']['percent_improvement']:.2f}%")
-
-    # Agentic fallback at end adds cost & model (normalized)
-    if not success and agentic_fallback and total_cost < budget:
-        # Ensure error_log_file exists before calling agentic fix
-        # Write the current log structure if it hasn't been written yet
-        try:
-            if not os.path.exists(error_log_file) or os.path.getsize(error_log_file) == 0:
-                error_log_path = Path(error_log_file)
-                error_log_path.parent.mkdir(parents=True, exist_ok=True)
-                with open(error_log_path, "w") as elog:
-                    if log_structure["iterations"]:
-                        elog.write(format_log_for_output(log_structure))
-                    else:
-                        # No iterations ran, write initial state info
-                        elog.write(f"Initial state: {initial_fails} fails, {initial_errors} errors, {initial_warnings} warnings\n")
-                        if 'pytest_output' in locals():
-                            elog.write(f"\n<pytest_output>\n{pytest_output}\n</pytest_output>\n")
-        except Exception as e:
-            rprint(f"[yellow]Warning: Could not write error log before agentic fallback: {e}[/yellow]")
-
-        rprint(f"[cyan]Attempting agentic fix fallback (prompt_file={prompt_file!r})...[/cyan]")
-        agent_success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_fix(
-            prompt_file=prompt_file,
-            code_file=code_file,
-            unit_test_file=unit_test_file,
-            error_log_file=error_log_file,
-            cwd=None,  # Use project root (cwd), not prompt file's parent
-        )
-        total_cost += agent_cost
-        if not agent_success:
-            rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
-        if agent_changed_files:
-            rprint(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-            for f in agent_changed_files:
-                rprint(f"  • {f}")
-        if agent_success:
-            model_name = agent_model or model_name
-            try:
-                with open(unit_test_file, "r") as f:
-                    final_unit_test = f.read()
-                with open(code_file, "r") as f:
-                    final_code = f.read()
-            except Exception as e:
-                rprint(f"[yellow]Warning: Could not read files after successful agentic fix: {e}[/yellow]")
-            success = True
-            # Bug #360: Verify with combined test files if extra_files present.
-            # The agentic fix only runs the primary file in isolation. If the
-            # failure requires all files to manifest (test isolation issue),
-            # the agent's success claim may be false. Re-verify with combined run.
-            if success and extra_files and is_python:
-                verify_fails, verify_errors, _, _ = run_pytest_on_file(unit_test_file, extra_files=extra_files)
-                if verify_fails > 0 or verify_errors > 0:
-                    rprint(f"[yellow]Agentic fix passed single-file test but combined test still fails ({verify_fails} failures, {verify_errors} errors)[/yellow]")
-                    success = False
-
-    return success, final_unit_test, final_code, fix_attempts, total_cost, model_name
-
-# If this module is run directly for testing purposes:
 if __name__ == "__main__":
-    # Example usage of fix_error_loop.
-    unit_test_file = "tests/test_example.py"
-    code_file = "src/code_example.py"
-    prompt = "Write a function that adds two numbers"
-    prompt_file = "prompts/example_prompt.txt"  # Added prompt_file for testing
-    verification_program = "verify_code.py"  # Program that verifies the code
-    strength = 0.5
-    temperature = 0.0
-    max_attempts = 5
-    budget = 1.0  # Maximum cost budget
-    error_log_file = "error_log.txt"
-    verbose = True
-
-    success, final_unit_test, final_code, attempts, total_cost, model_name = fix_error_loop(
-        unit_test_file,
-        code_file,
-        prompt_file,
-        prompt,
-        verification_program,
-        strength,
-        temperature,
-        max_attempts,
-        budget,
-        error_log_file,
-        verbose
+    console.print("[bold cyan]Running demonstration of pdd module functions[/bold cyan]")
+    test_f, code_f, prompt_f = "test_demo.py", "demo.py", "prompt.txt"
+    with open(test_f, "w", encoding="utf-8") as f:
+        f.write("def test_demo(): assert True\n")
+    with open(code_f, "w", encoding="utf-8") as f:
+        f.write("def demo(): pass\n")
+    with open(prompt_f, "w", encoding="utf-8") as f:
+        f.write("Fix everything\n")
+    success, _ut_final, _code_final, attempts, cost, _model = fix_error_loop(
+        test_f, code_f, prompt_f, "Fix it", sys.executable, 0.7, 0.7, 1, 1.0, verbose=True, agentic_fallback=False
     )
-
-    rprint("\n[bold]Process complete.[/bold]")
-    rprint(f"Success: {success}")
-    rprint(f"Attempts: {attempts}")
-    rprint(f"Total cost: ${total_cost:.6f}")
-    rprint(f"Model used: {model_name}")
-    rprint(f"Final unit test contents:\n{final_unit_test}")
+    console.print(f"Success: {success}, Attempts: {attempts}, Cost: {cost}")
+    for file in [test_f, code_f, prompt_f, "error_log.txt"]:
+        if os.path.exists(file):
+            os.remove(file)

@@ -2429,10 +2429,10 @@ sys.exit(result.returncode)
         captured = capsys.readouterr()
 
         # Assertions. cost may legitimately be 0 on a LiteLLM cache hit, so we
-        # require a cloud-success log line instead. fix_error_loop.py:139 prints
-        # "Cloud fix completed" only on the success path; the fallback branch at
-        # fix_error_loop.py:726 prints "Cloud fix failed, falling back to local",
-        # so a generic substring match on "cloud" would be insufficient.
+        # require a cloud-success log line instead. fix_error_loop.fix_error_loop
+        # prints "Cloud fix completed" only when the *successful* attempt used the
+        # cloud path (attempt_used_cloud); a local fallback does not, so a generic
+        # substring match on "cloud" would be insufficient to prove the cloud path.
         assert isinstance(success, bool), f"Expected success to be bool, got {type(success)}"
         assert isinstance(cost, (int, float)) and cost >= 0, f"Expected non-negative cost, got {cost!r}"
         assert attempts >= 1, f"Expected at least 1 attempt, got {attempts}"
@@ -2572,11 +2572,13 @@ def test_fix_main_passes_protect_tests_to_fix_errors_from_unit_tests(
 
 
 def test_fix_main_code_checks_protect_tests_before_writing_test():
-    """fix_main.py should check protect_tests before writing test file.
+    """fix_main.py should check protect_tests and focused-repair guards before writing test file.
 
-    This is a source code inspection test to ensure the conditional:
-        if fixed_unit_test and not protect_tests:
-    exists in fix_main.py, preventing test file writes when protect_tests=True.
+    This is a source code inspection test to ensure the write-guard condition
+    skips test writes both when protect_tests=True and when focused repair is
+    active (to avoid truncating the full test file with a sliced payload).
+    The guard should include all three conditions:
+        if fixed_unit_test and not protect_tests and not _local_focused_slices and not _fix_focused_slices:
     """
     from pathlib import Path
 
@@ -2584,9 +2586,176 @@ def test_fix_main_code_checks_protect_tests_before_writing_test():
     fix_main_path = Path(__file__).parent.parent / "pdd" / "fix_main.py"
     source = fix_main_path.read_text()
 
-    # Check that the code includes "protect_tests" check when writing test file
-    assert "if fixed_unit_test and not protect_tests:" in source, \
-        "fix_main.py should check 'if fixed_unit_test and not protect_tests:' before writing test file"
+    # Check that the code includes both protect_tests and focused-slice guards when writing test file
+    assert (
+        "if fixed_unit_test and not protect_tests and not _local_focused_slices and not _fix_focused_slices:" in source
+    ), (
+        "fix_main.py should guard test writes with "
+        "'if fixed_unit_test and not protect_tests and not _local_focused_slices and not _fix_focused_slices:' "
+        "to prevent truncating the full test file during focused repair"
+    )
+
+
+def test_fix_main_prompt_preserves_single_pass_focused_repair_contract():
+    """Prompt contract should keep focused repair in cloud and local single-pass modes."""
+    repo_root = Path(__file__).parent.parent
+    prompt = (repo_root / "pdd/prompts/fix_main_python.prompt").read_text(encoding="utf-8")
+    architecture = (repo_root / "architecture.json").read_text(encoding="utf-8")
+
+    assert "<pdd-dependency>fix_focus_python.prompt</pdd-dependency>" in prompt
+    assert '<include optional mode="interface">pdd/fix_focus.py</include>' in prompt
+    assert "Single-pass cloud mode" in prompt
+    assert "prepare_focused_inputs" in prompt
+    assert "protectTests" in prompt
+    assert "reconstruct_code(original_code, fixedCode, focused_inputs.slices)" in prompt
+    assert "validate against the full original test file" in prompt
+    assert "fix_focus.prepare_focused_inputs" in architecture
+    assert "never write returned sliced test content" in architecture
+
+
+@patch('pdd.fix_main.run_pytest_on_file')
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_errors_from_unit_tests')
+def test_fix_main_single_pass_local_uses_focused_repair_end_to_end(
+    mock_fix_errors,
+    mock_construct_paths,
+    mock_run_pytest,
+    mock_ctx,
+    tmp_path,
+    monkeypatch,
+):
+    """Single-pass local mode should use focused inputs without truncating tests.
+
+    This covers the cross-module interaction between fix_main and fix_focus:
+    assertion-only traceback -> Phase 1 diagnosis -> focused LLM payload ->
+    full-code reconstruction -> validation against the original full tests.
+    """
+    mock_ctx.obj['local'] = True
+    mock_ctx.obj['quiet'] = True
+    mock_ctx.obj['time'] = 0.7
+
+    error_file = tmp_path / "errors.log"
+    error_file.write_text("error details", encoding="utf-8")
+    output_test = tmp_path / "fixed_test.py"
+    output_code = tmp_path / "fixed_code.py"
+    output_results = tmp_path / "results.log"
+
+    original_code = "\n".join(
+        [
+            "def target(value):",
+            "    return value + 1",
+            "",
+            "def unrelated():",
+            "    return 99",
+            "",
+            *[f"# filler {i}" for i in range(520)],
+        ]
+    )
+    original_test = """\
+CASES = [1]
+
+class Case:
+    def __init__(self, value):
+        self.value = value
+
+def make_case(value):
+    return Case(value)
+
+def test_compute():
+    assert target(make_case(CASES[0]).value) == 1
+
+def test_unrelated():
+    assert unrelated() == 99
+"""
+    assertion_only_failure = (
+        "FAILED tests/test_code.py::test_compute - AssertionError\n"
+        "Traceback (most recent call last):\n"
+        '  File "tests/test_code.py", line 11, in test_compute\n'
+        "    assert target(make_case(CASES[0]).value) == 1\n"
+        "AssertionError\n"
+    )
+
+    mock_construct_paths.return_value = (
+        {},
+        {
+            "prompt_file": "Fix the implementation",
+            "code_file": original_code,
+            "unit_test_file": original_test,
+            "error_file": assertion_only_failure,
+        },
+        {
+            "output_test": str(output_test),
+            "output_code": str(output_code),
+            "output_results": str(output_results),
+        },
+        None,
+    )
+    mock_fix_errors.return_value = (
+        True,
+        True,
+        "def test_compute():\n    assert False\n",
+        "def target(value):\n    return value\n",
+        "analysis",
+        0.25,
+        "mock-model",
+    )
+
+    diagnose_calls = []
+
+    def fake_diagnose(**kwargs):
+        diagnose_calls.append(kwargs)
+        return ["target"]
+
+    validated_tests = []
+
+    def fake_run_pytest(test_file, *args, **kwargs):
+        validated_tests.append(Path(test_file).read_text(encoding="utf-8"))
+        return (0, 0, 0, "pass")
+
+    monkeypatch.setattr("pdd.fix_focus._diagnose_broken_functions", fake_diagnose)
+    mock_run_pytest.side_effect = fake_run_pytest
+
+    success, fixed_test, fixed_code, attempts, total_cost, model_name = fix_main(
+        ctx=mock_ctx,
+        prompt_file="prompt.prompt",
+        code_file="code.py",
+        unit_test_file="test_code.py",
+        error_file=str(error_file),
+        output_test=None,
+        output_code=None,
+        output_results=None,
+        loop=False,
+        verification_program=None,
+        max_attempts=3,
+        budget=1.0,
+        auto_submit=False,
+        protect_tests=False,
+        strength=0.6,
+        temperature=0.2,
+    )
+
+    assert success is True
+    assert attempts == 1
+    assert total_cost == 0.25
+    assert model_name == "mock-model"
+    assert diagnose_calls, "Phase 1 should run when fast-path names only match tests"
+
+    sent = mock_fix_errors.call_args.kwargs
+    assert sent["protect_tests"] is True
+    assert "def target(value):" in sent["code"]
+    assert "def unrelated()" not in sent["code"]
+    assert "CASES = [1]" in sent["unit_test"]
+    assert "class Case:" in sent["unit_test"]
+    assert "def make_case(value):" in sent["unit_test"]
+    assert "def test_compute():" in sent["unit_test"]
+    assert "def test_unrelated():" not in sent["unit_test"]
+
+    assert validated_tests == [original_test]
+    assert fixed_test == "def test_compute():\n    assert False\n"
+    assert "def target(value):\n    return value\n" in fixed_code
+    assert "def unrelated():\n    return 99" in fixed_code
+    assert output_code.read_text(encoding="utf-8") == fixed_code
+    assert not output_test.exists(), "focused repair must not write a sliced test file"
 
 
 # --- CI auth hang regression tests (GitHub Actions #462) ---
