@@ -526,6 +526,56 @@ def test_codex_cloudflare_cache_bypass_retry_falls_back_to_vertex(monkeypatch):
     assert result["model_name"] == "vertex_ai/gemini-3-flash-preview"
 
 
+def test_codex_cloudflare_cache_bypass_exception_falls_back_to_vertex(monkeypatch):
+    """Challenge HTML raised by LiteLLM during retry must not become an ERROR string."""
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
+    monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
+    monkeypatch.setenv("VERTEXAI_LOCATION", "global")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-used")
+
+    calls = []
+
+    def fake_completion(**kwargs):
+        model = kwargs.get("model")
+        calls.append(model)
+        if str(model).startswith("chatgpt/") and calls.count(model) == 1:
+            content = None
+        elif str(model).startswith("chatgpt/"):
+            raise RuntimeError(
+                '<span id="challenge-error-text">Enable JavaScript and cookies to continue</span>'
+            )
+        else:
+            content = "def comment_line(line: str) -> str:\n    return '# ' + line"
+        msg = type("M", (), {"content": content, "role": "assistant"})()
+        choice = type("C", (), {"message": msg, "finish_reason": "stop"})()
+        usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10})()
+        return type("R", (), {"choices": [choice], "usage": usage})()
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.codex_subscription.apply_litellm_chatgpt_output_patch", return_value=True), \
+         patch("pdd.llm_invoke.count_tokens_for_messages", return_value=10), \
+         patch("pdd.llm_invoke.get_context_limit", return_value=1_000_000), \
+         patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
+        result = li.llm_invoke(
+            prompt="write code for {x}",
+            input_json={"x": "comment_line"},
+            strength=0.5,
+            verbose=False,
+        )
+
+    assert calls[:2] == ["chatgpt/gpt-5.5", "chatgpt/gpt-5.5"]
+    assert "vertex_ai/gemini-3-flash-preview" in calls
+    assert "claude-sonnet-4-6" not in calls
+    assert "challenge-error-text" not in result["result"]
+    assert result["model_name"] == "vertex_ai/gemini-3-flash-preview"
+
+
 def test_pdd_model_default_first_pins_configured_default(monkeypatch):
     """PDD_MODEL_DEFAULT_FIRST keeps the configured default ahead of ELO interpolation."""
     df = li._load_model_data(_packaged_csv_path())

@@ -2554,6 +2554,15 @@ def _raise_if_provider_challenge_response(
     )
 
 
+def _raise_if_provider_challenge_error(
+    error: BaseException,
+    model_name: Any,
+    item_index: int,
+) -> None:
+    """Raise fallback-triggering error when provider challenge HTML is in an exception."""
+    _raise_if_provider_challenge_response(str(error), model_name, item_index)
+
+
 def _chatgpt_family(model_df: pd.DataFrame) -> pd.DataFrame:
     """Rows backed by the ChatGPT/Codex subscription provider."""
     return model_df[
@@ -4458,6 +4467,7 @@ def llm_invoke(
                                         break
                         except Exception:
                             result_text = None
+                        _raise_if_provider_challenge_response(result_text, model_name_litellm, 0)
 
                         # Calculate cost using usage + CSV rates
                         total_cost = 0.0
@@ -4551,6 +4561,8 @@ def llm_invoke(
                             'finish_reason': finish_reason,
                             'attempted_models': list(attempted_models),
                         })
+                    except SchemaValidationError:
+                        raise
                     except Exception as e:
                         last_exception = e
                         _emit_llm_attribution(
@@ -4810,6 +4822,7 @@ def llm_invoke(
                                 except SchemaValidationError:
                                     raise
                                 except Exception as retry_e:
+                                    _raise_if_provider_challenge_error(retry_e, model_name_litellm, i)
                                     logger.error(f"[ERROR] Cache bypass retry failed for item {i}: {retry_e}")
                                     results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
                                     continue
@@ -4874,6 +4887,7 @@ def llm_invoke(
                                 except SchemaValidationError:
                                     raise
                                 except Exception as retry_e:
+                                    _raise_if_provider_challenge_error(retry_e, model_name_litellm, i)
                                     logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
                             else:
                                 logger.warning(f"[WARNING] Cannot retry malformed JSON - batch mode or missing prompt/input_json, attempting repair...")
@@ -5163,6 +5177,7 @@ def llm_invoke(
                                     except SchemaValidationError:
                                         raise
                                     except Exception as retry_e:
+                                        _raise_if_provider_challenge_error(retry_e, model_name_litellm, i)
                                         logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
                                 else:
                                     logger.warning(f"[WARNING] Cannot retry invalid Python code - batch mode or missing prompt/input_json")
