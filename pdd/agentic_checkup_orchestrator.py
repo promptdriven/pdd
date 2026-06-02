@@ -1015,8 +1015,24 @@ def _setup_pr_worktree(
 
     # 2. Fetch the PR's head into a local branch.
     #    Always refresh (force) so a re-run picks up new pushes to the PR.
-    if _branch_exists(git_root, branch_name) and not resume_existing:
-        _delete_branch(git_root, branch_name)
+    #    Match the issue-mode stale-branch handling above: a crashed or
+    #    manually cleaned run can leave the checkup/pr-* branch registered to a
+    #    stale worktree, so prune before deleting and preserve has_branch when
+    #    deletion fails. Otherwise the later worktree add uses the non-forced
+    #    path and hard-fails with "already checked out at ...".
+    _prune_worktrees(git_root)
+    has_branch = _branch_exists(git_root, branch_name)
+    deleted_branch = False
+    if has_branch and not resume_existing:
+        deleted, del_err = _delete_branch(git_root, branch_name)
+        if deleted:
+            has_branch = False
+            deleted_branch = True
+        elif not quiet:
+            console.print(
+                f"[yellow]Could not delete {branch_name} ({del_err.strip()}); "
+                f"reusing it via a forced PR worktree add.[/yellow]"
+            )
 
     # Resolve which remote actually has this PR. Prefer a configured remote
     # (uses the user's auth + caching); fall back to the explicit GitHub URL
@@ -1050,12 +1066,20 @@ def _setup_pr_worktree(
     # 3. Create worktree on the fetched branch.
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "worktree", "add", str(worktree_path), branch_name],
-            cwd=git_root,
-            capture_output=True,
-            check=True,
-        )
+        if has_branch and not deleted_branch:
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
         return None, f"Failed to create PR worktree: {err_msg}"
