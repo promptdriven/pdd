@@ -25,6 +25,11 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
+from .agentic_common import (
+    drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
+    peek_agentic_progress_steer_metadata,
+)
 from .construct_paths import _is_known_language
 from .sync_order import compute_sccs
 
@@ -1000,6 +1005,7 @@ class AsyncSyncRunner:
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.module_targets: Dict[str, str] = dict(module_targets or {})
         self.initial_cost = float(initial_cost or 0.0)
+        self._steer_state: Dict[str, Any] = {}
 
         self.total_budget = self.sync_options.get("total_budget")
         self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
@@ -1385,10 +1391,79 @@ class AsyncSyncRunner:
             self._last_comment_update = now
             self._update_github_comment()
 
+    def _merge_steer_metadata_into_github_info(self) -> None:
+        """Attach steer UX fields from sync drain and interrupt context."""
+        if not self.github_info:
+            return
+        for key, value in peek_agentic_progress_steer_metadata().items():
+            self.github_info[key] = value
+        pending = self.github_info.get("pending_steers")
+        preview = self.github_info.get("steer_preview")
+        if pending:
+            return
+        if self._steer_state.get("_last_drained_count"):
+            self.github_info["pending_steers"] = self._steer_state["_last_drained_count"]
+            self.github_info["steer_preview"] = self._steer_state.get(
+                "_last_drained_preview", ""
+            )
+
+    def _steer_sync_cwd(self) -> Path:
+        if self.github_info and self.github_info.get("cwd"):
+            return Path(self.github_info["cwd"])
+        return self.project_root
+
+    def _seed_sync_steer_cursor(self) -> None:
+        if not self.github_info:
+            return
+        owner = self.github_info.get("owner")
+        repo = self.github_info.get("repo")
+        issue_number = self.github_info.get("issue_number")
+        if not (owner and repo and issue_number is not None):
+            return
+        ensure_issue_steer_cursor_seeded(
+            owner,
+            repo,
+            int(issue_number),
+            self._steer_state,
+            cwd=self._steer_sync_cwd(),
+            quiet=self.quiet,
+        )
+
+    def _drain_sync_steers_for_progress(self) -> None:
+        """Drain issue comments at a module boundary for progress comment UX (#1324 §7)."""
+        if not self.github_info:
+            return
+        owner = self.github_info.get("owner")
+        repo = self.github_info.get("repo")
+        issue_number = self.github_info.get("issue_number")
+        if not (owner and repo and issue_number is not None):
+            return
+        steers = drain_step_steers(
+            owner,
+            repo,
+            int(issue_number),
+            self._steer_state,
+            cwd=self._steer_sync_cwd(),
+            quiet=self.quiet,
+        )
+        if steers:
+            preview = ", ".join(f"@{entry.author}" for entry in steers[:3])
+            suffix = f" (+{len(steers) - 3} more)" if len(steers) > 3 else ""
+            self._steer_state["_last_drained_count"] = len(steers)
+            self._steer_state["_last_drained_preview"] = preview + suffix
+            if self.github_info is not None:
+                self.github_info["pending_steers"] = len(steers)
+                self.github_info["steer_preview"] = preview + suffix
+        else:
+            self._steer_state.pop("_last_drained_count", None)
+            self._steer_state.pop("_last_drained_preview", None)
+
     def _update_github_comment(self, status_label: Optional[str] = None) -> None:
         """Create or update a GitHub issue comment with current progress."""
         if not self.github_info:
             return
+
+        self._merge_steer_metadata_into_github_info()
 
         owner = self.github_info.get("owner")
         repo = self.github_info.get("repo")
@@ -1494,9 +1569,21 @@ class AsyncSyncRunner:
             "## PDD Agentic Sync Progress",
             f"Issue: #{issue_number}",
             "",
+        ]
+        pending_steers = (
+            self.github_info.get("pending_steers") if self.github_info else None
+        )
+        steer_preview = (
+            self.github_info.get("steer_preview") if self.github_info else None
+        )
+        if pending_steers:
+            detail = steer_preview or f"{pending_steers} comment(s)"
+            lines.append(f"**Mid-run feedback:** {detail} pending at next step boundary.")
+            lines.append("")
+        lines.extend([
             "| Module | Status | Phase | Duration | Cost |",
             "|--------|--------|-------|----------|------|",
-        ]
+        ])
 
         total_cost = self.initial_cost
 
@@ -1711,6 +1798,7 @@ class AsyncSyncRunner:
                 f"module(s): {resumed}[/green]"
             )
 
+        self._seed_sync_steer_cursor()
         self._update_github_comment()
 
         prev_sigint = signal.getsignal(signal.SIGINT)
@@ -1782,6 +1870,7 @@ class AsyncSyncRunner:
                     except Exception as exc:
                         success, cost, error = False, 0.0, str(exc)
                     self._record_result(basename, success, cost, error)
+                    self._drain_sync_steers_for_progress()
                     self._update_github_comment()
                     if self._budget_exhausted():
                         self.budget_exhausted = True
