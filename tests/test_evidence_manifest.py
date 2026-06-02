@@ -413,3 +413,32 @@ def test_resolve_generate_output_paths_uses_construct_paths(
 
     resolved = resolve_generate_output_paths(prompt, quiet=True)
     assert resolved == [str(tmp_path / "pdd" / "widget.py")]
+
+
+def test_contract_waivers_validate_against_schema(tmp_path: Path) -> None:
+    """Manifests with contract waivers must validate against the JSON schema."""
+    fixture = (
+        Path(__file__).parent
+        / "fixtures"
+        / "contract_check"
+        / "waiver_valid_python.prompt"
+    )
+    prompt = tmp_path / "prompts" / "waiver_python.prompt"
+    output = tmp_path / "src" / "waiver.py"
+    prompt.parent.mkdir()
+    output.parent.mkdir()
+    prompt.write_text(fixture.read_text(encoding="utf-8"), encoding="utf-8")
+    output.write_text("def upload():\n    return True\n", encoding="utf-8")
+
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        output_files=[output],
+        project_root=tmp_path,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    jsonschema.validate(instance=manifest, schema=_schema())
+    contracts = manifest["contracts"]
+    assert contracts["status"] == "available"
+    assert contracts["waivers"][0]["id"] == "W1"
+    assert contracts["rules"]["R3"]["waiver_status"] == "active"

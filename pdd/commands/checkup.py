@@ -17,6 +17,7 @@ from .checkup_simplify import checkup_simplify
 from .checkup_snapshot import checkup_snapshot
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
+from .gate import gate_cmd
 from .drift import drift_cmd
 from .gate import gate_cmd
 from .prompt import prompt_lint
@@ -370,8 +371,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup coverage [OPTIONS] TARGET
     Snapshot policy (nondeterministic prompt context):
       pdd checkup snapshot PROMPT_FILE [OPTIONS]
-    Evidence gate:
-      pdd checkup gate [TARGET] [OPTIONS]  →  enforce evidence policy checks.
+    Evidence and waiver gate:
+      pdd checkup gate [TARGET] [OPTIONS]  →  evidence manifests and waiver policy.
     Regeneration drift:
       pdd checkup drift <DEVUNIT> [OPTIONS]
     """
