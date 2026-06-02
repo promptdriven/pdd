@@ -275,10 +275,17 @@ def test_chatgpt_and_openai_api_models_do_not_collide():
     assert str(sub.iloc[0]["api_key"] or "") == ""
 
 
-def test_codex_family_strength_orders_by_elo():
+def test_codex_family_strength_orders_by_elo(monkeypatch):
     """Within the Codex family, high strength selects the top-ELO model (gpt-5.4),
     mirroring Anthropic's haiku->opus spread. (Flat cost => ELO is the ordering key
-    at strength>=0.5; same behavior as the GitHub Copilot family.)"""
+    at strength>=0.5; same behavior as the GitHub Copilot family.)
+
+    Issue #1164: chatgpt/* rows are now ``interactive_only`` (device-flow / codex
+    login), so the automatic candidate cascade skips the whole family by default
+    — only the explicitly configured base would survive, collapsing this ranking.
+    Intra-family ranking is therefore an opt-in scenario: set PDD_ALLOW_INTERACTIVE
+    so the family is included, then assert the ELO ordering."""
+    monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
     df = li._load_model_data(_packaged_csv_path())
     fam = df[df["provider"] == "OpenAI ChatGPT"].copy()
     cands = li._select_model_candidates(0.8, "chatgpt/gpt-5.3-codex", fam)
