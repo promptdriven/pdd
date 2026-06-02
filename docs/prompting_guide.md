@@ -1063,8 +1063,11 @@ Use `select=` to include only specific parts of a file instead of the whole thin
 | `section:Heading` | Markdown | `section:Installation` |
 | `pattern:/regex/` | Any | `pattern:/^import/` |
 | `path:key.nested` | JSON/YAML | `path:config.database.host` |
+| `pytest:test_name` | Python (pytest) (Python only) | `pytest:test_auth,test_login` |
 
 Selectors are composable: `select="lines:1-5,def:main,def:helper"`. If a selector fails to match, PDD falls back to the full file with a warning.
+
+**`pytest:` selector** (Python only): Specifically designed for testing context. It uses AST slicing to extract only the requested tests and their transitive closure of dependencies (fixtures, helper functions, decorators, and imports). It automatically resolves fixtures from the same file or `conftest.py` files.
 
 **Interface mode** (`mode="interface"`, Python only) extracts signatures, docstrings, and type hints with bodies replaced by `...`. Useful when you only need the contract, not the implementation:
 

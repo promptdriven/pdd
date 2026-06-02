@@ -9694,5 +9694,61 @@
       "x": 0,
       "y": 0
     }
+  },
+  {
+    "reason": "AST-based pytest context slicer for precise extraction of test context and dependencies.",
+    "description": "Precisely slices pytest files to include only relevant test context and its transitive closure of dependencies (fixtures, helpers, imports).",
+    "dependencies": [],
+    "priority": 100,
+    "filename": "pytest_slicer_python.prompt",
+    "filepath": "pdd/pytest_slicer.py",
+    "tags": [
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "PytestSlicer.__init__",
+            "signature": "(main_source: str, file_path: str | None = None)",
+            "returns": "None"
+          },
+          {
+            "name": "PytestSlicer.slice",
+            "signature": "(test_names: List[str])",
+            "returns": "Tuple[str, SlicedManifest]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
+    "description": "Deterministic content extraction from files based on line ranges, Python AST structures, Markdown sections, regex patterns, and JSON/YAML path traversal.",
+    "dependencies": [
+      "pytest_slicer_python.prompt"
+    ],
+    "priority": 101,
+    "filename": "content_selector_python.prompt",
+    "filepath": "pdd/content_selector.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ContentSelector.select",
+            "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\")",
+            "returns": "str"
+          }
+        ]
+      }
+    }
   }
 ]

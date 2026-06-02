@@ -2003,10 +2003,11 @@ PDD supports the following XML-like tags in prompt files. Note: XML-like tags (`
    ```xml
    <include>./path/to/file.txt</include>
    <include select="def:foo,class:Bar">src/utils.py</include>
+   <include select="pytest:test_my_feature">tests/test_existing.py</include>
    <include select="class:Handler" mode="interface">src/api.py</include>
    <include query="authentication flow">docs/api_reference.md</include>
    ```
-   - `select=` — deterministic structural extraction (functions, classes, line ranges, headings, regex, JSON/YAML paths). Composable via comma-separation.
+   - `select=` — deterministic structural extraction (functions, classes, pytest tests (Python only), line ranges, headings, regex, JSON/YAML paths). Composable via comma-separation.
    - `mode="interface"` — Python-only. Extracts signatures and docstrings with bodies replaced by `...`.
    - `query=` — LLM-powered semantic extraction, cached in `.pdd/extracts/`.
    - `optional` — when present on an `<include ...>` tag, a missing file resolves to an empty string (`""`) during non-recursive preprocessing (while still logging a warning).

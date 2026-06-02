@@ -4,6 +4,7 @@
 
 ### Feat
 
+- **pytest_slicer**: Implement AST-based pytest context slicing for selective includes. Supports recursive dependency resolution (fixtures, helpers, imports), `conftest.py` lookup, and `@pytest.mark.usefixtures`. Integrated into `ContentSelector` via the `pytest:` selector kind.
 - **sync**: add public-surface and test-churn gates to `pdd sync` to stop silent over-regeneration of mature modules and tests; gates honor anchored `BREAKING-CHANGE:` opt-outs and route failures through the existing `PDD_REPAIR_DIRECTIVE` retry plumbing across the in-process generate, per-op orchestration (`crash`/`verify`/`fix`), `cmd_test_main`, and one-session agentic paths. Configurable via `PDD_TEST_CHURN_THRESHOLD` (default `0.40`, trailing `%` accepted), `PDD_SKIP_PUBLIC_SURFACE_GATE`, `PDD_SKIP_TEST_CHURN_GATE`, `PDD_ALLOW_EMPTY_GENERATION` (escape hatch for the empty-output safety guard that refuses to truncate non-empty existing files with empty LLM responses), or the umbrella `PDD_SKIP_CONFORMANCE` (#1015, closes #1012, #1030).
 
 ### Fix
