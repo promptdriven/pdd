@@ -4702,6 +4702,152 @@ class TestDocContractCheck:
         res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
         assert res == 0
 
+    def test_repo_declared_doc_contract_supports_non_pdd_repo_surfaces(self, tmp_path: Path) -> None:
+        """A non-PDD repository can declare its own user-facing surfaces and docs.
+
+        This pins the holistic interface: the gate is not limited to PDD's
+        `.pddrc`, `PDD_*`, Click, README, or prompt conventions.
+        """
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        (tmp_path / ".pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".pdd" / "doc_contract.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "rules": [
+                        {
+                            "name": "application env vars",
+                            "source_globs": ["src/*.py"],
+                            "added_regex": r"\b(APP_[A-Z0-9_]+)\b",
+                            "docs": [
+                                {
+                                    "path": "docs/configuration.md",
+                                    "section_start": "## Environment",
+                                    "section_end_markers": ["## "],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "docs" / "configuration.md").write_text(
+            "# Config\n## Environment\n- `APP_EXISTING` is documented.\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "src" / "service.py").write_text(
+            "import os\nVALUE = os.environ.get('APP_EXISTING')\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "contract", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        (tmp_path / "src" / "service.py").write_text(
+            "import os\nVALUE = os.environ.get('APP_BILLING_TOKEN')\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "add env", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 1
+
+        (tmp_path / "docs" / "configuration.md").write_text(
+            "# Config\n## Environment\n- `APP_BILLING_TOKEN` is documented.\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "document env", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~2") == 0
+
+    def test_repo_declared_doc_contract_uses_base_config_not_pr_weakened_config(self, tmp_path: Path) -> None:
+        """A PR cannot bypass repo-declared docs by weakening its own config."""
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        (tmp_path / ".pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+        base_config = {
+            "version": 1,
+            "rules": [
+                {
+                    "name": "application env vars",
+                    "source_globs": ["src/*.py"],
+                    "added_regex": r"\b(APP_[A-Z0-9_]+)\b",
+                    "docs": ["docs/configuration.md"],
+                }
+            ],
+        }
+        (tmp_path / ".pdd" / "doc_contract.json").write_text(
+            json.dumps(base_config), encoding="utf-8"
+        )
+        (tmp_path / "docs" / "configuration.md").write_text(
+            "# Config\n", encoding="utf-8"
+        )
+        (tmp_path / "src" / "service.py").write_text(
+            "VALUE = None\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "base contract", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        weakened_config = {
+            "version": 1,
+            "rules": [
+                {
+                    "name": "application env vars",
+                    "source_globs": ["never/*.py"],
+                    "added_regex": r"\b(APP_[A-Z0-9_]+)\b",
+                    "docs": ["docs/configuration.md"],
+                }
+            ],
+        }
+        (tmp_path / ".pdd" / "doc_contract.json").write_text(
+            json.dumps(weakened_config), encoding="utf-8"
+        )
+        (tmp_path / "src" / "service.py").write_text(
+            "import os\nVALUE = os.environ.get('APP_SECRET_KEY')\n",
+            encoding="utf-8",
+        )
+
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "weaken config and add env", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 1
+
+        (tmp_path / "docs" / "configuration.md").write_text(
+            "# Config\n- `APP_SECRET_KEY` is documented.\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "document env", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~2") == 0
+
     def test_run_doc_contract_check_ignores_test_fixture_literals(self, tmp_path: Path) -> None:
         from pdd.checkup_gates import run_doc_contract_check
 

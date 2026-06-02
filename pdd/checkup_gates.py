@@ -50,6 +50,7 @@ Trust-boundary invariants:
 from __future__ import annotations
 
 import datetime as _dt
+import fnmatch
 import json
 import logging
 import os
@@ -61,7 +62,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -3308,6 +3309,269 @@ def get_markdown_section(text: str, start_marker: str, end_markers: List[str]) -
     return text[start_idx:end_idx]
 
 
+_DOC_CONTRACT_CONFIG_PATHS: Tuple[str, ...] = (
+    ".pdd/doc_contract.json",
+    ".pdd/doc-contract.json",
+)
+
+
+def _git_show_doc_contract_text(
+    worktree: Path,
+    base_spec: Optional[str],
+    rel_path: str,
+    trusted_git: Optional[str] = None,
+    git_env: Optional[Dict[str, str]] = None,
+) -> Optional[str]:
+    """Return ``rel_path`` content from ``base_spec`` when available."""
+    if not base_spec:
+        return None
+    if not trusted_git:
+        trusted_git = _resolve_trusted_git(worktree)
+    if not trusted_git:
+        return None
+    if git_env is None:
+        git_env = _build_subprocess_env(worktree)
+    try:
+        result = subprocess.run(
+            [trusted_git, "-C", str(worktree), "show", f"{base_spec}:{rel_path}"],
+            capture_output=True,
+            env=git_env,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
+def _as_str_list(value: Any) -> List[str]:
+    """Normalize a JSON string-or-list field to a list of strings."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str)]
+    return []
+
+
+def _load_doc_contract_config(
+    worktree: Path,
+    base_spec: Optional[str],
+    trusted_git: str,
+    git_env: Dict[str, str],
+) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Load repo-declared doc-contract rules.
+
+    The base-tree config is authoritative when it exists. A reviewed PR must
+    not be able to weaken the gate by editing or deleting its own contract
+    config in the worktree. If the base has no config, the current worktree
+    config is accepted so repositories can introduce the interface.
+    """
+    errors: List[str] = []
+    config_text: Optional[str] = None
+    config_source = ""
+    for rel_path in _DOC_CONTRACT_CONFIG_PATHS:
+        config_text = _git_show_doc_contract_text(
+            worktree, base_spec, rel_path, trusted_git, git_env
+        )
+        if config_text is not None:
+            config_source = f"{base_spec}:{rel_path}" if base_spec else rel_path
+            break
+    if config_text is None:
+        for rel_path in _DOC_CONTRACT_CONFIG_PATHS:
+            path = worktree / rel_path
+            if path.is_file():
+                try:
+                    config_text = path.read_text(encoding="utf-8")
+                    config_source = rel_path
+                except (OSError, UnicodeDecodeError) as exc:
+                    errors.append(f"Could not read {rel_path}: {exc}")
+                break
+    if config_text is None:
+        return [], errors
+    try:
+        parsed = json.loads(config_text)
+    except json.JSONDecodeError as exc:
+        return [], [f"Invalid doc-contract config {config_source}: {exc}"]
+    rules = parsed.get("rules") if isinstance(parsed, dict) else None
+    if not isinstance(rules, list):
+        return [], [f"Doc-contract config {config_source} must contain a 'rules' list."]
+    valid_rules: List[Dict[str, Any]] = []
+    for index, raw_rule in enumerate(rules, start=1):
+        if not isinstance(raw_rule, dict):
+            errors.append(f"Doc-contract rule #{index} in {config_source} is not an object.")
+            continue
+        name = str(raw_rule.get("name") or f"rule-{index}")
+        source_globs = _as_str_list(raw_rule.get("source_globs"))
+        added_regex = raw_rule.get("added_regex")
+        doc_specs_raw = raw_rule.get("docs", raw_rule.get("doc_paths"))
+        if isinstance(doc_specs_raw, (str, dict)):
+            doc_specs_raw = [doc_specs_raw]
+        if not source_globs:
+            errors.append(f"Doc-contract rule '{name}' is missing source_globs.")
+            continue
+        if not isinstance(added_regex, str) or not added_regex:
+            errors.append(f"Doc-contract rule '{name}' is missing added_regex.")
+            continue
+        if not isinstance(doc_specs_raw, list) or not doc_specs_raw:
+            errors.append(f"Doc-contract rule '{name}' is missing docs/doc_paths.")
+            continue
+        try:
+            re.compile(added_regex)
+        except re.error as exc:
+            errors.append(f"Doc-contract rule '{name}' has invalid added_regex: {exc}")
+            continue
+        docs: List[Dict[str, Any]] = []
+        for doc_index, item in enumerate(doc_specs_raw, start=1):
+            if isinstance(item, str):
+                docs.append({"path": item})
+                continue
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                errors.append(
+                    f"Doc-contract rule '{name}' doc #{doc_index} must be a path string or object with path."
+                )
+                continue
+            doc = dict(item)
+            if "section_end_markers" in doc:
+                doc["section_end_markers"] = _as_str_list(doc["section_end_markers"])
+            docs.append(doc)
+        if not docs:
+            continue
+        valid_rules.append(
+            {
+                "name": name,
+                "source_globs": source_globs,
+                "ignore_globs": _as_str_list(raw_rule.get("ignore_globs")),
+                "ignore_values": set(_as_str_list(raw_rule.get("ignore_values"))),
+                "added_regex": added_regex,
+                "doc_regex": raw_rule.get("doc_regex"),
+                "docs": docs,
+            }
+        )
+    return valid_rules, errors
+
+
+def _path_matches_any_glob(path: str, patterns: Sequence[str]) -> bool:
+    return any(fnmatch.fnmatch(path, pattern) for pattern in patterns)
+
+
+def _capture_doc_context(match: re.Match[str]) -> Dict[str, str]:
+    """Build escaped placeholder values for a generic doc-contract match."""
+    raw_values: Dict[str, str] = {}
+    raw_values.update({k: v for k, v in match.groupdict().items() if v is not None})
+    if match.lastindex:
+        raw_values.setdefault("value", match.group(1))
+    else:
+        raw_values.setdefault("value", match.group(0))
+    context: Dict[str, str] = {}
+    for key, value in raw_values.items():
+        context[key] = re.escape(value)
+        context[f"{key}_dashed"] = re.escape(value.replace("_", "-"))
+    context["__raw_value"] = raw_values["value"]
+    return context
+
+
+def _render_doc_regex(template: Optional[str], context: Dict[str, str]) -> str:
+    """Render a configured doc regex with escaped capture placeholders."""
+    if not isinstance(template, str) or not template:
+        return context["value"]
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1)
+        return context.get(key, match.group(0))
+
+    return re.sub(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", replace, template)
+
+
+def _doc_spec_text(worktree: Path, spec: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+    """Return the current documentation text selected by a doc spec."""
+    rel_path = spec.get("path")
+    if not isinstance(rel_path, str):
+        return "", "invalid doc path"
+    path = worktree / rel_path
+    if not path.is_file():
+        return "", f"{rel_path} is missing"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return "", f"could not read {rel_path}: {exc}"
+    section_start = spec.get("section_start")
+    if isinstance(section_start, str) and section_start:
+        section = get_markdown_section(
+            text,
+            section_start,
+            _as_str_list(spec.get("section_end_markers")) or ["## ", "### "],
+        )
+        if not section:
+            return "", f"{rel_path} does not contain section {section_start!r}"
+        text = section
+    return text, None
+
+
+def _run_configured_doc_contract_rules(
+    worktree: Path,
+    base_spec: Optional[str],
+    trusted_git: str,
+    git_env: Dict[str, str],
+    added_lines_by_file: Dict[str, List[str]],
+) -> List[str]:
+    """Evaluate repo-declared, non-PDD-specific doc-contract rules."""
+    rules, errors = _load_doc_contract_config(worktree, base_spec, trusted_git, git_env)
+    if not rules:
+        return errors
+    obligations: Dict[Tuple[str, str, str], Tuple[Dict[str, Any], Dict[str, str]]] = {}
+    for file_path, lines in added_lines_by_file.items():
+        normalized_path = file_path.replace("\\", "/")
+        for rule in rules:
+            if not _path_matches_any_glob(normalized_path, rule["source_globs"]):
+                continue
+            if _path_matches_any_glob(normalized_path, rule["ignore_globs"]):
+                continue
+            regex = re.compile(rule["added_regex"])
+            for line in lines:
+                for match in regex.finditer(line):
+                    context = _capture_doc_context(match)
+                    value = context["__raw_value"]
+                    if value in rule["ignore_values"]:
+                        continue
+                    obligations[(rule["name"], normalized_path, value)] = (
+                        rule,
+                        context,
+                    )
+    doc_cache: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {}
+    for (_name, source_path, value), (rule, context) in obligations.items():
+        doc_pattern = _render_doc_regex(rule.get("doc_regex"), context)
+        for doc in rule["docs"]:
+            doc_path = doc["path"]
+            section_start = str(doc.get("section_start") or "")
+            cache_key = (doc_path, section_start)
+            if cache_key not in doc_cache:
+                doc_cache[cache_key] = _doc_spec_text(worktree, doc)
+            doc_text, doc_error = doc_cache[cache_key]
+            if doc_error:
+                errors.append(
+                    f"Doc-contract rule '{rule['name']}' captured '{value}' from "
+                    f"{source_path}, but {doc_error}."
+                )
+                continue
+            try:
+                documented = re.search(doc_pattern, doc_text, re.MULTILINE) is not None
+            except re.error as exc:
+                errors.append(
+                    f"Doc-contract rule '{rule['name']}' rendered invalid doc_regex "
+                    f"for '{value}': {exc}"
+                )
+                continue
+            if not documented:
+                errors.append(
+                    f"Doc-contract rule '{rule['name']}' captured '{value}' from "
+                    f"{source_path}, but {doc_path} does not document it."
+                )
+    return errors
+
+
 def _doc_contract_should_scan_added_file(file_path: str) -> bool:
     """Return True when ``file_path`` can define user-facing runtime surfaces."""
     path = file_path.replace("\\", "/")
@@ -3595,8 +3859,16 @@ def run_doc_contract_check(
         prompt_content, "## Workflow Operations", ["## "]
     )
 
-    # 5. Perform the contract checks
-    errors = []
+    # 5. Perform the contract checks. Repo-declared rules are evaluated first:
+    # they are the repo-agnostic interface for non-PDD projects. The legacy PDD
+    # checks below remain as PDD's built-in default contract.
+    errors = _run_configured_doc_contract_rules(
+        worktree,
+        base_spec,
+        trusted_git,
+        git_env,
+        added_lines_by_file,
+    )
 
     for key in added_pddrc_keys:
         if f"`{key}`" not in pddrc_section and key not in pddrc_section:
