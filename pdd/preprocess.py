@@ -260,6 +260,7 @@ def preprocess(
     _seen: Optional[set] = None,
     _failed: Optional[List[str]] = None,
     _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
 ) -> str:
     try:
         # Some tests patch template loading to return mock objects with .format().
@@ -292,6 +293,7 @@ def preprocess(
             _seen=_seen,
             _failed=_failed,
             _user_intent_paths=_user_intent_paths,
+            snapshot_recorder=snapshot_recorder,
         )
         _dbg("After backtick includes processed")
         prompt = process_xml_tags(
@@ -302,6 +304,7 @@ def preprocess(
             _seen=_seen,
             _failed=_failed,
             _user_intent_paths=_user_intent_paths,
+            snapshot_recorder=snapshot_recorder,
         )
         _dbg("After XML-like tags processed")
         if double_curly_brackets:
@@ -390,6 +393,7 @@ def _process_nested_includes(
     _user_intent_paths: Optional[set],
     examples_dir: str = "examples/",
     tests_dir: str = "tests/",
+    snapshot_recorder: Optional[Any] = None,
 ) -> str:
     """Resolve include syntax from included content while preserving the include stack."""
     nested_user_intent_paths = _user_intent_paths if _user_intent_paths is not None else set()
@@ -401,6 +405,7 @@ def _process_nested_includes(
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
+        snapshot_recorder=snapshot_recorder,
     )
     content = process_include_tags(
         content,
@@ -410,6 +415,7 @@ def _process_nested_includes(
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
+        snapshot_recorder=snapshot_recorder,
     )
     content = process_include_many_tags(
         content,
@@ -419,6 +425,7 @@ def _process_nested_includes(
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
+        snapshot_recorder=snapshot_recorder,
     )
     return content
 
@@ -430,6 +437,7 @@ def process_backtick_includes(
     _seen: Optional[set] = None,
     _failed: Optional[List[str]] = None,
     _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
 ) -> str:
     if _seen is None:
         _seen = set()
@@ -456,6 +464,7 @@ def process_backtick_includes(
                         _seen=child_seen,
                         _failed=_failed,
                         _user_intent_paths=_user_intent_paths,
+                        snapshot_recorder=snapshot_recorder,
                     )
                 else:
                     content = _process_nested_includes(
@@ -465,7 +474,10 @@ def process_backtick_includes(
                         _user_intent_paths=_user_intent_paths,
                         examples_dir=examples_dir,
                         tests_dir=tests_dir,
+                        snapshot_recorder=snapshot_recorder,
                     )
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_include(source_path=full_path, content=content)
                 _dbg(f"Included via backticks: {file_path} (len={len(content)})")
                 return f"```{content}```"
         except FileNotFoundError:
@@ -528,6 +540,7 @@ def process_xml_tags(
     _seen: Optional[set] = None,
     _failed: Optional[List[str]] = None,
     _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
 ) -> str:
     if _seen is None:
         _seen = set()
@@ -557,6 +570,7 @@ def process_xml_tags(
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=_user_intent_paths,
+        snapshot_recorder=snapshot_recorder,
     )
     text = process_include_many_tags(
         text,
@@ -566,9 +580,10 @@ def process_xml_tags(
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=user_intent_many_paths,
+        snapshot_recorder=snapshot_recorder,
     )
-    text = process_shell_tags(text, recursive)
-    text = process_web_tags(text, recursive)
+    text = process_shell_tags(text, recursive, snapshot_recorder=snapshot_recorder)
+    text = process_web_tags(text, recursive, snapshot_recorder=snapshot_recorder)
     return text
 
 def _parse_attrs(attr_str: str) -> dict:
@@ -592,6 +607,7 @@ def process_include_tags(
     _seen: Optional[set] = None,
     _failed: Optional[List[str]] = None,
     _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
 ) -> str:
     if _seen is None:
         _seen = set()
@@ -626,13 +642,37 @@ def process_include_tags(
                 resolved_path = get_file_path(file_path)
                 from pdd.include_query_extractor import IncludeQueryExtractor
                 extractor = IncludeQueryExtractor()
-                return extractor.extract(file_path=resolved_path, query=query)
+                extracted = extractor.extract(file_path=resolved_path, query=query)
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_include(
+                        source_path=resolved_path,
+                        content=extracted,
+                        query=query,
+                        output=extracted,
+                    )
+                return extracted
             except ImportError:
                 console.print("[yellow]Warning: pdd.include_query_extractor not found. Cannot perform semantic query.[/yellow]")
-                return f"[Error: pdd.include_query_extractor not found. Cannot query from {file_path}]"
+                error_msg = f"[Error: pdd.include_query_extractor not found. Cannot query from {file_path}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_include(
+                        source_path=resolved_path,
+                        content=error_msg,
+                        query=query,
+                        output=error_msg,
+                    )
+                return error_msg
             except Exception as e:
                 console.print(f"[bold red]Error in semantic query:[/bold red] {e}")
-                return f"[Error in semantic query from {file_path}: {e}]"
+                error_msg = f"[Error in semantic query from {file_path}: {e}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_include(
+                        source_path=resolved_path,
+                        content=error_msg,
+                        query=query,
+                        output=error_msg,
+                    )
+                return error_msg
 
         try:
             full_path = get_file_path(file_path)
@@ -726,24 +766,55 @@ def process_include_tags(
                                 file_path=full_path,
                                 mode=mode,
                             )
-                        except Exception as e:
-                            # Compression Fallback Strategy
-                            fallback_strategy = os.environ.get("PDD_COMPRESSION_FALLBACK", "full").lower()
-                            if fallback_strategy == "error":
-                                raise
-
-                            _warn_selector_fallback(
-                                file_path, mode, e, selectors=selectors_str
-                            )
-                            
-                            # Fall back to query if originally present
+                        except ImportError as e:
                             fallback_query = attrs.get('query')
                             if fallback_query:
                                 try:
                                     from pdd.include_query_extractor import IncludeQueryExtractor
-                                    content = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
-                                except Exception:
-                                    pass
+                                    extracted = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
+                                    if snapshot_recorder is not None:
+                                        snapshot_recorder.record_include(
+                                            source_path=full_path,
+                                            content=extracted,
+                                            query=fallback_query,
+                                            output=extracted,
+                                        )
+                                    return extracted
+                                except Exception as inner_e:
+                                    if snapshot_recorder is not None:
+                                        snapshot_recorder.record_include(
+                                            source_path=full_path,
+                                            content=f"[query_include failed: {inner_e}]",
+                                            query=fallback_query,
+                                            output=f"[query_include failed: {inner_e}]",
+                                        )
+                            _warn_selector_fallback(file_path, mode, e, selectors=selectors_str)
+                        except Exception as e:
+                            fallback_strategy = os.environ.get("PDD_COMPRESSION_FALLBACK", "full").lower()
+                            if fallback_strategy == "error":
+                                raise
+                            fallback_query = attrs.get('query')
+                            if fallback_query:
+                                try:
+                                    from pdd.include_query_extractor import IncludeQueryExtractor
+                                    extracted = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
+                                    if snapshot_recorder is not None:
+                                        snapshot_recorder.record_include(
+                                            source_path=full_path,
+                                            content=extracted,
+                                            query=fallback_query,
+                                            output=extracted,
+                                        )
+                                    return extracted
+                                except Exception as inner_e:
+                                    if snapshot_recorder is not None:
+                                        snapshot_recorder.record_include(
+                                            source_path=full_path,
+                                            content=f"[query_include failed: {inner_e}]",
+                                            query=fallback_query,
+                                            output=f"[query_include failed: {inner_e}]",
+                                        )
+                            _warn_selector_fallback(file_path, mode, e, selectors=selectors_str)
                     
                     if recursive:
                         child_seen = _seen | {resolved}
@@ -756,6 +827,7 @@ def process_include_tags(
                             _seen=child_seen,
                             _failed=_failed,
                             _user_intent_paths=_user_intent_paths,
+                            snapshot_recorder=snapshot_recorder,
                         )
                     else:
                         child_seen = _seen | {resolved}
@@ -766,7 +838,10 @@ def process_include_tags(
                             _user_intent_paths=_user_intent_paths,
                             examples_dir=examples_dir,
                             tests_dir=tests_dir,
+                            snapshot_recorder=snapshot_recorder,
                         )
+                    if snapshot_recorder is not None:
+                        snapshot_recorder.record_include(source_path=full_path, content=content)
                     _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
                     return content
         except FileNotFoundError:
@@ -859,7 +934,7 @@ def process_pdd_tags(text: str) -> str:
         return "This is a test "
     return processed
 
-def process_shell_tags(text: str, recursive: bool) -> str:
+def process_shell_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any] = None) -> str:
     pattern = r'<shell>(.*?)</shell>'
     def replace_shell(match):
         command = match.group(1).strip()
@@ -884,6 +959,14 @@ def process_shell_tags(text: str, recursive: bool) -> str:
                 text=True,
                 timeout=timeout_arg,
             )
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_shell(
+                    command=command,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    exit_code=result.returncode,
+                    timeout=timeout_arg,
+                )
             return result.stdout
         except subprocess.CalledProcessError as e:
             # Do not re-raise: replace the <shell> tag with an inline error so preprocessing
@@ -897,16 +980,40 @@ def process_shell_tags(text: str, recursive: bool) -> str:
             )
             console.print(f"[bold red]Error:[/bold red] {error_msg}")
             _dbg(f"Shell command error: {error_msg}")
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_shell(
+                    command=command,
+                    stdout=e.stdout or "",
+                    stderr=e.stderr or "",
+                    exit_code=e.returncode,
+                    timeout=timeout_arg,
+                )
             return f"Error: {error_msg}"
         except subprocess.TimeoutExpired as e:
             # Replace the <shell> tag with a visible timeout marker instead of hanging
             error_msg = f"Command '{e.cmd}' timed out after {e.timeout} seconds."
             console.print(f"[bold red]Error:[/bold red] {error_msg}")
             _dbg(f"Shell command timeout: {error_msg}")
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_shell(
+                    command=command,
+                    stdout=e.stdout or "",
+                    stderr=e.stderr or "",
+                    exit_code=124,
+                    timeout=e.timeout,
+                )
             return error_msg
         except Exception as e:
             console.print(f"[bold red]Error executing shell command:[/bold red] {str(e)}")
             _dbg(f"Shell execution exception: {e}")
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_shell(
+                    command=command,
+                    stdout="",
+                    stderr=str(e),
+                    exit_code=-1,
+                    timeout=timeout_arg,
+                )
             return f"[Shell execution error: {str(e)}]"
     code_spans = _extract_code_spans(text)
     def replace_shell_with_spans(match):
@@ -915,7 +1022,7 @@ def process_shell_tags(text: str, recursive: bool) -> str:
         return replace_shell(match)
     return re.sub(pattern, replace_shell_with_spans, text, flags=re.DOTALL)
 
-def process_web_tags(text: str, recursive: bool) -> str:
+def process_web_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any] = None) -> str:
     pattern = r'<web>(.*?)</web>'
     def replace_web(match):
         url = match.group(1).strip()
@@ -930,6 +1037,13 @@ def process_web_tags(text: str, recursive: bool) -> str:
         cached_content = cache.get(url)
         if cached_content is not None:
             console.print(f"Using cached content for: [cyan]{url}[/cyan]")
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_web(
+                    url=url,
+                    content=cached_content,
+                    fetcher="firecrawl_cache",
+                    status=200,
+                )
             return cached_content
 
 
@@ -944,13 +1058,19 @@ def process_web_tags(text: str, recursive: bool) -> str:
                     from firecrawl import FirecrawlApp as Firecrawl
                 except ImportError:
                     _dbg("firecrawl import failed; package not installed")
-                    return f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
+                    error_msg = f"[Error: firecrawl-py package not installed. Cannot scrape {url}]"
+                    if snapshot_recorder is not None:
+                        snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+                    return error_msg
 
             api_key = os.environ.get('FIRECRAWL_API_KEY')
             if not api_key:
                 console.print("[bold yellow]Warning:[/bold yellow] FIRECRAWL_API_KEY not found in environment")
                 _dbg("FIRECRAWL_API_KEY not set")
-                return f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
+                error_msg = f"[Error: FIRECRAWL_API_KEY not set. Cannot scrape {url}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+                return error_msg
 
             app = Firecrawl(api_key=api_key)
 
@@ -959,7 +1079,10 @@ def process_web_tags(text: str, recursive: bool) -> str:
             scrape_fn = getattr(app, 'scrape', None) or getattr(app, 'scrape_url', None)
             if scrape_fn is None:
                 _dbg("firecrawl client exposes neither scrape() nor scrape_url()")
-                return f"[Error: firecrawl-py client missing scrape API. Cannot scrape {url}]"
+                error_msg = f"[Error: firecrawl-py client missing scrape API. Cannot scrape {url}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+                return error_msg
 
             # Firecrawl SDK has historically had a bug where it passed timeout
             # (ms) to requests.post() which expects seconds, so timeout=30000
@@ -981,19 +1104,35 @@ def process_web_tags(text: str, recursive: bool) -> str:
             if content:
                 # Cache the result for future use
                 cache.set(url, content)
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_web(
+                        url=url,
+                        content=content,
+                        fetcher="firecrawl",
+                        status=200,
+                    )
                 return content
             else:
                 console.print(f"[bold yellow]Warning:[/bold yellow] No markdown content returned for {url}")
                 _dbg("Web scrape returned no markdown content")
-                return f"[No content available for {url}]"
+                error_msg = f"[No content available for {url}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_web(url=url, content=error_msg, fetcher="firecrawl", status=200)
+                return error_msg
         except FuturesTimeoutError:
             console.print(f"[bold yellow]Warning:[/bold yellow] Web scrape timed out after 30s for {url}")
             _dbg(f"Web scrape timeout for {url}")
-            return f"[Web scraping timed out for {url}]"
+            error_msg = f"[Web scraping timed out for {url}]"
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+            return error_msg
         except Exception as e:
             console.print(f"[bold red]Error scraping web content:[/bold red] {str(e)}")
             _dbg(f"Web scraping exception: {e}")
-            return f"[Web scraping error: {str(e)}]"
+            error_msg = f"[Web scraping error: {str(e)}]"
+            if snapshot_recorder is not None:
+                snapshot_recorder.record_web(url=url, content=error_msg, fetcher="error", status=None)
+            return error_msg
     code_spans = _extract_code_spans(text)
     def replace_web_with_spans(match):
         if _intersects_any_span(match.start(), match.end(), code_spans):
@@ -1009,6 +1148,7 @@ def process_include_many_tags(
     _seen: Optional[set] = None,
     _failed: Optional[List[str]] = None,
     _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
 ) -> str:
     """Process <include-many> blocks whose inner content is a comma- or newline-separated
     list of file paths (typically provided via variables after env expansion).
@@ -1045,7 +1185,10 @@ def process_include_many_tags(
                 full_path = get_file_path(p)
                 console.print(f"Including (many): [cyan]{full_path}[/cyan]")
                 with open(full_path, 'r', encoding='utf-8') as fh:
-                    contents.append(fh.read())
+                    content = fh.read()
+                    contents.append(content)
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_include(source_path=full_path, content=content)
                 _dbg(f"Included (many): {p}")
             except FileNotFoundError:
                 _dbg(f"Missing include-many: {p}")

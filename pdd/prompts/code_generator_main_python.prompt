@@ -1,5 +1,23 @@
 <pdd-reason>Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "is_git_repository", "signature": "(path: Optional[str] = None) -> bool", "returns": "bool"},
+      {"name": "get_git_content_at_ref", "signature": "(file_path: str, git_ref: str = \"HEAD\") -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "get_file_git_status", "signature": "(file_path: str) -> str", "returns": "str"},
+      {"name": "git_add_files", "signature": "(file_paths: List[str], verbose: bool = False) -> bool", "returns": "bool"},
+      {"name": "code_generator_main", "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, snapshot_context: bool = False) -> Tuple[str, bool, float, str]", "returns": "Tuple[str, bool, float, str]"},
+      {"name": "ArchitectureConformanceError", "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)", "returns": "ArchitectureConformanceError"},
+      {"name": "PublicSurfaceRegressionError", "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)", "returns": "PublicSurfaceRegressionError"},
+      {"name": "TestChurnError", "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)", "returns": "TestChurnError"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>construct_paths_python.prompt</pdd-dependency>
 <pdd-dependency>preprocess_python.prompt</pdd-dependency>
 <pdd-dependency>code_generator_python.prompt</pdd-dependency>
@@ -8,13 +26,12 @@
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
+<pdd-dependency>context_snapshot_python.prompt</pdd-dependency>
 
 ---
 name: pdd/code_generator_main
 language: Python
 ---
-
-<pdd-dependency>auto_include_python.prompt</pdd-dependency>
 
 # Role and Scope
 You are an expert Python Backend Engineer responsible for the `code_generator_main` module. This module serves as the primary orchestration engine for the PDD CLI, coordinating the transition from a `.prompt` file to finalized source code. It must handle complex logic involving local/cloud LLM providers, incremental diff-based generation, Git-based version recovery, and extensible post-processing hooks.
@@ -30,6 +47,11 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     - Support both Cloud execution (via `requests` to a PDD API) and Local execution (via a local generator function).
     - Implement fallback logic: if Cloud fails (except for 402/401/403/400 errors), automatically retry using the local provider.
     - Support `PDD_CLOUD_ONLY` and `PDD_NO_LOCAL_FALLBACK` environment flags.
+    - Add an opt-in keyword argument `snapshot_context: bool = False` for standard generation paths. When true, initialize a context snapshot recorder before preprocessing, record preprocessing artifacts before invoking cloud/local generation, then finalize the snapshot after generation and output write so output hashes and model/provider metadata are included. Include snapshot metadata in the returned/evidence context without changing default behavior when false.
+    - Snapshot artifacts must record selected grounding/few-shot examples when the cloud/local generation path exposes them. If selected examples are unavailable, record an explicit `unavailable` reason rather than omitting the field.
+    - Evidence/context-map output must include the snapshot manifest path, dynamic tag detection, expanded prompt hash, output code hash, and model/provider metadata when snapshot mode is enabled.
+    - `pdd replay <run_artifact>` must be able to reconstruct the exact expanded prompt context from snapshot artifacts and verify the expanded hash. The replay contract is prompt/context reconstruction; generated code may still vary.
+    - Apply the context snapshot redaction policy before durable shell/web content is written. Snapshot files must be deterministic JSON/text files that are safe to inspect after policy redaction.
 4. **Post-Processing**:
     - Support a `post_process_python` hook defined in front-matter or environment variables.
     - Handle both `stdin` and `argv` execution modes for post-processing scripts.
@@ -110,6 +132,9 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 <preprocess>
     <include>pdd/preprocess.py</include>
 </preprocess>
+<context_snapshot>
+    <include>prompts/context_snapshot_python.prompt</include>
+</context_snapshot>
 <local_generator>
     <include>pdd/code_generator.py</include>
 </local_generator>

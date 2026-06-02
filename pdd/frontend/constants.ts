@@ -105,6 +105,7 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
       { name: 'max-attempts', type: 'number', placeholder: '3', description: 'Maximum fix attempts', defaultValue: '3' },
       { name: 'budget', type: 'number', placeholder: '20', description: 'Maximum cost in dollars', defaultValue: '20' },
       { name: 'skip-tests', type: 'checkbox', placeholder: '', description: 'Skip test generation' },
+      { name: 'snapshot-context', type: 'checkbox', placeholder: '', description: 'Capture replayable expanded prompt context' },
     ]
   },
   [CommandType.UPDATE]: {
@@ -132,6 +133,7 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
     options: [
       { name: 'output', type: 'file', placeholder: 'e.g., src/calculator.py', description: 'Where to save generated code' },
       { name: 'incremental', type: 'checkbox', placeholder: '', description: 'Use incremental patching' },
+      { name: 'snapshot-context', type: 'checkbox', placeholder: '', description: 'Capture replayable expanded prompt context' },
     ]
   },
   [CommandType.TEST]: {
@@ -248,7 +250,7 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
   [CommandType.SPLIT]: {
     name: CommandType.SPLIT,
     backendName: 'split',
-    description: "Agentic 15-step pipeline that diagnoses and splits a large dev unit into smaller, independent PDD dev units. Runs against the selected prompt's code file.",
+    description: "Agentic 14-step pipeline that diagnoses and splits a large dev unit into smaller, independent PDD dev units. Runs against the selected prompt's code file.",
     shortDescription: "Split Dev Unit",
     icon: "›",
     requiresPrompt: true,
@@ -308,6 +310,9 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
       { name: 'output', type: 'file', placeholder: 'prompts/updated.prompt', description: 'Where to save modified prompt' },
       { name: 'csv', type: 'file', placeholder: 'deps.csv', description: 'CSV file for dependency info' },
       { name: 'force-scan', type: 'checkbox', placeholder: '', description: 'Force rescan all files' },
+      { name: 'include-docs', type: 'checkbox', placeholder: '', description: 'Include documentation files (.md, .txt, .rst) in dependency discovery' },
+      { name: 'no-dedup', type: 'checkbox', placeholder: '', description: 'Skip redundant inline content removal' },
+      { name: 'concurrency', type: 'number', placeholder: '1', description: 'Number of parallel workers for file summarization', defaultValue: '1' },
     ]
   },
   [CommandType.CONFLICTS]: {
@@ -336,6 +341,23 @@ export const COMMANDS: Record<CommandType, CommandConfig> = {
       { name: 'xml', type: 'checkbox', placeholder: '', description: 'Insert XML delimiters for structure' },
       { name: 'recursive', type: 'checkbox', placeholder: '', description: 'Recursively preprocess includes' },
       { name: 'double', type: 'checkbox', placeholder: '', description: 'Double curly brackets' },
+      { name: 'snapshot', type: 'checkbox', placeholder: '', description: 'Capture replayable dynamic context snapshot' },
+    ]
+  },
+  [CommandType.REPLAY]: {
+    name: CommandType.REPLAY,
+    backendName: 'replay',
+    description: "Reconstruct and audit expanded prompt context from a snapshot run artifact.",
+    shortDescription: "Replay context",
+    icon: "›",
+    requiresPrompt: false,
+    isAdvanced: true,
+    group: "advanced",
+    options: [
+      { name: 'run-artifact', type: 'file', placeholder: '.pdd/evidence/runs/<run_id>.json', description: 'Snapshot run artifact to replay', required: true },
+      { name: 'output', type: 'file', placeholder: 'prompts/replayed.prompt', description: 'Where to write reconstructed expanded prompt' },
+      { name: 'verify-only', type: 'checkbox', placeholder: '', description: 'Only verify hashes without writing prompt' },
+      { name: 'json', type: 'checkbox', placeholder: '', description: 'Emit machine-readable replay status' },
     ]
   },
 };

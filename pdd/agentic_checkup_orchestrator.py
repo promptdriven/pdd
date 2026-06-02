@@ -20,7 +20,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from rich.console import Console
 
@@ -37,6 +37,9 @@ from .agentic_common import (
     run_agentic_task,
     save_workflow_state,
     substitute_template_variables,
+    drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
+    STEER_STATE_KEYS,
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
@@ -1752,6 +1755,7 @@ def _run_single_step(
     label: str,
     timeout_adder: float,
     reasoning_time: Optional[float] = None,
+    steers: Optional[List[Any]] = None,
 ) -> Optional[Tuple[bool, str, float, str]]:
     """Load template, preprocess, format, and run a single LLM step.
 
@@ -1787,6 +1791,7 @@ def _run_single_step(
         timeout=CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=reasoning_time,
+        steers=steers,
     )
     return (success, output, cost, model)
 
@@ -2248,6 +2253,12 @@ def _run_agentic_checkup_orchestrator_inner(
     last_completed_step_to_save = last_completed_step
     consecutive_provider_failures = 0
 
+    steer_state: Dict[str, Any] = {}
+    if state is not None:
+        for _steer_key in STEER_STATE_KEYS:
+            if _steer_key in state:
+                steer_state[_steer_key] = state[_steer_key]
+
     # ---- Helper closures for state management ----
 
     def _save_state() -> None:
@@ -2266,6 +2277,9 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_head_sha=current_pr_head_sha if pr_mode else None,
             step_comments=sorted(step_comments_set),
         )
+        for _steer_key in STEER_STATE_KEYS:
+            if _steer_key in steer_state:
+                new_state[_steer_key] = steer_state[_steer_key]
         github_comment_id = save_workflow_state(
             cwd=cwd, issue_number=issue_number, workflow_type="checkup",
             state=new_state, state_dir=state_dir,
@@ -2273,6 +2287,24 @@ def _run_agentic_checkup_orchestrator_inner(
             use_github_state=use_github_state,
             github_comment_id=github_comment_id,
         )
+
+    def _issue_step_steers():
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            steer_state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if step_steers:
+            _save_state()
+        return step_steers
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, steer_state, cwd=cwd, quiet=quiet
+    ):
+        _save_state()
 
     def _step_comment_key(step_num: Union[int, float], iteration: int = 1) -> int:
         """Project (step_num, iteration) -> deterministic non-negative int.
@@ -2449,6 +2481,7 @@ def _run_agentic_checkup_orchestrator_inner(
             label="step7_post_push_reverify",
             timeout_adder=timeout_adder,
             reasoning_time=reasoning_time,
+            steers=_issue_step_steers() or None,
         )
         if result is None:
             template_name = f"agentic_checkup_step7_{name7}_LLM"
@@ -2662,6 +2695,7 @@ def _run_agentic_checkup_orchestrator_inner(
             label=f"step{step_num}",
             timeout_adder=timeout_adder,
             reasoning_time=reasoning_time,
+            steers=_issue_step_steers() or None,
         )
 
         if result is None:
@@ -2709,6 +2743,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 label=f"step{step_num}",
                 timeout_adder=timeout_adder,
                 reasoning_time=reasoning_time,
+                steers=_issue_step_steers() or None,
             )
 
             if result is None:
@@ -2851,6 +2886,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 label="step7",
                 timeout_adder=timeout_adder,
                 reasoning_time=reasoning_time,
+                steers=_issue_step_steers() or None,
             )
 
             if result is None:
@@ -3138,6 +3174,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     label=iter_label,
                     timeout_adder=timeout_adder,
                     reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
                 )
 
                 if result is None:
@@ -4184,6 +4221,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 label="step8",
                 timeout_adder=timeout_adder,
                 reasoning_time=reasoning_time,
+                steers=_issue_step_steers() or None,
             )
 
             if result is None:
