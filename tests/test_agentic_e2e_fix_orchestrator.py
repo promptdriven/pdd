@@ -10739,3 +10739,162 @@ class TestFinalCheckupHeadSafetyChecks:
         # Only the pre-checkup SHA is fetched; the post-checkup fetch must
         # not happen because the checkup failed before any push.
         assert sha_mock.call_count == 1
+
+
+# Additional tests appended below
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+class TestPushWithRetryNewSignature:
+    """Tests for the new push_with_retry public API with keyword args."""
+
+    def test_push_with_retry_no_force_when_disabled(self, tmp_path):
+        """force_with_lease_on_non_fast_forward=False must NOT retry with force."""
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if "push" in cmd:
+                result.returncode = 1
+                result.stderr = (
+                    " ! [rejected] HEAD -> branch (non-fast-forward)\n"
+                    "hint: tip of your current branch is behind"
+                )
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
+            success, err = push_with_retry(
+                tmp_path,
+                repo_owner="o",
+                repo_name="r",
+                force_with_lease_on_non_fast_forward=False,
+            )
+
+        assert success is False
+        assert "non-fast-forward" in err
+        force_calls = [c for c in calls if "--force-with-lease" in c]
+        assert len(force_calls) == 0, (
+            f"Should not retry with force when disabled. Calls: {calls}"
+        )
+
+    def test_push_with_retry_accepts_remote_url_directly(self, tmp_path, monkeypatch):
+        """remote= can be a clone URL, not just a configured remote name."""
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        monkeypatch.setenv("GH_TOKEN", "ghs_xyz")
+        monkeypatch.delenv("PDD_GH_TOKEN_FILE", raising=False)
+        monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+        monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
+
+        push_cmds = []
+
+        def mock_run(cmd, **kwargs):
+            result = type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            if cmd[0] == "git" and cmd[1] == "push":
+                push_cmds.append(cmd)
+                if len(push_cmds) == 1:
+                    result.returncode = 1
+                    result.stderr = "fatal: Authentication failed"
+            return result
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
+            success, _ = push_with_retry(
+                tmp_path,
+                repo_owner="o",
+                repo_name="r",
+                remote="https://github.com/o/r.git",
+                refspec="refs/heads/feature:refs/heads/feature",
+                set_upstream=False,
+            )
+
+        assert success is True
+        # Second push should contain inlined token URL
+        assert len(push_cmds) == 2
+        assert any("x-access-token:ghs_xyz" in arg for arg in push_cmds[1])
+
+
+class TestFetchPrHeadShaHelper:
+    """Tests for _fetch_pr_head_sha best-effort helper."""
+
+    def test_returns_empty_string_on_exception(self):
+        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
+
+        with patch(
+            "pdd.checkup_review_loop._fetch_pr_metadata",
+            side_effect=RuntimeError("gh unavailable"),
+        ):
+            result = _fetch_pr_head_sha("owner", "repo", 42)
+        assert result == ""
+
+    def test_returns_head_sha_on_success(self):
+        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
+
+        with patch(
+            "pdd.checkup_review_loop._fetch_pr_metadata",
+            return_value={"head_sha": "abc123def"},
+        ):
+            result = _fetch_pr_head_sha("owner", "repo", 42)
+        assert result == "abc123def"
+
+    def test_returns_empty_when_metadata_missing_sha(self):
+        from pdd.agentic_e2e_fix_orchestrator import _fetch_pr_head_sha
+
+        with patch(
+            "pdd.checkup_review_loop._fetch_pr_metadata",
+            return_value={},
+        ):
+            result = _fetch_pr_head_sha("owner", "repo", 42)
+        assert result == ""
+
+
+class TestReadCheckupWorktreeHeadSha:
+    """Tests for _read_checkup_worktree_head_sha best-effort helper."""
+
+    def test_returns_empty_when_worktree_missing(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
+
+        def mock_run(cmd, **kwargs):
+            r = type("R", (), {"returncode": 0, "stdout": str(tmp_path) + "\n", "stderr": ""})()
+            return r
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
+            result = _read_checkup_worktree_head_sha(tmp_path, 42)
+        assert result == ""
+
+    def test_returns_sha_when_worktree_exists(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
+
+        worktree = tmp_path / ".pdd" / "worktrees" / "checkup-pr-42"
+        worktree.mkdir(parents=True)
+
+        def mock_run(cmd, **kwargs):
+            if "rev-parse" in cmd and "--show-toplevel" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": str(tmp_path) + "\n", "stderr": ""})()
+            if "rev-parse" in cmd and "HEAD" in cmd:
+                return type("R", (), {"returncode": 0, "stdout": "deadbeef\n", "stderr": ""})()
+            return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=mock_run):
+            result = _read_checkup_worktree_head_sha(tmp_path, 42)
+        assert result == "deadbeef"
+
+    def test_returns_empty_on_oserror(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _read_checkup_worktree_head_sha
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=OSError("boom"),
+        ):
+            result = _read_checkup_worktree_head_sha(tmp_path, 42)
+        assert result == ""
