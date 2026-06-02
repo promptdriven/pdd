@@ -33,6 +33,9 @@ from .agentic_common import (
     extract_step_report,
     normalize_step_comments_state,
     post_step_comment_once,
+    drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
+    STEER_STATE_KEYS,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -1810,6 +1813,7 @@ def _run_step11_code_cleanup(
     verbose: bool,
     quiet: bool,
     reasoning_time: Optional[float] = None,
+    steers: Optional[List[Any]] = None,
 ) -> Tuple[float, List[str]]:
     """Run Step 11: Code cleanup before CI validation.
 
@@ -1897,6 +1901,7 @@ def _run_step11_code_cleanup(
         label="step11_code_cleanup",
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=reasoning_time,
+        steers=steers,
     )
     total_cost += cleanup_cost
 
@@ -2077,6 +2082,7 @@ def run_agentic_e2e_fix_orchestrator(
     skipped_steps: Dict[int, str] = {}
     github_comment_id: Optional[int] = None
     step_comments_set: Set[int] = set()
+    steer_state: Dict[str, Any] = {}
     resumed_from_state = False
     # On resume, restore the workflow-start file snapshot so guards that diff
     # against it (e.g. NOT_A_BUG direct-edit suppression) keep working.
@@ -2142,6 +2148,9 @@ def run_agentic_e2e_fix_orchestrator(
             step_comments_set = normalize_step_comments_state(
                 loaded_state.get("step_comments")
             )
+            for _steer_key in STEER_STATE_KEYS:
+                if _steer_key in loaded_state:
+                    steer_state[_steer_key] = loaded_state[_steer_key]
 
             # Issue #1034 (codex P2 follow-up): restore the current cycle's
             # start snapshot so the resume-time cycle-waste-breaker can prove
@@ -2349,6 +2358,62 @@ def run_agentic_e2e_fix_orchestrator(
     import_error_retries = 0  # Global budget: max 1 retry across all cycles
     verification_failure_context = ""  # Injected into Step 1 prompt on retry
 
+    def _steer_state_fields() -> Dict[str, Any]:
+        return {
+            key: steer_state[key]
+            for key in STEER_STATE_KEYS
+            if key in steer_state
+        }
+
+    ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, steer_state, cwd=cwd, quiet=quiet
+    )
+
+    def _issue_step_steers():
+        nonlocal github_comment_id
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            steer_state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if not step_steers:
+            return step_steers
+        steer_payload = {
+            "workflow": workflow_name,
+            "issue_url": issue_url,
+            "issue_number": issue_number,
+            "current_cycle": current_cycle,
+            "last_completed_step": last_completed_step,
+            "step_outputs": step_outputs.copy(),
+            "dev_unit_states": dev_unit_states.copy(),
+            "total_cost": total_cost,
+            "model_used": model_used,
+            "changed_files": changed_files.copy(),
+            "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
+            "last_saved_at": datetime.now().isoformat(),
+            "github_comment_id": github_comment_id,
+            "step_comments": sorted(step_comments_set),
+            "clean_restart": effective_clean_restart,
+            **_steer_state_fields(),
+        }
+        new_gh_id = save_workflow_state(
+            cwd,
+            issue_number,
+            workflow_name,
+            steer_payload,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if new_gh_id:
+            github_comment_id = new_gh_id
+        return step_steers
+
     def _persist_resume_reverification_state() -> None:
         nonlocal github_comment_id
 
@@ -2370,6 +2435,7 @@ def run_agentic_e2e_fix_orchestrator(
             "initial_file_hashes": dict(initial_file_hashes),
             "initial_sha": initial_sha,
             "clean_restart": effective_clean_restart,
+            **_steer_state_fields(),
             # Persist None when the resumed cycle's baseline is unverified
             # (legacy state / pre-snapshot interrupt) — otherwise the next
             # resume would trust the fresh post-edit snapshot and immediately
@@ -2771,6 +2837,7 @@ def run_agentic_e2e_fix_orchestrator(
                     label=f"cycle{current_cycle}_step{step_num}",
                     max_retries=DEFAULT_MAX_RETRIES,
                     reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
                 )
 
                 # Step 1 timeout retry: retry once with increased timeout
@@ -2791,6 +2858,7 @@ def run_agentic_e2e_fix_orchestrator(
                         label=f"cycle{current_cycle}_step{step_num}_retry1",
                         max_retries=DEFAULT_MAX_RETRIES,
                         reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
                     )
                     step_cost += retry_cost
 
@@ -2915,6 +2983,7 @@ def run_agentic_e2e_fix_orchestrator(
                             else None
                         )
                     ),
+                    **_steer_state_fields(),
                 }
                 
                 new_gh_id = save_workflow_state(
@@ -3066,6 +3135,7 @@ def run_agentic_e2e_fix_orchestrator(
                             label=f"cycle{current_cycle}_step9_retry",
                             max_retries=DEFAULT_MAX_RETRIES,
                             reasoning_time=reasoning_time,
+                            steers=_issue_step_steers() or None,
                         )
                         total_cost += retry_cost
                         if retry_model:
@@ -3237,6 +3307,7 @@ def run_agentic_e2e_fix_orchestrator(
                     verbose=verbose,
                     quiet=quiet,
                     reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
                 )
                 # Round-2 of Greg's review: extend trusted step-comment
                 # coverage to the post-loop Step 11 (cleanup) path. The
@@ -3556,6 +3627,7 @@ def run_agentic_e2e_fix_orchestrator(
                     else None
                 )
             ),
+            **_steer_state_fields(),
         }
         save_workflow_state(
             cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
@@ -3610,6 +3682,7 @@ def run_agentic_e2e_fix_orchestrator(
                         else None
                     )
                 ),
+                **_steer_state_fields(),
             }
             save_workflow_state(
                 cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id

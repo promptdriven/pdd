@@ -9924,7 +9924,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False, reasoning_time=None):
+                        use_playwright=False, reasoning_time=None, steers=None, **kwargs):
             if "step3" in label:
                 return (
                     True,
@@ -9938,7 +9938,10 @@ class TestTrustedStepCommentPosting:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             return_value=True,
-        ) as mock_post_once:
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
             run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         assert mock_post_once.call_count >= 1
@@ -9954,7 +9957,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False, reasoning_time=None):
+                        use_playwright=False, reasoning_time=None, steers=None, **kwargs):
             if "step3" in label:
                 return (True, "NOT_A_BUG", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
@@ -9964,7 +9967,10 @@ class TestTrustedStepCommentPosting:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             return_value=True,
-        ) as mock_post_once:
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
             run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         assert mock_post_once.call_count >= 1
@@ -9981,7 +9987,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False, reasoning_time=None):
+                        use_playwright=False, reasoning_time=None, steers=None, **kwargs):
             if "step3" in label:
                 return (
                     True,
@@ -9995,6 +10001,9 @@ class TestTrustedStepCommentPosting:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             side_effect=RuntimeError("simulated gh failure"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
         ):
             # The run completes (success may be False due to NOT_A_BUG), but
             # the helper exception must not propagate.
