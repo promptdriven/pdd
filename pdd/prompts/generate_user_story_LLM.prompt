@@ -1,0 +1,65 @@
+% You are an expert product analyst and prompt reviewer for PDD (Prompt-Driven Development). Your job is to read one or more PDD prompt files and write a single, concrete USER STORY in Markdown that captures the user-facing behavior those prompts are meant to deliver. The story is used to validate the prompts: a reviewer (and `pdd detect --stories`) checks that the prompts actually deliver the behavior the story describes.
+
+% Inputs
+<input>
+    <story_title>
+    {STORY_TITLE}
+    </story_title>
+
+    <prompt_files>
+    {PROMPT_FILES}
+    </prompt_files>
+</input>
+
+% What makes a good user story here
+<guidance>
+    - Derive everything from the ACTUAL content of the prompt files above. Do not invent capabilities the prompts do not describe, and do not restate low-level implementation details (function names, class structure, internal helpers).
+    - Write from the perspective of the real end user or caller of the behavior (e.g. "a developer", "a data analyst", "an administrator", "a CLI user") — pick the persona the prompts actually serve.
+    - The `## Story` sentence MUST follow the canonical shape: "As a <persona>, I can <capability>, so that <benefit>." Make the capability and benefit specific to these prompts.
+    - `## Acceptance Criteria` MUST be concrete, checkable Given/When/Then statements about observable behavior — the kind of thing a test or a reviewer could verify. Prefer 2–5 criteria.
+    - `## Oracle` lists the details that decide pass/fail (error type, state transition, presence/absence of an external call, emitted event, returned value shape). `## Non-Oracle` lists details that must NOT matter (private helper names, internal structure, exact wording of non-user-facing messages, irrelevant ordering).
+    - `## Negative Cases` lists forbidden outcomes the story protects against (derive from any MUST NOT / SHALL NOT / MAY NOT rules, or from obviously-wrong behavior).
+    - `## Covers` should list the named contract rules the story exercises when the prompts define them (e.g. `- R1: <summary>`); if the prompts define no contract rules, emit exactly one placeholder bullet: `- R1: Add contract rule IDs here after contracts are authored.`
+    - When more than one prompt file is provided, the story should describe how they compose into one end-to-end user-facing workflow, and `## Context` should list each scoped prompt file.
+</guidance>
+
+% Output format
+<output_format>
+    Output ONLY the Markdown story file content — no preamble, no explanation, and no surrounding ``` code fence.
+    Do NOT emit an HTML metadata comment (e.g. `<!-- pdd-story-prompts: ... -->`); the tooling adds it automatically.
+    Use these section headings, in this exact order:
+
+    # User Story: {STORY_TITLE}
+
+    ## Covers
+    - R<n>: <short summary of the contract rule this story exercises>
+
+    ## Story
+    As a <persona>, I can <capability>, so that <benefit>.
+
+    ## Context
+    Describe the relevant state, assumptions, fixtures, users, records, external services, or dependencies. When multiple prompt files are scoped, list each one and what it contributes.
+
+    ## Acceptance Criteria
+    1. Given <state>, when <action>, then <observable outcome>.
+    2. ...
+
+    ## Oracle
+    These details matter for pass/fail:
+    - <detail>
+
+    ## Non-Oracle
+    These details should not matter:
+    - <detail>
+
+    ## Negative Cases
+    - <forbidden outcome this story protects against>
+
+    ## Non-Goals
+    - <what this story explicitly does not cover>
+
+    ## Notes
+    - <links, edge cases, fixtures, rationale, or implementation hints>
+</output_format>
+
+% Now write the user story for the prompt file(s) above. Output only the Markdown described in <output_format>.

@@ -651,6 +651,113 @@ def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
     )
 
 
+_STORY_META_PROMPT_NAME = "generate_user_story_LLM"
+# An LLM-authored story must contain at least these sections to be accepted;
+# otherwise the caller falls back to the deterministic template so the file
+# stays structurally valid for `pdd detect --stories` / `run_user_story_tests`.
+_REQUIRED_STORY_SECTIONS = ("## Story", "## Acceptance Criteria")
+_CODE_FENCE_RE = re.compile(
+    r"^\s*```[A-Za-z0-9_-]*\s*\n(?P<body>.*?)\n```\s*$",
+    re.DOTALL,
+)
+
+
+def _strip_markdown_code_fence(text: str) -> str:
+    """Drop a single wrapping ```...``` fence if the model wrapped the file."""
+    match = _CODE_FENCE_RE.match(text.strip())
+    if match:
+        return match.group("body").strip()
+    return text.strip()
+
+
+def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
+    *,
+    title: str,
+    prompt_paths: List[Path],
+    prompts_root: Optional[Path],
+    strength: float,
+    temperature: float,
+    time: float,
+    verbose: bool,
+) -> Tuple[Optional[str], float, str]:
+    """Author a complete ``story__*.md`` body with the LLM (issue #1356).
+
+    The model reads the prompt file(s) and writes the user story directly --
+    persona / capability / benefit, Context, Acceptance Criteria, Negative
+    Cases, etc. The ``pdd-story-prompts`` metadata is stitched deterministically
+    by the caller afterward, so story<->prompt linking and ``pdd detect
+    --stories`` are unaffected by what the model emits.
+
+    Returns ``(markdown, cost, model)``. Returns ``(None, cost, model)`` when the
+    LLM is unavailable, errors, or returns markdown missing a required section,
+    so the caller can fall back to the deterministic template -- keeping
+    ``pdd test <*.prompt>`` working offline and in tests without a provider key.
+    """
+    try:  # lazy imports to avoid a top-of-module import cycle through llm_invoke
+        from .llm_invoke import llm_invoke
+        from .load_prompt_template import load_prompt_template
+        from .preprocess import preprocess
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        logger.debug("User-story LLM generation unavailable: %s", exc)
+        return None, 0.0, ""
+
+    template = load_prompt_template(_STORY_META_PROMPT_NAME)
+    if not template:
+        logger.debug(
+            "Meta-prompt %s not found; using deterministic story template.",
+            _STORY_META_PROMPT_NAME,
+        )
+        return None, 0.0, ""
+
+    blocks: List[str] = []
+    for path in prompt_paths:
+        ref = _prompt_reference_for_metadata(path.resolve(), prompts_root)
+        try:
+            prompt_text = path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.debug("Could not read prompt %s for story generation: %s", path, exc)
+            return None, 0.0, ""
+        blocks.append(f'<prompt ref="{ref}">\n{prompt_text}\n</prompt>')
+    prompt_files_block = "\n\n".join(blocks)
+
+    processed = preprocess(
+        template,
+        recursive=False,
+        double_curly_brackets=True,
+        exclude_keys=["STORY_TITLE", "PROMPT_FILES"],
+    )
+
+    try:
+        response = llm_invoke(
+            prompt=processed,
+            input_json={"STORY_TITLE": title, "PROMPT_FILES": prompt_files_block},
+            strength=strength,
+            temperature=temperature,
+            time=time,
+            verbose=verbose,
+        )
+    except Exception as exc:  # any provider/auth/network error -> fall back
+        logger.debug("User-story LLM generation failed: %s", exc)
+        return None, 0.0, ""
+
+    cost = float(response.get("cost", 0.0) or 0.0)
+    model = response.get("model_name", "") or ""
+    raw = response.get("result", "")
+    if not isinstance(raw, str) or not raw.strip():
+        logger.debug("User-story LLM returned empty output; using template.")
+        return None, cost, model
+
+    markdown = _strip_markdown_code_fence(raw)
+    missing = [section for section in _REQUIRED_STORY_SECTIONS if section not in markdown]
+    if missing:
+        logger.debug("LLM story missing required sections %s; using template.", missing)
+        return None, cost, model
+
+    if not markdown.endswith("\n"):
+        markdown += "\n"
+    return markdown, cost, model
+
+
 def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
     *,
     prompt_files: List[str],
@@ -688,11 +795,26 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
 
     prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
     title = _story_title_from_prompts(resolved_paths)
-    story_markdown = _render_story_markdown_from_prompts(
+    # Issue #1356: author the user story with the LLM from the prompt content.
+    # When the LLM is unavailable (no provider key, offline, error, or
+    # structurally-invalid output), fall back to the deterministic
+    # contract-aware template so `pdd test <*.prompt>` keeps working in CI and
+    # tests. Either way the pdd-story-prompts metadata is stitched in below.
+    story_markdown, story_cost, story_model = _llm_generate_story_markdown(
         title=title,
         prompt_paths=resolved_paths,
         prompts_root=prompts_root,
+        strength=strength,
+        temperature=temperature,
+        time=time,
+        verbose=verbose,
     )
+    if story_markdown is None:
+        story_markdown = _render_story_markdown_from_prompts(
+            title=title,
+            prompt_paths=resolved_paths,
+            prompts_root=prompts_root,
+        )
 
     if output:
         output_path = Path(output)
@@ -714,8 +836,8 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
         for path in resolved_paths
     ]
     linked_refs = linked_refs_from_input
-    total_cost = 0.0
-    model_name = ""
+    total_cost = story_cost
+    model_name = story_model
 
     # Generation-time auto-detection: run detect_change on the story and
     # cache detected prompt links into metadata for deterministic reruns.

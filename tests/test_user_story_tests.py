@@ -459,7 +459,11 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     prompt_two.write_text("Send notifications.", encoding="utf-8")
 
     changes = [{"prompt_name": "notify_python.prompt", "change_instructions": "Refine scope"}]
-    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+    # Force the deterministic fallback (LLM unavailable) so this exercises the
+    # template path it asserts on.
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
+    ):
         mock_detect.return_value = (changes, 0.2, "gpt-test")
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
@@ -497,7 +501,9 @@ def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
     prompt_two.write_text("Send notifications.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
+    ):
         mock_detect.return_value = ([], 0.15, "gpt-test")
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
@@ -526,7 +532,9 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
     prompt_one = prompts_dir / "contract_rules_python.prompt"
     prompt_one.write_text(prompt_content, encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
+    ):
         mock_detect.return_value = ([], 0.1, "gpt-test")
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -554,7 +562,9 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
     prompt_two = prompts_dir / "other_python.prompt"
     prompt_two.write_text("Handle other stuff.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect:
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
+    ):
         mock_detect.return_value = ([], 0.1, "gpt-test")
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
@@ -566,6 +576,110 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "- prompts/contract_rules_python.prompt#R1: Positive amount" in story_text
     assert "- prompts/contract_rules_python.prompt#R2: Remaining balance" in story_text
+
+
+_LLM_STORY_MD = (
+    "# User Story: Upload CSV\n\n"
+    "## Covers\n\n- R1: Upload returns a summary report\n\n"
+    "## Story\n\n"
+    "As a data analyst, I can upload a CSV file and view a summary report, "
+    "so that I can quickly understand my data.\n\n"
+    "## Context\n\n- `prompts/upload_python.prompt`: CSV upload + summary\n\n"
+    "## Acceptance Criteria\n\n"
+    "1. Given a valid CSV, when uploaded, then a summary report is shown.\n\n"
+    "## Oracle\n\n- returned value shape\n\n"
+    "## Non-Oracle\n\n- internal helper names\n\n"
+    "## Negative Cases\n\n- Rejecting a valid CSV\n\n"
+    "## Non-Goals\n\n- Editing the CSV\n\n"
+    "## Notes\n\n- n/a\n"
+)
+
+
+def test_generate_user_story_uses_llm_output(tmp_path):
+    """Issue #1356: the story body is authored by the LLM from the prompt
+    content, and the pdd-story-prompts metadata is still stitched in."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text(
+        "Users can upload a CSV file and view a summary report.", encoding="utf-8"
+    )
+
+    fake_llm = {"result": _LLM_STORY_MD, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", return_value=fake_llm
+    ) as mock_llm:
+        mock_detect.return_value = ([], 0.1, "detect-model")
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert mock_llm.called
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    # LLM-authored narrative is present (not the deterministic placeholder).
+    assert "As a data analyst, I can upload a CSV file" in story_text
+    assert "<persona>" not in story_text
+    assert "## Acceptance Criteria" in story_text
+    # Metadata stitched deterministically even though the LLM did not emit it.
+    assert story_text.startswith("<!-- pdd-story-prompts:")
+    assert "upload_python.prompt" in story_text
+    # Cost includes both the story-generation call and the linking call.
+    assert cost == pytest.approx(0.15)
+
+
+def test_generate_user_story_falls_back_when_llm_errors(tmp_path):
+    """When the provider call fails (no key / offline / error), generation falls
+    back to the deterministic template so `pdd test` still produces a story."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", side_effect=RuntimeError("no provider key")
+    ):
+        mock_detect.return_value = ([], 0.1, "detect-model")
+        success, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    # Deterministic template placeholder is present.
+    assert "As a <persona>," in story_text
+    assert story_text.startswith("<!-- pdd-story-prompts:")
+
+
+def test_generate_user_story_falls_back_when_llm_output_malformed(tmp_path):
+    """LLM output missing a required section is rejected in favor of the
+    deterministic template (keeps stories structurally valid)."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    # Missing '## Acceptance Criteria'.
+    malformed = "# User Story: x\n\n## Story\n\nAs a user, I can do things.\n"
+    bad_llm = {"result": malformed, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+    ):
+        mock_detect.return_value = ([], 0.1, "detect-model")
+        success, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "As a <persona>," in story_text  # fell back to template
+    assert "I can do things." not in story_text
 
 
 def test_legacy_minimal_story_passes_validation(tmp_path):
