@@ -3529,7 +3529,15 @@ def _run_configured_doc_contract_rules(
     rules, errors = _load_doc_contract_config(worktree, base_spec, trusted_git, git_env)
     if not rules:
         return errors
-    obligations: Dict[Tuple[str, str, str], Tuple[Dict[str, Any], Dict[str, str]]] = {}
+    # Key obligations by the full capture context, not just the first capture
+    # group. A rule with multiple captures (e.g. ``category`` and ``name``) can
+    # emit distinct surfaces that share the first capture; keying on that capture
+    # alone collapses them and lets a later obligation overwrite an earlier one,
+    # so an undocumented surface fails open (#1309 review).
+    obligations: Dict[
+        Tuple[str, str, Tuple[Tuple[str, str], ...]],
+        Tuple[Dict[str, Any], Dict[str, str], str],
+    ] = {}
     for file_path, lines in added_lines_by_file.items():
         normalized_path = file_path.replace("\\", "/")
         for rule in rules:
@@ -3544,12 +3552,18 @@ def _run_configured_doc_contract_rules(
                     value = context["__raw_value"]
                     if value in rule["ignore_values"]:
                         continue
-                    obligations[(rule["name"], normalized_path, value)] = (
+                    context_key = tuple(sorted(context.items()))
+                    obligations[(rule["name"], normalized_path, context_key)] = (
                         rule,
                         context,
+                        value,
                     )
     doc_cache: Dict[Tuple[str, str], Tuple[str, Optional[str]]] = {}
-    for (_name, source_path, value), (rule, context) in obligations.items():
+    for (_name, source_path, _context_key), (
+        rule,
+        context,
+        value,
+    ) in obligations.items():
         doc_pattern = _render_doc_regex(rule.get("doc_regex"), context)
         for doc in rule["docs"]:
             doc_path = doc["path"]

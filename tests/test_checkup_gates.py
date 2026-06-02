@@ -4939,6 +4939,84 @@ class TestDocContractCheck:
         )
         assert run_doc_contract_check(tmp_path, base_ref="HEAD~2") == 0
 
+    def test_repo_declared_doc_contract_preserves_distinct_multi_capture_surfaces(
+        self, tmp_path: Path
+    ) -> None:
+        """Two surfaces that share their first capture must both be checked.
+
+        Regression for #1309 review: a rule with multiple captures (here
+        ``category`` and ``name``) can emit distinct obligations that share the
+        first capture group. Keying obligations on that first capture alone
+        collapses them, so a second documented surface silently overwrites an
+        undocumented first one and the gate fails open.
+        """
+        from pdd.checkup_gates import run_doc_contract_check
+
+        _git_init(tmp_path)
+        (tmp_path / ".pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "docs").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".pdd" / "doc_contract.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "rules": [
+                        {
+                            "name": "features",
+                            "source_globs": ["src/*.txt"],
+                            "added_regex": (
+                                r"FEATURE\('(?P<category>[a-z]+)',\s*"
+                                r"'(?P<name>[A-Z_]+)'\)"
+                            ),
+                            "doc_regex": "{category}.*{name}",
+                            "docs": ["docs/features.md"],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "docs" / "features.md").write_text(
+            "# Features\n", encoding="utf-8"
+        )
+        (tmp_path / "src" / "features.txt").write_text("", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "base", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        # Add two surfaces sharing the first capture ("billing"); document only
+        # the second one ("BETA"). The first ("ALPHA") is undocumented.
+        (tmp_path / "src" / "features.txt").write_text(
+            "FEATURE('billing', 'ALPHA')\nFEATURE('billing', 'BETA')\n",
+            encoding="utf-8",
+        )
+        (tmp_path / "docs" / "features.md").write_text(
+            "# Features\n- billing BETA is documented.\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "add features", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 1
+
+        # Documenting the previously-collapsed surface clears the gate.
+        (tmp_path / "docs" / "features.md").write_text(
+            "# Features\n- billing ALPHA is documented.\n- billing BETA is documented.\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "document alpha", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        assert run_doc_contract_check(tmp_path, base_ref="HEAD~2") == 0
+
     def test_run_doc_contract_check_ignores_test_fixture_literals(self, tmp_path: Path) -> None:
         from pdd.checkup_gates import run_doc_contract_check
 
