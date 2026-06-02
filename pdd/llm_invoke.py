@@ -2387,6 +2387,18 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
         else:
              df['structured_output'] = False # Assume false if column missing
 
+        # Boolean interpretation for interactive_only. Parse with string-aware
+        # logic rather than a plain .astype(bool): CSV stores everything as
+        # strings and bool("False") is True, which would mark every row
+        # interactive. Treat only "true"/"1"/"yes" (case-insensitive, stripped)
+        # as True; "false"/"0"/""/NaN and a missing column all mean False.
+        if 'interactive_only' in df.columns:
+             df['interactive_only'] = df['interactive_only'].map(
+                 lambda v: str(v).strip().lower() in ("true", "1", "yes")
+             )
+        else:
+             df['interactive_only'] = False # Old CSVs without the column: non-interactive
+
         # Ensure reasoning_type is string, fillna with 'none' and lowercase
         df['reasoning_type'] = df['reasoning_type'].fillna('none').astype(str).str.lower()
 
@@ -2522,6 +2534,23 @@ def _select_model_candidates(
     if os.environ.get("PDD_SKIP_LOCAL_MODELS"):
         local_providers = {"lm_studio", "ollama"}
         available_df = available_df[~available_df['provider'].str.lower().isin(local_providers)]
+
+    # Generic interactive-only guard. Rows flagged interactive_only=True
+    # (github_copilot device-flow OAuth, lm_studio/ollama local servers, and
+    # any future provider so classified in llm_model.csv) require interactive
+    # human auth or a running local server, so they hang instead of fast-failing
+    # in non-interactive contexts (Cloud Run, CI, library import). Exclude them
+    # from the automatic candidate cascade unless PDD_ALLOW_INTERACTIVE is set
+    # (a real terminal opts back in). An explicitly configured base model is
+    # always honored even if it is interactive_only. This generalizes the
+    # surgical PDD_SKIP_LOCAL_MODELS / github_copilot checks, which remain as
+    # defense-in-depth.
+    if 'interactive_only' in available_df.columns and not _env_truthy("PDD_ALLOW_INTERACTIVE"):
+        is_interactive = available_df['interactive_only'].map(
+            lambda v: str(v).strip().lower() in ("true", "1", "yes")
+        )
+        keep_mask = ~is_interactive | (available_df['model'] == base_model_name)
+        available_df = available_df[keep_mask]
 
     # --- Check if the initial DataFrame itself was empty ---
     if model_df.empty:
