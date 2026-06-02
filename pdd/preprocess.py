@@ -225,7 +225,17 @@ def compute_user_intent_paths(text: str) -> set:
     return paths
 
 
-def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
+def preprocess(
+    prompt: Union[str, Any],
+    recursive: bool = False,
+    double_curly_brackets: bool = True,
+    exclude_keys: Optional[List[str]] = None,
+    examples_dir: str = "examples/",
+    tests_dir: str = "tests/",
+    _seen: Optional[set] = None,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+) -> str:
     try:
         # Some tests patch template loading to return mock objects with .format().
         # In that case preprocessing is not applicable; return as string.
@@ -242,13 +252,32 @@ def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_br
         if _failed is None:
             _failed = []
         _DEBUG_EVENTS.clear()
-        _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys})")
+        _dbg(
+            f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, "
+            f"exclude_keys={exclude_keys}, examples_dir={examples_dir}, tests_dir={tests_dir})"
+        )
         _dbg(f"Initial length: {len(prompt)} characters")
         if not _is_quiet_mode():
             console.print(Panel("Starting prompt preprocessing", style="bold blue"))
-        prompt = process_backtick_includes(prompt, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
+        prompt = process_backtick_includes(
+            prompt,
+            recursive,
+            examples_dir=examples_dir,
+            tests_dir=tests_dir,
+            _seen=_seen,
+            _failed=_failed,
+            _user_intent_paths=_user_intent_paths,
+        )
         _dbg("After backtick includes processed")
-        prompt = process_xml_tags(prompt, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
+        prompt = process_xml_tags(
+            prompt,
+            recursive,
+            examples_dir=examples_dir,
+            tests_dir=tests_dir,
+            _seen=_seen,
+            _failed=_failed,
+            _user_intent_paths=_user_intent_paths,
+        )
         _dbg("After XML-like tags processed")
         if double_curly_brackets:
             prompt = double_curly(prompt, exclude_keys)
@@ -334,12 +363,16 @@ def _process_nested_includes(
     _seen: set,
     _failed: Optional[List[str]],
     _user_intent_paths: Optional[set],
+    examples_dir: str = "examples/",
+    tests_dir: str = "tests/",
 ) -> str:
     """Resolve include syntax from included content while preserving the include stack."""
     nested_user_intent_paths = _user_intent_paths if _user_intent_paths is not None else set()
     content = process_backtick_includes(
         content,
         recursive=False,
+        examples_dir=examples_dir,
+        tests_dir=tests_dir,
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
@@ -347,6 +380,8 @@ def _process_nested_includes(
     content = process_include_tags(
         content,
         recursive=False,
+        examples_dir=examples_dir,
+        tests_dir=tests_dir,
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
@@ -354,12 +389,23 @@ def _process_nested_includes(
     content = process_include_many_tags(
         content,
         recursive=False,
+        examples_dir=examples_dir,
+        tests_dir=tests_dir,
+        _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
     )
     return content
 
-def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
+def process_backtick_includes(
+    text: str,
+    recursive: bool,
+    examples_dir: str = "examples/",
+    tests_dir: str = "tests/",
+    _seen: Optional[set] = None,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+) -> str:
     if _seen is None:
         _seen = set()
     # More specific pattern that doesn't match nested > characters
@@ -380,6 +426,8 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
                         content,
                         recursive=True,
                         double_curly_brackets=False,
+                        examples_dir=examples_dir,
+                        tests_dir=tests_dir,
                         _seen=child_seen,
                         _failed=_failed,
                         _user_intent_paths=_user_intent_paths,
@@ -390,6 +438,8 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
                         _seen=child_seen,
                         _failed=_failed,
                         _user_intent_paths=_user_intent_paths,
+                        examples_dir=examples_dir,
+                        tests_dir=tests_dir,
                     )
                 _dbg(f"Included via backticks: {file_path} (len={len(content)})")
                 return f"```{content}```"
@@ -445,7 +495,15 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
         iterations += 1
     return current_text
 
-def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
+def process_xml_tags(
+    text: str,
+    recursive: bool,
+    examples_dir: str = "examples/",
+    tests_dir: str = "tests/",
+    _seen: Optional[set] = None,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+) -> str:
     if _seen is None:
         _seen = set()
     # If the caller supplied an explicit user-intent set, use it directly
@@ -466,8 +524,24 @@ def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None, _f
     else:
         user_intent_many_paths = None
     text = process_pdd_tags(text)
-    text = process_include_tags(text, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths)
-    text = process_include_many_tags(text, recursive, _failed=_failed, _user_intent_paths=user_intent_many_paths)
+    text = process_include_tags(
+        text,
+        recursive,
+        examples_dir=examples_dir,
+        tests_dir=tests_dir,
+        _seen=_seen,
+        _failed=_failed,
+        _user_intent_paths=_user_intent_paths,
+    )
+    text = process_include_many_tags(
+        text,
+        recursive,
+        examples_dir=examples_dir,
+        tests_dir=tests_dir,
+        _seen=_seen,
+        _failed=_failed,
+        _user_intent_paths=user_intent_many_paths,
+    )
     text = process_shell_tags(text, recursive)
     text = process_web_tags(text, recursive)
     return text
@@ -485,19 +559,26 @@ def _parse_attrs(attr_str: str) -> dict:
         attrs["optional"] = "true"
     return attrs
 
-def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None) -> str:
+def process_include_tags(
+    text: str,
+    recursive: bool,
+    examples_dir: str = "examples/",
+    tests_dir: str = "tests/",
+    _seen: Optional[set] = None,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+) -> str:
     if _seen is None:
         _seen = set()
     # Support both <include>path</include> and <include path="path" attrs... />
     pattern = r'<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>|<include(?P<attrs_self>\s+[^>]*?)\s*/>'
-    
+
     def replace_include(match):
         attrs_str = match.group('attrs') or match.group('attrs_self') or ""
         attrs = _parse_attrs(attrs_str)
 
         # Content between tags (used as path for bare <include>path</include>)
         content = match.group('content') if match.group('content') is not None else ""
-
         file_path = attrs.get('path') or content.strip()
         if not file_path:
             return match.group(0)
@@ -533,6 +614,28 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
             resolved = os.path.realpath(full_path)
             if resolved in _seen:
                 raise ValueError(f"Circular include detected: {file_path} is already in the include chain")
+
+            # Automatic mode detection based on context compression settings
+            mode = attrs.get('mode', 'full')
+            if mode == "full":
+                compression = (os.environ.get("PDD_CONTEXT_COMPRESSION") or "").lower()
+                modes = [m.strip() for m in compression.split(",") if m.strip()]
+
+                # Check for test/all mode or legacy test context compression
+                if "all" in modes or "test" in modes or os.environ.get("PDD_COMPRESS_TEST_CONTEXT") == "1":
+                    if file_path.startswith(tests_dir):
+                        mode = "test_interface"
+
+                # Check for examples/all mode or legacy examples compression
+                if mode == "full" and ("all" in modes or "examples" in modes or os.environ.get("PDD_COMPRESS_EXAMPLES") == "1"):
+                    if file_path.startswith(examples_dir):
+                        mode = "interface"
+
+                # Check for contracts/all mode
+                if mode == "full" and ("all" in modes or "contracts" in modes):
+                    if any(file_path.endswith(ext) for ext in (".prompt", ".md", ".markdown", ".rst")):
+                        mode = "contracts"
+
             ext = os.path.splitext(file_path)[1].lower()
             image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic']
 
@@ -581,7 +684,6 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                     # Apply selectors if any
                     selectors_str = attrs.get('select')
                     lines_str = attrs.get('lines')
-                    mode = attrs.get('mode', 'full')
 
                     if selectors_str or lines_str or mode != 'full':
                         selectors = []
@@ -599,38 +701,22 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                                 file_path=full_path,
                                 mode=mode,
                             )
-                        except ImportError:
-                            # Fall back to query if originally present, otherwise full file
-                            fallback_query = attrs.get('query')
-                            if fallback_query:
-                                console.print(f"[yellow]Warning: ContentSelector not available; falling back to query= for {full_path}[/yellow]")
-                                try:
-                                    from pdd.include_query_extractor import IncludeQueryExtractor
-                                    return IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
-                                except Exception:
-                                    pass
-                            import warnings
-                            warnings.warn(
-                                f"ContentSelector not importable for select=\"{selectors_str}\" "
-                                f"on file {full_path}. Including full file content."
-                            )
-                            console.print(f"[yellow]Warning: pdd.content_selector not found for select=\"{selectors_str}\" on {full_path}. Including full content.[/yellow]")
                         except Exception as e:
-                            # Fall back to query if originally present, otherwise full file
+                            # Compression Fallback Strategy
+                            fallback_strategy = os.environ.get("PDD_COMPRESSION_FALLBACK", "full").lower()
+                            if fallback_strategy == "error":
+                                raise
+                            
+                            console.print(f"[yellow]Warning: Selector failed for {file_path} (mode={mode}): {e}. Falling back to full content.[/yellow]")
+                            
+                            # Fall back to query if originally present
                             fallback_query = attrs.get('query')
                             if fallback_query:
-                                console.print(f"[yellow]Warning: ContentSelector failed for select=\"{selectors_str}\"; falling back to query= for {full_path}[/yellow]")
                                 try:
                                     from pdd.include_query_extractor import IncludeQueryExtractor
-                                    return IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
+                                    content = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
                                 except Exception:
                                     pass
-                            import warnings
-                            warnings.warn(
-                                f"ContentSelector failed for select=\"{selectors_str}\" "
-                                f"on file {full_path}: {e}. Including full file content."
-                            )
-                            console.print(f"[yellow]Warning: ContentSelector failed for select=\"{selectors_str}\" on {full_path}: {e}. Including full content.[/yellow]")
                     
                     if recursive:
                         child_seen = _seen | {resolved}
@@ -638,6 +724,8 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                             content,
                             recursive=True,
                             double_curly_brackets=False,
+                            examples_dir=examples_dir,
+                            tests_dir=tests_dir,
                             _seen=child_seen,
                             _failed=_failed,
                             _user_intent_paths=_user_intent_paths,
@@ -649,6 +737,8 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                             _seen=child_seen,
                             _failed=_failed,
                             _user_intent_paths=_user_intent_paths,
+                            examples_dir=examples_dir,
+                            tests_dir=tests_dir,
                         )
                     _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
                     return content
@@ -887,6 +977,9 @@ def process_web_tags(text: str, recursive: bool) -> str:
 def process_include_many_tags(
     text: str,
     recursive: bool,
+    examples_dir: str = "examples/",
+    tests_dir: str = "tests/",
+    _seen: Optional[set] = None,
     _failed: Optional[List[str]] = None,
     _user_intent_paths: Optional[set] = None,
 ) -> str:

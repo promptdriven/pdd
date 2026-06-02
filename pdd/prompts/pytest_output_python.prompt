@@ -1,3 +1,16 @@
+<pdd-reason>Captures and parses pytest output, supporting compressed context markers and extracting test results into JSON.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "pytest_output", "description": "Capture the output of pytest and save it to a JSON file"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python CLI tool, "pytest_output", that will capture the output of pytest and save it to a JSON file.  The tool should also provide an option to output *only* the JSON to standard output.
 
 <include>context/python_preamble.prompt</include>
@@ -28,6 +41,7 @@
     Step 1. Validate that the test file exists and has a .py extension.
     Step 2. Run pytest on the given test file(s) and capture stdout/stderr.
     Step 3. Parse the output to extract test counts (passed, failures, errors, warnings).
+        - **Compressed Output Handling**: If the output contains markers indicating that only a subset of tests were run (e.g., due to `--compress-test-context`), ensure the parser correctly attributes failures to the specific test cases. For unscheduled tests (those skipped by compression), the `passed` count in the JSON output MUST NOT include them; instead, add a `skipped_by_compression` integer field to the result dictionary representing the count of tests that were not run due to compression filters.
     Step 4. Build a result dictionary with the following format:
         {
             "test_file": "path/to/test_file.py",
@@ -40,6 +54,7 @@
                     "errors": "number of errors",
                     "failures": "number of failures",
                     "passed": "number of passed tests",
+                    "skipped_by_compression": 0  // Added: number of tests skipped by compression
                 }
             ]
         }

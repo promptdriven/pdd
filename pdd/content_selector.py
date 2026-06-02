@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import textwrap
 from dataclasses import dataclass, field
@@ -623,6 +624,12 @@ class ContentSelector:
                 _report_error(f"Failed to parse Python source: {exc}", file_path)
                 raise SelectorError(f"Python parse error: {exc}") from exc
 
+        if not selectors and mode == "contracts":
+            return _contracts_mode(content)
+
+        if not selectors and mode == "test_interface":
+            return _test_interface_mode(content, file_path)
+
         if not selectors:
             return content
 
@@ -816,3 +823,103 @@ def _report_error(message: str, file_path: str | None = None) -> None:
     """Print a formatted error to the rich console."""
     location = f" in [path]{file_path}[/path]" if file_path else ""
     console.print(f"[error]ContentSelector error{location}:[/error] {message}")
+# ---------------------------------------------------------------------------
+# Contract and Test Interface Modes
+# ---------------------------------------------------------------------------
+
+def _contracts_mode(content: str) -> str:
+    """Extract contract-related elements from prompt or documentation files."""
+    lines = content.splitlines()
+    output = []
+    
+    # Architecture metadata tags
+    meta_tags = re.findall(r'<(pdd-reason|pdd-interface|pdd-dependency)>.*?</\1>', content, re.DOTALL)
+    output.extend(meta_tags)
+    
+    # Logical sections
+    logical_sections = re.findall(r'<(responsibility|non_responsibilities|vocabulary|contract_rules|capabilities|waivers|coverage)>.*?</\1>', content, re.DOTALL)
+    output.extend(logical_sections)
+    
+    # Specific elements
+    for line in lines:
+        stripped = line.strip()
+        # Contract rules: R\d+ -
+        if re.match(r'^R\d+ -', stripped):
+            output.append(line)
+        # Capabilities: - MAY, - MUST, - MUST NOT
+        elif re.match(r'^- (MAY|MUST|MUST NOT)\b', stripped):
+            output.append(line)
+            
+    return "\n".join(output)
+
+
+def _test_interface_mode(content: str, file_path: str | None) -> str:
+    """Extract only failing tests and necessary fixtures using AST slicing."""
+    failing_tests_env = os.environ.get("PDD_FAILING_TESTS", "")
+    failing_test_ids = [t.strip() for t in failing_tests_env.split(",") if t.strip()]
+    
+    if not failing_test_ids:
+        return ""
+        
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return ""
+        
+    source_lines = _splitlines(content)
+    
+    # Helper to get node spans
+    def get_node_span(node):
+        start = node.lineno - 1
+        if hasattr(node, 'decorator_list') and node.decorator_list:
+            start = node.decorator_list[0].lineno - 1
+        end = node.end_lineno
+        return _Span(start, end)
+
+    # 1. Identify fixtures
+    fixtures = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            is_fixture = False
+            for dec in node.decorator_list:
+                if (isinstance(dec, ast.Name) and dec.id == "fixture") or \
+                   (isinstance(dec, ast.Attribute) and dec.attr == "fixture") or \
+                   (isinstance(dec, ast.Call) and (
+                       (isinstance(dec.func, ast.Name) and dec.func.id == "fixture") or
+                       (isinstance(dec.func, ast.Attribute) and dec.func.attr == "fixture")
+                   )):
+                    is_fixture = True
+                    break
+            if is_fixture:
+                fixtures[node.name] = node
+
+    # 2. Identify failing tests and their used fixtures
+    failing_test_nodes = []
+    used_fixture_names = set()
+    
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            is_failing = False
+            for ftid in failing_test_ids:
+                if node.name in ftid:
+                    is_failing = True
+                    break
+            
+            if is_failing:
+                failing_test_nodes.append(node)
+                for arg in node.args.args:
+                    if arg.arg in fixtures:
+                        used_fixture_names.add(arg.arg)
+
+    # 3. Collect spans
+    all_spans = []
+    for node in failing_test_nodes:
+        all_spans.append(get_node_span(node))
+    
+    for fname in used_fixture_names:
+        all_spans.append(get_node_span(fixtures[fname]))
+        
+    if not all_spans:
+        return ""
+        
+    return _extract_spans(source_lines, all_spans)

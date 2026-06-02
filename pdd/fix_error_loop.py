@@ -4,6 +4,8 @@ import sys
 import subprocess
 import shutil
 import json
+import re
+import base64
 from datetime import datetime
 from pathlib import Path
 from typing import Tuple, Optional
@@ -276,6 +278,27 @@ def format_log_for_output(log_structure):
     
     return formatted_text
 
+def _extract_failing_tests(pytest_output: str) -> list[str]:
+    """Extract failing test IDs from pytest output."""
+    # Remove ANSI escape sequences
+    clean_output = re.sub(r'\x1b\[[0-?]*[ -/]*[@-~]', '', pytest_output)
+    failing_tests = []
+    seen = set()
+    # FAILED tests/test_foo.py::test_name
+    for match in re.finditer(r'FAILED\s+([^\s:]+\.py::[^\s]+)', clean_output):
+        test_id = match.group(1).split()[0]  # Take only the ID
+        if test_id not in seen:
+            failing_tests.append(test_id)
+            seen.add(test_id)
+    # path/file.py::test_name FAILED
+    for match in re.finditer(r'([^\s:]+\.py::[^\s]+)\s+FAILED', clean_output):
+        test_id = match.group(1)
+        if test_id not in seen:
+            failing_tests.append(test_id)
+            seen.add(test_id)
+    return failing_tests
+
+
 def fix_error_loop(unit_test_file: str,
                    code_file: str,
                    prompt_file: str,
@@ -292,7 +315,10 @@ def fix_error_loop(unit_test_file: str,
                    protect_tests: bool = False,
                    use_cloud: bool = False,
                    test_files: list[str] | None = None,
-                   failure_aware_retries: bool = True):
+                   failure_aware_retries: bool = True,
+                   compress_test_context: bool = False,
+                   context_compression: str | None = None,
+                   compression_fallback: str | None = None):
     """
     Attempt to fix errors in a unit test and corresponding code using repeated iterations,
     counting only the number of times we actually call the LLM fix function.
@@ -309,6 +335,7 @@ def fix_error_loop(unit_test_file: str,
     Inputs:
         unit_test_file: Path to the file containing unit tests.
         code_file: Path to the file containing the code under test.
+        prompt_file: Path to the prompt file.
         prompt: Prompt that generated the code under test.
         verification_program: Path to a Python program that verifies the code still works.
         strength: float [0,1] representing LLM fix strength.
@@ -327,6 +354,9 @@ def fix_error_loop(unit_test_file: str,
         failure_aware_retries: When True (default), shorten the loop for syntax/import
             failures that do not change signature, and for timeout/flaky patterns without
             improvement. Set False for legacy behavior (always up to max_attempts).
+        compress_test_context: When True, use AST-based slicing for failing tests.
+        context_compression: Global compression mode override.
+        compression_fallback: Strategy for when a file cannot be compressed.
     Outputs:
         success: Boolean indicating if the overall process succeeded.
         final_unit_test: String contents of the final unit test file.
@@ -335,6 +365,14 @@ def fix_error_loop(unit_test_file: str,
         total_cost: Total cost accumulated.
         model_name: Name of the LLM model used.
     """
+    # Set compression environment variables if requested
+    if compress_test_context:
+        os.environ["PDD_COMPRESS_TEST_CONTEXT"] = "1"
+    if context_compression:
+        os.environ["PDD_CONTEXT_COMPRESSION"] = context_compression
+    if compression_fallback:
+        os.environ["PDD_COMPRESSION_FALLBACK"] = compression_fallback
+
     # Check if unit_test_file and code_file exist.
     if not os.path.isfile(unit_test_file):
         rprint(f"[red]Error:[/red] Unit test file '{unit_test_file}' does not exist.")
@@ -646,6 +684,13 @@ def fix_error_loop(unit_test_file: str,
         kind_this_iteration = classify_failure(pytest_output)
         sig_before_fix = extract_failure_signature(pytest_output)
         failure_hint = failure_classification_hint(kind_this_iteration)
+
+        # Extract failing tests and set environment variable for context selection
+        failing_tests = _extract_failing_tests(pytest_output)
+        if failing_tests:
+            os.environ["PDD_FAILING_TESTS"] = ",".join(failing_tests)
+        else:
+            os.environ.pop("PDD_FAILING_TESTS", None)
 
         # We only attempt to fix if test is failing or has warnings:
         # Let's create backups in .pdd/backups/ to avoid polluting code/test directories

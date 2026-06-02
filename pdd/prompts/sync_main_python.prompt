@@ -1,5 +1,16 @@
 <pdd-reason>CLI entry point for the unified sync workflow, handling both single-module and global project-wide synchronization.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "sync_main", "signature": "(ctx, basename, max_attempts, budget, skip_verify, skip_tests, target_coverage, dry_run, no_steer, steer_timeout, agentic_mode, one_session, compress_examples, compress_test_context, context_compression, compression_fallback)", "returns": "Tuple[Dict[str, Any], float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
@@ -29,6 +40,10 @@
         - `steer_timeout` (Optional[float]): Steering choice timeout in seconds. None = default timeout.
         - `agentic_mode` (bool): When True, Python behaves like non-Python languages (uses agentic path for operations)
         - `one_session` (bool): When True, run example/crash/verify/test/fix in a single agentic session instead of separate steps
+        - `compress_examples` (bool): Automatically apply `mode="interface"` to example files
+        - `compress_test_context` (bool): Use AST-based slicing for test context
+        - `context_compression` (str): Global compression mode (choice: off, test, examples, contracts, all)
+        - `compression_fallback` (str): Strategy for when a file cannot be compressed (choice: full, error)
 
     Outputs:
         - Tuple of (Dict[str, Any] results, float total_cost, str model_name)
@@ -36,11 +51,10 @@
 % Key Implementation Details:
 
 1. **Parameter Resolution**:
-    - Use `ctx.obj.get(key, default)` pattern for ctx.obj parameters
-    - Import DEFAULT_STRENGTH, DEFAULT_TIME from package root
-    - Import `DEFAULT_STEER_TIMEOUT_S` from `sync_tui`
-    - Name context variable `context_override`, time variable `time_param` to avoid shadowing builtins
-    - Configuration hierarchy: CLI value (if not None) > .pddrc value > hardcoded default
+    - Use `ctx.obj` for shared CLI state (e.g., cost tracking, example review, local mode)
+    - Follow established hierarchy for configuration: CLI value (if not None) > .pddrc value > hardcoded default
+    - Use package-standard constants for default values (strength, time, timeouts)
+    - Ensure local variable names do not shadow Python builtins or package-level imports
 
 2. **Prompt Discovery** (two-stage):
     - **Template-based discovery (primary)**: Search contexts in .pddrc for `outputs.prompt.path` templates. Expand template with basename and common languages until a prompt file is found. Use `_find_pddrc_file`, `_load_pddrc_config`, and `expand_template` from template_expander.
@@ -119,7 +133,7 @@
     - Track remaining_budget across languages (reduce after each language's cost)
     - Skip subsequent languages if budget exhausted
     - Aggregate results and costs from all language syncs
-    - Forward steerability controls (`no_steer`, resolved `steer_timeout`) to each sync_orchestration call
+    - Forward steerability controls (`no_steer`, resolved `steer_timeout`) and compression flags (`compress_examples`, `compress_test_context`, `context_compression`, `compression_fallback`) to each sync_orchestration call
     - **Auto-submit on success**: After sync_orchestration returns success for a language (and not local mode), call `_auto_submit_example()` to submit the prompt+code pair to PDD Cloud, same as one-session mode. Use `get_pdd_file_paths()` to resolve the module file paths needed for submission. Wrap in try/except and log warnings on failure (do not abort sync).
 
 11. User Feedback (unless quiet=True):

@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "preprocess", "signature": "(prompt, recursive, double_curly_brackets, exclude_keys, _seen)", "returns": "str"},
+      {"name": "preprocess", "signature": "(prompt, recursive, double_curly_brackets, exclude_keys, _seen, examples_dir, tests_dir)", "returns": "str"},
       {"name": "get_file_path", "signature": "(file_name)", "returns": "str"}
     ]
   }
@@ -25,7 +25,7 @@ Write the `pdd/preprocess.py` module.
 Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<include>`, `<include-many>`, `<shell>`, `<web>`) and optionally escaping curly braces. Supports recursive include resolution, selective extraction, semantic LLM queries, and code block protection.
 
 % Requirements
-1. Function: `preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, _seen=None) -> str`
+1. Function: `preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, _seen=None, examples_dir="examples/", tests_dir="tests/") -> str`
    - `_seen`: set of resolved real paths for circular include detection, passed to child calls
    - Returns the preprocessed prompt string; preserve leading/trailing whitespace
    - If `prompt` is not a string, return `str(prompt)`; if empty, print error and return `""`
@@ -36,9 +36,18 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
    - Also supports self-closing syntax: `<include path="..." />`
    - Also supports `lines` attribute shorthand: `<include lines="1-10">file</include>`
    - Parse attributes with `key="value"` or `key='value'` syntax
-6. `<include select="..." mode="...">file</include>` — delegate to `ContentSelector.select()`. `mode` defaults to `"full"`; `"interface"` extracts signatures only.
-   - On failure (import error or selector error), log warning and fall back to full file content
-   - If `query=` was also present, try query extraction before falling back to full file
+6. `<include select="..." mode="...">file</include>` — delegate to `ContentSelector.select()`. `mode` defaults to `"full"`; `"interface"` extracts signatures only; `"contracts"` extracts PDD contract rules and metadata; `"test_interface"` extracts failing tests and fixtures.
+   - **Global Compression Overrides**:
+     - The global `PDD_CONTEXT_COMPRESSION` env var (from `--context-compression`) accepts a comma-separated list of modes: `test`, `examples`, `contracts`, `all`, or `off` (default).
+     - When `PDD_CONTEXT_COMPRESSION` includes `examples` or `all` (or legacy `PDD_COMPRESS_EXAMPLES=1`), any include whose path is within the configured `examples_dir` (default: `examples/`) must default to `mode="interface"` unless a mode is explicitly specified in the tag.
+     - When `PDD_CONTEXT_COMPRESSION` includes `test` or `all` (or legacy `PDD_COMPRESS_TEST_CONTEXT=1`), any include whose path is within the configured `tests_dir` (default: `tests/`) must default to `mode="test_interface"` unless a mode is explicitly specified.
+     - When `PDD_CONTEXT_COMPRESSION` includes `contracts` or `all`, any include for a `.prompt` file must default to `mode="contracts"`. For `.md`, `.markdown`, or `.rst` files, default to `mode="contracts"` only if the file explicitly includes PDD architecture tags (`<pdd-reason>`, `<pdd-interface>`, or `<pdd-dependency>`); narrative documents without these tags should default to `mode="full"` to prevent mangling narrative content like tutorials or PRDs that do not follow the contract/vocabulary structure.
+   - **Compression Fallback Strategy**:
+     - Controlled by `PDD_COMPRESSION_FALLBACK` env var (from `--compression-fallback`): `full` (default) or `error`.
+     - On selector failure (e.g., AST syntax error in `interface` mode):
+       - If `full`, log a warning and fall back to the full file content.
+       - If `error`, raise `SelectorError` immediately.
+   - If `query=` was also present, try query extraction before applying fallback.
 7. `<include query="...">file</include>` — delegate to `IncludeQueryExtractor.extract()`. Deferred when `recursive=True` (leave tag intact). On import error or exception, return inline error message in brackets (e.g., `[Error: pdd.include_query_extractor not found...]`).
 8. When both `select=` and `query=` present, keep `select=` and discard `query=`; fall back to `query=` only if `select=` fails
 9. Image includes (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px and convert to base64 data URL. GIF first frame converted to static image. HEIC converted to JPEG (requires `pillow_heif`).

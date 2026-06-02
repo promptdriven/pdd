@@ -353,6 +353,30 @@ class PDDCLI(click.Group):
     default=10,
     help="Number of core dumps to keep (default: 10, min: 0). Older dumps are garbage collected after each dump write.",
 )
+@click.option(
+    "--compress-examples",
+    is_flag=True,
+    default=None,
+    help="Automatically compress example code in context to signatures only.",
+)
+@click.option(
+    "--compress-test-context",
+    is_flag=True,
+    default=None,
+    help="Automatically compress test context to failing tests only.",
+)
+@click.option(
+    "--context-compression",
+    type=click.Choice(["off", "test", "examples", "contracts", "all"]),
+    default=None,
+    help="Set global context compression mode.",
+)
+@click.option(
+    "--compression-fallback",
+    type=click.Choice(["full", "error"]),
+    default=None,
+    help="Behavior when context compression fails (default: full).",
+)
 @click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
 def cli(
@@ -370,6 +394,10 @@ def cli(
     list_contexts: bool,
     core_dump: bool,
     keep_core_dumps: int,
+    compress_examples: Optional[bool],
+    compress_test_context: Optional[bool],
+    context_compression: Optional[str],
+    compression_fallback: Optional[str],
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
@@ -424,6 +452,21 @@ def cli(
     if time is not None:
         from ..reasoning import time_to_effort_level
         os.environ["PDD_REASONING_EFFORT"] = time_to_effort_level(time)
+    
+    # Context compression options
+    ctx.obj["compress_examples"] = compress_examples
+    if compress_examples:
+        os.environ['PDD_COMPRESS_EXAMPLES'] = '1'
+    ctx.obj["compress_test_context"] = compress_test_context
+    if compress_test_context:
+        os.environ['PDD_COMPRESS_TEST_CONTEXT'] = '1'
+    ctx.obj["context_compression"] = context_compression
+    if context_compression:
+        os.environ['PDD_CONTEXT_COMPRESSION'] = context_compression
+    ctx.obj["compression_fallback"] = compression_fallback
+    if compression_fallback:
+        os.environ['PDD_COMPRESSION_FALLBACK'] = compression_fallback
+
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
     ctx.obj["core_dump"] = core_dump

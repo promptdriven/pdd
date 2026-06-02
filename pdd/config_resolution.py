@@ -9,6 +9,7 @@ This module ensures consistent priority ordering across all commands:
 """
 from typing import Dict, Any, Optional
 import click
+import os
 
 from . import DEFAULT_STRENGTH, DEFAULT_TEMPERATURE, DEFAULT_TIME
 
@@ -33,7 +34,7 @@ def resolve_effective_config(
         param_overrides: Optional command-specific parameter overrides
 
     Returns:
-        Dict with resolved values for strength, temperature, time
+        Dict with resolved values for strength, temperature, time, and compression flags
     """
     ctx_obj = ctx.obj if ctx.obj else {}
     param_overrides = param_overrides or {}
@@ -51,8 +52,24 @@ def resolve_effective_config(
         # Priority 4: Hardcoded default
         return default
 
-    return {
+    effective_config = {
         "strength": resolve_value("strength", DEFAULT_STRENGTH),
         "temperature": resolve_value("temperature", DEFAULT_TEMPERATURE),
         "time": resolve_value("time", DEFAULT_TIME),
+        "context_compression": resolve_value("context_compression", "off"),
+        "compress_examples": resolve_value("compress_examples", False),
+        "compress_test_context": resolve_value("compress_test_context", False),
+        "compression_fallback": resolve_value("compression_fallback", "full"),
     }
+
+    # Set environment variables so they propagate to preprocess()
+    if effective_config["context_compression"]:
+        os.environ["PDD_CONTEXT_COMPRESSION"] = str(effective_config["context_compression"])
+    if effective_config["compress_examples"]:
+        os.environ["PDD_COMPRESS_EXAMPLES"] = "1"
+    if effective_config["compress_test_context"]:
+        os.environ["PDD_COMPRESS_TEST_CONTEXT"] = "1"
+    if effective_config["compression_fallback"]:
+        os.environ["PDD_COMPRESSION_FALLBACK"] = str(effective_config["compression_fallback"])
+
+    return effective_config

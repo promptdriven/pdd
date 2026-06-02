@@ -1,5 +1,16 @@
 <pdd-reason>Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "sync_orchestration", "signature": "(basename, target_coverage=90.0, language='python', prompts_dir='prompts', code_dir='src', examples_dir='examples', tests_dir='tests', max_attempts=3, budget=10.0, skip_verify=False, skip_tests=False, dry_run=False, force=False, strength=DEFAULT_STRENGTH, temperature=0.0, time_param=0.25, verbose=False, quiet=False, output_cost=None, review_examples=False, local=False, context_config=None, context_override=None, confirm_callback=None, no_steer=False, steer_timeout=DEFAULT_STEER_TIMEOUT_S, agentic_mode=False, compress_examples=False, compress_test_context=False, context_compression=None, compression_fallback=None)", "returns": "Dict[str, Any]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 
@@ -60,6 +71,10 @@ def sync_orchestration(
     no_steer: bool = False,
     steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
     agentic_mode: bool = False,
+    compress_examples: bool = False,
+    compress_test_context: bool = False,
+    context_compression: Optional[str] = None,
+    compression_fallback: Optional[str] = None,
 ) -> Dict[str, Any]:
 ```
 
@@ -205,8 +220,9 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 4. **crash**: Fix runtime errors to make code executable
 5. **verify**: Verify against prompt intent (unless `--skip-verify`)
 6. **test**: Generate unit tests (unless `--skip-tests`)
-7. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages or when agentic_mode=True since code coverage tooling is Python-specific)
-8. **fix**: Resolve test failures (unless `--skip-tests`)
+8. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages or when agentic_mode=True since code coverage tooling is Python-specific)
+- **fix**: Resolve test failures (unless `--skip-tests`). Pass `compress_test_context`, `context_compression`, and `compression_fallback` to `fix_main`.
+
 9. **update**: Back-propagate learnings to prompt
 
 Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`
@@ -227,14 +243,14 @@ After each `sync_determine_operation` call, allow the user to override the recom
 
 ### TUI Integration
 
-1. Instantiate `SyncApp` with `worker_func` containing the main workflow loop
-2. Use mutable reference lists (`function_name_ref`, `cost_ref`, `*_color_ref`, `*_path_ref`) and `stop_event` (threading.Event) to coordinate with TUI
-3. Store app reference in `app_ref` list for confirmation dialogs via `app.request_confirmation()`
-4. Track `user_confirmed_overwrite` to avoid repeated confirmation prompts
-5. Maintain `progress_callback_ref` for TUI ProgressBar updates during auto-deps
-6. Call `show_exit_animation()` after completion (unless quiet mode)
-7. After `app.run()` completes, check `app.worker_exception` for worker thread crashes; print error and traceback to stderr
-8. If `app.run()` returns None, return error dict indicating sync was interrupted
+1. Instantiate `SyncApp` with a worker function containing the main workflow loop
+2. Coordinate with the TUI to provide real-time updates on operation status, costs, and progress
+3. Support interactive confirmation dialogs via the TUI when destructive operations are required
+4. Implement a mechanism to track user confirmations to avoid redundant prompts within a single sync session
+5. Provide progress updates during long-running operations like `auto-deps`
+6. Display a completion animation unless in quiet mode
+7. Handle worker thread crashes gracefully by capturing and reporting exceptions
+8. If the TUI app is interrupted or returns None, treat it as a failure state
 
 ### Headless Mode
 

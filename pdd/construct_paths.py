@@ -143,6 +143,10 @@ _PDDRC_DEFAULTS_KEYS = {
     "max_attempts",
     "outputs",
     "auto_deps_csv_path",
+    "context_compression",
+    "compress_examples",
+    "compress_test_context",
+    "compression_fallback",
 }
 
 
@@ -540,6 +544,10 @@ def _resolve_config_hierarchy(
         'budget': None,
         'max_attempts': None,
         'auto_deps_csv_path': 'PDD_AUTO_DEPS_CSV_PATH',
+        'context_compression': 'PDD_CONTEXT_COMPRESSION',
+        'compress_examples': 'PDD_COMPRESS_EXAMPLES',
+        'compress_test_context': 'PDD_COMPRESS_TEST_CONTEXT',
+        'compression_fallback': 'PDD_COMPRESSION_FALLBACK',
     }
 
     for config_key, env_var in config_keys.items():

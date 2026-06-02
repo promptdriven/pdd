@@ -116,6 +116,32 @@ On re-generation: Your prior successful generation is typically the closest matc
 
 ---
 
+## Automated Context Compression
+
+To manage large context windows and reduce costs, PDD supports automated context compression. This feature reduces the token count of dependencies while maintaining their behavioral contract.
+
+### How It Works
+
+Users can enable compression via CLI flags or `.pddrc` configuration:
+
+- **`--compress-examples`**: Automatically applies `mode="interface"` to all example files in the `<include>` graph. This extracts signatures and docstrings, replacing function bodies with `...`.
+- **`--compress-test-context`**: Uses AST-based slicing to include only failing tests and their necessary fixtures from the test context during `pdd fix` or `pdd test`.
+- **`--context-compression {off,test,examples,contracts,all}`**: A global setting to enable multiple compression modes at once.
+
+### The "Mold Walls" Concept
+
+Compressed context acts as a "mold" that constrains the generated code. By sending only the interface of a dependency, you define the boundaries (the "mold walls") without cluttering the context with implementation details. This ensures the generated code respects the dependency's contract while staying within token budgets.
+
+### Fallback Behavior
+
+If compression fails (e.g., due to AST parsing errors in a dependency), the system defaults to full file inclusion to ensure correctness. This behavior can be controlled with the `--compression-fallback {full,error}` flag.
+
+### Reporting
+
+PDD reports when compression is applied in the execution summary, indicating which files were compressed and whether any fallbacks were triggered.
+
+---
+
 ## Grounding Overrides: Pin & Exclude (PDD Cloud)
 
 For users with PDD Cloud access, you can override automatic grounding using XML tags:
