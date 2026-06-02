@@ -2530,6 +2530,28 @@ def _chatgpt_family(model_df: pd.DataFrame) -> pd.DataFrame:
     ].copy()
 
 
+def _gemini_subscription_fallback_family(model_df: pd.DataFrame) -> pd.DataFrame:
+    """Gemini rows allowed after Codex subscription models fail.
+
+    Cloud Run can occasionally receive a Cloudflare challenge from the
+    ChatGPT subscription backend. In the default Codex route, the next safe
+    fallback is Gemini/Vertex-Gemini, never direct Anthropic API-key rows.
+    """
+    provider = model_df["provider"].astype(str).str.lower()
+    model = model_df["model"].astype(str).str.lower()
+    api_key = model_df["api_key"].astype(str).str.upper()
+
+    chatgpt = model.str.startswith("chatgpt/")
+    direct_anthropic = provider.eq("anthropic") | api_key.str.contains("ANTHROPIC_API_KEY", na=False)
+    gemini = (
+        provider.eq("google gemini")
+        | model.str.startswith("gemini/")
+        | (provider.eq("google vertex ai") & model.str.contains("gemini", na=False))
+        | model.str.startswith("vertex_ai/gemini")
+    )
+    return model_df[gemini & ~chatgpt & ~direct_anthropic].copy()
+
+
 def _chatgpt_default_for_request(family_df: pd.DataFrame, requested_model: Any) -> str:
     """Resolve the ChatGPT-family default model for the current request."""
     requested = str(requested_model or "").strip()
@@ -2577,11 +2599,15 @@ def _apply_codex_subscription_default(
         return model_df, effective_default_model, False
 
     family = _chatgpt_family(model_df)
+    gemini_fallback = _gemini_subscription_fallback_family(model_df)
     if family.empty:
         try:
-            packaged_family = _chatgpt_family(_load_model_data(None))
+            packaged_df = _load_model_data(None)
+            packaged_family = _chatgpt_family(packaged_df)
+            packaged_gemini_fallback = _gemini_subscription_fallback_family(packaged_df)
         except Exception:
             packaged_family = pd.DataFrame()
+            packaged_gemini_fallback = pd.DataFrame()
         if packaged_family.empty:
             raise ValueError(
                 "Codex subscription auth is available, but the active model catalog "
@@ -2593,13 +2619,20 @@ def _apply_codex_subscription_default(
             "ChatGPT subscription rows for Codex default."
         )
         family = packaged_family
+        if gemini_fallback.empty:
+            gemini_fallback = packaged_gemini_fallback
 
     resolved_default = _chatgpt_default_for_request(family, requested)
+    candidate_df = family
+    if not gemini_fallback.empty:
+        candidate_df = pd.concat([family, gemini_fallback], ignore_index=True)
     logger.info(
-        "Using Codex subscription default for llm_invoke: provider=OpenAI ChatGPT model=%s",
+        "Using Codex subscription default for llm_invoke: provider=OpenAI ChatGPT model=%s "
+        "with %d Gemini fallback candidate(s)",
         resolved_default,
+        len(gemini_fallback.index),
     )
-    return family, resolved_default, True
+    return candidate_df, resolved_default, True
 
 
 def _pin_default_model_first(

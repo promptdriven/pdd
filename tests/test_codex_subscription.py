@@ -169,7 +169,7 @@ def test_ensure_api_key_chatgpt_allowed_interactively_without_auth(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 def _fake_model_df():
-    """Mimic _load_model_data output: an Anthropic row + the default chatgpt row."""
+    """Mimic _load_model_data output with Anthropic, Codex, and Gemini rows."""
     rows = [
         {
             "provider": "Anthropic", "model": "claude-sonnet-4-6",
@@ -184,6 +184,13 @@ def _fake_model_df():
             "base_url": "", "api_key": "",
             "max_reasoning_tokens": 0, "structured_output": True,
             "reasoning_type": "none", "location": "",
+        },
+        {
+            "provider": "Google Vertex AI", "model": "vertex_ai/gemini-3-flash-preview",
+            "input": 0.5, "output": 3.0, "coding_arena_elo": 1437,
+            "base_url": "", "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+            "max_reasoning_tokens": 0, "structured_output": True,
+            "reasoning_type": "effort", "location": "global",
         },
     ]
     df = pd.DataFrame(rows)
@@ -312,7 +319,7 @@ def test_codex_family_strength_orders_by_elo():
 
 
 def test_codex_subscription_default_excludes_anthropic_when_auth_exists(monkeypatch):
-    """With codex auth, default selection is constrained to chatgpt/*."""
+    """With codex auth, default selection is Codex first plus Gemini fallback."""
     df = li._load_model_data(_packaged_csv_path())
     monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
     monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
@@ -320,7 +327,8 @@ def test_codex_subscription_default_excludes_anthropic_when_auth_exists(monkeypa
 
     assert used is True
     assert default_model == "chatgpt/gpt-5.5"
-    assert set(restricted["provider"]) == {"OpenAI ChatGPT"}
+    assert "OpenAI ChatGPT" in set(restricted["provider"])
+    assert any(restricted["model"].astype(str).str.contains("gemini"))
     assert not any(restricted["api_key"].astype(str).str.contains("ANTHROPIC_API_KEY"))
 
 
@@ -332,7 +340,9 @@ def test_codex_subscription_maps_gpt55_default_to_chatgpt(monkeypatch):
 
     assert used is True
     assert default_model == "chatgpt/gpt-5.5"
-    assert set(restricted["provider"]) == {"OpenAI ChatGPT"}
+    assert "OpenAI ChatGPT" in set(restricted["provider"])
+    assert any(restricted["model"].astype(str).str.contains("gemini"))
+    assert not any(restricted["api_key"].astype(str).str.contains("ANTHROPIC_API_KEY"))
 
 
 def test_codex_subscription_uses_packaged_rows_when_active_catalog_is_stale(monkeypatch):
@@ -372,6 +382,54 @@ def test_codex_subscription_uses_packaged_rows_when_active_catalog_is_stale(monk
     assert used is True
     assert default_model == "chatgpt/gpt-5.5"
     assert restricted["model"].tolist() == ["chatgpt/gpt-5.5"]
+
+
+def test_codex_cloudflare_falls_back_to_vertex_gemini_not_anthropic(monkeypatch):
+    """Cloudflare HTML from chatgpt/ must not strand sync or use Anthropic API key."""
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
+    monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
+    monkeypatch.setenv("VERTEXAI_LOCATION", "global")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-used")
+
+    calls = []
+
+    def fake_completion(**kwargs):
+        model = kwargs.get("model")
+        calls.append(model)
+        if str(model).startswith("chatgpt/"):
+            msg = type("M", (), {
+                "content": '<span id="challenge-error-text">Enable JavaScript and cookies to continue</span>',
+                "role": "assistant",
+            })()
+        else:
+            msg = type("M", (), {"content": '{"ok": true}', "role": "assistant"})()
+        choice = type("C", (), {"message": msg, "finish_reason": "stop"})()
+        usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10})()
+        return type("R", (), {"choices": [choice], "usage": usage})()
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.codex_subscription.apply_litellm_chatgpt_output_patch", return_value=True), \
+         patch("pdd.llm_invoke.count_tokens_for_messages", return_value=10), \
+         patch("pdd.llm_invoke.get_context_limit", return_value=1_000_000), \
+         patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
+        result = li.llm_invoke(
+            prompt="return json for {x}",
+            input_json={"x": "smoke"},
+            strength=0.5,
+            output_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]},
+            verbose=False,
+        )
+
+    assert calls[0] == "chatgpt/gpt-5.5"
+    assert "vertex_ai/gemini-3-flash-preview" in calls
+    assert "claude-sonnet-4-6" not in calls
+    assert result["model_name"] == "vertex_ai/gemini-3-flash-preview"
 
 
 def test_pdd_model_default_first_pins_configured_default(monkeypatch):
