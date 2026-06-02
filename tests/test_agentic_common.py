@@ -3413,6 +3413,120 @@ def test_drain_issue_steers_from_github(mock_cwd, mock_subprocess_run, mock_shut
     assert state["last_steered_comment_id"] == "1001"
     assert state["steer_generation"] == 1
 
+    cmd = mock_subprocess_run.call_args[0][0]
+    assert "--method" in cmd
+    assert "GET" in cmd
+
+
+def test_gh_api_list_issue_comments_cmd_uses_get_with_since():
+    """``-f since=`` must not downgrade the comments list request to POST."""
+    from pdd.agentic_common import _gh_api_list_issue_comments_cmd
+
+    cmd = _gh_api_list_issue_comments_cmd(
+        "owner", "repo", 55, since="2026-06-01T12:00:00Z"
+    )
+    assert cmd == [
+        "gh",
+        "api",
+        "repos/owner/repo/issues/55/comments",
+        "--method",
+        "GET",
+        "--paginate",
+        "--slurp",
+        "-f",
+        "since=2026-06-01T12:00:00Z",
+    ]
+
+
+def test_drain_issue_steers_github_since_uses_get(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Regression: ``last_steer_at`` must keep the GitHub request as GET."""
+    from pdd.agentic_common import drain_issue_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = "[]"
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {
+        "last_steered_comment_id": "1000",
+        "last_steer_at": "2026-06-01T11:00:00Z",
+        "steer_cursor_seeded": True,
+    }
+    drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+
+    cmd = mock_subprocess_run.call_args[0][0]
+    assert cmd[cmd.index("--method") + 1] == "GET"
+    assert "-f" in cmd
+    assert "since=2026-06-01T11:00:00Z" in cmd
+
+
+def test_drain_issue_steers_without_cursor_skips_github_poll(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Empty state must not treat all historical issue comments as steers."""
+    from pdd.agentic_common import drain_issue_steers
+
+    mock_shutil_which.return_value = "/bin/gh"
+
+    state = {}
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+
+    assert steers == []
+    mock_subprocess_run.assert_not_called()
+
+
+def test_seed_issue_steer_cursor_sets_baseline(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Run-start seed advances the cursor without returning steers."""
+    from pdd.agentic_common import (
+        drain_issue_steers,
+        seed_issue_steer_cursor,
+    )
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_comments = [
+        {
+            "id": 2001,
+            "user": {"login": "old-user", "type": "User"},
+            "body": "Historical discussion",
+            "created_at": "2026-05-01T10:00:00Z",
+        },
+        {
+            "id": 2002,
+            "user": {"login": "pdd-bot", "type": "Bot"},
+            "body": "Bot noise",
+            "created_at": "2026-05-01T11:00:00Z",
+        },
+    ]
+    mock_subprocess_run.return_value.returncode = 0
+    mock_subprocess_run.return_value.stdout = json.dumps(mock_comments)
+    mock_subprocess_run.return_value.stderr = ""
+
+    state = {}
+    assert seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd) is True
+    assert state["last_steered_comment_id"] == "2002"
+    assert state["last_steer_at"] == "2026-05-01T11:00:00Z"
+    assert state["steer_cursor_seeded"] is True
+
+    mock_subprocess_run.return_value.stdout = json.dumps(
+        mock_comments
+        + [
+            {
+                "id": 2003,
+                "user": {"login": "new-user", "type": "User"},
+                "body": "Steer me",
+                "created_at": "2026-06-01T12:00:00Z",
+            },
+        ]
+    )
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+    assert len(steers) == 1
+    assert steers[0].comment_id == "2003"
+    assert steers[0].body == "Steer me"
+
 
 # ---------------------------------------------------------------------------
 # GitHub State Persistence Tests — Issue #481
