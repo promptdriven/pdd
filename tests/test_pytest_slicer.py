@@ -160,6 +160,25 @@ def test_param(x):
     assert "@pytest.mark.parametrize" in sliced_code
     assert "def test_param(x):" in sliced_code
 
+def test_slice_async_test():
+    source = """
+import pytest
+
+async def test_async_flow():
+    assert True
+
+class TestAsync:
+    async def test_method(self):
+        assert 1 == 1
+"""
+    slicer = PytestSlicer(source)
+    sliced_code, _ = slicer.slice(["test_async_flow"])
+    assert "async def test_async_flow" in sliced_code
+
+    sliced_code2, _ = slicer.slice(["TestAsync.test_method"])
+    assert "async def test_method" in sliced_code2
+
+
 def test_slice_recursive_deps():
     source = """
 VAL = 10

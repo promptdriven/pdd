@@ -22,10 +22,10 @@ Deterministic content extraction from files based on line ranges, Python AST str
 % Requirements
 1. Class: `ContentSelector` with a static `select(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = "full") -> str` method
 2. Exception: `SelectorError(Exception)` — all user-facing errors must raise `SelectorError` with a descriptive message
-3. Selectors are `kind:value` strings where `kind` is one of: `lines`, `def`, `class`, `section`, `pattern`, `path`, `pytest`
+3. Selectors are `kind:value` strings where `kind` is one of: `lines`, `def`, `class`, `section`, `pattern`, `path`, `pytest`, `contract`
    - Accept `selectors` as a `list[str]` or a single comma-separated string
    - Skip empty/whitespace-only strings silently
-   - Raise `SelectorError` for non-empty strings that don't match `kind:value` format. Error messages must explicitly list all valid kinds (e.g., "Invalid selector kind 'foo'. Valid kinds are: lines, def, class, section, pattern, path, pytest").
+   - Raise `SelectorError` for non-empty strings that don't match `kind:value` format. Error messages must explicitly list all valid kinds (e.g., "Invalid selector kind 'foo'. Valid kinds are: lines, def, class, section, pattern, path, pytest, contract").
 4. When selectors is empty, return full content — unless `mode="interface"`, which produces a full-file interface
 5. Infer file type from `file_path` extension:
    - `.py` → Python, `.md`/`.markdown` → Markdown, `.json` → JSON, `.yaml`/`.yml` → YAML
@@ -66,6 +66,10 @@ Deterministic content extraction from files based on line ranges, Python AST str
     - Delegate to `PytestSlicer` to extract the test and its transitive closure of dependencies (fixtures, helpers, imports)
     - Catch `SlicerError` from `PytestSlicer` and re-raise as `SelectorError` if the test is not found or if slicing fails
     - Only supported for `.py` files; raise `SelectorError` otherwise
+13. `contract:symbol[,symbol...]` — API/dependency contract slicing
+    - Delegate to `ApiContractSlicer` to preserve seed symbols and transitive local dependencies
+    - Catch `ContractSlicerError` and re-raise as `SelectorError`
+    - Only supported for `.py` files; raise `SelectorError` otherwise
 
 % Combining Results
 13. Multiple selectors: merge overlapping line spans to preserve file order. Path results collected separately and appended after span-based content, joined with `\n`.
@@ -83,6 +87,7 @@ Deterministic content extraction from files based on line ranges, Python AST str
 
 % Dependencies
 <pdd-dependency>pytest_slicer_python.prompt</pdd-dependency>
+<pdd-dependency>api_contract_slicer_python.prompt</pdd-dependency>
 <pytest_slicer_interface>
   <include mode="interface">pdd/pytest_slicer.py</include>
 </pytest_slicer_interface>

@@ -9726,10 +9726,36 @@
     }
   },
   {
+    "reason": "AST-based API/dependency contract slicing for compressed generation (#875).",
+    "description": "Preserves imported symbols, patch targets, and transitive local helpers/constants when compressing module context.",
+    "dependencies": [],
+    "priority": 99,
+    "filename": "api_contract_slicer_python.prompt",
+    "filepath": "pdd/api_contract_slicer.py",
+    "tags": [
+      "module",
+      "python",
+      "context"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ApiContractSlicer.slice",
+            "signature": "(seeds: List[str])",
+            "returns": "Tuple[str, ContractManifest]"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
     "description": "Deterministic content extraction from files based on line ranges, Python AST structures, Markdown sections, regex patterns, and JSON/YAML path traversal.",
     "dependencies": [
-      "pytest_slicer_python.prompt"
+      "pytest_slicer_python.prompt",
+      "api_contract_slicer_python.prompt"
     ],
     "priority": 101,
     "filename": "content_selector_python.prompt",

@@ -38,6 +38,12 @@ class ASTVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_function_like(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._visit_function_like(node)
+
+    def _visit_function_like(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Call):
                 func = decorator.func
@@ -92,12 +98,12 @@ class PytestSlicer:
         for node in tree.body:
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 self.imports.append((node, self._get_source_segment(source, node), path))
-            elif isinstance(node, ast.FunctionDef):
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 self.definitions[node.name] = (node, self._get_source_segment(source, node), path, None)
             elif isinstance(node, ast.ClassDef):
                 self.definitions[node.name] = (node, self._get_source_segment(source, node), path, None)
                 for item in node.body:
-                    if isinstance(item, ast.FunctionDef):
+                    if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         full_name = f"{node.name}.{item.name}"
                         self.definitions[full_name] = (item, self._get_source_segment(source, item), path, node)
             elif isinstance(node, ast.Assign):
@@ -253,7 +259,8 @@ class PytestSlicer:
                 
                 header_lines = []
                 for line in full_segment.splitlines():
-                    if line.strip().startswith("def "):
+                    stripped = line.strip()
+                    if stripped.startswith("def ") or stripped.startswith("async def "):
                         break
                     header_lines.append(line)
                 class_lines.extend(header_lines)

@@ -2316,6 +2316,26 @@ def test_include_select_multiple_selectors(tmp_path, monkeypatch) -> None:
     assert call_kwargs.kwargs['selectors'] == ['def:a', 'def:b']
 
 
+def test_include_select_pytest_comma_separated(tmp_path, monkeypatch) -> None:
+    """pytest:test_one,test_two must stay one selector (not split on the comma)."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "tests/test_sample.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(
+        "def helper():\n    return 1\n\n"
+        "def test_one():\n    assert helper() == 1\n\n"
+        "def test_two():\n    assert True\n"
+    )
+    prompt = '<include select="pytest:test_one,test_two">tests/test_sample.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "sliced"
+        preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['selectors'] == ['pytest:test_one,test_two']
+
+
 def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
     """If ContentSelector can't be imported, fall back to full file content with a warning."""
     monkeypatch.chdir(tmp_path)

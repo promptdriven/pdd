@@ -12,6 +12,8 @@ from typing import Optional, Any, Union
 from rich.console import Console
 from rich.theme import Theme
 
+from ._selector_parse import parse_selectors_string
+from .api_contract_slicer import ApiContractSlicer, ContractSlicerError
 from .pytest_slicer import PytestSlicer, SlicerError
 
 # Theme for consistent styling
@@ -43,16 +45,7 @@ class ContentSelector:
         Extracts content based on provided selectors.
         """
         if isinstance(selectors, str):
-            raw_parts = [s.strip() for s in selectors.split(",") if s.strip()]
-            selectors = []
-            for part in raw_parts:
-                # If part has a kind: prefix, it's a new selector
-                # Kind prefix is word characters followed by a colon
-                if re.match(r'^\w+:', part) or not selectors:
-                    selectors.append(part)
-                else:
-                    # Otherwise it's a continuation of the previous selector's value
-                    selectors[-1] += "," + part
+            selectors = parse_selectors_string(selectors)
         else:
             selectors = [s.strip() for s in selectors if s.strip()]
 
@@ -71,7 +64,7 @@ class ContentSelector:
         if all(not s for s in selectors):
             return content
 
-        valid_kinds = {"lines", "def", "class", "section", "pattern", "path", "pytest"}
+        valid_kinds = {"lines", "def", "class", "section", "pattern", "path", "pytest", "contract"}
         
         spans: list[tuple[int, int]] = []
         path_results: list[str] = []
@@ -121,6 +114,16 @@ class ContentSelector:
                         sliced_content, _ = slicer.slice(test_names)
                         path_results.append(sliced_content)
                     except SlicerError as e:
+                        raise SelectorError(str(e))
+                elif kind == "contract":
+                    if file_ext != "py":
+                        raise SelectorError("contract selector requires a Python file.")
+                    try:
+                        symbols = [t.strip() for t in value.split(",") if t.strip()]
+                        slicer = ApiContractSlicer(content, file_path=file_path)
+                        sliced_content, _ = slicer.slice(symbols)
+                        path_results.append(sliced_content)
+                    except ContractSlicerError as e:
                         raise SelectorError(str(e))
             except SelectorError:
                 raise
