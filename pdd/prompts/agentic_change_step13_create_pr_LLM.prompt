@@ -38,11 +38,10 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
 
 % Your Task
 
-1. **Stage all changes**
-   ```bash
-   cd {worktree_path}
-   git add -A
-   ```
+1. **Use the orchestrator-staged changes**
+   - The PDD orchestrator already staged the exact changed files and any expected `.pdd/meta/<module>_<language>.json` fingerprints before this step.
+   - Do not run `git add -A`, `git add .`, or blanket `.pdd` staging.
+   - If you must repair staging, stage only paths listed in `Files Changed` with `git add -- <exact_path>`, and use `git add -f -- <exact_fingerprint_path>` only for listed `.pdd/meta` fingerprint files.
 
 2. **Create commit**
    - Use a clear commit message referencing the issue
