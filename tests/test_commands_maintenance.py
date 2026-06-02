@@ -611,6 +611,35 @@ def test_sync_architecture_reports_summary_and_success(mock_sync_prompts, mock_a
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.maintenance.sync_prompts_to_architecture')
+def test_sync_architecture_echoes_module_warnings(mock_sync_prompts, mock_auto_update, runner):
+    """Per-module contract_summary warnings from sync results appear in CLI output."""
+    mock_sync_prompts.return_value = {
+        "success": True,
+        "updated_count": 1,
+        "skipped_count": 0,
+        "results": [
+            {
+                "filename": "refund_python.prompt",
+                "success": True,
+                "updated": True,
+                "changes": {},
+                "error": None,
+                "warnings": ["contract_summary: story file unreadable: broken.md"],
+            },
+        ],
+        "validation": {"valid": True, "errors": [], "warnings": []},
+        "errors": [],
+    }
+
+    result = runner.invoke(cli.cli, ["sync-architecture"])
+
+    assert result.exit_code == 0
+    assert "WARNING refund_python.prompt:" in result.output
+    assert "story file unreadable" in result.output
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_prompts_to_architecture')
 def test_sync_architecture_passes_filenames_and_dry_run(mock_sync_prompts, mock_auto_update, runner):
     """Specific prompt filenames and --dry-run should flow into the shared helper."""
     mock_sync_prompts.return_value = {
@@ -723,3 +752,75 @@ def test_sync_architecture_uses_nearest_cwd_project(mock_auto_update, runner, tm
     assert "Updated 1 module(s); skipped 0." in result.output
     assert json.loads((repo_root / "architecture.json").read_text(encoding="utf-8"))[0]["reason"] == "Original root reason"
     assert json.loads((nested_root / "architecture.json").read_text(encoding="utf-8"))[0]["reason"] == "Updated nested reason"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_model_flag_sets_pdd_model_default(mock_sync_main, mock_auto_update, runner, monkeypatch):
+    """`pdd sync <basename> --model X` sets PDD_MODEL_DEFAULT for the run so the
+    selection resolver (which reads it at call time) routes to X — the public-CLI
+    way to force, e.g., the chatgpt/ subscription family (issue #1269)."""
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    seen = {}
+
+    def _capture(*args, **kwargs):
+        seen["model_default"] = os.environ.get("PDD_MODEL_DEFAULT")
+        return ("success", 0.0, "chatgpt/gpt-5.3-codex")
+
+    mock_sync_main.side_effect = _capture
+    result = runner.invoke(
+        cli.cli, ["sync", "test_module", "--model", "chatgpt/gpt-5.3-codex"]
+    )
+    assert result.exit_code == 0, result.output
+    assert seen.get("model_default") == "chatgpt/gpt-5.3-codex"
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
+def test_sync_without_model_flag_leaves_default_unset(mock_sync_main, mock_auto_update, runner, monkeypatch):
+    """Without --model, sync must not invent a PDD_MODEL_DEFAULT."""
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    seen = {}
+
+    def _capture(*args, **kwargs):
+        seen["model_default"] = os.environ.get("PDD_MODEL_DEFAULT")
+        return ("success", 0.0, "x")
+
+    mock_sync_main.side_effect = _capture
+    result = runner.invoke(cli.cli, ["sync", "test_module"])
+    assert result.exit_code == 0, result.output
+    assert seen.get("model_default") is None
+
+
+def test_llm_invoke_resolves_model_from_env_at_call_time(monkeypatch):
+    """P1 core: llm_invoke must resolve the base model from PDD_MODEL_DEFAULT at
+    CALL time, not the import-frozen constant — this is what makes `pdd sync
+    --model` (which sets the env var) actually change the model in-process,
+    including precedence over a different value present at startup."""
+    import pdd.llm_invoke as li
+
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")  # never touch the cloud auth flow
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "vertex_ai/gemini-3-flash-preview")
+    captured = {}
+
+    def _spy(strength, base, df):
+        captured["base"] = base
+        # Short-circuit before llm_invoke enters the candidate loop. We only need
+        # to assert the base model resolved at CALL time; letting the call proceed
+        # with a chatgpt/ base drives real get_model_info / token-refresh /
+        # completion attempts that hang in CI (no token) and trip the 60s
+        # pytest-timeout. llm_invoke catches this in its model-selection
+        # try/except and re-raises, which the test's `except Exception` swallows.
+        raise RuntimeError("stop after capturing base (hermetic test, #1269)")
+
+    monkeypatch.setattr(li, "_select_model_candidates", _spy)
+    # change the env AFTER import (as `pdd sync --model` does) and call:
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.3-codex")
+    try:
+        li.llm_invoke(prompt="hi {x}", input_json={"x": "y"}, strength=0.5, verbose=False)
+    except Exception:
+        pass  # selector is stubbed; downstream may error — we only assert the base.
+
+    assert captured.get("base") == "chatgpt/gpt-5.3-codex", (
+        "llm_invoke used a stale base model; --model would not take effect in-process"
+    )

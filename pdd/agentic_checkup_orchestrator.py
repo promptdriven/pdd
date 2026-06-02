@@ -15,6 +15,7 @@ branch; the worktree is created before the first loop iteration.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -582,6 +583,146 @@ def _git_rev_parse_head(worktree: Path) -> str:
     return fn(worktree)
 
 
+# Codex round-3 Finding 5: diff size sanity gate. A fixer push that adds
+# more than ``DIFF_SIZE_ADDED_LOC_LIMIT`` lines without an explicit
+# EXPANSION_ITEMS justification is treated as an oversized change and
+# refused. Threshold chosen as a deliberate conservative ceiling tied to a
+# typical bug-fix surface — larger fixes should declare themselves via
+# EXPANSION_ITEMS so the operator can see the scope expansion. Override via
+# the ``PDD_CHECKUP_DIFF_LOC_LIMIT`` env var (positive int; falls back to
+# the default on parse error). Set to ``0`` to disable the gate entirely.
+DIFF_SIZE_ADDED_LOC_LIMIT = 800
+
+# Codex round-9 Finding 2: a path is treated as "oversized" — and
+# therefore required to carry its OWN justified EXPANSION_ITEMS entry
+# when the total diff exceeds ``DIFF_SIZE_ADDED_LOC_LIMIT`` — when its
+# added lines alone meet or exceed this floor. Small companion edits
+# (e.g. a 5-line test update next to a 600-line refactor) are exempt:
+# the docs and Step 6 prompt both promise "every oversized dirty path",
+# not "every dirty path".
+OVERSIZED_PATH_ADDED_LOC_FLOOR = 50
+
+
+def _numstat_rename_dest(path_field: str) -> str:
+    """Resolve a ``git diff --numstat`` rename path to its destination.
+
+    git emits renames either as a plain ``old => new`` or a brace form that
+    factors the shared prefix/suffix, e.g. ``a/{b => c}/d.py`` -> ``a/c/d.py``
+    (and ``{b => c}`` -> ``c``). Some tools use ``old -> new`` instead.
+    Returns the post-rename (working-tree) path.
+    """
+    pf = path_field.strip()
+    if "{" in pf and "}" in pf and "=>" in pf:
+        pre, _, rest = pf.partition("{")
+        inside, _, post = rest.partition("}")
+        new_seg = inside.split("=>", 1)[1].strip()
+        return (pre + new_seg + post).replace("//", "/").strip()
+    for sep in ("=>", "->"):
+        if sep in pf:
+            return pf.split(sep, 1)[1].strip()
+    return pf
+
+
+def _diff_size_added_lines_by_path(worktree: Path) -> Optional[Dict[str, int]]:
+    """Return per-path added line counts for uncommitted + untracked files.
+
+    Same probe shape as :func:`_diff_size_added_lines` (which delegates to
+    this helper for the total) but reports the count per file so the
+    pre-push gate can isolate which paths individually pushed the diff
+    over the limit. ``None`` indicates the git probe itself failed —
+    callers fail-degrade rather than blocking pushes on a flaky git
+    invocation.
+    """
+    try:
+        from .checkup_gates import (  # pylint: disable=import-outside-toplevel
+            _build_subprocess_env,
+            _resolve_trusted_git,
+        )
+
+        git_bin = _resolve_trusted_git(worktree)
+        if not git_bin:
+            return None
+        env = _build_subprocess_env(worktree)
+        result = subprocess.run(
+            [git_bin, "diff", "--numstat", "HEAD"],
+            cwd=str(worktree),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if result.returncode != 0:
+            return None
+        per_path: Dict[str, int] = {}
+        for line in result.stdout.splitlines():
+            parts = line.split("\t")
+            if len(parts) < 3:
+                continue
+            added_field = parts[0].strip()
+            path_field = parts[-1].strip()
+            if not path_field:
+                continue
+            # Rename rows from ``git diff --numstat`` use ``=>``: either a
+            # plain ``old => new`` or a brace form that factors the shared
+            # prefix/suffix (e.g. ``dir/{old => new}/f.py``). The
+            # destination is what's in the working tree, so resolve to the
+            # post-rename path for matching against ``guard_changed_files``.
+            # (Also tolerate the ``old -> new`` shape some tools emit.)
+            if "=>" in path_field or " -> " in path_field:
+                path_field = _numstat_rename_dest(path_field)
+            if added_field in ("", "-"):
+                # Binary files contribute zero; still record so the gate
+                # sees the path.
+                per_path[path_field] = per_path.get(path_field, 0)
+                continue
+            try:
+                per_path[path_field] = per_path.get(path_field, 0) + int(added_field)
+            except ValueError:
+                continue
+
+        untracked = subprocess.run(
+            [git_bin, "ls-files", "--others", "--exclude-standard"],
+            cwd=str(worktree),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if untracked.returncode == 0:
+            for path in untracked.stdout.splitlines():
+                rel = path.strip()
+                if not rel:
+                    continue
+                full = worktree / rel
+                try:
+                    if full.is_file():
+                        with full.open("rb") as fh:
+                            per_path[rel] = per_path.get(rel, 0) + sum(1 for _ in fh)
+                except OSError:
+                    continue
+        return per_path
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _diff_size_added_lines(worktree: Path) -> Optional[int]:
+    """Return total added lines across uncommitted + untracked files.
+
+    Uses ``git diff --numstat`` to count added lines in tracked changes,
+    then adds the line counts of untracked files (numstat ignores them).
+    Binary files report ``-`` in numstat output and contribute zero.
+
+    Returns ``None`` when the git probe fails, so callers fail-degrade
+    rather than blocking pushes on a flaky git invocation.
+    """
+    per_path = _diff_size_added_lines_by_path(worktree)
+    if per_path is None:
+        return None
+    return sum(per_path.values())
+
+
 def _check_prompt_source_guard(
     worktree: Path, changed_files: List[str]
 ) -> Optional[str]:
@@ -655,7 +796,9 @@ def _scrub_secrets(text: str) -> str:
     return fn(text)
 
 
-def _step7_passed(step7_output: str, pr_mode: bool) -> Tuple[bool, str]:
+def _step7_passed(
+    step7_output: str, pr_mode: bool, has_issue: bool = True
+) -> Tuple[bool, str]:
     """Parse Step 7's JSON report and decide whether the checkup may proceed.
 
     The Step 7 prompt (``agentic_checkup_step7_verify_LLM.prompt``) requires
@@ -674,7 +817,9 @@ def _step7_passed(step7_output: str, pr_mode: bool) -> Tuple[bool, str]:
     Returns ``(passed, failure_reason)`` where ``passed`` is True iff:
 
     * ``success`` is ``True``;
-    * in PR mode, ``issue_aligned`` is ``True``;
+    * in PR mode WITH a source issue (``has_issue``), ``issue_aligned`` is
+      ``True``; with no issue (#1292) the alignment gate is dropped and the
+      verdict rests on code findings alone (review the PR on its own merits);
     * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
 
     Fails closed: if no JSON object can be extracted, returns
@@ -711,7 +856,7 @@ def _step7_passed(step7_output: str, pr_mode: bool) -> Tuple[bool, str]:
             f"Message: {payload.get('message') or '<no message>'}",
         )
 
-    if pr_mode and payload.get("issue_aligned") is not True:
+    if pr_mode and has_issue and payload.get("issue_aligned") is not True:
         return (
             False,
             f"Step 7 reported issue_aligned=false — PR does not resolve the "
@@ -987,6 +1132,445 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
+_STEP5_SKIPPED_STATUSES = frozenset({"skipped", "skip", "no_tests", "n/a", "n_a"})
+
+
+def _step5_failure_signal_status(step_output_value: str) -> str:
+    """Return the lowercase ``failure_signal.status`` from a Step 5 output.
+
+    Strips a leading ``"FAILED: "`` prefix that ``_handle_step_result``
+    prepends for failed steps, then delegates to
+    :func:`_parse_failure_signal_block`. Returns ``""`` when no status
+    is present.
+
+    Codex round-10 Finding 3: the orchestrator must be able to derive
+    Step 5's logical outcome at any point in the run — including on
+    resume — from the persisted ``step_outputs["5"]`` value alone,
+    without depending on the in-memory ``context`` cache that is not
+    part of the saved workflow state.
+    """
+    if not step_output_value:
+        return ""
+    body = step_output_value
+    if body.startswith("FAILED: "):
+        body = body[len("FAILED: "):]
+    fields, _ = _parse_failure_signal_block(body)
+    return str(fields.get("status", "")).strip().lower()
+
+
+def _step5_was_skipped(step_output_value: str) -> bool:
+    """Return True when Step 5 reported a ``skipped``-family status.
+
+    Independent of provider success (round-10 Finding 1) — an agent
+    that emitted a coherent ``status: skipped`` block even on a failed
+    provider call still means "tests did not run", and the pre-push
+    gate must refuse the push regardless.
+    """
+    return _step5_failure_signal_status(step_output_value) in _STEP5_SKIPPED_STATUSES
+
+
+_EXPANSION_CAUSAL_KEYWORDS = (
+    "because",
+    "broken by",
+    "caused by",
+    "depends on",
+    "required by",
+    "needed for",
+    "needed because",
+    "blocked by",
+    "fails because",
+    "breaks because",
+    "due to",
+    "triggered by",
+    "imports",
+    "uses",
+    "regression in",
+)
+
+
+def _parse_expansion_items(step6_output: str) -> Tuple[set, set]:
+    """Parse the ``EXPANSION_ITEMS:`` allowlist from Step 6 output.
+
+    Returns ``(paths, justified_paths)``:
+      - ``paths``: the set of all file paths explicitly listed on
+        ``EXPANSION_ITEMS:`` lines.
+      - ``justified_paths``: the subset of ``paths`` whose own marker
+        carried a causal justification — either inline on the marker
+        line (``: <paths> — <reason>``) or as trailing prose lines
+        beneath the marker block.
+
+    Codex round-5 Finding 3: justification must be tracked per marker
+    entry, not globally. A fixer can otherwise list an unrelated path on
+    one ``EXPANSION_ITEMS:`` line and then satisfy the justification
+    check with a *different* justified marker entry, bypassing the
+    out-of-scope guard for the unrelated path.
+    """
+    paths: set = set()
+    justified_paths: set = set()
+    if "EXPANSION_ITEMS:" not in step6_output:
+        return paths, justified_paths
+
+    lines = step6_output.splitlines()
+    for idx, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("EXPANSION_ITEMS:"):
+            continue
+        payload = stripped.split(":", 1)[1].strip()
+        # Allow an inline justification after an em-dash, hyphen, or
+        # "because"/"reason"-style suffix on the same line:
+        #   EXPANSION_ITEMS: tests/test_x.py — broken by core.py change
+        inline_paths = payload
+        inline_reason = ""
+        for sep in (" — ", " -- ", " - ", " because ", " reason: "):
+            if sep in payload:
+                inline_paths, _, inline_reason = payload.partition(sep)
+                break
+        # Per-marker justification segments accumulate ONLY for this
+        # marker so a sibling marker's reason cannot whitelist the paths
+        # listed here.
+        marker_segments: List[str] = []
+        if inline_reason.strip():
+            marker_segments.append(inline_reason.strip())
+        # Treat ``none`` / ``n/a`` / empty payload as no expansion.
+        marker_paths: set = set()
+        if inline_paths and inline_paths.lower() not in ("none", "n/a", "-"):
+            for token in inline_paths.replace(";", ",").split(","):
+                cleaned = token.strip().strip("`'\"")
+                # Skip obvious non-path fragments (sentences, parentheticals).
+                if not cleaned:
+                    continue
+                if " " in cleaned and "/" not in cleaned and "\\" not in cleaned:
+                    # Reads like prose, not a path — drop it.
+                    marker_segments.append(cleaned)
+                    continue
+                marker_paths.add(cleaned)
+        # Pull a few trailing non-empty lines as potential justification
+        # text so a multi-line block of reasoning still satisfies the
+        # justification requirement. Codex round-6 Finding 1 / round-7
+        # Finding 1: arbitrary trailing prose (e.g. a closing "All done."
+        # sentence) used to qualify as justification on length alone,
+        # letting the fixer bypass scope by emitting any marker plus any
+        # padding text. Round-6 tried to fix this by treating indented
+        # or bulleted continuations as inherently per-marker — but that
+        # is still bypassable with "  All done." or "- All done.". The
+        # tightened rule requires SEMANTIC content: a line counts as a
+        # per-marker justification only when it carries a JUSTIFICATION:
+        # /REASON:/BECAUSE: prefix, mentions one of the marker's own
+        # paths (full path or basename), or contains a causal keyword.
+        # Bare indentation/bullets without those signals no longer
+        # qualifies.
+        marker_path_tokens: set = set()
+        for path in marker_paths:
+            marker_path_tokens.add(path)
+            tail = path.rsplit("/", 1)[-1]
+            if tail:
+                marker_path_tokens.add(tail)
+        for follow in lines[idx + 1: idx + 6]:
+            follow_stripped = follow.strip()
+            if not follow_stripped:
+                continue
+            if follow_stripped.startswith("EXPANSION_ITEMS:"):
+                break
+            if follow_stripped.startswith(("FILES_", "PATTERN_", "FIX_")):
+                break
+            # Strip a leading bullet/blockquote marker so the semantic
+            # checks below see the actual content (mentions/keyword) of
+            # a "- because foo broke" continuation.
+            content = follow_stripped
+            for bullet in ("- ", "* ", "+ ", "> "):
+                if content.startswith(bullet):
+                    content = content[len(bullet):].strip()
+                    break
+            lowered = content.lower()
+            has_prefix = lowered.startswith(
+                ("justification:", "reason:", "because:", "rationale:", "why:")
+            )
+            mentions_path = any(tok in content for tok in marker_path_tokens)
+            has_causal_keyword = any(
+                kw in lowered for kw in _EXPANSION_CAUSAL_KEYWORDS
+            )
+            if not (has_prefix or mentions_path or has_causal_keyword):
+                # Trailing prose without semantic per-marker content
+                # (even when indented or bulleted) — not a justification.
+                continue
+            marker_segments.append(content)
+
+        paths.update(marker_paths)
+        marker_has_justification = any(
+            len(seg) >= 8 for seg in marker_segments
+        )
+        if marker_has_justification:
+            justified_paths.update(marker_paths)
+
+    return paths, justified_paths
+
+
+_FAILURE_SIGNAL_REQUIRED_KEYS = (
+    "command",
+    "exit_code",
+    "status",
+    "failing_ids",
+    "artifact_path",
+    "output",
+)
+
+
+def _extract_failure_signal_block(step5_output: str) -> Optional[str]:
+    """Return the raw text inside a `````failure_signal`` fenced block.
+
+    Returns the body (without the fences) when found, otherwise ``None``.
+    Only the LAST such block is returned — the Step 5 prompt requires the
+    block to be the final fenced block of the response.
+    """
+    if not step5_output or "failure_signal" not in step5_output:
+        return None
+    matches = list(
+        re.finditer(
+            r"```failure_signal\s*\n(.*?)```",
+            step5_output,
+            flags=re.DOTALL,
+        )
+    )
+    if not matches:
+        return None
+    return matches[-1].group(1)
+
+
+def _parse_failure_signal_block(step5_output: str) -> Tuple[Dict[str, str], List[str]]:
+    """Parse the structured failure_signal block from Step 5 output.
+
+    Returns ``(fields, missing)``:
+      - ``fields``: dict of recognised keys. Missing keys are absent. The
+        ``output:`` value collects the indented block under the key (each
+        leading two-space indent is stripped) per the prompt's YAML-ish
+        shape.
+      - ``missing``: ordered list of REQUIRED keys not present in the block
+        (or with empty values for required-non-empty keys like ``status``
+        and ``command``). When the block itself is missing,
+        ``missing == ["__block__"]``.
+
+    Round-2 Finding 5: the prompt says Step 5 MUST emit this block and
+    that Step 6 rejects failures without it, but no parsing/validation
+    existed. This helper lets the orchestrator detect missing/malformed
+    blocks and synthesise a normalised structured block for Step 6.
+    """
+    body = _extract_failure_signal_block(step5_output)
+    if body is None:
+        return {}, ["__block__"]
+
+    fields: Dict[str, str] = {}
+    current_key: Optional[str] = None
+    indented_lines: List[str] = []
+
+    def _commit_block_value() -> None:
+        if current_key is None:
+            return
+        fields[current_key] = "\n".join(indented_lines).rstrip()
+
+    for raw_line in body.splitlines():
+        line = raw_line.rstrip()
+        if not line:
+            if current_key is not None and indented_lines:
+                indented_lines.append("")
+            continue
+        # Recognise ``key: value`` at column 0 (or with ``  key:`` indent
+        # styling tolerated). A continuation of a block scalar is any
+        # line that starts with whitespace.
+        match = re.match(r"^([A-Za-z_]+)\s*:\s*(.*)$", line)
+        if match and not raw_line.startswith((" ", "\t")):
+            _commit_block_value()
+            current_key = match.group(1).strip().lower()
+            value = match.group(2).rstrip()
+            if value == "|":
+                # Block-scalar follows on subsequent indented lines.
+                fields[current_key] = ""
+                indented_lines = []
+            else:
+                fields[current_key] = value
+                current_key = None
+                indented_lines = []
+        else:
+            if current_key is not None:
+                stripped = raw_line[2:] if raw_line.startswith("  ") else raw_line
+                indented_lines.append(stripped)
+    _commit_block_value()
+
+    missing: List[str] = []
+    status_value = str(fields.get("status", "")).strip().lower()
+    # Codex round-3 Finding 4: when the status indicates a real failure
+    # (``fail``/``error``) Step 6 needs concrete debugging context — exit
+    # code, failing IDs, an artifact pointer, and at least some output to
+    # reason from. A block that lists those keys with empty values is just
+    # as useless as one that omits them, so promote them to ``missing``.
+    failure_statuses = {"fail", "error", "failed", "failure"}
+    failure_required_non_empty = {
+        "exit_code",
+        "failing_ids",
+        "artifact_path",
+        "output",
+    }
+    for key in _FAILURE_SIGNAL_REQUIRED_KEYS:
+        if key not in fields:
+            missing.append(key)
+            continue
+        value = str(fields[key]).strip()
+        if key in ("command", "status") and not value:
+            missing.append(key)
+            continue
+        if status_value in failure_statuses and key in failure_required_non_empty and not value:
+            # ``failing_ids`` may legitimately be empty when the runner
+            # cannot enumerate the IDs; the prompt instructs Step 5 to
+            # write ``none`` or a synthetic identifier in that case, so an
+            # empty value here is still treated as missing context.
+            missing.append(key)
+    return fields, missing
+
+
+_ARTIFACT_OUTPUT_MAX_LINES = 400
+_ARTIFACT_OUTPUT_MAX_BYTES = 256 * 1024
+# Codex round-6 performance: cap raw bytes pulled off disk before scrubbing.
+# Tokens are short (~40 chars) so 16x headroom is more than enough to keep any
+# secret intact across the read boundary, while preventing a pathological pytest
+# log (hundreds of MB) from spiking orchestrator memory.
+_ARTIFACT_READ_MAX_BYTES = _ARTIFACT_OUTPUT_MAX_BYTES * 16
+
+
+def _read_failure_signal_artifact(
+    artifact_path_value: str,
+    worktree_path: Optional[Path],
+) -> Optional[str]:
+    """Read the Step 5 failure log when it lives in ``artifact_path``.
+
+    Codex round-4 Finding 3: Step 5 is allowed to leave ``output:`` empty
+    when ``artifact_path:`` points at a file on disk that holds the full
+    pytest log. The previous orchestrator never read that file, so Step 6
+    received an empty ``output:`` payload and the entire failure detail
+    was lost. Resolves the path under the PR worktree, refuses to escape
+    it, caps the content to keep the prompt bounded, and scrubs secrets.
+
+    Returns ``None`` when the value is empty, sentinel ("inline"/"none"),
+    not a regular file under the worktree, or unreadable.
+    """
+    value = (artifact_path_value or "").strip()
+    if not value or value.lower() in {"inline", "none", "n/a", "-", "missing"}:
+        return None
+    if worktree_path is None:
+        return None
+    try:
+        worktree_resolved = worktree_path.resolve()
+        candidate = Path(value)
+        if not candidate.is_absolute():
+            candidate = worktree_resolved / candidate
+        candidate_resolved = candidate.resolve()
+    except (OSError, RuntimeError):
+        return None
+    # Refuse paths that escape the worktree — Step 5 controls this value
+    # and a hostile or buggy run could otherwise hand Step 6 secrets from
+    # outside the PR scope (e.g. ``/etc/passwd``, ``~/.netrc``).
+    try:
+        candidate_resolved.relative_to(worktree_resolved)
+    except ValueError:
+        return None
+    if not candidate_resolved.is_file():
+        return None
+    try:
+        # Read at most _ARTIFACT_READ_MAX_BYTES + 1 so callers can detect
+        # raw-side truncation without materialising arbitrarily large logs.
+        with candidate_resolved.open("rb") as fh:
+            raw_bytes = fh.read(_ARTIFACT_READ_MAX_BYTES + 1)
+    except OSError:
+        return None
+    raw_truncated = len(raw_bytes) > _ARTIFACT_READ_MAX_BYTES
+    if raw_truncated:
+        raw_bytes = raw_bytes[:_ARTIFACT_READ_MAX_BYTES]
+    # Codex round-5 Finding 4: decode AND scrub the full artifact body
+    # before any truncation. Slicing raw bytes first leaves a
+    # recognisable ``ghp_AB...`` fragment when a token straddles the
+    # byte cutoff — the scrub regex never sees the full token, so it
+    # cannot redact the fragment. Scrub everything, then truncate the
+    # already-safe text.
+    full_text = raw_bytes.decode("utf-8", errors="replace")
+    token = _github_token_from_env()
+
+    def _scrub(value: str) -> str:
+        scrubbed_value = _scrub_secrets(value)
+        if token:
+            scrubbed_value = _redact_secret(scrubbed_value, token)
+        return scrubbed_value
+
+    scrubbed_full = _scrub(full_text)
+    scrubbed_lines = scrubbed_full.splitlines()
+    truncated_lines = scrubbed_lines[:_ARTIFACT_OUTPUT_MAX_LINES]
+    body = "\n".join(truncated_lines)
+    if len(body.encode("utf-8", errors="replace")) > _ARTIFACT_OUTPUT_MAX_BYTES:
+        body_bytes = body.encode("utf-8", errors="replace")[:_ARTIFACT_OUTPUT_MAX_BYTES]
+        body = body_bytes.decode("utf-8", errors="replace")
+    needs_truncation_note = (
+        raw_truncated
+        or len(raw_bytes) > _ARTIFACT_OUTPUT_MAX_BYTES
+        or len(scrubbed_lines) > _ARTIFACT_OUTPUT_MAX_LINES
+    )
+    truncation_note = ""
+    if needs_truncation_note:
+        # Scrub the artifact path before echoing it back — a hostile or
+        # buggy run could embed a token in the directory name.
+        safe_path = _scrub(value)
+        truncation_note = (
+            "\n# orchestrator-note: artifact truncated for prompt "
+            f"budget (cap: {_ARTIFACT_OUTPUT_MAX_LINES} lines / "
+            f"{_ARTIFACT_OUTPUT_MAX_BYTES} bytes; full log at "
+            f"{safe_path})."
+        )
+    return body + truncation_note
+
+
+def _normalised_failure_signal_text(
+    raw_output: str,
+    fields: Dict[str, str],
+    missing: List[str],
+) -> str:
+    """Return a normalised structured block for downstream prompts.
+
+    When the Step 5 agent omits or paraphrases the ``failure_signal``
+    block we still want to hand Step 6 a structured representation
+    instead of letting it invent context (which is what caused the
+    original hallucinated-fix mode). Falls back to a synthesised block
+    that captures the raw output verbatim and flags the missing keys.
+    """
+    if not missing:
+        rendered = "\n".join(
+            f"{key}: {fields.get(key, '')}"
+            for key in _FAILURE_SIGNAL_REQUIRED_KEYS
+            if key != "output"
+        )
+        rendered += "\noutput: |\n"
+        body = fields.get("output", "")
+        for body_line in body.splitlines() or [""]:
+            rendered += f"  {body_line}\n"
+        return f"```failure_signal\n{rendered.rstrip()}\n```"
+
+    # Synthesise: pull any fields we did parse; mark the rest as MISSING.
+    parts = []
+    for key in _FAILURE_SIGNAL_REQUIRED_KEYS:
+        if key == "output":
+            continue
+        value = fields.get(key)
+        if value is None or (key in ("command", "status") and not str(value).strip()):
+            value = "MISSING"
+        parts.append(f"{key}: {value}")
+    rendered = "\n".join(parts)
+    raw_body = fields.get("output") or raw_output or ""
+    rendered += "\noutput: |\n"
+    for body_line in (raw_body.splitlines() or [""])[:200]:
+        rendered += f"  {body_line}\n"
+    rendered += (
+        "\n# orchestrator-note: Step 5 emitted a non-compliant "
+        f"failure_signal block (missing/empty keys: {sorted(missing)}). "
+        "Raw step output is preserved above for Step 6."
+    )
+    return f"```failure_signal\n{rendered.rstrip()}\n```"
+
+
 def _is_provider_failure(output: str) -> bool:
     """Return true when the agent runner exhausted every provider."""
     return "All agent providers failed" in output
@@ -1252,16 +1836,30 @@ def _run_agentic_checkup_orchestrator_inner(
         (success, final_message, total_cost, model_used)
     """
     pr_mode = pr_url is not None and pr_number is not None
+    # Issue #1292: in PR mode the source issue is optional. ``has_issue`` is
+    # False when the caller passed an empty ``issue_url`` (merit-review PR
+    # mode): the issue-alignment gate is dropped, the LLM issue context is
+    # blanked, and per-step progress + the duplicate issue-thread post are
+    # suppressed (``issue_number`` here is the PR number, so those posts would
+    # otherwise land on — and flood — the PR thread). With a real issue,
+    # behaviour is byte-for-byte unchanged.
+    has_issue = bool((issue_url or "").strip()) and issue_url not in ("null", "None")
     if test_scope not in ("full", "targeted"):
         raise ValueError(
             f"test_scope must be 'full' or 'targeted', got {test_scope!r}"
         )
     pr_test_scope = test_scope if pr_mode else "full"
     if not quiet:
-        console.print(
-            f"[bold]Running checkup for issue #{issue_number}: "
-            f"\"{issue_title}\"[/bold]"
-        )
+        if pr_mode and not has_issue:
+            console.print(
+                f"[bold]Running checkup for PR #{pr_number} "
+                f"(no source issue — reviewing on its own merits)[/bold]"
+            )
+        else:
+            console.print(
+                f"[bold]Running checkup for issue #{issue_number}: "
+                f"\"{issue_title}\"[/bold]"
+            )
 
     # Context accumulation — grows across steps.
     context: Dict[str, str] = {
@@ -1271,6 +1869,11 @@ def _run_agentic_checkup_orchestrator_inner(
         "repo_name": repo_name,
         "issue_number": str(issue_number),
         "issue_title": issue_title,
+        # #1292: when False (PR mode, no source issue) the step prompts review
+        # the PR on its own merits and skip GitHub issue-thread posting; the
+        # issue_url/issue_content/issue_title fields above are empty in that
+        # case while issue_number stays the PR number (the postable thread).
+        "has_issue": "true" if has_issue else "false",
         "architecture_json": architecture_json,
         "pddrc_content": pddrc_content,
         "project_root": str(cwd),
@@ -1284,6 +1887,14 @@ def _run_agentic_checkup_orchestrator_inner(
         "pr_number": str(pr_number) if pr_number is not None else "",
         "pr_push_output": "",
         "pr_changed_files": "",
+        # Codex round-4 Finding 2: ``pr_changed_files`` is a test-selection
+        # signal (only populated when ``pr_test_scope == 'targeted'`` so
+        # Step 5 runs a focused subset). ``pr_scope_changed_files`` is the
+        # FIXER scope signal — Step 6 uses it to constrain edits to the
+        # PR's existing changed-file set regardless of test scope. We
+        # populate it unconditionally in PR mode so the prompt scope guard
+        # holds even when the operator runs the default ``--scope full``.
+        "pr_scope_changed_files": "",
         "pr_test_scope": pr_test_scope,
         "manual_start_step": str(start_step_override or ""),
         "worktree_path": "",
@@ -1291,6 +1902,12 @@ def _run_agentic_checkup_orchestrator_inner(
         "fix_verify_iteration": "1",
         "max_fix_verify_iterations": str(MAX_FIX_VERIFY_ITERATIONS),
         "previous_fixes": "",
+        # Codex round-3 Finding 3: initialise the normalised Step 5
+        # failure_signal slots so the Step 6 prompt (which now references
+        # ``{step5_failure_signal}``) always renders, even when Step 5
+        # succeeded or has not run yet.
+        "step5_failure_signal": "",
+        "step5_failure_signal_missing": "",
     }
     for step in STEP_ORDER:
         step_key = str(step).replace(".", "_")
@@ -1485,6 +2102,29 @@ def _run_agentic_checkup_orchestrator_inner(
                     )
                 last_completed_step = actual_last_success
 
+        # External review (PR #1215) Finding 2: a loaded state whose run
+        # already COMPLETED (last_completed_step is the terminal step) must NOT
+        # be resumed. The terminal ``clear_workflow_state`` is best-effort and
+        # ``load_workflow_state`` prefers the GitHub state comment over local,
+        # so a remote clear that failed (e.g. a token without
+        # comment-delete/edit scope) would otherwise let this rerun skip every
+        # step and replay the cached Step 7 verdict as "Checkup complete"
+        # without re-verifying the current PR head. Discard it and re-run from
+        # scratch. Preserve ``github_comment_id`` so the fresh run PATCHes the
+        # lingering state comment instead of creating a duplicate.
+        if start_step_override is None and last_completed_step >= STEP_ORDER[-1]:
+            if not quiet:
+                console.print(
+                    "[yellow]Cached workflow state is from a completed run "
+                    "(its terminal cleanup did not remove the state comment); "
+                    "discarding it and re-running verification from "
+                    "scratch.[/yellow]"
+                )
+            github_comment_id = loaded_gh_id
+            last_completed_step = 0
+            state = None
+
+    if state is not None:
         resume_start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
         if not quiet:
             console.print(
@@ -1542,11 +2182,17 @@ def _run_agentic_checkup_orchestrator_inner(
                     metadata_for_guard,
                     quiet,
                 )
+                # Codex round-4 Finding 2: always populate the fixer scope
+                # placeholder so Step 6's scope guard holds in full mode
+                # too. ``pr_changed_files`` stays gated on ``targeted`` so
+                # Step 5's test-selection contract is unchanged.
+                pr_scope_files_text = _format_pr_changed_files_for_prompt(
+                    worktree_path,
+                    metadata_for_guard,
+                )
+                context["pr_scope_changed_files"] = pr_scope_files_text
                 if pr_test_scope == "targeted":
-                    context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
-                        worktree_path,
-                        metadata_for_guard,
-                    )
+                    context["pr_changed_files"] = pr_scope_files_text
 
         # Restore context from cached step outputs.
         # State keys use underscores (e.g. "6_1"); context keys follow suit.
@@ -1687,7 +2333,24 @@ def _run_agentic_checkup_orchestrator_inner(
 
         # Use underscore-based key for fractional steps: 6.1 -> "6_1"
         step_key = str(step_num).replace(".", "_")
-        context[f"step{step_key}_output"] = output
+
+        # Round-2 Finding 4 + codex round-5 Finding 2: scrub Step 5
+        # output BEFORE every persistence surface, on ALL result paths.
+        # The provider-success/tests-failing path is the common case in
+        # CI — failure_signal blocks frequently embed redacted-looking
+        # but actually-live tokens (curl headers, env exports, CI logs).
+        # Scrubbing only when ``not success`` leaked credentials into
+        # ``context['step5_output']``, ``step_outputs['5']``, and any
+        # per-step GitHub comment whenever the provider call itself
+        # completed normally.
+        persistable_output = output
+        if step_num == 5 and output:
+            persistable_output = _scrub_secrets(output)
+            token = _github_token_from_env()
+            if token:
+                persistable_output = _redact_secret(persistable_output, token)
+
+        context[f"step{step_key}_output"] = persistable_output
 
         # Steps 6.1/6.2/6.3: parse changed files.
         if step_num in (6.1, 6.2, 6.3) and success:
@@ -1697,22 +2360,48 @@ def _run_agentic_checkup_orchestrator_inner(
             changed_files[:] = list(dict.fromkeys(changed_files))
             context["files_to_stage"] = ", ".join(changed_files)
 
-        if not success and not quiet:
-            console.print(
-                f"[yellow]Warning: Step {step_num} reported failure, "
-                f"but proceeding as no hard stop condition met.[/yellow]"
-            )
+        if not success:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: Step {step_num} reported failure, "
+                    f"but proceeding as no hard stop condition met.[/yellow]"
+                )
+            # Always surface Step 5 failure detail — visible even in quiet mode.
+            # ``persistable_output`` is already scrubbed when step_num == 5.
+            if step_num == 5 and persistable_output:
+                console.print(
+                    f"[yellow]Step 5 failure detail:\n{persistable_output}[/yellow]"
+                )
         elif not quiet:
             console.print(f"  -> Step {step_num} complete.")
 
         if success:
-            step_outputs[step_key] = output
+            step_outputs[step_key] = persistable_output
             last_completed_step_to_save = step_num
             consecutive_provider_failures = 0
-            if description:
-                _maybe_post_step_comment(step_num, description, output, iteration)
+            # External review (PR #1215) Finding 3: in PR mode the orchestrator
+            # owns the single canonical Step 7 report, posted via
+            # ``_post_pr_mode_final_report`` on every terminal path. Posting a
+            # per-step Step 7 comment here too duplicates Step 7 reporting on
+            # the issue thread (prompt contract: "Step 7 must not post GitHub
+            # comments in PR mode"). Suppress the per-step comment for Step 7 in
+            # PR mode only; earlier steps' progress comments are unaffected, and
+            # issue-mode runs still post a Step 7 comment (they have no separate
+            # final-report post).
+            #
+            # #1292: in no-issue PR mode the per-step comment thread is the PR
+            # itself (issue_number == pr_number), so posting every step's
+            # progress would flood the PR. Suppress ALL per-step progress
+            # comments there — the orchestrator still posts the single
+            # canonical final report to the PR. With a source issue, progress
+            # lands on the issue thread (unchanged).
+            suppress_step_comment = (pr_mode and step_num == 7) or (
+                pr_mode and not has_issue
+            )
+            if description and not suppress_step_comment:
+                _maybe_post_step_comment(step_num, description, persistable_output, iteration)
         else:
-            step_outputs[step_key] = f"FAILED: {output}"
+            step_outputs[step_key] = f"FAILED: {persistable_output}"
             if _is_provider_failure(output):
                 consecutive_provider_failures += 1
                 if consecutive_provider_failures >= 3:
@@ -1785,7 +2474,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # to the post-push reverify output. The "All Issues Fixed" string
         # alone is just a loop-exit sentinel; the structured verdict is
         # what tells us the rebased tree actually satisfies the contract.
-        passed, reason = _step7_passed(output, pr_mode=pr_mode)
+        passed, reason = _step7_passed(output, pr_mode=pr_mode, has_issue=has_issue)
         if not passed:
             return (
                 False,
@@ -1796,7 +2485,12 @@ def _run_agentic_checkup_orchestrator_inner(
         return None
 
     def _post_pr_mode_final_report(final_step7_output: str) -> str:
-        """Post the canonical PR-mode final report to PR + issue threads.
+        """Post the canonical PR-mode final report to the PR thread.
+
+        With a source issue it is also posted to the issue thread; with no
+        issue (#1292) the issue-thread post is skipped — ``issue_number`` is
+        the PR number there, so a second post would only duplicate the PR
+        comment.
 
         Returns a ``status_suffix`` (empty when reporting is not applicable
         or both posts succeeded). On failure, the rendered body is also
@@ -1826,17 +2520,23 @@ def _run_agentic_checkup_orchestrator_inner(
             context.get("pr_push_output", ""),
         )
         pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
-        step_posted = post_step_comment(
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            issue_number=issue_number,
-            step_num=7,
-            total_steps=TOTAL_STEPS,
-            description="Verification & Final Report",
-            output=final_step7_output,
-            cwd=cwd,
-            body=body,
-        )
+        if has_issue:
+            step_posted = post_step_comment(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=7,
+                total_steps=TOTAL_STEPS,
+                description="Verification & Final Report",
+                output=final_step7_output,
+                cwd=cwd,
+                body=body,
+            )
+        else:
+            # No source issue (#1292): issue_number is the PR number, so the
+            # issue-thread post would duplicate the PR comment above. The PR
+            # post is the single canonical report.
+            step_posted = True
         if pr_posted and step_posted:
             return ""
 
@@ -1920,11 +2620,17 @@ def _run_agentic_checkup_orchestrator_inner(
             metadata_for_guard,
             quiet,
         )
+        # Codex round-4 Finding 2: always populate the fixer scope
+        # placeholder so Step 6's scope guard holds in the default full
+        # mode. The targeted test-selection placeholder
+        # (``pr_changed_files``) remains opt-in.
+        pr_scope_files_text = _format_pr_changed_files_for_prompt(
+            worktree_path,
+            metadata_for_guard,
+        )
+        context["pr_scope_changed_files"] = pr_scope_files_text
         if pr_test_scope == "targeted":
-            context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
-                worktree_path,
-                metadata_for_guard,
-            )
+            context["pr_changed_files"] = pr_scope_files_text
 
         if not quiet:
             console.print(
@@ -2023,6 +2729,98 @@ def _run_agentic_checkup_orchestrator_inner(
                     last_model_used,
                 )
 
+        # --no-fix --pr Step 5 status gate (issue #1212 round-14):
+        # Runs AFTER the 3/4/5 loop so it covers both fresh runs (Step 5
+        # just executed) and resumed runs (Step 5 skipped via start_step
+        # but output is already in step_outputs from loaded state).
+        # Non-PR no-fix runs are unaffected (pr_mode is False).
+        if pr_mode:
+            # No truthiness guard on the raw output: an empty/missing Step 5
+            # output is itself a fail-closed condition (no test evidence).
+            # Parsing "" yields a missing block, which routes to the
+            # logical-failure branch (pass-17 Finding 1: a provider that
+            # returns success with empty Step 5 output must not slip past the
+            # gate as a verified result).
+            _s5_raw = step_outputs.get("5", "") or context.get("step5_output", "") or ""
+            _s5f, _s5m = _parse_failure_signal_block(_s5_raw)
+            _s5v = str(_s5f.get("status", "")).strip().lower()
+            _s5_block_missing = "__block__" in _s5m
+            _s5_skipped = _s5v in _STEP5_SKIPPED_STATUSES
+            _s5_pass = _s5v in {"pass", "ok", "success", "passed", "clean"}
+            _s5_fail = (
+                _s5v in {"fail", "error", "failed", "failure"}
+                or _s5_block_missing
+                or (not _s5_pass and not _s5_skipped)
+            )
+            if _s5_skipped or _s5_fail:
+                _art = cwd / ".pdd" / f"checkup-pr-{pr_number}"
+                _art.mkdir(parents=True, exist_ok=True)
+                if _s5_skipped:
+                    _nofix_refusal = (
+                        "Step 5 reported status: skipped — tests did not "
+                        "run against the PR head. Refusing to report a "
+                        "verified result. Rerun pdd checkup --pr --no-fix "
+                        "once the test environment is healthy."
+                    )
+                    (_art / "nofix-step5-skipped-refusal.txt").write_text(
+                        _nofix_refusal + "\n"
+                    )
+                else:
+                    _s5_sfx = (
+                        " (failure_signal block missing or malformed)"
+                        if _s5_block_missing
+                        else f" (status: {_s5v!r})"
+                    )
+                    _nofix_refusal = (
+                        f"Step 5 reported a test failure{_s5_sfx}. "
+                        "Rerun pdd checkup --pr --no-fix after addressing "
+                        "the failures."
+                    )
+                    (_art / "nofix-step5-failure-refusal.txt").write_text(
+                        _nofix_refusal + "\n"
+                    )
+                _nofix_post_suffix = _post_pr_mode_final_report(_nofix_refusal)
+                # Clear saved state so the next run reruns Step 5 from
+                # scratch rather than replaying the stale cached output.
+                # Without this, resume reuses step_outputs["5"] and fires
+                # the same refusal again even after the user fixes the
+                # environment — and posts a duplicate final-report comment.
+                #
+                # Round-17 follow-up: ``load_workflow_state`` loads the
+                # GitHub state comment with PRIORITY over local state, so
+                # if the remote clear silently fails the next rerun
+                # replays the stale cache anyway. ``clear_workflow_state``
+                # now returns whether the clear (incl. the
+                # neutralise-on-delete-failure fallback) was confirmed;
+                # surface a warning when it was not so the operator knows
+                # the rerun may need a manual state-comment cleanup.
+                _cleared = clear_workflow_state(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    workflow_type="checkup",
+                    state_dir=state_dir,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    use_github_state=use_github_state,
+                )
+                if not _cleared:
+                    _state_thread = "the PR" if not has_issue else "the issue"
+                    _clear_warn = (
+                        f" (warning: could not confirm workflow-state "
+                        f"cleanup — a rerun may replay the cached Step 5 "
+                        f"result; delete the PDD_WORKFLOW_STATE comment "
+                        f"on {_state_thread} manually if the refusal repeats)"
+                    )
+                    if not quiet:
+                        console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")
+                    _nofix_refusal = f"{_nofix_refusal}{_clear_warn}"
+                return (
+                    False,
+                    f"{_nofix_refusal}{_nofix_post_suffix}",
+                    total_cost,
+                    last_model_used,
+                )
+
         # Skip step 6 sub-steps.
         for sub_step in (6.1, 6.2, 6.3):
             if sub_step >= start_step:
@@ -2073,7 +2871,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # return tuple. Returning success when Step 7 reported failure
         # would be the same anti-pattern as the fix-mode push case.
         nofix_gate_passed, nofix_gate_reason = _step7_passed(
-            nofix_step7_output, pr_mode=pr_mode
+            nofix_step7_output, pr_mode=pr_mode, has_issue=has_issue
         )
 
         # Skip step 8.
@@ -2222,6 +3020,25 @@ def _run_agentic_checkup_orchestrator_inner(
 
         step7_output = ""
 
+        # Codex round-3 Finding 2: track whether the fixer (Steps 6.1/6.2/6.3)
+        # ever actually ran. Defaults to False so that a clean-run PR (Steps
+        # 3/4/5 all clean) cannot push side-effect edits left in the worktree
+        # by other steps or tooling. Non-PR mode skips the side-effect refusal
+        # path entirely (regular checkup commits its fixes the usual way).
+        #
+        # Codex round-6 Finding 3 / round-7 Finding 2: a resume that skips
+        # ahead bypasses the assignment that would otherwise flip the
+        # flag — without honouring persisted fixer state the side-effect
+        # guard would refuse the dirty changes the previous run's fixer
+        # produced. Seed ONLY from persisted ``step_outputs`` so a manual
+        # ``--start-step 7`` (no prior fixer execution, no persisted 6_x
+        # outputs) does NOT bypass the side-effect guard for dirty files
+        # left by tooling. The earlier ``or start_step > 6`` clause made
+        # that bypass possible.
+        fixer_invoked = any(
+            k in step_outputs for k in ("6_1", "6_2", "6_3")
+        )
+
         while fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS:
             if resuming_mid_iteration:
                 resuming_mid_iteration = False
@@ -2238,12 +3055,66 @@ def _run_agentic_checkup_orchestrator_inner(
                 )
 
             step7_output = ""
+            # Bug 5a: track per-step success of the discovery/build/interface/
+            # test signals. The fixer (6.1/6.2/6.3) is skipped in PR mode only
+            # when ALL of them are clean — Steps 3 and 4 can fail before Step
+            # 5 succeeds and Step 6 is the right place to fix those failures.
+            #
+            # Round-2 Finding 3: when resuming mid-loop (start_step > 3),
+            # initialise the clean flags from the persisted ``step_outputs``
+            # so a clean Step 3/4/5 cached before the interruption is not
+            # forgotten. Without this, a resume after a clean Step 5 reentered
+            # the fixer with all three flags False and hallucinated changes,
+            # recreating the non-convergent clean-run bug. ``step_outputs[K]``
+            # stores raw success output for clean steps and ``FAILED: …`` for
+            # failures (see ``_handle_step_result``).
+            def _cached_clean(key: str) -> bool:
+                cached = step_outputs.get(key)
+                if not cached:
+                    return False
+                return not cached.startswith("FAILED:")
+
+            step3_clean = (
+                is_first_loop_pass
+                and start_step > 3
+                and _cached_clean("3")
+            )
+            step4_clean = (
+                is_first_loop_pass
+                and start_step > 4
+                and _cached_clean("4")
+            )
+            step5_clean = (
+                is_first_loop_pass
+                and start_step > 5
+                and _cached_clean("5")
+            )
 
             for step_num, name, description in loop_steps:
                 # On first pass through the loop, honour resume (skip
                 # already-done steps). Subsequent iterations run all steps.
                 if is_first_loop_pass and step_num < start_step:
                     continue
+
+                # Bug 5a: Skip fixer steps only when Steps 3, 4, AND 5 are all
+                # clean (PR mode only). In regular mode, the fixer always
+                # runs regardless of the upstream signals.
+                if (
+                    pr_mode
+                    and step3_clean
+                    and step4_clean
+                    and step5_clean
+                    and step_num in (6.1, 6.2, 6.3)
+                ):
+                    continue
+
+                # Codex round-3 Finding 2: a fixer step is about to execute,
+                # so any subsequent worktree changes can plausibly be
+                # attributed to the fixer. Without this flag, edits left by
+                # other tools/steps in an otherwise-clean PR run would be
+                # committed and pushed as "checkup fixes".
+                if step_num in (6.1, 6.2, 6.3):
+                    fixer_invoked = True
 
                 # Label uses underscores: step6_1_iter1
                 step_str = str(step_num).replace(".", "_")
@@ -2281,6 +3152,166 @@ def _run_agentic_checkup_orchestrator_inner(
                 if abort is not None:
                     return abort
 
+                if step_num == 3:
+                    step3_clean = success
+                if step_num == 4:
+                    step4_clean = success
+                if step_num == 5:
+                    # Codex round-5 Finding 1: a provider-success result
+                    # whose embedded ``failure_signal`` block declares
+                    # ``status: fail`` still means tests failed. Treating
+                    # provider success as cleanliness lets PR mode skip
+                    # the fixer (Steps 6.1/6.2/6.3) and report a passing
+                    # verdict with broken code on the PR head. Always
+                    # parse the block and derive the logical outcome from
+                    # ``status``, then combine it with provider success
+                    # for ``step5_clean``.
+                    step5_persisted = context.get("step5_output", "") or ""
+                    signal_fields, signal_missing = (
+                        _parse_failure_signal_block(step5_persisted)
+                    )
+                    failure_statuses = {"fail", "error", "failed", "failure"}
+                    pass_statuses = {"pass", "ok", "success", "passed", "clean"}
+                    # Codex round-9 Finding 1: ``skipped``/``skip``/empty-
+                    # results statuses mean tests did not run, so we have
+                    # NO verification signal. Round-8 mapped any non-pass
+                    # status to ``logical_failure``, which ran the fixer
+                    # against a non-failure and then allowed a push of
+                    # speculative changes that no test ever validated.
+                    # Treat skipped as a third state: don't run the fixer
+                    # (no failure to act on) but record an "unverified"
+                    # flag that the pre-push gate consumes to refuse the
+                    # push regardless of other guards.
+                    skipped_statuses = _STEP5_SKIPPED_STATUSES
+                    status_value = (
+                        str(signal_fields.get("status", "")).strip().lower()
+                    )
+                    # Codex round-8 Finding 1: when the agent omits or
+                    # mangles the required ``failure_signal`` block, the
+                    # logical outcome is unknown — treating an unknown
+                    # outcome as "pass" let a provider-success Step 5
+                    # that reported failing tests only in prose flow
+                    # through as ``step5_clean=True`` and skipped the
+                    # fixer. Fail closed: a missing block (signal_missing
+                    # contains "__block__"), an empty status, or any
+                    # status word that is neither a known pass nor a
+                    # known skipped value counts as a logical failure.
+                    block_missing = "__block__" in signal_missing
+                    status_recognised_pass = status_value in pass_statuses
+                    status_skipped = status_value in skipped_statuses
+                    logical_failure = (
+                        status_value in failure_statuses
+                        or block_missing
+                        or (not status_recognised_pass and not status_skipped)
+                    )
+                    # For loop-control purposes treat a "skipped" result
+                    # like a clean Step 5 so the fixer is NOT triggered.
+                    # The unverified flag below blocks the eventual push.
+                    # Round-10 Finding 1: a "skipped" status from the
+                    # agent means tests did not run REGARDLESS of the
+                    # provider success flag — an agent can emit a
+                    # coherent block even when its provider call timed
+                    # out or otherwise reported failure. Set the
+                    # in-memory hint based on the status alone; the
+                    # pre-push gate also re-derives the truth from the
+                    # persisted ``step_outputs["5"]`` so the hint is a
+                    # cache, not the source of truth.
+                    step5_clean = success and not logical_failure
+                    if status_skipped:
+                        context["step5_verification_skipped"] = "1"
+                        # When provider returned failure but status is
+                        # skipped, treat the loop like a clean Step 5
+                        # too so the fixer doesn't run against a
+                        # non-failure.
+                        if not success:
+                            step5_clean = True
+                    else:
+                        context.pop("step5_verification_skipped", None)
+
+                    # Codex round-6 Finding 2: a provider-success result whose
+                    # embedded failure_signal block declares status: fail used
+                    # to skip the failure-detail console.print (which only
+                    # fires in the not-success branch) AND left step_outputs
+                    # ["5"] without the "FAILED:" prefix. That blanked out
+                    # the user-visible failure detail and silently disabled
+                    # the downstream causal-connection check (which keys off
+                    # step_outputs["5"].startswith("FAILED:")). Surface the
+                    # detail and normalise the persisted step output so both
+                    # paths behave the same.
+                    if success and logical_failure:
+                        persisted_for_surface = step5_persisted
+                        if not quiet:
+                            console.print(
+                                "[yellow]Step 5 reported provider success but the "
+                                "failure_signal block declares status="
+                                f"{status_value!r}; treating as a test failure."
+                                "[/yellow]"
+                            )
+                        # External review (PR #1215) Finding 3: surface the
+                        # failure detail unconditionally — visible even in quiet
+                        # mode — to match the provider-failure path's
+                        # always-on print (see ``_handle_step_result``). Quiet
+                        # automation is exactly where operators have no other
+                        # window into the failing tests this branch handles.
+                        # ``persisted_for_surface`` is the already-scrubbed
+                        # ``context['step5_output']``.
+                        if persisted_for_surface:
+                            console.print(
+                                "[yellow]Step 5 failure detail:\n"
+                                f"{persisted_for_surface}[/yellow]"
+                            )
+                        if not step_outputs.get("5", "").startswith("FAILED:"):
+                            step_outputs["5"] = f"FAILED: {persisted_for_surface}"
+                            _save_state()
+
+                    if not step5_clean:
+                        # Codex round-4 Finding 3: when Step 5 leaves
+                        # ``output:`` empty and points to a file via
+                        # ``artifact_path:``, the orchestrator must read
+                        # the file so Step 6 still sees the failure
+                        # detail. Without this, long pytest logs were
+                        # silently dropped before Step 6, recreating the
+                        # original no-signal fixer problem.
+                        if (
+                            "output" in signal_missing
+                            and signal_fields.get("artifact_path")
+                        ):
+                            artifact_content = _read_failure_signal_artifact(
+                                signal_fields.get("artifact_path", ""),
+                                worktree_path,
+                            )
+                            if artifact_content:
+                                signal_fields["output"] = artifact_content
+                                signal_missing = [
+                                    k for k in signal_missing if k != "output"
+                                ]
+                        if signal_missing and not quiet:
+                            console.print(
+                                "[yellow]Step 5 failure_signal block "
+                                f"missing/malformed (keys: {sorted(signal_missing)}); "
+                                "synthesising normalised block for Step 6."
+                                "[/yellow]"
+                            )
+                        normalised_signal = _normalised_failure_signal_text(
+                            step5_persisted, signal_fields, signal_missing
+                        )
+                        context["step5_failure_signal"] = normalised_signal
+                        context["step5_failure_signal_missing"] = ",".join(
+                            signal_missing
+                        )
+                    else:
+                        # External review (PR #1215) Finding 1: the failure
+                        # signal is written ONLY on the failing path above and
+                        # ``context`` persists across fix-verify iterations. A
+                        # clean (or skipped — both set ``step5_clean``) Step 5
+                        # in a later iteration would otherwise leave the PRIOR
+                        # iteration's failure block in place, driving Step 6 to
+                        # "fix" a failure that no longer exists. Clear it
+                        # whenever Step 5 is clean so Step 6 only ever sees the
+                        # current iteration's signal.
+                        context["step5_failure_signal"] = ""
+                        context["step5_failure_signal_missing"] = ""
+
                 if step_num == 7:
                     step7_output = output
 
@@ -2303,7 +3334,7 @@ def _run_agentic_checkup_orchestrator_inner(
             )
             max_reason = max_msg
             max_gate_passed, max_gate_reason = _step7_passed(
-                step7_output, pr_mode=pr_mode
+                step7_output, pr_mode=pr_mode, has_issue=has_issue
             )
             if not max_gate_passed:
                 max_reason = f"{max_msg} {max_gate_reason}"
@@ -2339,7 +3370,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # with `issue_aligned: false` or unfixed critical issues could be
         # marked green by downstream consumers.
         # --------------------------------------------------------------
-        gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode)
+        gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode, has_issue=has_issue)
         if not gate_passed:
             if not quiet:
                 console.print(
@@ -2465,7 +3496,22 @@ def _run_agentic_checkup_orchestrator_inner(
                 # used to skip them, opening a #1063/#1081 bypass. Run
                 # 10b first (registry-edit) and 10a second (prompt-
                 # source) to mirror the review-loop ordering.
-                guard_changed_files = _git_changed_files(worktree_path)
+                #
+                # Codex round-2 Finding 1: filter the orchestrator's own
+                # PDD scratch artifacts (e.g. ``.pdd/checkup-context/
+                # pr-changed-files-api.txt`` written by
+                # ``_format_pr_changed_files_for_prompt`` and the
+                # ``.pdd/checkup-pr-<n>/`` working dir) before any scope
+                # or causal guard runs. These files are non-committable
+                # (gitignore covers ``.pdd/*``) but can leak into
+                # ``--untracked-files=all`` output and falsely poison the
+                # scope/causal checks, breaking the clean-run convergence
+                # contract.
+                _raw_guard_changed_files = _git_changed_files(worktree_path)
+                guard_changed_files = [
+                    f for f in _raw_guard_changed_files
+                    if not f.startswith(".pdd/")
+                ]
                 pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
 
                 registry_refusal = _check_architecture_registry_edit_guard(
@@ -2518,11 +3564,427 @@ def _run_agentic_checkup_orchestrator_inner(
                         last_model_used,
                     )
 
-                push_ok, push_message = _commit_and_push_if_changed(
-                    worktree_path,
-                    pr_metadata,
-                    f"fix: apply checkup fixes for #{issue_number}",
+                # Bug 5b: Clean run — when there are no fixer-produced
+                # changes there is nothing to commit and nothing to scope-
+                # or causal-check. We still flow through the regular push
+                # block so Checkpoint D (PR-head freshness) runs and the
+                # outer finalization (clear_workflow_state) gets called.
+                no_changes_clean_run = not guard_changed_files
+
+                # Codex round-9 Finding 1 / round-10 Findings 2+3: when
+                # Step 5 reported ``status: skipped`` the test suite
+                # never executed, so we have no verification of whatever
+                # the fixer (or tooling) produced AND no evidence that
+                # the PR itself is healthy. Refuse the push regardless
+                # of scope/causal/diff-size — and regardless of whether
+                # the worktree happens to be clean. Returning success on
+                # a clean worktree would tell the user "checkup
+                # complete" even though no tests ran (round-10 #2).
+                #
+                # Derive the skipped state from the PERSISTED
+                # ``step_outputs["5"]`` value rather than relying on the
+                # in-memory ``context['step5_verification_skipped']``
+                # cache — context isn't part of the saved state, so a
+                # mid-loop interruption could resume with the
+                # ``step_outputs["5"]`` skipped block but an empty
+                # context cache (round-10 #3). The helper handles a
+                # leading ``"FAILED: "`` prefix that ``_handle_step_result``
+                # may have prepended.
+                verification_skipped = (
+                    context.get("step5_verification_skipped") == "1"
+                    or _step5_was_skipped(step_outputs.get("5", ""))
                 )
+                if verification_skipped:
+                    # Keep the context cache in sync so downstream code
+                    # / state save reflects the gate decision.
+                    context["step5_verification_skipped"] = "1"
+                    if no_changes_clean_run:
+                        unverified_refusal = (
+                            "Step 5 verification skipped: the failure_signal "
+                            "block reported a 'skipped' status, so the test "
+                            "suite did not execute against the PR head. The "
+                            "worktree is clean (no fixer changes to push) "
+                            "but the checkup did NOT verify that the PR's "
+                            "tests pass — refusing to report success. Rerun "
+                            "pdd checkup --pr once the test environment is "
+                            "healthy."
+                        )
+                    else:
+                        unverified_refusal = (
+                            "Step 5 verification skipped: the failure_signal "
+                            "block reported a 'skipped' status, so the test "
+                            "suite did not execute against the PR head. "
+                            "Refusing to push fixer/tooling changes "
+                            f"({sorted(guard_changed_files)}) because there "
+                            "is no test evidence that they don't break the "
+                            "PR. Rerun pdd checkup --pr once the test "
+                            "environment is healthy."
+                        )
+                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    (
+                        pr_artifacts_dir / "verification-skipped-refusal.txt"
+                    ).write_text(unverified_refusal + "\n")
+                    step_outputs["pr_push"] = unverified_refusal
+                    context["pr_push_output"] = unverified_refusal
+                    _save_state()
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{unverified_refusal}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+
+                # Codex round-3 Finding 2: when Steps 3/4/5 were all clean
+                # the fixer (6.1/6.2/6.3) was skipped, so any dirty files in
+                # the worktree are side effects from non-fixer steps (Step 7
+                # tooling, ad-hoc agent edits, etc.). Pushing them would
+                # recreate the non-convergent clean-run failure where each
+                # rerun publishes a new "checkup fix" commit that nobody
+                # asked for. Refuse the push, record the artifact, and post
+                # the canonical Step 7 verdict instead.
+                if (
+                    not fixer_invoked
+                    and not no_changes_clean_run
+                ):
+                    side_effect_refusal = (
+                        "Clean-run side-effect guard: fixer steps "
+                        "(6.1/6.2/6.3) were skipped because Steps 3/4/5 all "
+                        "reported clean, but the worktree contains "
+                        f"non-fixer edits: {sorted(guard_changed_files)}. "
+                        "Refusing to commit or push these — they were not "
+                        "produced by the fixer and have no causal link to a "
+                        "PR failure."
+                    )
+                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    (
+                        pr_artifacts_dir / "clean-run-side-effect-refusal.txt"
+                    ).write_text(side_effect_refusal + "\n")
+                    step_outputs["pr_push"] = side_effect_refusal
+                    context["pr_push_output"] = side_effect_refusal
+                    _save_state()
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{side_effect_refusal}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+
+                # Bug 2: Scope guard — reject fixer files outside the PR's
+                # changed-file set. Parse the actual GitHub API status rows
+                # emitted by ``_format_pr_api_changed_files`` ("- MODIFIED:
+                # path", "- ADDED: path", "- RENAMED: old -> new", etc.).
+                # RENAMED rows contribute both the old and new paths so a
+                # fixer that touches either side is in scope. The
+                # truncation footer ("NOTE: GitHub PR files API list
+                # truncated…") is filtered out because its colon would
+                # otherwise pollute the file set.
+                pr_file_set: set = set()
+                if not no_changes_clean_run:
+                    import re as _re
+                    # Codex round-2 Finding 1: prefer the unbounded
+                    # ``api_changed_files_full`` list when present —
+                    # ``api_changed_files`` is a truncated preview (with a
+                    # ``- NOTE: GitHub PR files API list truncated…``
+                    # footer) so on large PRs valid in-scope files beyond
+                    # the preview were being rejected. Fall back to the
+                    # preview when the full list is unavailable.
+                    api_files_text = (
+                        pr_metadata.get("api_changed_files_full")
+                        or pr_metadata.get("api_changed_files")
+                        or ""
+                    )
+                    # Codex round-8 Finding 2: when the GitHub PR files
+                    # API is down/rate-limited, ``api_files_text`` is
+                    # empty even though the local merge-base diff
+                    # (formatted by ``_format_pr_changed_files_for_prompt``
+                    # into ``context['pr_scope_changed_files']``) still
+                    # lists the PR's changed files. Parsing only the API
+                    # rows left ``pr_file_set`` empty and refused valid
+                    # edits to PR-touched files. Union both sources so
+                    # the scope guard tolerates an API outage when the
+                    # local base ref is healthy. The same regex matches
+                    # both formats — uppercase word statuses (MODIFIED/
+                    # ADDED/RENAMED/DELETED) from the API formatter, and
+                    # short git statuses (M, A, D, R100) from the local
+                    # merge-base formatter — because ``[A-Z][A-Z0-9]*``
+                    # spans both.
+                    local_scope_text = str(
+                        context.get("pr_scope_changed_files") or ""
+                    )
+                    pr_scope_sources = "\n".join(
+                        text for text in (api_files_text, local_scope_text)
+                        if text
+                    )
+
+                    def _ingest_row(status_label: str, value: str) -> None:
+                        if status_label == "NOTE":
+                            return
+                        if " -> " in value and status_label.startswith("R"):
+                            old_path, _, new_path = value.partition(" -> ")
+                            if old_path:
+                                pr_file_set.add(old_path)
+                            if new_path:
+                                pr_file_set.add(new_path)
+                        else:
+                            pr_file_set.add(value)
+
+                    for match in _re.finditer(
+                        r"^-\s+([A-Z][A-Z0-9]*):\s*(.+?)\s*$",
+                        pr_scope_sources,
+                        flags=_re.MULTILINE,
+                    ):
+                        _ingest_row(match.group(1), match.group(2))
+                    # Codex round-5 Finding 3: parse EXPANSION_ITEMS into
+                    # (paths, justified_paths). Only paths whose OWN marker
+                    # entry carried a causal justification bypass the
+                    # out-of-scope refusal — a fixer cannot list an
+                    # unrelated path on one marker line and let a sibling
+                    # marker's justification cover for it.
+                    step6_out = step_outputs.get("6_1", "")
+                    _, justified_paths_set = (
+                        _parse_expansion_items(step6_out)
+                    )
+                    # Codex round-8 Finding 3: the Step 6 prompt
+                    # explicitly permits the fixer to edit failing test
+                    # files and files whose failures are causally related
+                    # to PR-changed files, without requiring an explicit
+                    # EXPANSION_ITEMS marker. The old scope guard refused
+                    # those before the causal guard could allow them.
+                    # Extract Step 5 failure paths and treat them as a
+                    # third scope-allowed source. The causal guard below
+                    # still applies (it requires at least one overlap
+                    # between fixer files and the OK-set), so genuinely
+                    # unrelated edits remain blocked.
+                    step5_for_scope = step_outputs.get("5", "")
+                    scope_failure_paths: set = set()
+                    if step5_for_scope.startswith("FAILED:"):
+                        scope_failure_paths = set(_re.findall(
+                            r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
+                            step5_for_scope,
+                        ))
+                    scope_allowed: set = (
+                        pr_file_set | scope_failure_paths | justified_paths_set
+                    )
+                    out_of_scope = [
+                        f for f in guard_changed_files
+                        if f not in scope_allowed
+                    ]
+                    if out_of_scope:
+                        if justified_paths_set:
+                            scope_refusal = (
+                                "Scope guard: fixer touched files outside PR's "
+                                "changed-file set; EXPANSION_ITEMS marker was "
+                                "present but did not cover these paths: "
+                                f"{out_of_scope}. Justified expansion paths: "
+                                f"{sorted(justified_paths_set)}."
+                            )
+                        elif "EXPANSION_ITEMS:" in step6_out:
+                            scope_refusal = (
+                                "Scope guard: fixer emitted an EXPANSION_ITEMS "
+                                "marker but no listed path carried its own "
+                                "causal justification. Out-of-scope files: "
+                                f"{out_of_scope}."
+                            )
+                        else:
+                            scope_refusal = (
+                                "Scope guard: fixer touched files outside PR's "
+                                "changed-file set without EXPANSION_ITEMS "
+                                f"justification: {out_of_scope}"
+                            )
+                        pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                        (pr_artifacts_dir / "scope-guard-refusal.txt").write_text(
+                            scope_refusal + "\n"
+                        )
+                        step_outputs["pr_push"] = scope_refusal
+                        context["pr_push_output"] = scope_refusal
+                        _save_state()
+                        post_suffix = _post_pr_mode_final_report(
+                            step_outputs.get("7", step7_output)
+                        )
+                        return (False, f"{scope_refusal}{post_suffix}", total_cost, last_model_used)
+
+                    # Bug 3: Causal-connection check — fixer diff must
+                    # plausibly relate to the work in this PR. The "OK
+                    # set" is the UNION of:
+                    #   1. PR changed files (parsed above) — a test-file
+                    #      failure pointing at a source file that is part
+                    #      of the PR is the normal causal pattern.
+                    #   2. File paths mentioned in the Step 5 failure
+                    #      output (test files, pdd/src files, etc.).
+                    #   3. EXPANSION_ITEMS paths explicitly justified by
+                    #      the fixer (parsed from step 6 output).
+                    # Only refuse when fixer_files has zero overlap with
+                    # the union. This avoids the previous false-positive
+                    # where a failing ``tests/test_main.py`` could not be
+                    # fixed by editing ``pdd/main.py``.
+                    step5_out = step_outputs.get("5", "")
+                    if step5_out.startswith("FAILED:"):
+                        failure_paths = set(_re.findall(
+                            r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
+                            step5_out,
+                        ))
+                        # Codex round-5 Finding 3: reuse the per-path
+                        # justified expansion set from the scope check;
+                        # only paths whose OWN marker carried a causal
+                        # justification contribute to the causal OK-set.
+                        expansion_paths = justified_paths_set
+                        ok_set = pr_file_set | failure_paths | expansion_paths
+                        if failure_paths and ok_set:
+                            fixer_files_set = set(guard_changed_files)
+                            overlap = fixer_files_set & ok_set
+                            if not overlap:
+                                causal_refusal = (
+                                    f"Causal-connection check: fixer changed files "
+                                    f"{sorted(fixer_files_set)} have zero overlap with "
+                                    f"the union of PR changed files {sorted(pr_file_set)}, "
+                                    f"Step 5 failure paths {sorted(failure_paths)}, and "
+                                    f"justified EXPANSION_ITEMS paths {sorted(expansion_paths)}. "
+                                    f"Refusing push to prevent unrelated changes reaching the PR."
+                                )
+                                pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                                (
+                                    pr_artifacts_dir / "causal-connection-refusal.txt"
+                                ).write_text(causal_refusal + "\n")
+                                step_outputs["pr_push"] = causal_refusal
+                                context["pr_push_output"] = causal_refusal
+                                _save_state()
+                                post_suffix = _post_pr_mode_final_report(
+                                    step_outputs.get("7", step7_output)
+                                )
+                                return (
+                                    False,
+                                    f"{causal_refusal}{post_suffix}",
+                                    total_cost,
+                                    last_model_used,
+                                )
+
+                # Codex round-3 Finding 5: diff size sanity gate. A push
+                # that adds more than ``DIFF_SIZE_ADDED_LOC_LIMIT`` lines
+                # without an explicit, justified EXPANSION_ITEMS marker
+                # signals a runaway fixer (whole-module rewrites, large
+                # generated files, etc.). Refuse it so the operator can
+                # inspect — a fix genuinely needing that much code should
+                # declare itself via EXPANSION_ITEMS.
+                if not no_changes_clean_run:
+                    try:
+                        size_limit = int(
+                            os.environ.get(
+                                "PDD_CHECKUP_DIFF_LOC_LIMIT",
+                                str(DIFF_SIZE_ADDED_LOC_LIMIT),
+                            )
+                        )
+                    except ValueError:
+                        size_limit = DIFF_SIZE_ADDED_LOC_LIMIT
+                    if size_limit > 0:
+                        per_path_added = _diff_size_added_lines_by_path(worktree_path)
+                        added_lines = (
+                            sum(per_path_added.values())
+                            if per_path_added is not None
+                            else None
+                        )
+                        if added_lines is not None and added_lines > size_limit:
+                            # Codex round-5 Finding 3 / round-9 Finding 2:
+                            # every OVERSIZED dirty path must be covered
+                            # by its OWN justified EXPANSION_ITEMS entry —
+                            # small companion files (a 5-line test update
+                            # alongside a 600-line refactor) are exempt
+                            # so the gate matches the documented
+                            # "every oversized dirty path" promise. A
+                            # sibling marker's justification still does
+                            # NOT wave the size gate through for an
+                            # oversized path that lacks its own causal
+                            # reason.
+                            #
+                            # NOTE: this is intentionally stricter than
+                            # the scope guard above — the scope guard
+                            # accepts ``pr_file_set`` membership alone
+                            # because PR-listed files are presumed
+                            # in-scope by the PR itself. The size guard
+                            # cares about the SIZE of the change, so
+                            # in-scope membership does not implicitly
+                            # justify a large diff; only an explicit,
+                            # path-level justified EXPANSION_ITEMS entry
+                            # does.
+                            oversized_paths = {
+                                path
+                                for path, count in (per_path_added or {}).items()
+                                if count >= OVERSIZED_PATH_ADDED_LOC_FLOOR
+                            }
+                            uncovered_oversized = sorted(
+                                oversized_paths - justified_paths_set
+                            )
+                            # If the total is over but no single file is
+                            # oversized (death-by-a-thousand-cuts), fall
+                            # back to the original strict rule so the
+                            # gate still catches diffuse runaway diffs.
+                            if not oversized_paths:
+                                uncovered_oversized = sorted(
+                                    set(guard_changed_files) - justified_paths_set
+                                )
+                            covers_oversized_paths = (
+                                bool(justified_paths_set)
+                                and not uncovered_oversized
+                            )
+                            if not covers_oversized_paths:
+                                if not justified_paths_set:
+                                    bypass_reason = (
+                                        "no justified EXPANSION_ITEMS marker"
+                                    )
+                                else:
+                                    bypass_reason = (
+                                        "EXPANSION_ITEMS marker did not cover "
+                                        "every oversized changed path "
+                                        f"(>= {OVERSIZED_PATH_ADDED_LOC_FLOOR} "
+                                        "added lines) with its own causal "
+                                        "justification; uncovered oversized "
+                                        f"files: {uncovered_oversized}. Justified "
+                                        f"expansion paths: {sorted(justified_paths_set)}"
+                                    )
+                                size_refusal = (
+                                    "Diff size guard: fixer push would add "
+                                    f"{added_lines} lines (limit {size_limit}) "
+                                    f"and the bypass is invalid: {bypass_reason}. "
+                                    "Refusing push — every oversized changed "
+                                    f"path (>= {OVERSIZED_PATH_ADDED_LOC_FLOOR} "
+                                    "added lines) must be declared under "
+                                    "EXPANSION_ITEMS with a causal justification, "
+                                    "or the limit must be raised via "
+                                    "PDD_CHECKUP_DIFF_LOC_LIMIT."
+                                )
+                                pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                                (
+                                    pr_artifacts_dir / "diff-size-guard-refusal.txt"
+                                ).write_text(size_refusal + "\n")
+                                step_outputs["pr_push"] = size_refusal
+                                context["pr_push_output"] = size_refusal
+                                _save_state()
+                                post_suffix = _post_pr_mode_final_report(
+                                    step_outputs.get("7", step7_output)
+                                )
+                                return (
+                                    False,
+                                    f"{size_refusal}{post_suffix}",
+                                    total_cost,
+                                    last_model_used,
+                                )
+
+                if no_changes_clean_run:
+                    push_ok, push_message = True, "No changes to push."
+                else:
+                    _fix_ref = (
+                        f"#{issue_number}" if has_issue else f"PR #{pr_number}"
+                    )
+                    push_ok, push_message = _commit_and_push_if_changed(
+                        worktree_path,
+                        pr_metadata,
+                        f"fix: apply checkup fixes for {_fix_ref}",
+                    )
                 step_outputs["pr_push"] = push_message
                 context["pr_push_output"] = push_message
                 _save_state()
@@ -2733,8 +4195,15 @@ def _run_agentic_checkup_orchestrator_inner(
             if abort is not None:
                 return abort
 
-    # All steps complete — clear state.
-    clear_workflow_state(
+    # All steps complete — clear state. External review (PR #1215) Finding 2:
+    # ``load_workflow_state`` loads the GitHub state comment with PRIORITY over
+    # local state, so a remote clear that cannot be confirmed (e.g. a token
+    # without comment-delete/edit scope) would let the NEXT run resume from this
+    # stale completed state instead of rerunning verification. Surface a warning
+    # when the clear is unconfirmed. The checkup itself succeeded, so this is
+    # appended to the message rather than flipping the verdict (mirrors the
+    # no-fix early-refusal path).
+    _state_cleared = clear_workflow_state(
         cwd=cwd,
         issue_number=issue_number,
         workflow_type="checkup",
@@ -2743,6 +4212,21 @@ def _run_agentic_checkup_orchestrator_inner(
         repo_name=repo_name,
         use_github_state=use_github_state,
     )
+    if not _state_cleared:
+        _state_thread2 = (
+            "the issue"
+            if bool((issue_url or "").strip()) and issue_url not in ("null", "None")
+            else "the PR"
+        )
+        _clear_warn = (
+            f" (warning: could not confirm workflow-state cleanup — a rerun "
+            f"may replay the cached completed state; delete the "
+            f"PDD_WORKFLOW_STATE comment on {_state_thread2} manually if a stale "
+            f"verdict reappears)"
+        )
+        if not quiet:
+            console.print(f"[yellow]{_clear_warn.strip()}[/yellow]")
+        pending_post_suffix = f"{pending_post_suffix}{_clear_warn}"
 
     final_msg = "Checkup complete"
     if not quiet:

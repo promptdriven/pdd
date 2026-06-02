@@ -27,6 +27,12 @@ try:
 except Exception:  # pragma: no cover
     _record_llm_pair = None  # type: ignore
 
+from .grounding_provenance import (
+    build_grounding_metadata,
+    resolve_grounding_overrides_for_invoke,
+    reviewed_from_click_ctx,
+)
+
 # Environment variable to control log level
 PDD_LOG_LEVEL = os.getenv("PDD_LOG_LEVEL", "INFO")
 PRODUCTION_MODE = os.getenv("PDD_ENVIRONMENT") == "production"
@@ -110,6 +116,7 @@ if _AnthropicConfigOpus47 is not None:
     # which it now controls). Dot-aliases mirror LiteLLM's own naming
     # support so we don't miss `claude-opus-4.7` style identifiers.
     _OPUS_ADDITIONAL_ALIASES = (
+        "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
         "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
         "opus-4-5", "opus_4_5", "opus-4.5", "opus_4.5",
     )
@@ -216,11 +223,22 @@ if _AnthropicConfigOpus47 is not None:
 # model=model)` — and the predicate patch above flips that to adaptive
 # for opus-4-7, with no effort field attached.
 #
+# Opus models that use the adaptive-thinking API on the Bedrock/Vertex relays
+# (currently 4.7 and 4.8). Kept SEPARATE from _OPUS_ADDITIONAL_ALIASES, which
+# also lists the pre-adaptive 4.5 — reusing that here would force the adaptive
+# thinking shape onto 4.5 relay rows (reasoning_type='none' today) and likely
+# 400 them. Both relay patch sites below reference this single tuple so a new
+# adaptive Opus can't be half-synced into one relay but not the other.
+_RELAY_OPUS_ADAPTIVE_ALIASES = (
+    "opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7",
+    "opus-4-8", "opus_4_8", "opus-4.8", "opus_4.8",
+)
+
 # AWS Bedrock Converse for Claude flattens adaptive thinking into a
 # single key (no output_config sibling like the direct Anthropic API).
 # Wrap Converse `map_openai_params` to:
 #   * normalize any remaining `thinking.type.enabled` to adaptive on
-#     opus-4-7 (defensive — 1.80.x without the predicate-effective
+#     opus-4-7/4-8 (defensive — 1.80.x without the predicate-effective
 #     change), and
 #   * make sure the effort hint from `reasoning_effort` lands in the
 #     thinking dict so `time_to_effort_level()` isn't dropped.
@@ -232,7 +250,7 @@ try:
     if not getattr(_existing_converse_map, "_pdd_opus_4_7_converse_patched", False):
         _orig_converse_map = _existing_converse_map
         # Match LiteLLM's own naming convention (hyphen + dot aliases).
-        _CONVERSE_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        _CONVERSE_OPUS_47_ALIASES = _RELAY_OPUS_ADAPTIVE_ALIASES
         def _patched_converse_map(self, non_default_params, optional_params, model, drop_params):  # pylint: disable=function-redefined
             result = _orig_converse_map(self, non_default_params, optional_params, model, drop_params)
             m = model.lower() if isinstance(model, str) else ""
@@ -283,7 +301,7 @@ try:
     _existing_vertex_transform = _VertexAIAnthropicConfigOpus47.transform_request
     if not getattr(_existing_vertex_transform, "_pdd_opus_4_7_vertex_patched", False):
         _orig_vertex_transform = _existing_vertex_transform
-        _VERTEX_OPUS_47_ALIASES = ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
+        _VERTEX_OPUS_47_ALIASES = _RELAY_OPUS_ADAPTIVE_ALIASES
         # Map LiteLLM "low/medium/high/max" reasoning_effort levels back to a
         # default `output_config.effort` value when none is present on the
         # incoming request. This mirrors what LiteLLM's map_openai_params
@@ -839,6 +857,8 @@ def _llm_invoke_cloud(
     use_batch_mode: bool,
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]],
     language: Optional[str],
+    grounding_overrides: Optional[Dict[str, List[str]]] = None,
+    source_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Execute llm_invoke via cloud endpoint.
 
@@ -867,10 +887,16 @@ def _llm_invoke_cloud(
         raise CloudFallbackError("Could not authenticate with cloud")
 
     # Prepare payload
+    # Coerce a None ``time`` to the documented default (0.25). The cloud
+    # llm_invoke endpoint parses this with float(data.get("time", 0.25)), where
+    # the default only applies when the key is ABSENT — a present-but-null value
+    # reaches float(None) and 500s with "Internal server error during LLM
+    # invocation". This mirrors the existing guard in fix_error_loop.py's
+    # cloud_fix_errors payload.
     payload: Dict[str, Any] = {
         "strength": strength,
         "temperature": temperature,
-        "time": time,
+        "time": time if time is not None else 0.25,
         "verbose": verbose,
         "useBatchMode": use_batch_mode,
     }
@@ -937,12 +963,41 @@ def _llm_invoke_cloud(
                     # Return raw result if validation fails
                     pass
 
-            return {
+            examples_used = data.get("examplesUsed")
+            resolved_overrides = resolve_grounding_overrides_for_invoke(
+                grounding_overrides, source_prompt
+            )
+            try:
+                grounding = build_grounding_metadata(
+                    mode="cloud",
+                    examples_used=examples_used,
+                    grounding_overrides=resolved_overrides,
+                    reviewed=reviewed_from_click_ctx(examples_used=examples_used),
+                )
+            except (TypeError, ValueError, KeyError) as exc:
+                logger.warning("Grounding metadata extraction failed: %s", exc)
+                grounding = build_grounding_metadata(
+                    mode="unavailable",
+                    grounding_overrides=resolved_overrides,
+                    reviewed=reviewed_from_click_ctx(examples_used=examples_used),
+                )
+
+            if verbose and grounding.get("selected_examples"):
+                logger.info(
+                    "Grounding examples selected: %s",
+                    [ex.get("module") for ex in grounding["selected_examples"]],
+                )
+
+            cloud_payload: Dict[str, Any] = {
                 "result": result,
                 "cost": data.get("totalCost", 0.0),
                 "model_name": data.get("modelName", "cloud_model"),
                 "thinking_output": data.get("thinkingOutput"),
+                "grounding": grounding,
             }
+            if examples_used is not None:
+                cloud_payload["examplesUsed"] = examples_used
+            return cloud_payload
 
         elif response.status_code == 402:
             error_msg = response.json().get("error", "Insufficient credits")
@@ -1358,9 +1413,44 @@ litellm.success_callback = [_litellm_success_callback]
 # --- Cost Mapping Support (CSV Rates) ---
 # Populate from CSV inside llm_invoke; used by callback fallback
 _MODEL_RATE_MAP: Dict[str, Tuple[float, float]] = {}
+_MODEL_PROVIDER_MAP: Dict[str, str] = {}
+
+# CSV provider column -> litellm provider token, for models whose id is BARE
+# (no "provider/" prefix). Prefixed ids ("vertex_ai/...") already encode the
+# provider; bare ids from direct-API rows (e.g. Anthropic's "claude-opus-4-8")
+# previously fell through to a hardcoded "openai" default in registration,
+# which silently misrouted any litellm-unknown bare non-OpenAI model to OpenAI
+# (wrong provider + wrong key -> auth failure -> silent fallback). Unmapped
+# providers keep the historical "openai" fallback so existing registrations
+# are unchanged.
+_CSV_PROVIDER_TO_LITELLM_PROVIDER: Dict[str, str] = {
+    "anthropic": "anthropic",
+    "openai": "openai",
+    # AWS Bedrock ids are bare with dots (e.g. "anthropic.claude-opus-4-8"),
+    # so they have no "/" prefix to route on; map the CSV provider explicitly.
+    "aws bedrock": "bedrock",
+}
+
+
+def _litellm_provider_for_csv_model(
+    model_name: str, csv_provider: Optional[str]
+) -> str:
+    """Resolve the litellm provider token a CSV model should register under.
+
+    Prefixed model ids carry the provider in the prefix; bare ids are mapped
+    from the CSV ``provider`` column. Falls back to ``"openai"`` for unmapped
+    providers to preserve prior behavior.
+    """
+    if "/" in model_name:
+        return model_name.split("/", 1)[0]
+    token = _CSV_PROVIDER_TO_LITELLM_PROVIDER.get(
+        str(csv_provider or "").strip().lower()
+    )
+    return token or "openai"
+
 
 def _set_model_rate_map(df: pd.DataFrame) -> None:
-    global _MODEL_RATE_MAP
+    global _MODEL_RATE_MAP, _MODEL_PROVIDER_MAP
     try:
         _MODEL_RATE_MAP = {
             str(row['model']): (
@@ -1369,8 +1459,14 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
             )
             for _, row in df.iterrows()
         }
+        _MODEL_PROVIDER_MAP = {
+            str(row['model']): str(row['provider'])
+            for _, row in df.iterrows()
+            if pd.notna(row.get('provider'))
+        }
     except Exception:
         _MODEL_RATE_MAP = {}
+        _MODEL_PROVIDER_MAP = {}
     _register_csv_models_with_litellm()
 
 
@@ -1386,7 +1482,9 @@ def _register_csv_models_with_litellm() -> None:
         for model_name, (in_rate, out_rate) in _MODEL_RATE_MAP.items():
             if not model_name or model_name in existing:
                 continue
-            provider = model_name.split("/", 1)[0] if "/" in model_name else "openai"
+            provider = _litellm_provider_for_csv_model(
+                model_name, _MODEL_PROVIDER_MAP.get(model_name)
+            )
             registrations[model_name] = {
                 "input_cost_per_token": in_rate / 1_000_000.0,
                 "output_cost_per_token": out_rate / 1_000_000.0,
@@ -1936,7 +2034,12 @@ def _summarize_litellm_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
 def _model_disallows_temperature(model_name: Any) -> bool:
     """Return True for models whose provider rejects the temperature parameter."""
     model_lower = str(model_name or "").lower()
-    return "claude-opus-4-7" in model_lower or "claude-opus-4.7" in model_lower
+    return (
+        "claude-opus-4-7" in model_lower
+        or "claude-opus-4.7" in model_lower
+        or "claude-opus-4-8" in model_lower
+        or "claude-opus-4.8" in model_lower
+    )
 
 
 # Regex anchored to the Gemini 3 family identifier so that:
@@ -2284,6 +2387,18 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
         else:
              df['structured_output'] = False # Assume false if column missing
 
+        # Boolean interpretation for interactive_only. Parse with string-aware
+        # logic rather than a plain .astype(bool): CSV stores everything as
+        # strings and bool("False") is True, which would mark every row
+        # interactive. Treat only "true"/"1"/"yes" (case-insensitive, stripped)
+        # as True; "false"/"0"/""/NaN and a missing column all mean False.
+        if 'interactive_only' in df.columns:
+             df['interactive_only'] = df['interactive_only'].map(
+                 lambda v: str(v).strip().lower() in ("true", "1", "yes")
+             )
+        else:
+             df['interactive_only'] = False # Old CSVs without the column: non-interactive
+
         # Ensure reasoning_type is string, fillna with 'none' and lowercase
         df['reasoning_type'] = df['reasoning_type'].fillna('none').astype(str).str.lower()
 
@@ -2419,6 +2534,23 @@ def _select_model_candidates(
     if os.environ.get("PDD_SKIP_LOCAL_MODELS"):
         local_providers = {"lm_studio", "ollama"}
         available_df = available_df[~available_df['provider'].str.lower().isin(local_providers)]
+
+    # Generic interactive-only guard. Rows flagged interactive_only=True
+    # (github_copilot device-flow OAuth, lm_studio/ollama local servers, and
+    # any future provider so classified in llm_model.csv) require interactive
+    # human auth or a running local server, so they hang instead of fast-failing
+    # in non-interactive contexts (Cloud Run, CI, library import). Exclude them
+    # from the automatic candidate cascade unless PDD_ALLOW_INTERACTIVE is set
+    # (a real terminal opts back in). An explicitly configured base model is
+    # always honored even if it is interactive_only. This generalizes the
+    # surgical PDD_SKIP_LOCAL_MODELS / github_copilot checks, which remain as
+    # defense-in-depth.
+    if 'interactive_only' in available_df.columns and not _env_truthy("PDD_ALLOW_INTERACTIVE"):
+        is_interactive = available_df['interactive_only'].map(
+            lambda v: str(v).strip().lower() in ("true", "1", "yes")
+        )
+        keep_mask = ~is_interactive | (available_df['model'] == base_model_name)
+        available_df = available_df[keep_mask]
 
     # --- Check if the initial DataFrame itself was empty ---
     if model_df.empty:
@@ -2667,6 +2799,32 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         # ``pdd setup`` will have the token file present and proceed
         # normally. Caller is _ensure_api_key in llm_invoke.py.
         model_name = str(model_info.get('model', ''))
+        if model_name.startswith("chatgpt/"):
+            # chatgpt/ models authenticate with a ChatGPT subscription via the
+            # codex login token (issue #1269). Bridge the codex auth.json into
+            # the shape litellm's chatgpt provider expects and apply the
+            # empty-output workaround; skip cleanly in --force when no token
+            # exists so litellm never hangs on an interactive device login.
+            from pdd.codex_subscription import (
+                apply_litellm_chatgpt_output_patch,
+                bridge_codex_auth_for_litellm,
+            )
+            apply_litellm_chatgpt_output_patch()
+            if bridge_codex_auth_for_litellm():
+                if verbose:
+                    logger.info(f"[INFO] Using ChatGPT subscription auth for {model_name}.")
+                return True
+            if os.environ.get('PDD_FORCE'):
+                logger.warning(
+                    f"Skipping {model_name}: no ChatGPT subscription token found "
+                    "(run `codex login`) and running in --force mode."
+                )
+                return False
+            logger.warning(
+                f"No ChatGPT subscription token found for {model_name}; litellm may "
+                "prompt for device-flow authentication. Run `codex login` to avoid this."
+            )
+            return True
         if model_name.startswith("github_copilot/"):
             token_dir = Path(os.environ.get(
                 'GITHUB_COPILOT_TOKEN_DIR',
@@ -2811,6 +2969,26 @@ def _format_messages(prompt: str, input_data: Union[Dict[str, Any], List[Dict[st
         raise ValueError(f"Prompt formatting error: Missing key {e} in input_json for prompt string.") from e
     except Exception as e:
         raise ValueError(f"Error formatting prompt: {e}") from e
+
+
+def _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode,
+                                  model_name, output_pydantic, output_schema):
+    """Rebuild retry/repair messages, re-injecting the schema for chatgpt/ models.
+
+    The cache-bypass / malformed-JSON / invalid-code retry paths rebuild messages
+    from scratch via :func:`_format_messages`. For chatgpt/ subscription models the
+    backend ignores ``response_format`` (dropped on those calls), so the in-prompt
+    schema is the ONLY structured-output enforcement — it must be re-injected on
+    every retry or the retry returns prose (issue #1269). Non-chatgpt models and
+    non-structured calls are unaffected.
+    """
+    messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+    if not use_batch_mode and str(model_name).lower().startswith("chatgpt/"):
+        schema = output_pydantic.model_json_schema() if output_pydantic else output_schema
+        if schema is not None:
+            from pdd.codex_subscription import inject_chatgpt_schema_instruction
+            messages = inject_chatgpt_schema_instruction(messages, schema)
+    return messages
 
 # --- JSON Extraction Helpers ---
 
@@ -3231,6 +3409,8 @@ def llm_invoke(
     messages: Optional[Union[List[Dict[str, str]], List[List[Dict[str, str]]]]] = None,
     language: Optional[str] = None,
     use_cloud: Optional[bool] = None,
+    grounding_overrides: Optional[Dict[str, List[str]]] = None,
+    source_prompt: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -3298,6 +3478,19 @@ def llm_invoke(
          formatted_messages = _format_messages(prompt, input_json, use_batch_mode)
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
+
+    resolved_grounding_overrides = resolve_grounding_overrides_for_invoke(
+        grounding_overrides, source_prompt
+    )
+
+    def _with_local_grounding(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if "grounding" not in payload:
+            payload["grounding"] = build_grounding_metadata(
+                mode="unavailable",
+                grounding_overrides=resolved_grounding_overrides,
+                reviewed=reviewed_from_click_ctx(),
+            )
+        return payload
 
     # --- 1. Cloud Execution Path ---
     # Determine cloud usage: explicit param > environment > default (local)
@@ -3424,6 +3617,8 @@ def llm_invoke(
                 use_batch_mode=use_batch_mode,
                 messages=messages,
                 language=language,
+                grounding_overrides=grounding_overrides,
+                source_prompt=source_prompt,
             )
             # On success, replace the placeholder with the cloud-returned
             # modelName so the history reflects the actual model used.
@@ -3500,7 +3695,31 @@ def llm_invoke(
     # --- 2. Load Model Data & Select Candidates ---
     try:
         model_df = _load_model_data(LLM_MODEL_CSV_PATH)
-        candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
+        # Resolve the base model from PDD_MODEL_DEFAULT at CALL time (not the
+        # import-frozen DEFAULT_BASE_MODEL) so an in-process override such as
+        # `pdd sync --model` takes effect this run (issue #1269).
+        _effective_default_model = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_BASE_MODEL)
+        # Diagnostic for the CSV-shadowing trap (issue #1269): llm_invoke prefers
+        # ~/.pdd/llm_model.csv and project .pdd/llm_model.csv over the packaged
+        # catalog, so an existing install with an older user/project CSV will not
+        # contain the curated OpenAI ChatGPT (chatgpt/*) rows. Without a clear
+        # message, `--model chatgpt/...` silently falls through to other models.
+        if str(_effective_default_model).lower().startswith("chatgpt/"):
+            try:
+                _has_family = model_df["model"].astype(str).str.lower().str.startswith("chatgpt/").any()
+            except Exception:
+                _has_family = True  # don't block on an unexpected df shape
+            if not _has_family:
+                logger.error(
+                    "Requested model %r but the active model catalog (%s) has no "
+                    "chatgpt/ rows. A user/project llm_model.csv is shadowing the "
+                    "packaged catalog. Add the 'OpenAI ChatGPT' family rows to that "
+                    "CSV (or remove the file to use the packaged catalog). See the "
+                    "README 'ChatGPT/Codex subscription' section.",
+                    _effective_default_model,
+                    LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
+                )
+        candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
         _emit_llm_attribution(
@@ -3540,8 +3759,8 @@ def llm_invoke(
         # Find min/max for cost and ELO
         min_cost = model_df['avg_cost'].min()
         max_elo = model_df['coding_arena_elo'].max()
-        base_cost = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['avg_cost'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else min_cost
-        base_elo = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else max_elo
+        base_cost = model_df[model_df['model'] == _effective_default_model]['avg_cost'].iloc[0] if not model_df[model_df['model'] == _effective_default_model].empty else min_cost
+        base_elo = model_df[model_df['model'] == _effective_default_model]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == _effective_default_model].empty else max_elo
 
         def calc_strength(candidate):
             # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)
@@ -3715,6 +3934,7 @@ def llm_invoke(
             provider_lower_for_model = provider.lower()
             is_lm_studio = model_name_lower.startswith('lm_studio/') or provider_lower_for_model == 'lm_studio'
             is_groq = model_name_lower.startswith('groq/') or provider_lower_for_model == 'groq'
+            is_chatgpt_subscription = str(model_name_litellm).lower().startswith("chatgpt/")
             if is_lm_studio:
                 # Ensure base_url is set (fallback to env LM_STUDIO_API_BASE or localhost)
                 if not litellm_kwargs.get("base_url"):
@@ -3827,6 +4047,26 @@ def llm_invoke(
                         if verbose:
                             logger.info(f"[INFO] Using JSON object mode with schema in prompt for Groq (avoiding tool_use issues)")
 
+                    # ChatGPT subscription backend ignores response_format/json_schema
+                    # (it returns prose), so enforce the schema in-band and drop the
+                    # ignored response_format. Mirrors the Groq handling above. (#1269)
+                    if is_chatgpt_subscription:
+                        from pdd.codex_subscription import inject_chatgpt_schema_instruction
+                        _schema_dict = None
+                        if output_pydantic:
+                            _schema_dict = output_pydantic.model_json_schema()
+                        elif output_schema:
+                            _schema_dict = output_schema
+                        litellm_kwargs.pop("response_format", None)
+                        if _schema_dict is not None:
+                            # Shared helper — used here AND in the retry/repair paths
+                            # (via _build_chatgpt_retry_messages) so a chatgpt/ retry
+                            # never loses the schema instruction (issue #1269).
+                            litellm_kwargs["messages"] = inject_chatgpt_schema_instruction(
+                                litellm_kwargs.get("messages", []), _schema_dict
+                            )
+                            if verbose:
+                                logger.info("[INFO] ChatGPT subscription structured output via schema-in-prompt")
                     # As a fallback, one could use:
                     # litellm_kwargs["response_format"] = {"type": "json_object"}
                     # And potentially enable client-side validation:
@@ -3942,14 +4182,22 @@ def llm_invoke(
                 if litellm.cache is not None:
                     logger.debug(f"litellm.cache type: {type(litellm.cache)}, ID: {id(litellm.cache)}")
 
-                # Only add if litellm.cache is configured
-                if litellm.cache is not None:
+                # Only add if litellm.cache is configured.
+                # Skip caching for chatgpt/ subscription models (issue #1269):
+                # litellm's responses-API cache-key path raises (preset_cache_key
+                # bug), and flat-rate subscription responses must not be cached —
+                # a transient empty response would otherwise poison the prompt's
+                # cache entry and break it on every later run.
+                if litellm.cache is not None and not is_chatgpt_subscription:
                     litellm_kwargs["caching"] = True
                     # Workaround for litellm bug where metadata=None causes AttributeError
                     # in caching.py when it tries kwargs.get("metadata", {}).get("redis_namespace")
                     if litellm_kwargs.get("metadata") is None:
                         litellm_kwargs["metadata"] = {}
                     logger.debug("Caching enabled for this request")
+                elif is_chatgpt_subscription:
+                    litellm_kwargs["caching"] = False
+                    logger.debug("Caching disabled for chatgpt/ subscription model (#1269)")
                 else:
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
 
@@ -4139,14 +4387,14 @@ def llm_invoke(
                             finish_reason=finish_reason,
                             call_type="responses",
                         )
-                        return {
+                        return _with_local_grounding({
                             'result': final_result,
                             'cost': total_cost,
                             'model_name': model_name_litellm,
                             'thinking_output': None,
                             'finish_reason': finish_reason,
                             'attempted_models': list(attempted_models),
-                        }
+                        })
                     except Exception as e:
                         last_exception = e
                         _emit_llm_attribution(
@@ -4340,7 +4588,7 @@ def llm_invoke(
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
-                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                     # Disable cache for retry
                                     litellm.cache = None
                                     # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
@@ -4352,7 +4600,7 @@ def llm_invoke(
                                             "model": model_name_litellm,
                                             "messages": retry_messages,
                                             "temperature": current_temperature,
-                                            "response_format": response_format,
+                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
                                             "timeout": LLM_CALL_TIMEOUT,
                                             **time_kwargs,
                                             **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
@@ -4410,7 +4658,7 @@ def llm_invoke(
                                 # Add a small space to bypass cache
                                 modified_prompt = prompt + " "
                                 try:
-                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                    retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                     # Disable cache for retry
                                     original_cache = litellm.cache
                                     litellm.cache = None
@@ -4423,7 +4671,7 @@ def llm_invoke(
                                             "model": model_name_litellm,
                                             "messages": retry_messages,
                                             "temperature": current_temperature,
-                                            "response_format": response_format,
+                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
                                             "timeout": LLM_CALL_TIMEOUT,
                                             **time_kwargs,
                                             **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
@@ -4680,7 +4928,7 @@ def llm_invoke(
                                     # Add a small variation to bypass cache
                                     modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
                                     try:
-                                        retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                        retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
                                         # Disable cache for retry
                                         original_cache = litellm.cache
                                         litellm.cache = None
@@ -4693,7 +4941,7 @@ def llm_invoke(
                                                 "model": model_name_litellm,
                                                 "messages": retry_messages,
                                                 "temperature": current_temperature,
-                                                "response_format": response_format,
+                                                **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
                                                 "timeout": LLM_CALL_TIMEOUT,
                                                 **time_kwargs,
                                                 **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
@@ -4805,14 +5053,14 @@ def llm_invoke(
                     finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
                     call_type=call_type_for_attribution,
                 )
-                return {
+                return _with_local_grounding({
                     'result': final_result,
                     'cost': total_cost,
                     'model_name': model_name_litellm, # Actual model used
                     'thinking_output': final_thinking if final_thinking else None,
                     'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
                     'attempted_models': list(attempted_models),
-                }
+                })
 
             # --- 6b. Handle Invocation Errors ---
             except openai.AuthenticationError as e:

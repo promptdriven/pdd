@@ -142,8 +142,8 @@
           },
           {
             "name": "clear_workflow_state",
-            "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None",
-            "returns": "None"
+            "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> bool",
+            "returns": "bool"
           }
         ]
       }
@@ -2458,10 +2458,11 @@
     }
   },
   {
-    "reason": "Iteratively fixes errors until tests pass.",
-    "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations.",
+    "reason": "Iterative test-fix loop with verification, failure-aware retries, and agentic fallback for unresolved failures.",
+    "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations. Supports two-phase focused repair for large dev units via fix_focus, and failure-aware early exit for syntax/import and timeout/flaky failures.",
     "dependencies": [
-      "failure_classification_python.prompt"
+      "failure_classification_python.prompt",
+      "fix_focus_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2476,44 +2477,14 @@
       "module": {
         "functions": [
           {
-            "name": "escape_brackets",
-            "signature": "(text: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, code_file_ext: str = '.py') -> Tuple[bool, bool, str, str, str, float, str]",
-            "returns": "Tuple[bool, bool, str, str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "run_pytest_on_file",
-            "signature": "(test_file: str) -> tuple[int, int, int, str]",
-            "returns": "tuple[int, int, int, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "format_log_for_output",
-            "signature": "(log_structure)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)",
+            "returns": "Tuple[bool, bool, str, str, str, float, str]"
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file: str, code_file: str, prompt_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str = 'error_log.txt', verbose: bool = False, time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False)",
+            "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -2524,12 +2495,91 @@
     }
   },
   {
-    "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
-    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "reason": "Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction. Zero I/O. Phase-1 diagnosis uses one lightweight llm_invoke call when fast-path traceback parsing finds no targets or when fast-path targets do not match product-code slices.",
+    "description": "AST-based module used by fix_error_loop and fix_main for two-phase focused repair of large dev units. Provides skeleton extraction, function slicing, traceback parsing, focused test slicing, and source reconstruction. The prepare_focused_inputs Phase-1 path calls llm_invoke (lazy import) when fast-path traceback parsing returns no function names OR when fast-path names match no product-code slices (e.g. assertion-only failures where only test functions appear in the traceback), but skips that LLM call and returns [] when ast.parse(code) raises SyntaxError so syntax-broken large files fall back instead of sending an unchanged full source payload. Focused test slicing preserves setup/teardown, fixtures, class attributes, non-test helper methods, and referenced non-collecting top-level support definitions such as TestBase; it falls back to the full test file when the dependency-preserving slice is not meaningfully smaller.",
+    "dependencies": [
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 64,
+    "filename": "fix_focus_python.prompt",
+    "filepath": "pdd/fix_focus.py",
+    "tags": [
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "is_large",
+            "signature": "(code: str, unit_test: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "build_skeleton",
+            "signature": "(code: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "extract_function_names_from_traceback",
+            "signature": "(error: str) -> list[str]",
+            "returns": "list[str]"
+          },
+          {
+            "name": "prepare_focused_inputs",
+            "signature": "(code: str, unit_test: str, error: str, strength: float, temperature: float, time: float, verbose: bool, language: Optional[str]) -> Optional[FocusedInputs]",
+            "returns": "Optional[FocusedInputs]"
+          },
+          {
+            "name": "reconstruct_code",
+            "signature": "(original_code: str, fixed_focused_code: str, slices: list[FunctionSlice]) -> str",
+            "returns": "str"
+          }
+        ],
+        "models": [
+          {
+            "name": "DiagnosisResult",
+            "fields": [
+              "function_names: list[str]"
+            ]
+          },
+          {
+            "name": "FunctionSlice",
+            "fields": [
+              "name: str",
+              "qualname: str",
+              "start_line: int",
+              "end_line: int",
+              "source: str",
+              "indent: int"
+            ]
+          },
+          {
+            "name": "FocusedInputs",
+            "fields": [
+              "focused_code: str",
+              "focused_tests: str",
+              "slices: list[FunctionSlice]"
+            ]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 9280,
+      "y": 1760
+    }
+  },
+  {
+    "reason": "CLI entry point for the fix command; single-pass cloud/local modes use fix_focus for large dev units and auto-submit short-circuits in cloud executors with a bounded Device Flow JWT call.",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
-      "core/cloud_python.prompt"
+      "core/cloud_python.prompt",
+      "fix_focus_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
@@ -2545,7 +2595,7 @@
         "commands": [
           {
             "name": "fix_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None) -> Tuple[bool, str, str, int, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True) -> Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -4103,7 +4153,7 @@
     }
   },
   {
-    "reason": "Configuration data for llm model.",
+    "reason": "Defines the llm_model.csv catalog schema: provider, pricing, ELO, structured_output, and interactive_only columns.",
     "description": "Defines llm model settings and data. Used by runtime modules.",
     "dependencies": [],
     "priority": 115,
@@ -4480,7 +4530,7 @@
   },
   {
     "reason": "Orchestrates pdd setup with OpenCode- and Antigravity-aware CLI bootstrap and deterministic model configuration.",
-    "description": "Runs the interactive pdd setup flow with agentic CLI bootstrapping, API-key discovery, model configuration, .pddrc initialization, and summary output.",
+    "description": "Runs the interactive pdd setup flow with agentic CLI bootstrapping, API-key discovery, model configuration, multi-provider curation for local routing (prompts which provider(s) pdd --local should use when several are configured, persists the choice to ~/.pdd/setup_preferences.json, backs up before removing rows), .pddrc initialization, and summary output.",
     "dependencies": [
       "cli_detector_python.prompt",
       "cli_branding_python.prompt"
@@ -7578,8 +7628,8 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
-    "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
+    "reason": "Entry point for the agentic checkup workflow \u2014 fetches the GitHub issue when one is provided (optional in PR mode), loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
+    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
       "checkup_review_loop_python.prompt"
@@ -7598,7 +7648,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, start_step_override: Optional[Union[int, float]], cwd: Optional[Path]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7846,8 +7896,8 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR.",
-    "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, resolves a trusted absolute git binary through checkup_gates for the base-refresh and changed-file prompt probes so PATH=.:$PATH cannot execute a PR-shipped ./git, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists.",
+    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR. In PR mode the linked issue is OPTIONAL: with no issue (issue_url/issue_number absent) the PR is reviewed on its own merits and _step7_passed drops the issue_aligned requirement (verdict = code findings only), the issue-thread per-step/error/final posts are skipped, and _post_pr_mode_final_report posts only to the PR thread; with an issue present the issue-alignment gate is unchanged. Issue #1212 contract: Step 5 emits a structured failure_signal block normalised into context['step5_failure_signal']; Step 6.1's prompt renders that block. The Step 5 status word is parsed into three states \u2014 pass/ok/success/passed/clean (logically clean), skipped/skip/no_tests/n/a/n_a (verification did not run; sets context['step5_verification_skipped']=1 and is detected from the parsed status alone regardless of the provider success flag, round-10 #1), and everything else including a missing/malformed block (logical failure, fail closed). The fixer is skipped for both clean and skipped; a dedicated pre-push gate refuses any push when the skipped flag is set because tests never ran \u2014 including when the worktree is clean (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user). The gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time rather than trusting only the in-memory context cache (round-10 #3: context is not part of the saved workflow state, so a mid-loop interruption can resume with the cached Step 5 skipped block but an empty context cache). The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND context['pr_scope_changed_files'] (the local merge-base diff), tolerating GitHub API outages when the local base is healthy. The scope-allowed set extends pr_file_set with Step 5 failure paths and justified EXPANSION_ITEMS paths so the guard matches the Step 6 prompt's allowance for editing failing test files / causally-connected files without an explicit marker; the causal guard remains the backstop for zero-overlap fixes. EXPANSION_ITEMS justification is per-marker; trailing continuation lines only count when they carry semantic content (prefix marker, path mention, or causal keyword) so indented/bulleted padding cannot whitelist a path. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] (not from start_step) so a manual --start-step 7 still trips the side-effect guard. A clean Steps-3/4/5 run never commits or pushes side-effect edits left by non-fixer tooling. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is NOT guarded on the raw output being truthy, so an empty/missing Step 5 output is itself a fail-closed condition (no test evidence) that routes to the logical-failure branch (pass-17 #1: provider success with empty Step 5 output must not slip through as a verified result). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt, calls _post_pr_mode_final_report(refusal_message) to post the terminal status to PR/issue threads, calls clear_workflow_state(...) to discard the saved cache so the next rerun reruns Step 5 instead of replaying the stale skipped/failed output (and avoids a duplicate final-report comment), and returns (False, f'{refusal}{suffix}', ...) before Step 7 runs; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and follows the same post-then-clear-then-return pattern. Because load_workflow_state loads the GitHub state comment with PRIORITY over local state (round-17), clear_workflow_state now returns a bool and github_clear_state falls back to neutralising the state-comment body (stripping the PDD_WORKFLOW_STATE marker via _github_edit_comment) when a DELETE fails, so a token without delete scope can no longer leave stale remote state that replays the refusal forever; the orchestrator appends a cleanup warning to the returned message when the clear is still unconfirmed. The SAME unconfirmed-clear warning is appended on the terminal-success path (external review #1215 Finding 2): that path captures clear_workflow_state's bool instead of discarding it so a failed remote clear cannot let the next run resume from completed state \u2014 the checkup still returns success, the warning is informational. As a second, independent backstop for the same hole, load_workflow_state-side resume DISCARDS any cached state whose (FAILED-corrected) last_completed_step has already reached STEP_ORDER[-1] (the terminal step) when no start_step_override is given: a completed run's lingering state (left behind precisely because its best-effort remote clear failed) must not be resumed, or the rerun would skip every step and replay the cached Step 7 verdict as 'Checkup complete' without re-verifying the PR head. On discard it resets last_completed_step to 0 but preserves github_comment_id=loaded_gh_id so the fresh run PATCHes the lingering state comment rather than creating a duplicate. Because context persists across fix-verify iterations and context['step5_failure_signal'] is written ONLY on the failing Step 5 path, the orchestrator clears it (and step5_failure_signal_missing) to '' whenever a later iteration's Step 5 is clean or skipped so Step 6 is never driven by a prior iteration's stale failure block (external review #1215 Finding 1); the provider-success/logical-failure branch also prints the scrubbed failure detail unconditionally (even in quiet mode) like the provider-failure path (external review #1215 Finding 3). Non-PR no-fix runs are unaffected. The pre-push diff size gate (PDD_CHECKUP_DIFF_LOC_LIMIT, default 800 added LoC; 0 disables; unparseable falls back to default) refuses oversized pushes unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry. Small companion files are exempt; diffuse death-by-a-thousand-cuts diffs still require every path covered.",
+    "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, resolves a trusted absolute git binary through checkup_gates for the base-refresh and changed-file prompt probes so PATH=.:$PATH cannot execute a PR-shipped ./git, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists. In PR mode _handle_step_result suppresses its per-step issue comment for Step 7 (the orchestrator's canonical final report already covers it) so the issue thread does not get duplicate Step 7 reporting; earlier-step progress comments and issue-mode Step 7 comments are unaffected (external review #1215 Finding 3). Issue #1212 safety contract: (a) Step 5 MUST emit a structured ```failure_signal``` block (command, exit_code, status, failing_ids, artifact_path, output); the orchestrator parses it via _parse_failure_signal_block, treats empty fail/error-status fields as missing, synthesises a normalised block into context['step5_failure_signal'] that Step 6's prompt explicitly references, and maps the status word to one of three states (clean / skipped / failure) with fail-closed defaults \u2014 a missing block or unrecognised status counts as a logical failure (round-8 #1) so the fixer runs rather than silently passing. A 'skipped'/'skip'/'no_tests'/'n/a'/'n_a' status sets context['step5_verification_skipped']=1 \u2014 detected from the parsed status INDEPENDENT of the provider success flag (round-10 #1: an agent can emit a coherent skipped block even when its provider call timed out) \u2014 and triggers a dedicated pre-push gate that refuses any commit/push because tests never ran (round-9 #1), including the no-changes-clean-worktree path (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user); the gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time so a mid-loop interruption + resume cannot slip past via a missing in-memory cache (round-10 #3). (b) The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND the local merge-base diff in context['pr_scope_changed_files'] (round-8 #2 \u2014 tolerates GitHub API outages), parses both formats with regex `^-\\s+([A-Z][A-Z0-9]*):\\s*(.+?)\\s*$` (uppercase words from the API formatter, short git statuses M/A/R100 from the local-diff formatter), extends the scope-allowed set with Step 5 failure paths (round-8 #3 \u2014 matches the Step 6 prompt's allowance for editing failing test files and causally-connected files without an EXPANSION_ITEMS marker; the causal guard remains the backstop for zero-overlap fixes), parses EXPANSION_ITEMS as a structured per-marker allowlist requiring BOTH a non-empty path list AND a per-marker causal justification (_parse_expansion_items); follow-up lines only count when they carry semantic content (round-7 #1: prefix marker, path mention, or causal keyword \u2014 bare indentation/bullets do not qualify). (c) A clean PR run (Steps 3, 4, AND 5 all reported success \u2192 fixer skipped) MUST NOT commit or push worktree changes from non-fixer steps; a dedicated clean-run side-effect guard fires before scope/causal/size checks. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] so a manual --start-step 7 without prior fixer state still trips the guard (round-7 #2). (d) Pre-push diff sanity gate (_diff_size_added_lines_by_path returning per-path counts; total via _diff_size_added_lines + DIFF_SIZE_ADDED_LOC_LIMIT, overridable via PDD_CHECKUP_DIFF_LOC_LIMIT \u2014 0 disables, unparseable falls back to default) refuses pushes adding more than the configured added-line threshold unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry; small companion files are exempt (round-9 #2). A diffuse over-limit diff with no individually oversized path falls back to the original strict 'every changed path covered' rule so death-by-a-thousand-cuts diffs are still blocked. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is not guarded on truthiness so an empty/missing Step 5 output fails closed as a logical failure (pass-17 #1). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt and returns (False, ...) \u2014 calling _post_pr_mode_final_report(refusal_message) before returning so PR/issue threads receive a terminal status comment even without a Step 7 output, then clear_workflow_state(...) so the next rerun reruns Step 5 rather than replaying the stale cache; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and returns (False, ...) the same way. clear_workflow_state returns a bool and github_clear_state neutralises a state comment that cannot be DELETEd (round-17) so stale GitHub state \u2014 which load_workflow_state prefers over local \u2014 cannot replay the refusal on the next run. Non-PR no-fix runs are unaffected.",
     "dependencies": [
       "agentic_common_python.prompt",
       "checkup_review_loop_python.prompt",
@@ -7867,7 +7917,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None, start_step_override: Optional[Union[int, float]] = None) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None, test_scope: str = \"full\", start_step_override: Optional[Union[int, float]] = None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Creates or reuses checkup worktrees",
@@ -7888,7 +7938,7 @@
           },
           {
             "name": "_step7_passed",
-            "signature": "(step7_output: str, pr_mode: bool) -> Tuple[bool, str]",
+            "signature": "(step7_output: str, pr_mode: bool, has_issue: bool = True) -> Tuple[bool, str]",
             "returns": "Tuple[bool, str]",
             "sideEffects": [
               "None"
@@ -8351,7 +8401,7 @@
   },
   {
     "reason": "Registers the pdd checkup CLI command for project health checks and lint dispatch.",
-    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration.",
+    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
     "dependencies": [
       "agentic_checkup_python.prompt"
     ],
@@ -9409,6 +9459,50 @@
     }
   },
   {
+    "reason": "Bridges a ChatGPT/Codex subscription (codex login token in ~/.codex/auth.json) into litellm's chatgpt/ provider so llm_invoke can use it as a flat-rate fallback when ANTHROPIC_API_KEY is missing or rate-limited (issue #1269).",
+    "description": "ChatGPT/Codex subscription support for llm_invoke: bridges ~/.codex/auth.json into litellm's chatgpt/ provider auth dir, applies the litellm empty-output workaround (#25429/PR#27562), detects subscription auth for the credential gate, and builds the schema-in-prompt instruction for structured output.",
+    "dependencies": [],
+    "priority": 236,
+    "filename": "codex_subscription_python.prompt",
+    "filepath": "pdd/codex_subscription.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "is_chatgpt_subscription_model",
+            "signature": "(model_name)",
+            "returns": "bool"
+          },
+          {
+            "name": "bridge_codex_auth_for_litellm",
+            "signature": "()",
+            "returns": "bool"
+          },
+          {
+            "name": "has_codex_subscription_auth",
+            "signature": "()",
+            "returns": "bool"
+          },
+          {
+            "name": "apply_litellm_chatgpt_output_patch",
+            "signature": "()",
+            "returns": "bool"
+          },
+          {
+            "name": "build_chatgpt_schema_instruction",
+            "signature": "(schema)",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Parses prompt contract sections into a deterministic IR.",
     "description": "Extracts contract_rules, coverage, waivers, vocabulary, capabilities, and related metadata from .prompt files and stories for downstream deterministic checks.",
     "dependencies": [],
@@ -9658,12 +9752,171 @@
     }
   },
   {
-    "reason": "Optional per-run JSON evidence manifests for supported commands.",
-    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps.",
+    "reason": "Loads YAML and built-in policy for evidence gate require/allow/limit rules.",
+    "description": "Resolves `pdd checkup gate --policy` overrides merged with default gate policy.",
+    "dependencies": [],
+    "priority": 242,
+    "filename": "gate_policy_python.prompt",
+    "filepath": "pdd/gate_policy.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "default_policy",
+            "signature": "() -> GatePolicy",
+            "returns": "GatePolicy"
+          },
+          {
+            "name": "load_policy",
+            "signature": "(path: Optional[Path]) -> GatePolicy",
+            "returns": "GatePolicy"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Reads dev-unit evidence manifests and exposes freshness helpers for policy enforcement.",
+    "description": "Loads `.pdd/evidence/devunits/*.latest.json` and compares on-disk prompt/output hashes to manifest records.",
+    "dependencies": [],
+    "priority": 242,
+    "filename": "evidence_store_python.prompt",
+    "filepath": "pdd/evidence_store.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "evidence",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "list_latest_manifests",
+            "signature": "(project_root: Path) -> list[Path]",
+            "returns": "list[Path]"
+          },
+          {
+            "name": "output_freshness",
+            "signature": "(manifest: ManifestView, project_root: Path) -> list[OutputFreshness]",
+            "returns": "list[OutputFreshness]"
+          },
+          {
+            "name": "prompt_freshness",
+            "signature": "(manifest: ManifestView) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Checkup-scoped CLI for evidence policy gate (no top-level pdd gate).",
+    "description": "Dispatches `pdd checkup gate` to `run_gate_policy` with JSON and YAML policy options.",
+    "dependencies": [
+      "gate_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "commands/gate_python.prompt",
+    "filepath": "pdd/commands/gate.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "commands",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": []
+      }
+    }
+  },
+  {
+    "reason": "Evaluates evidence manifest policy for CI merge gates on dev units.",
+    "description": "Runs deterministic checks on validation status, stale outputs, contract coverage, and cost limits.",
+    "dependencies": [
+      "evidence_store_python.prompt",
+      "gate_policy_python.prompt",
+      "contract_check_python.prompt",
+      "coverage_contracts_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "gate_python.prompt",
+    "filepath": "pdd/gate_main.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "evidence",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_gate_policy",
+            "signature": "(project_root: Path, *, policy_path: Optional[Path] = None, target: Optional[str] = None, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> GateResult",
+            "returns": "GateResult"
+          },
+          {
+            "name": "evaluate_manifest",
+            "signature": "(manifest: ManifestView, project_root: Path, policy: GatePolicy, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> list[GateFailure]",
+            "returns": "list[GateFailure]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Loads optional .pdd/grounding_policy.yaml and checks per-run grounding evidence against required-review and required-pin rules for critical modules.",
+    "description": "Policy library for the grounding evidence recorded by pdd generate. Library-only; CI integration (pdd gate) will be wired separately.",
+    "dependencies": [],
+    "priority": 243,
+    "filename": "grounding_policy_python.prompt",
+    "filepath": "pdd/grounding_policy.py",
+    "tags": [
+      "module",
+      "python",
+      "grounding",
+      "policy"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "load_policy",
+            "signature": "(path: Optional[str] = None) -> GroundingPolicy",
+            "returns": "GroundingPolicy"
+          },
+          {
+            "name": "check",
+            "signature": "(policy: GroundingPolicy, module: str, grounding: Dict[str, Any]) -> List[PolicyViolation]",
+            "returns": "List[PolicyViolation]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance.",
+    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance when provided.",
     "dependencies": [
       "context_snapshot_python.prompt"
     ],
-    "priority": 242,
+    "priority": 244,
     "filename": "pdd/evidence_manifest_python.prompt",
     "filepath": "pdd/evidence_manifest.py",
     "tags": [
@@ -9677,7 +9930,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None) -> Path",
+            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False) -> Path",
             "returns": "Path"
           },
           {

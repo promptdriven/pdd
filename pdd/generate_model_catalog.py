@@ -85,6 +85,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # -----------------------------------------------------------------------
     # Anthropic Claude
     # -----------------------------------------------------------------------
+    "claude-opus-4-8": 1575,            # [EST] provisional, until live arena lists it
     "claude-opus-4-6": 1561,            # [CODE] #1
     "claude-opus-4-5": 1469,            # [CODE] #6
     "claude-opus-4-1": 1389,            # [CODE] #20
@@ -97,6 +98,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     "claude-3-5-sonnet": 1310,          # [EST]
     "claude-haiku-4-5": 1303,           # [CODE]
     # Dot-separated aliases
+    "claude-opus-4.8": 1575,
     "claude-opus-4.6": 1561,
     "claude-opus-4.5": 1469,
     "claude-opus-4.1": 1389,
@@ -328,6 +330,19 @@ _TIER_PATTERN = re.compile(r"^together-ai-[\d.]+b", re.IGNORECASE)
 # Models we never want in the catalog (sample spec, image-only, etc.)
 _SKIP_KEYS = {"sample_spec"}
 
+# Routes PDD intentionally DEFERS from the catalog pending live validation,
+# even if LiteLLM's registry happens to know the id. Without this guard a regen
+# on a LiteLLM build that ships one of these would re-introduce the exact route
+# the bundled CSV deliberately omits — e.g. azure_ai/claude-opus-4-8 rides the
+# legacy budget shape through AzureAIStudioConfig (OpenAI-based), which the
+# Bedrock/Vertex adaptive relay patches in llm_invoke.py do NOT reach and which
+# is unaudited for the adaptive-only Opus 4.7+/4.8 contract. Remove an entry
+# here once its provider/reasoning path is validated and the corresponding
+# CSV / _MANDATORY_MODEL_ROWS row is added with tests.
+_DEFERRED_MODEL_IDS = frozenset({
+    "azure_ai/claude-opus-4-8",
+})
+
 # Regex matching dated preview model names (after provider prefix is stripped).
 # Examples: gemini-2.5-flash-preview-04-17, gemini-2.5-pro-preview-06-05
 _DATED_PREVIEW = re.compile(
@@ -338,8 +353,22 @@ _DATED_PREVIEW = re.compile(
 CSV_FIELDNAMES = [
     "provider", "model", "input", "output", "coding_arena_elo",
     "base_url", "api_key", "max_reasoning_tokens", "structured_output",
-    "reasoning_type", "location",
+    "reasoning_type", "location", "interactive_only",
 ]
+
+# Provider roots that require interactive human auth (device-flow OAuth) or a
+# running local server (localhost connect), and therefore hang in
+# non-interactive contexts (Cloud Run, CI, library import) rather than
+# fast-failing. Rows for these providers are emitted with interactive_only=True
+# so automatic model selection can skip them by default. See
+# llm_invoke._select_model_candidates and the PDD_ALLOW_INTERACTIVE opt-in.
+#   - github_copilot: device-flow OAuth (github.com/login/device)
+#   - lm_studio / ollama: local server on localhost
+#   - chatgpt: ChatGPT subscription via the codex login token (`codex login`);
+#     the hand-managed chatgpt/* rows carry an empty api_key and litellm may
+#     prompt for device-flow auth when no token exists, so they belong in the
+#     same default-deny class (issue #1164 review).
+_INTERACTIVE_ONLY_PROVIDERS = {"github_copilot", "lm_studio", "ollama", "chatgpt"}
 
 # ---------------------------------------------------------------------------
 # Regex patterns for _extract_base_model() — stripping provider/region/version
@@ -548,6 +577,21 @@ def _get_provider_root(litellm_provider: str) -> str:
     return litellm_provider.split("-")[0].split("_models")[0]
 
 
+def _is_interactive_only(model_id: str) -> bool:
+    """Return True for rows that require interactive human auth or a running
+    local server (and therefore hang in non-interactive contexts).
+
+    Classification is by the model's provider-prefix root so it applies
+    uniformly to litellm-derived rows, seeded local-runner rows, and
+    user-preserved rows. ``ollama_chat`` is litellm's chat-format variant of
+    the ``ollama`` local runner and is treated the same.
+    """
+    prefix = model_id.split("/", 1)[0] if "/" in model_id else model_id
+    if prefix == "ollama_chat":
+        prefix = "ollama"
+    return prefix in _INTERACTIVE_ONLY_PROVIDERS
+
+
 # Regex matching region-specific Bedrock model IDs, e.g.:
 #   bedrock/us-east-1/...   bedrock/eu-north-1/...
 #   us.anthropic....        eu.anthropic....
@@ -566,7 +610,7 @@ def _has_region(model_id: str) -> bool:
 # legacy budget shape. Direct-Anthropic-provider routes enforce this;
 # Azure AI / Bedrock / Vertex relays do not yet (as of 2026-05-24) — keep
 # those on budget/effort until separately audited.
-_ADAPTIVE_ANTHROPIC_MODELS = {"claude-opus-4-7"}
+_ADAPTIVE_ANTHROPIC_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
 
 
 def _is_adaptive_anthropic_model(model_id: str, litellm_provider: str) -> bool:
@@ -1068,6 +1112,66 @@ _DEFAULT_LOCAL_RUNNER_ROWS: List[Dict[str, Any]] = [
 # shims for PDD's own model routing, not a second model catalog.
 _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
     {
+        # Claude Opus 4.8 (released 2026-05-28) is PDD's default Opus
+        # (pdd-opus) but is absent from litellm.model_cost until litellm
+        # ships it, so the litellm-driven build loop would drop it. Seed it
+        # here; the row is deduped automatically once litellm registers the
+        # model. Direct-Anthropic adaptive thinking only (legacy budget shape
+        # 400s on 4.8). ELO is resolved from STATIC_ELO_FALLBACK at build time.
+        "provider": "Anthropic",
+        "model": "claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "ANTHROPIC_API_KEY",
+        "max_reasoning_tokens": 16000,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+    },
+    {
+        # Opus 4.8 on AWS Bedrock (anthropic.claude-opus-4-8). Available at
+        # launch but absent from litellm.model_cost until litellm ships it, so
+        # seed it like the direct row to survive regen. Bedrock/Vertex relays
+        # are NOT on the direct-Anthropic adaptive enforcement path, so they
+        # keep reasoning_type="effort" (mirrors the opus-4-7 relay rows and
+        # _infer_reasoning_type for these providers); the litellm relay patch
+        # maps effort -> adaptive thinking server-side for the opus-4-8 alias.
+        "provider": "AWS Bedrock",
+        "model": "anthropic.claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "",
+    },
+    {
+        # Opus 4.8 on Google Vertex AI (vertex_ai/claude-opus-4-8). Same
+        # rationale as the Bedrock row above; mirrors the opus-4-7 Vertex row.
+        "provider": "Google Vertex AI",
+        "model": "vertex_ai/claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "global",
+    },
+    # Azure AI / Microsoft Foundry also surfaces Opus 4.8, and an
+    # azure_ai/claude-opus-4-7 sibling ships today — but it is intentionally
+    # deferred here pending validation, NOT omitted on a "not available" claim.
+    # Reason: Azure routes through AzureAIStudioConfig (OpenAI-based), which the
+    # Bedrock/Vertex adaptive relay patches in llm_invoke.py do NOT reach, so
+    # the 4-7 Azure row still rides the legacy budget shape (unaudited for the
+    # adaptive-only 4.7+/4.8 contract). Third-party aggregators (Perplexity,
+    # OpenRouter, GMI) similarly lag the direct launch. Add these rows once
+    # their reasoning shape is verified against the live relay.
+    {
         "provider": "Google Vertex AI",
         "model": "vertex_ai/gemini-3-flash-preview",
         "input": 0.5,
@@ -1174,6 +1278,47 @@ def _mandatory_rows_missing_from(
     return missing
 
 
+# Issue #1269: the ChatGPT/Codex SUBSCRIPTION family is hand-managed. It is
+# billed by a flat-rate ChatGPT plan (not per-token API keys) and is not present
+# in ``litellm.model_cost`` in a curatable form, so it is intentionally skipped
+# by ``_SKIP_PROVIDER_ROOTS`` during generation and instead PRESERVED here — the
+# same survival mechanism used for local-runner rows (#1269). ELOs mirror the
+# API twins; empty api_key marks device-flow (codex login) auth, like the
+# github_copilot/ rows. Keep in sync with pdd/data/llm_model.csv.
+_CHATGPT_SUBSCRIPTION_ROWS: List[Dict[str, str]] = [
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.4", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "1437", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.3-codex", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "1407", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.2", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "1404", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.3-codex-spark",
+     "input": "0.0", "output": "0.0", "coding_arena_elo": "1400", "base_url": "",
+     "api_key": "", "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
+]
+
+
+def _merge_chatgpt_subscription_rows(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """Append the hand-managed ChatGPT subscription rows, model-keyed deduped.
+
+    Mirrors the local-runner preserve path so a catalog regeneration never drops
+    the subscription fallback (issue #1269).
+    """
+    have = {r.get("model") for r in rows}
+    merged = list(rows)
+    for sub in _CHATGPT_SUBSCRIPTION_ROWS:
+        if sub["model"] not in have:
+            merged.append(dict(sub))
+    return merged
+
+
 def build_rows(
     refresh_elo: bool = False,
     existing_catalog: Optional[Path] = None,
@@ -1205,6 +1350,11 @@ def build_rows(
     elo_source_counts: Dict[str, int] = defaultdict(int)
 
     for model_id, entry in litellm.model_cost.items():
+        # Skip routes PDD intentionally defers pending validation, even if
+        # LiteLLM's registry knows them (see _DEFERRED_MODEL_IDS). Checked first
+        # so the deferral holds regardless of how LiteLLM classifies the entry.
+        if model_id in _DEFERRED_MODEL_IDS:
+            continue
         # Only chat and responses modes (responses = OpenAI's newer API format)
         if entry.get("mode") not in ("chat", "responses"):
             continue
@@ -1505,8 +1655,23 @@ def build_rows(
 
     print(f"  Post-processing: {initial_count} -> {len(rows)} rows.")
 
+    # Issue #1269: preserve the hand-managed ChatGPT subscription family
+    # (intentionally skipped during litellm-derived generation above) BEFORE
+    # the final sort, so the rows land under their "OpenAI ChatGPT" provider
+    # block deterministically rather than appended after the last provider.
+    rows = _merge_chatgpt_subscription_rows(rows)
+
+    # Classify every emitted row (litellm-derived, seeded local-runner,
+    # mandatory, user-preserved, and the merged ChatGPT rows alike) for the
+    # interactive_only column.
+    for row in rows:
+        row["interactive_only"] = _is_interactive_only(row["model"])
+
     # Sort: provider ascending, then ELO descending within each provider
-    rows.sort(key=lambda r: (r["provider"], -r["coding_arena_elo"], r["model"]))
+    # int() coercion: litellm-derived rows carry int elo, but the hand-managed
+    # ChatGPT subscription rows (merged just above) store it as a string — keep
+    # the key total-orderable across both so the merge-before-sort holds.
+    rows.sort(key=lambda r: (r["provider"], -int(r["coding_arena_elo"]), r["model"]))
     return rows
 
 

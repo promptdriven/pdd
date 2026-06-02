@@ -48,7 +48,7 @@ def main():
             "anthropic",
         )
 
-        # --- EXECUTE THE MODULE ---
+        # --- EXECUTE THE MODULE (issue mode) ---
         success, message, cost, model = run_agentic_checkup(
             issue_url=issue_url,
             verbose=True,
@@ -56,6 +56,15 @@ def main():
             no_fix=False,
             timeout_adder=0.0,
             use_github_state=True,
+        )
+
+        # --- PR-only / no-issue mode (#1292) ---
+        # issue_url may be None or "" — both mean "review on its own merits".
+        success, message, cost, model = run_agentic_checkup(
+            issue_url=None,
+            pr_url="https://github.com/org/repo/pull/42",
+            no_fix=True,
+            use_github_state=False,
         )
 
     print("\n--- Result Summary ---")

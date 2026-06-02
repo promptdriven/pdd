@@ -14,6 +14,7 @@ from ..track_cost import track_cost
 from ..operation_log import log_operation
 from ..core.errors import handle_error
 from ..evidence_manifest import (
+    grounding_kwargs_from_ctx,
     resolve_generate_output_paths,
     resolve_test_output_paths,
     write_evidence_manifest,
@@ -265,6 +266,7 @@ def generate(
                     model=model,
                     cost_usd=cost,
                     temperature=obj.get("temperature", 0.0),
+                    **grounding_kwargs_from_ctx(ctx.obj),
                 )
             return (message, cost, model) if success else None
 
@@ -303,6 +305,7 @@ def generate(
                     cost_usd=cost,
                     temperature=(ctx.obj or {}).get("temperature", 0.0),
                     basename="agentic-generate",
+                    **grounding_kwargs_from_ctx(ctx.obj),
                 )
             return (message, cost, model) if success else None
 
@@ -367,6 +370,7 @@ def generate(
                 model=model,
                 cost_usd=cost,
                 temperature=ctx_obj.get("temperature", 0.0),
+                **grounding_kwargs_from_ctx(ctx_obj),
                 context_snapshot=ctx_obj.get("context_snapshot"),
             )
         return generated_code, cost, model

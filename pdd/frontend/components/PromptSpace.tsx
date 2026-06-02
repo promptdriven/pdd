@@ -2057,7 +2057,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                   <div className="bg-surface-900/50 rounded-lg p-3">
                     <div className="text-xs text-surface-500 mb-1">Context Usage</div>
                     <div className="text-lg font-semibold text-white">
-                      {includeAnalysis.metrics.context_usage_percent.toFixed(1)}%
+                      {(includeAnalysis.metrics.context_usage_percent ?? 0).toFixed(1)}%
                     </div>
                   </div>
                 </div>

@@ -4978,6 +4978,117 @@ class TestSelectModelCandidates:
         assert candidates[0]["provider"] == "Google Vertex AI"
 
 
+# ============================================================================
+# TESTS: interactive_only column + PDD_ALLOW_INTERACTIVE opt-in (#1164)
+# ============================================================================
+
+class TestInteractiveOnlyFilter:
+    """The interactive_only column lets server/CI/library contexts skip
+    device-flow / subscription / local-server providers (github_copilot,
+    chatgpt, lm_studio, ollama) that would otherwise hang. Default: skip.
+    PDD_ALLOW_INTERACTIVE=1: include. An explicitly configured base model is
+    always honored.
+    """
+
+    def _make_df(self, llm_mod, tmp_path, with_column=True):
+        col = ",interactive_only" if with_column else ""
+        keyed = ",False" if with_column else ""
+        copilot = ",True" if with_column else ""
+        chatgpt = ",True" if with_column else ""
+        local = ",True" if with_column else ""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens" + col + "\n"
+            "openai,gpt-4,30,60,1300,OPENAI_API_KEY,True,effort,128000,4096,0" + keyed + "\n"
+            "anthropic,claude-3,15,75,1280,ANTHROPIC_API_KEY,True,budget,200000,8192,16000" + keyed + "\n"
+            "Github Copilot,github_copilot/gpt-5,0,0,1393,,True,none,128000,4096,0" + copilot + "\n"
+            # chatgpt/* subscription rows use codex-login device-flow auth, empty api_key.
+            "OpenAI ChatGPT,chatgpt/gpt-5.4,0,0,1437,,True,none,128000,4096,0" + chatgpt + "\n"
+            "lm_studio,lm_studio/qwen3-coder-next,0,0,1310,,True,none,128000,4096,0" + local + "\n"
+        )
+        csv_path = tmp_path / "models_interactive.csv"
+        csv_path.write_text(content)
+        return llm_mod._load_model_data(csv_path)
+
+    def test_interactive_rows_parsed_as_bool(self, llm_mod, tmp_path):
+        df = self._make_df(llm_mod, tmp_path)
+        # String-aware parse: "False" must NOT become truthy (bool("False") is True).
+        # Three interactive rows: github_copilot, chatgpt, lm_studio.
+        assert int(df["interactive_only"].sum()) == 3
+        keyed = df[df["model"] == "gpt-4"].iloc[0]["interactive_only"]
+        assert bool(keyed) is False
+
+    def test_interactive_excluded_by_default(self, llm_mod, tmp_path, monkeypatch):
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        names = [c["model"] for c in candidates]
+        assert "github_copilot/gpt-5" not in names
+        assert "chatgpt/gpt-5.4" not in names
+        assert "lm_studio/qwen3-coder-next" not in names
+        assert "gpt-4" in names and "claude-3" in names
+
+    def test_interactive_included_with_opt_in(self, llm_mod, tmp_path, monkeypatch):
+        monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+        df = self._make_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        names = [c["model"] for c in candidates]
+        assert "github_copilot/gpt-5" in names
+        assert "chatgpt/gpt-5.4" in names
+        assert "lm_studio/qwen3-coder-next" in names
+
+    def test_explicit_interactive_base_is_honored(self, llm_mod, tmp_path, monkeypatch):
+        # No opt-in, but the user explicitly configured an interactive base:
+        # honor it (it's an implicit opt-in), while still excluding the other
+        # interactive rows from the automatic cascade.
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(0.5, "github_copilot/gpt-5", df)
+        names = [c["model"] for c in candidates]
+        assert "github_copilot/gpt-5" in names
+        assert "chatgpt/gpt-5.4" not in names
+        assert "lm_studio/qwen3-coder-next" not in names
+
+    def test_chatgpt_excluded_by_default(self, llm_mod, tmp_path, monkeypatch):
+        # Regression for the #1164 review: chatgpt/* subscription rows use the
+        # same device-flow (codex login) auth class and must be skipped in the
+        # automatic cascade by default.
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        names = [c["model"] for c in llm_mod._select_model_candidates(0.5, "gpt-4", df)]
+        assert "chatgpt/gpt-5.4" not in names
+
+    def test_chatgpt_included_with_opt_in(self, llm_mod, tmp_path, monkeypatch):
+        monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
+        df = self._make_df(llm_mod, tmp_path)
+        names = [c["model"] for c in llm_mod._select_model_candidates(0.5, "gpt-4", df)]
+        assert "chatgpt/gpt-5.4" in names
+
+    def test_explicit_chatgpt_base_is_honored(self, llm_mod, tmp_path, monkeypatch):
+        # An explicitly configured chatgpt/* base is honored even without opt-in.
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(0.5, "chatgpt/gpt-5.4", df)
+        names = [c["model"] for c in candidates]
+        assert "chatgpt/gpt-5.4" in names
+        # ...while the OTHER interactive rows stay excluded.
+        assert "github_copilot/gpt-5" not in names
+        assert "lm_studio/qwen3-coder-next" not in names
+
+    def test_missing_column_defaults_to_non_interactive(self, llm_mod, tmp_path, monkeypatch):
+        # Backward compatibility: a pre-migration CSV has no column. Nothing is
+        # treated as interactive and no row is dropped.
+        monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
+        df = self._make_df(llm_mod, tmp_path, with_column=False)
+        assert int(df["interactive_only"].sum()) == 0
+        candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
+        names = [c["model"] for c in candidates]
+        assert "github_copilot/gpt-5" in names
+        assert "chatgpt/gpt-5.4" in names
+        assert "lm_studio/qwen3-coder-next" in names
+
+
 class TestAlternativeBaseLookups:
     """Direct tests for the `_alternative_base_lookups` helper."""
 
@@ -5602,6 +5713,87 @@ class TestSetModelRateMap:
         assert "gpt-4" in llm_mod._MODEL_RATE_MAP
         assert llm_mod._MODEL_RATE_MAP["gpt-4"] == (30.0, 60.0)
         assert llm_mod._MODEL_RATE_MAP["claude-3"] == (15.0, 75.0)
+
+    # ------------------------------------------------------------------
+    # Regression: litellm provider derivation for CSV-only model registration.
+    # A litellm-unknown BARE-named non-OpenAI model (e.g. a new direct-Anthropic
+    # Opus) must register under its real provider, not the historical "openai"
+    # default — otherwise litellm resolves the wrong provider, the call fails
+    # auth against the wrong key, and PDD silently falls back to another model.
+    # ------------------------------------------------------------------
+
+    def test_provider_for_bare_anthropic_model_maps_to_anthropic(self, llm_mod):
+        assert llm_mod._litellm_provider_for_csv_model(
+            "claude-opus-4-8", "Anthropic"
+        ) == "anthropic"
+
+    def test_provider_for_prefixed_model_uses_prefix(self, llm_mod):
+        # Prefixed ids already encode the provider; CSV column is ignored.
+        assert llm_mod._litellm_provider_for_csv_model(
+            "vertex_ai/claude-opus-4-7", "Google Vertex AI"
+        ) == "vertex_ai"
+
+    def test_provider_for_bare_openai_and_unknown_fallback(self, llm_mod):
+        assert llm_mod._litellm_provider_for_csv_model("gpt-5", "OpenAI") == "openai"
+        # Unmapped provider preserves the historical "openai" fallback.
+        assert llm_mod._litellm_provider_for_csv_model(
+            "some-future-bare-model", "Brand New Co"
+        ) == "openai"
+        assert llm_mod._litellm_provider_for_csv_model("bare", None) == "openai"
+
+    def test_provider_for_bare_bedrock_model_maps_to_bedrock(self, llm_mod):
+        # Bedrock ids are bare with dots ("anthropic.claude-opus-4-8") — no "/"
+        # prefix to route on — so they must map from the CSV provider column,
+        # not fall through to the "openai" default.
+        assert llm_mod._litellm_provider_for_csv_model(
+            "anthropic.claude-opus-4-8", "AWS Bedrock"
+        ) == "bedrock"
+
+    def test_set_model_rate_map_populates_provider_map(self, llm_mod):
+        import pandas as pd
+        df = pd.DataFrame({
+            "model": ["claude-opus-4-8", "vertex_ai/claude-opus-4-7"],
+            "provider": ["Anthropic", "Google Vertex AI"],
+            "input": [5.0, 5.0],
+            "output": [25.0, 25.0],
+        })
+        llm_mod._set_model_rate_map(df)
+        assert llm_mod._MODEL_PROVIDER_MAP.get("claude-opus-4-8") == "Anthropic"
+
+    def test_registers_bare_anthropic_model_under_anthropic_provider(self, llm_mod):
+        import pandas as pd
+        import litellm
+        # Unique fake id guaranteed absent from litellm.model_cost so the
+        # registration path (not the skip-if-known branch) is exercised.
+        fake = "claude-pdd-regtest-bare-zzz"
+        assert fake not in (getattr(litellm, "model_cost", {}) or {})
+        df = pd.DataFrame({
+            "model": [fake],
+            "provider": ["Anthropic"],
+            "input": [5.0],
+            "output": [25.0],
+        })
+        llm_mod._set_model_rate_map(df)
+        _model, provider, *_ = litellm.get_llm_provider(fake)
+        assert provider == "anthropic"
+
+    def test_registers_bare_bedrock_dotted_model_under_bedrock_provider(self, llm_mod):
+        import pandas as pd
+        import litellm
+        # Bedrock ids are bare with dots (no "/"). A litellm-unknown one must
+        # register as provider="bedrock", not the historical "openai" default —
+        # this pins the dotted-id path the "AWS Bedrock" map entry exists for.
+        fake = "anthropic.pdd-regtest-bedrock-zzz"
+        assert fake not in (getattr(litellm, "model_cost", {}) or {})
+        df = pd.DataFrame({
+            "model": [fake],
+            "provider": ["AWS Bedrock"],
+            "input": [5.0],
+            "output": [25.0],
+        })
+        llm_mod._set_model_rate_map(df)
+        _model, provider, *_ = litellm.get_llm_provider(fake)
+        assert provider == "bedrock"
 
 
 # ============================================================================
@@ -7402,6 +7594,27 @@ def test_map_openai_params_direct_opus_47_preserves_caller_adaptive():
     assert output_config == {"effort": "medium"}, output_config
 
 
+def test_map_openai_params_direct_opus_48_emits_adaptive_shape():
+    """claude-opus-4-8 (released 2026-05-28) uses the same adaptive-only
+    contract as 4.7: the legacy thinking.type="enabled" shape 400s on it.
+    This covers the DIRECT AnthropicConfig path (via _map_thinking_kwargs):
+    map_openai_params must emit thinking.type=adaptive + output_config.effort
+    instead of the legacy enabled shape, across hyphen/dot naming. The actual
+    Bedrock Converse and Vertex relay transform classes are covered by the
+    dedicated 4.8 relay tests below."""
+    for model in (
+        "claude-opus-4-8",
+        "claude-opus-4.8",
+        "vertex_ai/claude-opus-4-8",
+        "anthropic.claude-opus-4-8",
+    ):
+        thinking, output_config = _map_thinking_kwargs(
+            {"reasoning_effort": "medium"}, model
+        )
+        assert thinking == {"type": "adaptive"}, (model, thinking)
+        assert output_config == {"effort": "medium"}, (model, output_config)
+
+
 def test_map_openai_params_unrelated_model_unchanged():
     """The patch is gated on opus-4-7 substring (and pre-existing predicates).
     GPT-5 must not be affected by any patch layer — LiteLLM drops Anthropic-
@@ -7480,6 +7693,35 @@ def test_bedrock_converse_adapter_opus_47_emits_adaptive_shape():
         assert result.get("thinking") == {"type": "adaptive", "effort": "high"}, (model, result)
 
 
+def test_bedrock_converse_adapter_opus_48_emits_adaptive_shape():
+    """Same as the 4-7 Converse test for claude-opus-4-8. The Bedrock relay
+    row this PR adds (anthropic.claude-opus-4-8, reasoning_type='effort')
+    relies on the Converse wrap rewriting the effort hint into adaptive
+    thinking — the relay alias tuple must include the 4-8 variants, or the
+    effort hint is dropped and the call sends the wrong shape. RED before the
+    relay-alias fix, GREEN after; this is the net that would have caught it."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AmazonConverseConfig in this env")
+    cfg = AmazonConverseConfig()
+    for model in (
+        "bedrock/anthropic.claude-opus-4-8",
+        "bedrock/converse/anthropic.claude-opus-4-8",
+    ):
+        result = cfg.map_openai_params(
+            non_default_params={"reasoning_effort": "high"},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert result.get("thinking") == {"type": "adaptive", "effort": "high"}, (model, result)
+
+
 def test_bedrock_converse_adapter_opus_47_preserves_caller_adaptive_payload():
     """When the caller already supplied thinking={type: adaptive, ...}, the
     wrap must preserve their richer payload (e.g. display=summarized) and
@@ -7536,6 +7778,36 @@ def test_vertex_anthropic_transform_request_keeps_output_config_for_opus_47():
         model="claude-opus-4-7",
         messages=[{"role": "user", "content": "hi"}],
         optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert body.get("thinking") == {"type": "adaptive"}, body
+    assert body.get("output_config") == {"effort": "high"}, body
+
+
+def test_vertex_anthropic_transform_request_keeps_output_config_for_opus_48():
+    """Same as the 4-7 Vertex test for claude-opus-4-8. The Vertex relay row
+    this PR adds (vertex_ai/claude-opus-4-8) requires output_config.effort to
+    survive transform_request alongside thinking.type=adaptive (Vertex 400s
+    otherwise). The relay alias tuple must include the 4-8 variants. RED before
+    the relay-alias fix, GREEN after."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
+            VertexAIAnthropicConfig,
+        )
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose VertexAIAnthropicConfig in this env")
+
+    cfg = VertexAIAnthropicConfig()
+    body = cfg.transform_request(
+        model="claude-opus-4-8",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "thinking": {"type": "adaptive"},
+            "output_config": {"effort": "high"},
+        },
         litellm_params={},
         headers={},
     )
