@@ -1,0 +1,65 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Finalizes deterministic PDD fingerprints at CLI-created PR commit boundaries.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "finalize_pr_metadata",
+        "signature": "(repo_root: Path, changed_paths: Optional[Iterable[str]] = None, *, stage: bool = True) -> PRMetadataFinalizationResult",
+        "returns": "PRMetadataFinalizationResult"
+      },
+      {
+        "name": "stage_paths_scoped",
+        "signature": "(repo_root: Path, paths: Iterable[str], *, force: bool = False, exclude_pdd_meta: bool = True) -> Tuple[bool, str]",
+        "returns": "Tuple[bool, str]"
+      },
+      {
+        "name": "is_pdd_meta_artifact",
+        "signature": "(path: str) -> bool",
+        "returns": "bool"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>metadata_sync_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
+<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
+<pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/pr_metadata_finalizer.py`, a small deterministic helper used by CLI PR creation/update flows (`pdd bug`, `pdd fix`, `pdd change`, and `pdd checkup --fix` review-loop commits) before they report success, commit, or push.
+
+% Role & Scope
+The helper owns only the PR-boundary metadata contract. It does not generate code, run tests, create commits, push branches, or create pull requests. Its job is to detect whether the pending PR update touched a PDD-owned prompt/code/example/test file, refresh the matching `.pdd/meta/<module>_<language>.json` fingerprint with deterministic PDD machinery, verify the fingerprint hashes are fresh, and stage only those exact expected fingerprint files.
+
+% Requirements
+1. Public API:
+   - `finalize_pr_metadata(repo_root, changed_paths=None, *, stage=True) -> PRMetadataFinalizationResult`
+   - `stage_paths_scoped(repo_root, paths, *, force=False, exclude_pdd_meta=True) -> Tuple[bool, str]`
+   - `is_pdd_meta_artifact(path) -> bool`
+2. If `changed_paths` is omitted, discover pending worktree changes with `git status --porcelain=v1 -z --untracked-files=all` and parse it through `pdd.git_porcelain.parse_porcelain_z` / `iter_changed_paths`.
+3. Detect touched PDD modules by scanning top-level project prompt roots (`prompts/` and `pdd/prompts/`) when present; only if neither exists, fall back to real directories named `prompts`, and finally the repo root. Exclude `.git`, `.pdd`, virtualenvs, caches, build outputs, and `node_modules`. Infer `(basename, language)` with `infer_module_identity`, resolve authoritative prompt/code/example/test paths with `get_pdd_file_paths`, and match changed paths against that module path set. Include `test_files` fan-out, not only the conventional single test path.
+4. Ignore incoming changed paths under `.pdd/meta/`; metadata files never trigger another module finalization. Unrelated `.pdd/meta/*.json` files must not be staged.
+5. For every touched module:
+   - Call `run_metadata_sync(prompt_path, code_path, repo_root=repo_root, architecture_path=<first architecture candidate if any>)`.
+   - Fail with a clear `message` when the result is not ok.
+   - Preserve any existing `.pdd/meta/<module>_<language>_run.json` report around metadata sync; PR finalization owns deterministic fingerprints, not run-report deletion.
+   - Refresh the operation-log fingerprint again through `save_fingerprint(...)` using the full resolved path map from `get_pdd_file_paths`, not only prompt/code, so example/test/test_files hashes are preserved and updated.
+   - Preserve a prior workflow-complete command (`verify`, `test`, `fix`, or `update`) when present; otherwise use `fix`.
+   - Read the fingerprint and compare current hashes from `calculate_current_hashes(...)`; fail if any current prompt/code/example/test/test_files hash differs from the saved fingerprint.
+6. When `stage=True`, stage each finalized fingerprint with `git add -f -- <exact .pdd/meta path>`. Use `-f` because target repos may ignore `.pdd/meta`. Never use `git add -A`, `git add .`, `git add -u`, or blanket `.pdd` staging inside this helper.
+7. `stage_paths_scoped` stages exact caller-supplied paths and skips arbitrary `.pdd/meta` paths by default. Callers use it for non-metadata files after `finalize_pr_metadata` has already force-staged the expected fingerprints.
+8. The helper must change into `repo_root` while calling operation-log primitives, because those primitives use repo-relative `.pdd/meta` paths. Guard the chdir section with a module-level lock and always restore the original cwd.
+9. Return an ok result with an empty `finalized` tuple when no PDD-owned files were touched.
+10. Keep error handling deterministic and local: do not call LLMs, network APIs, or shell commands except the explicit `git status` / `git add` operations.
+
+% Deliverables
+- Code: `pdd/pr_metadata_finalizer.py`
+- Tests covering changed-code detection, ignored `.pdd/meta` artifacts, exact force-staging of expected fingerprints, and caller scoped-staging behavior.
