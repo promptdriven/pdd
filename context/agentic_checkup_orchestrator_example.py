@@ -5,68 +5,47 @@ from unittest.mock import patch
 
 from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
-def main():
+def main() -> None:
     """
-    Example showing how to run the agentic checkup orchestrator.
-    We use mock patches here to avoid executing actual Git commands or LLM calls
-    during the example, but the signature and usage remain identical for real runs.
-    """
-    cwd = Path("./output/dummy_project").resolve()
-    cwd.mkdir(parents=True, exist_ok=True)
-
-    print("--- Running Agentic Checkup Orchestrator (Issue Mode) ---")
+    Demonstrates how to invoke the multi-step agentic checkup orchestrator.
     
-    # Mock the inner function to simulate a successful checkup run
+    The orchestrator manages an 8-step workflow (Discover, Deps, Build, Interfaces, 
+    Test, Fix, Verify, Create PR) to automatically resolve issues or verify PRs.
+    
+    Here, we mock the internal inner orchestrator to prevent actual LLM API calls 
+    and git worktree mutations during the example.
+    """
+    github_token = os.environ.get("GITHUB_TOKEN")
+    if not github_token:
+        print("GITHUB_TOKEN not set. Set it to run this example.")
+        sys.exit(0)
+
+    # Setup a dummy working directory for the repository
+    cwd = Path("./output/dummy_checkup_repo")
+    cwd.mkdir(parents=True, exist_ok=True)
+    
+    # In a real scenario, this would run the full LLM and git pipeline.
+    # We patch the inner orchestrator to return a simulated success result.
     with patch("pdd.agentic_checkup_orchestrator._run_agentic_checkup_orchestrator_inner") as mock_inner:
-        mock_inner.return_value = (True, "Checkup complete", 0.05, "gpt-4o")
+        mock_inner.return_value = (True, "Checkup complete (mocked)", 0.15, "claude-3.5-sonnet")
         
         success, message, cost, model = run_agentic_checkup_orchestrator(
-            issue_url="https://github.com/example-owner/example-repo/issues/1",
-            issue_content="Fix a bug in the calculation module.",
+            issue_url="https://github.com/example-owner/example-repo/issues/42",
+            issue_content="The build fails with a syntax error in main.py.",
             repo_owner="example-owner",
             repo_name="example-repo",
-            issue_number=1,
-            issue_title="Bug in calculation",
+            issue_number=42,
+            issue_title="Syntax error in main.py",
             architecture_json="{}",
-            pddrc_content="# pdd config",
+            pddrc_content="",
             cwd=cwd,
             verbose=True,
             quiet=False,
-            no_fix=False,
-            use_github_state=False,
-            test_scope="full"
+            no_fix=True,           # Run analysis and verification only (skip fixer steps)
+            use_github_state=False # Do not interact with GitHub issues for state persistence
         )
-
-        print(f"Success: {success}")
-        print(f"Message: {message}")
-        print(f"Total Cost: ${cost:.4f}")
-        print(f"Model Used: {model}")
-
-    print("\n--- Running Agentic Checkup Orchestrator (PR Mode) ---")
-    with patch("pdd.agentic_checkup_orchestrator._run_agentic_checkup_orchestrator_inner") as mock_inner:
-        mock_inner.return_value = (True, "PR verified and checkup complete", 0.12, "gpt-4o")
-
-        success, message, cost, model = run_agentic_checkup_orchestrator(
-            issue_url="https://github.com/example-owner/example-repo/issues/2",
-            issue_content="Add feature X",
-            repo_owner="example-owner",
-            repo_name="example-repo",
-            issue_number=2,
-            issue_title="Feature X",
-            architecture_json="{}",
-            pddrc_content="# pdd config",
-            cwd=cwd,
-            verbose=False,
-            quiet=True,
-            no_fix=True,           # Just verify, don't push fixes
-            use_github_state=False,
-            test_scope="targeted", # Run tests related to PR diff
-            pr_url="https://github.com/example-owner/example-repo/pull/3",
-            pr_owner="example-owner",
-            pr_repo="example-repo",
-            pr_number=3
-        )
-
+        
+        print("--- Orchestrator Result ---")
         print(f"Success: {success}")
         print(f"Message: {message}")
         print(f"Total Cost: ${cost:.4f}")
