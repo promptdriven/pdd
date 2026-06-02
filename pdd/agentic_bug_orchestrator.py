@@ -463,7 +463,7 @@ def _parse_needs_fix(step6_output: str) -> List[Tuple[str, str]]:
     `|` separator are treated as `(item, "")`. Empty items are skipped.
     """
     results: List[Tuple[str, str]] = []
-    for match in re.finditer(r"NEEDS_FIX:\s*(.+)", step6_output):
+    for match in re.finditer(r"(?m)^\s*NEEDS_FIX:[^\S\r\n]*(.*)$", step6_output):
         raw = match.group(1).strip()
         if not raw:
             continue
