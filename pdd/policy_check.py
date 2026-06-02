@@ -285,9 +285,16 @@ class PolicyVisitor(ast.NodeVisitor):
         if not self.allowed_file:
             self._add_issue(node, "file", f"Unauthorized file operation: {label}")
 
+    def _call_module_root(self, module_name: str) -> str:
+        """Resolve a call's module prefix through import aliases (e.g. ``o`` -> ``os``)."""
+        if not module_name:
+            return ""
+        return self._resolve_bound_module(module_name.split(".")[0])
+
     def visit_Call(self, node: ast.Call) -> None:
         func_name = ""
         module_name = ""
+        resolved_module = ""
 
         if isinstance(node.func, ast.Attribute):
             if isinstance(node.func.value, ast.Name):
@@ -304,15 +311,17 @@ class PolicyVisitor(ast.NodeVisitor):
             func_name = node.func.id
             module_name = self.imported_names.get(func_name, "")
 
-        if (module_name == "os" and func_name in SHELL_METHODS) or (
-            module_name == "subprocess"
-        ) or (func_name == "system" and not module_name):
+        resolved_module = self._call_module_root(module_name)
+
+        if (resolved_module == "os" and func_name in SHELL_METHODS) or (
+            resolved_module == "subprocess"
+        ) or (func_name == "system" and not resolved_module):
             if not self.allowed_shell:
                 label = f"{module_name}.{func_name}" if module_name else func_name
                 self._add_issue(node, "shell", f"Unauthorized shell execution: {label}")
 
-        if (module_name == "os" and func_name in FILE_WRITE_METHODS) or (
-            module_name == "shutil" and func_name in FILE_WRITE_METHODS
+        if (resolved_module == "os" and func_name in FILE_WRITE_METHODS) or (
+            resolved_module == "shutil" and func_name in FILE_WRITE_METHODS
         ):
             label = f"{module_name}.{func_name}" if module_name else func_name
             self._check_file_operation(node, label=label)
@@ -354,10 +363,10 @@ class PolicyVisitor(ast.NodeVisitor):
             label = f"{node.func.value.id}.{func_name}"
             self._check_file_operation(node, label=label)
 
-        if (module_name == "os" and func_name in ENV_METHODS) or (
+        if (resolved_module == "os" and func_name in ENV_METHODS) or (
             func_name in ENV_METHODS
-            and not module_name
-            and self.imported_names.get(func_name) == "os"
+            and not resolved_module
+            and self._call_module_root(self.imported_names.get(func_name, "")) == "os"
         ):
             if not self.allowed_env:
                 label = f"{module_name}.{func_name}" if module_name else func_name

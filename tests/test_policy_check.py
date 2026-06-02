@@ -237,6 +237,38 @@ def test_import_os_as_alias_environ_blocked(tmp_path: Path) -> None:
     assert any(i.category == "env" and "environ" in i.message for i in result.issues)
 
 
+def test_import_os_as_alias_call_methods_blocked(tmp_path: Path) -> None:
+    """Regression: ``import os as o`` must not bypass shell/env/file call checks."""
+    prompt = tmp_path / "records_only.prompt"
+    prompt.write_text("<capabilities>\n- MAY read records.\n</capabilities>\n", encoding="utf-8")
+    cases = {
+        "shell": (
+            "import os as o\n\n"
+            "def f() -> None:\n"
+            "    o.system('echo hi')\n",
+            "shell",
+        ),
+        "env": (
+            "import os as o\n\n"
+            "def f() -> None:\n"
+            "    o.getenv('SECRET_TOKEN')\n",
+            "env",
+        ),
+        "file": (
+            "import os as o\n\n"
+            "def f() -> None:\n"
+            "    o.remove('/tmp/x')\n",
+            "file",
+        ),
+    }
+    for label, (source, category) in cases.items():
+        target = tmp_path / f"os_alias_{label}.py"
+        target.write_text(source, encoding="utf-8")
+        result = run_policy_check(target, prompt)
+        assert not result.passed, label
+        assert any(i.category == category for i in result.issues), (label, result.issues)
+
+
 def test_explicit_filesystem_capability_allows_pathlib_write(tmp_path: Path) -> None:
     prompt = tmp_path / "file_ok.prompt"
     prompt.write_text(
