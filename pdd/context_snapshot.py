@@ -495,25 +495,64 @@ def start_snapshot_run(
     return ContextSnapshotRecorder(Path(prompt_path), root, command=command)
 
 
+def _load_snapshot_replay_payload(run_artifact: Path) -> tuple[Path, Dict[str, Any]]:
+    """Resolve a run artifact to schema v1 snapshot manifest fields for replay."""
+
+    artifact_path = run_artifact.resolve()
+    payload = _read_json(artifact_path)
+    linked = _find_snapshot_manifest(artifact_path, payload)
+    if linked and linked.is_file() and linked.resolve() != artifact_path:
+        linked_payload = _read_json(linked)
+        if linked_payload.get("schema_version") == 1:
+            return linked.resolve(), linked_payload
+
+    schema_version = payload.get("schema_version")
+    if schema_version == 1:
+        return artifact_path, payload
+
+    if schema_version == 2:
+        section = payload.get("context_snapshot")
+        if isinstance(section, Mapping) and section.get("enabled"):
+            manifest_path = section.get("manifest_path")
+            if isinstance(manifest_path, str) and manifest_path:
+                bases = [artifact_path.parent]
+                if artifact_path.parent.name == "runs":
+                    bases.append(artifact_path.parent.parent)
+                for base in bases:
+                    candidate = Path(manifest_path)
+                    resolved = (
+                        candidate.resolve()
+                        if candidate.is_absolute()
+                        else (base / candidate).resolve()
+                    )
+                    if resolved.is_file():
+                        inner = _read_json(resolved)
+                        if inner.get("schema_version") == 1:
+                            return resolved, inner
+            expanded = section.get("expanded_prompt")
+            if isinstance(expanded, Mapping):
+                wrapper: Dict[str, Any] = {
+                    "schema_version": 1,
+                    "snapshot_dir": section.get("snapshot_dir"),
+                    "run_id": section.get("run_id"),
+                    "expanded_prompt": expanded,
+                    "expanded_sha256": section.get("expanded_sha256"),
+                }
+                return artifact_path, wrapper
+
+    raise ValueError(
+        f"Unsupported snapshot schema_version: {schema_version!r}; "
+        "pass a schema v1 manifest under .pdd/evidence/runs/ or an evidence "
+        "manifest with context_snapshot.enabled."
+    )
+
+
 def replay_snapshot(run_artifact: str | Path) -> Dict[str, Any]:
     """Load a run artifact or snapshot manifest and verify expanded prompt hash."""
 
-    artifact_path = Path(run_artifact).resolve()
-    payload = _read_json(artifact_path)
-    snapshot_manifest = _find_snapshot_manifest(artifact_path, payload)
-    if snapshot_manifest and snapshot_manifest != artifact_path:
-        payload = _read_json(snapshot_manifest)
-        artifact_path = snapshot_manifest
-
-    schema_version = payload.get("schema_version")
-    if schema_version != 1:
-        raise ValueError(f"Unsupported snapshot schema_version: {schema_version!r}")
+    artifact_path, payload = _load_snapshot_replay_payload(Path(run_artifact))
 
     expanded = payload.get("expanded_prompt")
-    if not isinstance(expanded, Mapping):
-        context = payload.get("context_snapshot")
-        if isinstance(context, Mapping):
-            expanded = context.get("expanded_prompt")
     if not isinstance(expanded, Mapping):
         raise ValueError("Artifact does not contain replayable expanded prompt metadata.")
 

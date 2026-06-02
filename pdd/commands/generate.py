@@ -109,7 +109,11 @@ class GenerateCommand(click.Command):
     "--snapshot-context",
     is_flag=True,
     default=False,
-    help="Write replayable expanded prompt context artifacts.",
+    help=(
+        "Write replayable expanded prompt context artifacts (single prompt-file "
+        "generation only; not global/agentic sync). Use pdd replay on the "
+        "snapshot manifest under .pdd/evidence/runs/."
+    ),
 )
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)

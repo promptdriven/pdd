@@ -40,6 +40,15 @@ The run manifest remains `.pdd/evidence/runs/<run_id>.json`. Replayable
 expanded-prompt and dynamic-context artifacts live in the sibling directory
 `.pdd/evidence/runs/<run_id>/`.
 
+Snapshot manifests use **schema version 1**. Evidence manifests produced with
+`--evidence` use **schema version 2** and may embed a `context_snapshot` block
+pointing at the v1 snapshot manifest. Pass either file to `pdd replay`; replay
+resolves linked snapshot metadata and verifies the expanded prompt hash.
+
+Do not combine `pdd preprocess --recursive` with `--snapshot` when the prompt
+uses `<shell>`, `<web>`, or `query=` includes; recursive mode defers those tags
+so nothing is captured.
+
 Enforce policy on latest manifests before merge:
 
 ```bash

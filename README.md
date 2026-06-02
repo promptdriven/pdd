@@ -2014,7 +2014,7 @@ Options:
 pdd preprocess prompts/refund_python.prompt --snapshot
 ```
 
-Use snapshots when dynamic tags are needed for durable behavior. Static prompts with only deterministic includes report that no nondeterministic context was captured.
+Use snapshots when dynamic tags are needed for durable behavior. Static prompts with only deterministic includes report that no nondeterministic context was captured. Do not pass `--recursive` with `--snapshot` when the prompt uses `<shell>`, `<web>`, or `query=` includes (recursive mode defers those tags). Enforce captured snapshots in CI with `pdd checkup snapshot prompts/refund_python.prompt` (see [docs/ci.md](docs/ci.md)).
 
 #### XML-like Tags
 
@@ -2856,7 +2856,7 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 `checkup` can also run against an existing pull request. With `--pr <PR_URL>` alone it reviews the PR diff on its own merits (correctness / quality), using full project context (architecture, `.pddrc`); the issue-alignment gate is skipped. Add `--issue <ISSUE_URL>` to also verify the PR resolves that issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop (which still requires `--issue`).
 
-**Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` command.
+**Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, **`pdd checkup snapshot`** for nondeterministic-prompt snapshot policy (prompts with `<shell>`, `<web>`, or `query=` includes must have a replayable artifact under `.pdd/evidence/`), and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` or `pdd policy snapshot` command—use `pdd checkup snapshot` only.
 
 `pdd checkup simplify` is a local subcommand for candidate cleanup rather than
 a PR review gate. By default it calls Claude Code's bundled `/simplify` skill; use

@@ -189,7 +189,10 @@ def _write_sync_evidence_manifest(
     "--snapshot-context",
     is_flag=True,
     default=False,
-    help="Write replayable expanded prompt context artifacts for generation steps.",
+    help=(
+        "Write replayable expanded prompt context artifacts (single-module sync "
+        "only). Replay via pdd replay on .pdd/evidence/runs/<run_id>.json."
+    ),
 )
 @click.option(
     "--model",

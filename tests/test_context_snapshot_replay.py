@@ -1,11 +1,14 @@
 import json
 from pathlib import Path
 
+import click
+import pytest
 from click.testing import CliRunner
 
 from pdd.commands.replay import replay
 from pdd.context_snapshot import replay_snapshot, start_snapshot_run
 from pdd.preprocess import preprocess
+from pdd.preprocess_main import preprocess_main
 
 
 def test_preprocess_snapshot_records_dynamic_outputs(tmp_path, monkeypatch):
@@ -189,6 +192,26 @@ def test_query_include_snapshot_recorded(tmp_path, monkeypatch):
     assert "extracted helper output" in expanded
     assert any(artifact["type"] == "query_include" for artifact in manifest["artifacts"])
     assert "query_include" in manifest["declared_dynamic_tags"]
+
+
+def test_preprocess_rejects_snapshot_with_recursive_dynamic_tags(tmp_path: Path) -> None:
+    prompt = tmp_path / "dynamic_python.prompt"
+    prompt.write_text("<shell>printf x</shell>\n", encoding="utf-8")
+    (tmp_path / "pdd").mkdir()
+    ctx = click.Context(click.Command("preprocess"))
+    ctx.obj = {"quiet": True, "force": False}
+
+    with pytest.raises(click.UsageError, match="cannot be combined with --recursive"):
+        preprocess_main(
+            ctx,
+            str(prompt),
+            output=str(tmp_path / "pdd" / "dynamic_python_preprocessed.prompt"),
+            xml=False,
+            recursive=True,
+            double=True,
+            exclude=[],
+            snapshot=True,
+        )
 
 
 def test_replay_from_evidence_manifest_with_context_snapshot(tmp_path):

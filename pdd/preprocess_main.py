@@ -8,7 +8,7 @@ from rich import print as rprint
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .preprocess import preprocess
-from .context_snapshot import start_snapshot_run
+from .context_snapshot import detect_dynamic_tags, start_snapshot_run
 from .xml_tagger import xml_tagger
 from .architecture_sync import (
     get_architecture_entry_for_prompt,
@@ -71,6 +71,13 @@ def preprocess_main(
                 if not ctx.obj.get("quiet", False):
                     rprint(f"[yellow]No architecture entry found for '{prompt_filename}', skipping PDD tags.[/yellow]")
 
+        if snapshot and recursive and detect_dynamic_tags(prompt):
+            raise click.UsageError(
+                "--snapshot cannot be combined with --recursive when the prompt "
+                "uses <shell>, <web>, or <include ... query=...>; run without "
+                "--recursive so dynamic context is captured."
+            )
+
         if xml:
             if snapshot:
                 raise click.UsageError("--snapshot is not supported with --xml.")
@@ -107,8 +114,9 @@ def preprocess_main(
             total_cost, model_name = 0.0, "N/A"
 
         # Save the preprocessed prompt
-        with open(output_file_paths["output"], "w") as f:
-            f.write(processed_prompt)
+        output_path = Path(output_file_paths["output"])
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(processed_prompt, encoding="utf-8")
 
         snapshot_manifest = None
         if snapshot and not xml:
@@ -135,6 +143,8 @@ def preprocess_main(
 
         return processed_prompt, total_cost, model_name
 
+    except click.UsageError:
+        raise
     except Exception as e:
         if not ctx.obj.get("quiet", False):
             rprint(f"[bold red]Error during preprocessing:[/bold red] {e}")

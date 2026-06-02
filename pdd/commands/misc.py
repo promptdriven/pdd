@@ -25,7 +25,10 @@ from ..core.errors import handle_error
     "--recursive",
     is_flag=True,
     default=False,
-    help="Recursively preprocess includes.",
+    help=(
+        "Recursively preprocess includes. Incompatible with --snapshot when the "
+        "prompt uses <shell>, <web>, or query= includes (those tags are deferred)."
+    ),
 )
 @click.option(
     "--double",

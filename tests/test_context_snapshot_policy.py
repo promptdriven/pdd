@@ -82,6 +82,28 @@ def test_policy_cli_exit_code(tmp_path: Path, monkeypatch) -> None:
     assert ok.exit_code == 0, ok.output
 
 
+def test_policy_ignores_snapshot_for_other_prompt(tmp_path: Path, monkeypatch) -> None:
+    """A replayable snapshot for prompt A must not satisfy policy for prompt B."""
+    monkeypatch.chdir(tmp_path)
+    prompt_a = tmp_path / "prompts" / "a.prompt"
+    prompt_b = tmp_path / "prompts" / "b.prompt"
+    prompt_a.parent.mkdir(parents=True)
+    prompt_a.write_text("<shell>printf a</shell>\n", encoding="utf-8")
+    prompt_b.write_text("<shell>printf b</shell>\n", encoding="utf-8")
+
+    recorder = start_snapshot_run(prompt_a, evidence_root=tmp_path / ".pdd" / "evidence")
+    expanded = preprocess(
+        prompt_a.read_text(encoding="utf-8"),
+        recursive=False,
+        snapshot_recorder=recorder,
+    )
+    recorder.finalize(expanded_prompt=expanded, prompt_text=prompt_a.read_text(encoding="utf-8"))
+
+    passed, message = check_snapshot_policy(prompt_b, tmp_path)
+    assert passed is False
+    assert "no replayable snapshot" in message
+
+
 def test_checkup_snapshot_dispatched_via_checkup_group(tmp_path: Path) -> None:
     """``pdd checkup snapshot`` routes through the checkup command group."""
     prompt = tmp_path / "static.prompt"
