@@ -2529,15 +2529,28 @@
         "models": [
           {
             "name": "DiagnosisResult",
-            "fields": ["function_names: list[str]"]
+            "fields": [
+              "function_names: list[str]"
+            ]
           },
           {
             "name": "FunctionSlice",
-            "fields": ["name: str", "qualname: str", "start_line: int", "end_line: int", "source: str", "indent: int"]
+            "fields": [
+              "name: str",
+              "qualname: str",
+              "start_line: int",
+              "end_line: int",
+              "source: str",
+              "indent: int"
+            ]
           },
           {
             "name": "FocusedInputs",
-            "fields": ["focused_code: str", "focused_tests: str", "slices: list[FunctionSlice]"]
+            "fields": [
+              "focused_code: str",
+              "focused_tests: str",
+              "slices: list[FunctionSlice]"
+            ]
           }
         ]
       }
@@ -4128,7 +4141,7 @@
     }
   },
   {
-    "reason": "Configuration data for llm model.",
+    "reason": "Defines the llm_model.csv catalog schema: provider, pricing, ELO, structured_output, and interactive_only columns.",
     "description": "Defines llm model settings and data. Used by runtime modules.",
     "dependencies": [],
     "priority": 115,
@@ -9720,6 +9733,130 @@
             "name": "run_checkup_simplify",
             "signature": "(*, path: Optional[Path], apply: bool, since: Optional[str], staged: bool, max_files: Optional[int], attempts: Optional[int], engine: Optional[str], evidence: bool, verify: bool, no_format: bool, quiet: bool, verbose: bool) -> SimplifyRunResult",
             "returns": "SimplifyRunResult"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Loads YAML and built-in policy for evidence gate require/allow/limit rules.",
+    "description": "Resolves `pdd checkup gate --policy` overrides merged with default gate policy.",
+    "dependencies": [],
+    "priority": 242,
+    "filename": "gate_policy_python.prompt",
+    "filepath": "pdd/gate_policy.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "default_policy",
+            "signature": "() -> GatePolicy",
+            "returns": "GatePolicy"
+          },
+          {
+            "name": "load_policy",
+            "signature": "(path: Optional[Path]) -> GatePolicy",
+            "returns": "GatePolicy"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Reads dev-unit evidence manifests and exposes freshness helpers for policy enforcement.",
+    "description": "Loads `.pdd/evidence/devunits/*.latest.json` and compares on-disk prompt/output hashes to manifest records.",
+    "dependencies": [],
+    "priority": 242,
+    "filename": "evidence_store_python.prompt",
+    "filepath": "pdd/evidence_store.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "evidence",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "list_latest_manifests",
+            "signature": "(project_root: Path) -> list[Path]",
+            "returns": "list[Path]"
+          },
+          {
+            "name": "output_freshness",
+            "signature": "(manifest: ManifestView, project_root: Path) -> list[OutputFreshness]",
+            "returns": "list[OutputFreshness]"
+          },
+          {
+            "name": "prompt_freshness",
+            "signature": "(manifest: ManifestView) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Checkup-scoped CLI for evidence policy gate (no top-level pdd gate).",
+    "description": "Dispatches `pdd checkup gate` to `run_gate_policy` with JSON and YAML policy options.",
+    "dependencies": [
+      "gate_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "commands/gate_python.prompt",
+    "filepath": "pdd/commands/gate.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "commands",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": []
+      }
+    }
+  },
+  {
+    "reason": "Evaluates evidence manifest policy for CI merge gates on dev units.",
+    "description": "Runs deterministic checks on validation status, stale outputs, contract coverage, and cost limits.",
+    "dependencies": [
+      "evidence_store_python.prompt",
+      "gate_policy_python.prompt",
+      "contract_check_python.prompt",
+      "coverage_contracts_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "gate_python.prompt",
+    "filepath": "pdd/gate_main.py",
+    "tags": [
+      "checkup",
+      "gate",
+      "evidence",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_gate_policy",
+            "signature": "(project_root: Path, *, policy_path: Optional[Path] = None, target: Optional[str] = None, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> GateResult",
+            "returns": "GateResult"
+          },
+          {
+            "name": "evaluate_manifest",
+            "signature": "(manifest: ManifestView, project_root: Path, policy: GatePolicy, *, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> list[GateFailure]",
+            "returns": "list[GateFailure]"
           }
         ]
       }

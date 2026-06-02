@@ -1,0 +1,15 @@
+<pdd-reason>Refund handler with contract obligations</pdd-reason>
+
+<contract_rules>
+R1 - Refund cap
+The system MUST cap refunds to the remaining balance.
+R2 - CRITICAL audit trail
+The system MUST log every refund attempt.
+</contract_rules>
+
+<capabilities>
+- reads_payments
+- writes_refunds
+</capabilities>
+
+% Implementation instructions...
