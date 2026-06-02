@@ -392,3 +392,17 @@ def test_targeted_tests_failing_changed_test_blocks(tmp_path):
     )
 
     assert any("targeted-tests failed" in f for f in failures), failures
+
+
+def test_targeted_tests_note_for_changed_js_ts_test(tmp_path):
+    """Issue #1293 (FM1 follow-on): a changed JS/TS test is not executed (the
+    gate runs pytest), but it must be SURFACED as a note rather than silently
+    skipped, so reviewers/checkup know it wasn't run."""
+    (tmp_path / "tests").mkdir()
+
+    failures, notes = pre_checkup_gate._run_targeted_tests(
+        tmp_path, ["tests/foo.test.ts"], timeout=10.0
+    )
+
+    assert failures == []
+    assert any("JS/TS test" in n and "foo.test.ts" in n for n in notes), notes

@@ -844,6 +844,23 @@ def _quarantined_tests() -> Set[str]:
     return {_norm(piece) for piece in re.split(r"[,\s]+", raw) if piece.strip()}
 
 
+_JS_TS_TEST_EXTS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+_JS_TS_TEST_NAME_RE = re.compile(r"\.(test|spec)\.[mc]?[jt]sx?$", re.IGNORECASE)
+
+
+def _changed_js_ts_tests(code_files: Sequence[str]) -> List[str]:
+    """Changed files that look like JS/TS tests (``*.test.ts`` / ``*.spec.js`` /
+    a ``__tests__/`` member)."""
+    out: Set[str] = set()
+    for rel in code_files:
+        path = Path(rel)
+        if path.suffix.lower() not in _JS_TS_TEST_EXTS:
+            continue
+        if _JS_TS_TEST_NAME_RE.search(path.name) or "__tests__" in path.parts:
+            out.add(_norm(rel))
+    return sorted(out)
+
+
 def _run_targeted_tests(
     worktree: Path,
     code_files: Sequence[str],
@@ -852,6 +869,18 @@ def _run_targeted_tests(
 ) -> Tuple[List[str], List[str]]:
     failures: List[str] = []
     notes: List[str] = []
+    # The targeted-test phase runs pytest, so a changed JS/TS test is not
+    # executed. Surface that explicitly rather than letting it pass silently
+    # (#1293): JS/TS test execution would need a JS runner dispatched against
+    # PR-controlled test/config, which the fork-PR-RCE constraint forbids;
+    # compile/type errors in the changed test are still caught by the tsc gate.
+    js_ts_tests = _changed_js_ts_tests(code_files)
+    if js_ts_tests:
+        notes.append(
+            "targeted-tests note: changed JS/TS test file(s) not run by the gate "
+            f"(pytest only; JS test execution is out of scope for the RCE "
+            f"constraint): {', '.join(js_ts_tests)}"
+        )
     candidates = _targeted_test_candidates(worktree, code_files)
     if not candidates:
         notes.append("targeted-tests skipped: no matching test files found")
