@@ -101,7 +101,7 @@ def preprocess_main(
                 prompt,
                 recursive,
                 double,
-                exclude=exclude,
+                exclude_keys=exclude,
                 _seen=initial_seen,
                 snapshot_recorder=recorder,
             )

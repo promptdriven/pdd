@@ -235,7 +235,10 @@ def preprocess(
     _failed: Optional[List[str]] = None,
     _user_intent_paths: Optional[set] = None,
     snapshot_recorder: Optional[Any] = None,
+    exclude: Optional[List[str]] = None,
 ) -> str:
+    if exclude_keys is None:
+        exclude_keys = exclude
     try:
         # Some tests patch template loading to return mock objects with .format().
         # In that case preprocessing is not applicable; return as string.
