@@ -1304,12 +1304,8 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         test_dir = ctx_defaults.get("test_output_path", defaults["test_dir"])
         example_dir = ctx_defaults.get("example_output_path", defaults["example_dir"])
 
-        # Derive ext from language. Keep parsed .pddrc paths even when the
-        # extension table is unavailable in minimal test/runtime environments.
-        try:
-            ext = get_extension(language) if language else defaults["ext"]
-        except Exception:  # pylint: disable=broad-exception-caught
-            ext = defaults["ext"]
+        # Derive ext from language
+        ext = get_extension(language) if language else defaults["ext"]
         if ext.startswith("."):
             ext = ext[1:]  # Remove leading dot if present
 
@@ -2142,42 +2138,6 @@ def run_agentic_change_orchestrator(
     previous_fixes = state.get("previous_fixes", "")
     
     if last_completed_step < 13:
-        if worktree_path and worktree_path.is_dir() and not changed_files:
-            boundary_changes = _detect_worktree_changes(
-                worktree_path,
-                context.get("direct_edit_candidates", []),
-            )
-            if boundary_changes:
-                changed_files = sorted(set([*changed_files, *boundary_changes]))
-                context["files_to_stage"] = ", ".join(changed_files)
-
-        if current_work_dir.is_dir():
-            from .pr_metadata_finalizer import (
-                finalize_pr_metadata,
-                stage_paths_scoped,
-            )
-
-            finalization = finalize_pr_metadata(
-                current_work_dir,
-                changed_paths=changed_files or None,
-                stage=True,
-            )
-            if not finalization.ok:
-                return False, finalization.message, total_cost, model_used, changed_files
-
-            if finalization.metadata_paths:
-                changed_files = sorted(set([*changed_files, *finalization.metadata_paths]))
-                context["files_to_stage"] = ", ".join(changed_files)
-
-            stage_ok, stage_message = stage_paths_scoped(current_work_dir, changed_files)
-            if not stage_ok:
-                return False, stage_message, total_cost, model_used, changed_files
-        elif not quiet:
-            console.print(
-                f"[yellow]Warning: worktree {current_work_dir} does not exist; "
-                f"skipping PR metadata finalization[/yellow]"
-            )
-
         while review_iteration < MAX_REVIEW_ITERATIONS:
             review_iteration += 1
             state["review_iteration"] = review_iteration

@@ -1525,9 +1525,7 @@
   {
     "reason": "Orchestrates the 12-step agentic bug workflow with E2E gate, persistent state, and orchestrator-owned GitHub step comments.",
     "description": "Coordinates duplicate checking, documentation review, triage, API research, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation. Posts per-step progress comments to the issue and persists workflow state for crash-safe resumes.",
-    "dependencies": [
-      "pr_metadata_finalizer_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 42,
     "filename": "agentic_bug_orchestrator_python.prompt",
     "filepath": "pdd/agentic_bug_orchestrator.py",
@@ -5898,8 +5896,7 @@
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt",
-      "git_porcelain_python.prompt",
-      "pr_metadata_finalizer_python.prompt"
+      "git_porcelain_python.prompt"
     ],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
@@ -6283,8 +6280,7 @@
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
       "agentic_checkup_python.prompt",
-      "ci_validation_python.prompt",
-      "pr_metadata_finalizer_python.prompt"
+      "ci_validation_python.prompt"
     ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
@@ -7681,8 +7677,7 @@
       "agentic_checkup_orchestrator_python.prompt",
       "agentic_e2e_fix_orchestrator_python.prompt",
       "architecture_registry_python.prompt",
-      "git_porcelain_python.prompt",
-      "pr_metadata_finalizer_python.prompt"
+      "git_porcelain_python.prompt"
     ],
     "priority": 217.5,
     "filename": "checkup_review_loop_python.prompt",
@@ -9354,52 +9349,6 @@
     "position": {
       "x": 24600,
       "y": 800
-    }
-  },
-  {
-    "reason": "Finalizes deterministic PDD fingerprints at CLI-created PR commit boundaries.",
-    "description": "Detects touched PDD-owned prompt/code/example/test files before CLI-created PR commits or PR-creation handoffs, runs deterministic metadata sync, refreshes full operation-log fingerprints, verifies current hashes, and force-stages only expected .pdd/meta fingerprint files.",
-    "dependencies": [
-      "metadata_sync_python.prompt",
-      "operation_log_python.prompt",
-      "sync_determine_operation_python.prompt",
-      "architecture_registry_python.prompt",
-      "git_porcelain_python.prompt"
-    ],
-    "priority": 5,
-    "filename": "pr_metadata_finalizer_python.prompt",
-    "filepath": "pdd/pr_metadata_finalizer.py",
-    "tags": [
-      "sync",
-      "metadata",
-      "git",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "finalize_pr_metadata",
-            "signature": "(repo_root: Path, changed_paths: Optional[Iterable[str]] = None, *, stage: bool = True) -> PRMetadataFinalizationResult",
-            "returns": "PRMetadataFinalizationResult"
-          },
-          {
-            "name": "stage_paths_scoped",
-            "signature": "(repo_root: Path, paths: Iterable[str], *, force: bool = False, exclude_pdd_meta: bool = True) -> Tuple[bool, str]",
-            "returns": "Tuple[bool, str]"
-          },
-          {
-            "name": "is_pdd_meta_artifact",
-            "signature": "(path: str) -> bool",
-            "returns": "bool"
-          }
-        ]
-      }
-    },
-    "position": {
-      "x": 25000,
-      "y": 1200
     }
   },
   {
