@@ -1039,9 +1039,10 @@ def _determine_language(
 ) -> str:
     """
     Apply the language discovery strategy.
-    Priority: Explicit option > default_language > output path > input code/test
-    files > Prompt filename suffix.
+    Priority: Explicit option > output path > input code/test files > prompt
+    filename suffix > detect special-case > error.
     For 'detect' command, default to 'prompt' as it typically doesn't need a language.
+    Note: ``default_language`` from .pddrc is not applied here (use ``--language``).
     """
     # Diagnostic check for None (should be handled by caller, but for safety)
     command_options = command_options or {}
@@ -1051,10 +1052,6 @@ def _determine_language(
         lang_lower = explicit_lang.lower()
         # Optional: Validate known language? Let's assume valid for now.
         return lang_lower
-
-    default_lang = command_options.get("default_language")
-    if default_lang:
-        return str(default_lang).lower()
 
     output_hint = command_options.get("output")
     if output_hint:

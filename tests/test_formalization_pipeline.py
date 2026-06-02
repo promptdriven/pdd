@@ -186,6 +186,11 @@ def test_m2_replay_fixtures_smoke(tmp_path: Path) -> None:
     assert proc.returncode == 0, proc.stderr
     manifest = json.loads(proc.stdout)
     assert manifest["replay_fixtures"] is True
+    a0_econ = manifest["tasks"][0]["arms"]["A0"]["economics"]
+    a1_econ = manifest["tasks"][0]["arms"]["A1"]["economics"]
+    assert a0_econ.get("test_source") == "pdd_fixtures"
+    assert a0_econ.get("code_source") == "pdd_fixtures"
+    assert a1_econ.get("test_source") == "pdd_fixtures"
     notes = manifest["tasks"][0]["arms"]["A0"]["notes"]
     assert any("pdd_generated fixtures" in n for n in notes)
 

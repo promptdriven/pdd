@@ -104,6 +104,10 @@ def run_generation_loop(
             )
             rounds.append(replay)
             economics["generation_rounds"] = 0
+            if replay.get("code_source"):
+                economics["code_source"] = replay["code_source"]
+            if replay.get("test_source"):
+                economics["test_source"] = replay["test_source"]
             loop_notes.append(
                 f"harness_only: replayed pdd_generated fixtures from {pdd_fixtures_root}"
             )
