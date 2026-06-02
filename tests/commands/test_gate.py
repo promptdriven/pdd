@@ -39,7 +39,8 @@ def test_top_level_pdd_gate_is_not_registered() -> None:
 def test_checkup_gate_help() -> None:
     result = CliRunner().invoke(checkup, ["gate", "--help"], obj={"quiet": True})
     assert result.exit_code == 0
-    assert "Validate waiver policy" in result.output
+    assert "waiver" in result.output.lower()
+    assert "evidence" in result.output.lower()
 
 
 def test_checkup_gate_allow_waivers_passes_for_valid_fixture() -> None:

@@ -370,14 +370,18 @@ def validation_from_sync(
         for operation in lang_result.get("operations_completed") or []:
             operations.add(str(operation))
 
-    overall_success = sync_result.get("overall_success")
-    if overall_success is None:
-        successes = [
-            bool(lang_result.get("success"))
-            for lang_result in by_language.values()
-            if isinstance(lang_result, dict)
-        ]
-        overall_success = bool(successes) and all(successes)
+    lang_successes = [
+        bool(lang_result.get("success"))
+        for lang_result in by_language.values()
+        if isinstance(lang_result, dict) and "success" in lang_result
+    ]
+    if lang_successes:
+        # Prefer per-language outcomes over a stale top-level overall_success flag.
+        overall_success = all(lang_successes)
+    elif sync_result.get("overall_success") is not None:
+        overall_success = bool(sync_result.get("overall_success"))
+    else:
+        overall_success = False
 
     test_operations = {"test", "crash", "fix", "test_extend"}
     if not skip_tests and operations & test_operations:
@@ -392,6 +396,39 @@ def validation_from_sync(
     return validation
 
 
+def collect_sync_evidence_paths(
+    basename: str,
+    sync_result: Mapping[str, Any],
+    *,
+    project_root: Path | str | None = None,
+) -> tuple[Optional[Path], list[Path]]:
+    """Resolve prompt and generated output paths for a completed ``pdd sync`` run."""
+    from .sync_determine_operation import get_pdd_file_paths  # pylint: disable=import-outside-toplevel
+
+    root = Path(project_root or Path.cwd()).resolve()
+    by_language = sync_result.get("results_by_language")
+    if not isinstance(by_language, dict):
+        by_language = {"python": sync_result}
+
+    languages = [lang for lang in by_language if lang != "_"]
+    language = languages[0] if len(languages) == 1 else "python"
+
+    try:
+        pdd_files = get_pdd_file_paths(basename, language, str(root / "prompts"))
+    except Exception:  # pylint: disable=broad-except
+        return None, []
+
+    prompt = pdd_files.get("prompt")
+    outputs: list[Path] = []
+    for key in ("code", "test", "example"):
+        candidate = pdd_files.get(key)
+        if candidate is not None and candidate.is_file():
+            outputs.append(candidate.resolve())
+    prompt_path = prompt.resolve() if prompt is not None and prompt.is_file() else None
+    return prompt_path, outputs
+
+
+
 def grounding_kwargs_from_ctx(
     ctx_obj: Optional[Mapping[str, Any]] = None,
 ) -> dict[str, Any]:
@@ -403,6 +440,7 @@ def grounding_kwargs_from_ctx(
         examples_used = grounding.get("selected_examples")
     reviewed = grounding_reviewed_for_manifest(obj, examples_used)
     return {"grounding": grounding, "reviewed": reviewed}
+
 
 
 def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals

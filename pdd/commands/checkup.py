@@ -18,6 +18,7 @@ from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .gate import gate_cmd
 from .drift import drift_cmd
+from .gate import gate_cmd
 from .prompt import prompt_lint
 
 
@@ -359,8 +360,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
-    Contract checks:
-      pdd checkup contract check TARGET [OPTIONS]
     Simplify (Claude Code /simplify, requires --apply):
       pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:
@@ -369,8 +368,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
     Contract coverage:
       pdd checkup coverage [OPTIONS] TARGET
-    Waiver policy gate:
-      pdd checkup gate [OPTIONS] [TARGET]
+    Evidence and waiver gate:
+      pdd checkup gate [TARGET] [OPTIONS]  →  evidence manifests and waiver policy.
     Regeneration drift:
       pdd checkup drift <DEVUNIT> [OPTIONS]
     """
@@ -381,9 +380,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "contract",
         "contracts",
         "coverage",
+        "drift",
         "gate",
         "simplify",
-        "drift",
     }:
         click.echo(ctx.command.get_help(ctx))
         return None
@@ -488,13 +487,14 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "gate":
-        if show_help:
+        gate_args = list(ctx.args)
+        if show_help and not gate_args:
             click.echo(
                 gate_cmd.get_help(click.Context(gate_cmd, info_name="pdd checkup gate"))
             )
             return None
         exit_code = gate_cmd.main(
-            args=list(ctx.args),
+            args=gate_args,
             prog_name="pdd checkup gate",
             standalone_mode=False,
             obj=ctx.obj,
