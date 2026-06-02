@@ -366,12 +366,21 @@ def test_default_codex_auth_uses_chatgpt_even_when_anthropic_key_present(monkeyp
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-used")
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    # Pin an OpenAI/Codex default at CALL time so the subscription restriction
+    # fires deterministically. A bare delenv is env-fragile: a CI/cloud box that
+    # exported PDD_MODEL_DEFAULT (a non-OpenAI model) at import freezes it into
+    # DEFAULT_BASE_MODEL, which delenv can't undo — then no restriction fires and
+    # claude (ANTHROPIC_API_KEY) wins by ELO (issue #1318 cloud-test).
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
 
     captured = {}
 
     def fake_completion(**kwargs):
-        captured["model"] = kwargs.get("model")
+        # Capture the FIRST model tried (chatgpt/gpt-5.5 when the subscription
+        # default is preferred). Capturing the last is env-fragile: where
+        # Vertex/Gemini creds exist the gemini fallback row is also a candidate
+        # and is tried after chatgpt (issue #1318 cloud-test).
+        captured.setdefault("model", kwargs.get("model"))
         raise RuntimeError("STOP_AFTER_CAPTURE")
 
     with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
@@ -383,7 +392,7 @@ def test_default_codex_auth_uses_chatgpt_even_when_anthropic_key_present(monkeyp
         except Exception:
             pass
 
-    assert captured.get("model") == "chatgpt/gpt-5.5"
+    assert captured.get("model") == "chatgpt/gpt-5.5"  # chatgpt preferred (tried first)
 
 
 def test_chatgpt_default_disables_cache_per_request_not_globally(monkeypatch):
@@ -392,15 +401,21 @@ def test_chatgpt_default_disables_cache_per_request_not_globally(monkeypatch):
     litellm.cache (which races with concurrent llm_invoke calls)."""
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    # Pin an OpenAI/Codex default at call time (env-robust; see the note in
+    # test_default_codex_auth_uses_chatgpt_even_when_anthropic_key_present).
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
 
     sentinel = object()
     monkeypatch.setattr(li.litellm, "cache", sentinel, raising=False)
     captured = {}
 
     def fake_completion(**kwargs):
-        captured["model"] = kwargs.get("model")
-        captured["cache_kwarg"] = kwargs.get("cache")
+        # Capture the FIRST (chatgpt/) call's model + cache kwarg; the global is
+        # checked on every call. Capturing the last model is env-fragile — a
+        # Vertex gemini fallback row is also tried in cloud (issue #1318 cloud-test).
+        if "model" not in captured:
+            captured["model"] = kwargs.get("model")
+            captured["cache_kwarg"] = kwargs.get("cache")
         captured["global_cache_during_call"] = li.litellm.cache
         raise RuntimeError("STOP_AFTER_CAPTURE")
 

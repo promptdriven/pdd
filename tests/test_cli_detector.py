@@ -145,9 +145,14 @@ def _run_bootstrap_capture(
     cli_paths = cli_paths or {}
     env_keys = env_keys or {}
 
-    # Clean environment
+    # Clean environment. Vertex env vars are read directly by
+    # _has_google_vertex_auth (NOT via the mocked _has_provider_oauth), so clear
+    # them too — otherwise a CI/cloud box with Vertex creds reports gemini/agy as
+    # credentialed and these "no credential" tests fail (issue #1318 cloud-test).
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                "GEMINI_API_KEY", "SHELL"):
+                "GEMINI_API_KEY", "SHELL",
+                "GOOGLE_GENAI_USE_VERTEXAI", "VERTEXAI_PROJECT", "VERTEX_PROJECT",
+                "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"):
         monkeypatch.delenv(var, raising=False)
     for k, v in env_keys.items():
         monkeypatch.setenv(k, v)
