@@ -293,6 +293,38 @@ def _prune_worktrees(cwd: Path) -> None:
         pass
 
 
+def _worktree_holding_branch(cwd: Path, branch: str) -> Optional[str]:
+    """Return the path of the live worktree that has ``branch`` checked out.
+
+    Parses ``git worktree list --porcelain``. Returns ``None`` if no live
+    worktree currently has the branch checked out (e.g. it is just a plain
+    leftover ref, or it was only registered to a directory that has since been
+    pruned). Used to turn git's cryptic "refusing to fetch into branch ...
+    checked out at <path>" failure into an actionable message that names the
+    worktree the operator must remove. Best-effort: returns ``None`` on any
+    git error.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+    target = f"refs/heads/{branch}"
+    current_path: Optional[str] = None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_path = line[len("worktree "):].strip()
+        elif line.startswith("branch ") and line[len("branch "):].strip() == target:
+            return current_path
+    return None
+
+
 def _pr_worktree_branch_name(git_root: Path, pr_number: int) -> str:
     """Return a PR worktree branch name scoped to this checkout root."""
     root_scope = hashlib.sha1(str(git_root.resolve()).encode("utf-8")).hexdigest()[:8]
@@ -1015,11 +1047,19 @@ def _setup_pr_worktree(
 
     # 2. Fetch the PR's head into a local branch.
     #    Always refresh (force) so a re-run picks up new pushes to the PR.
-    #    Match the issue-mode stale-branch handling above: a crashed or
-    #    manually cleaned run can leave the checkup/pr-* branch registered to a
-    #    stale worktree, so prune before deleting and preserve has_branch when
-    #    deletion fails. Otherwise the later worktree add uses the non-forced
-    #    path and hard-fails with "already checked out at ...".
+    #    A crashed or manually cleaned run can leave the checkup/pr-* branch
+    #    registered to a worktree directory that no longer exists, so prune
+    #    first: that frees the branch so it can be deleted and re-fetched.
+    #    If the branch survives the delete even after pruning, it is genuinely
+    #    checked out in a LIVE worktree (a concurrent or abandoned checkup on
+    #    this same PR in this clone). We must NOT proceed to fetch in that case:
+    #    git refuses to update a checked-out branch
+    #    ("refusing to fetch into branch ... checked out at ..."), so the user
+    #    would otherwise see a cryptic "Failed to fetch PR" error. Surface a
+    #    clear, actionable conflict instead. (Unlike issue mode, reusing the
+    #    branch via a forced worktree add is not viable here: we could not
+    #    refresh it to the PR head, so verification would run against stale
+    #    code — exactly what PR mode exists to avoid.)
     _prune_worktrees(git_root)
     has_branch = _branch_exists(git_root, branch_name)
     deleted_branch = False
@@ -1028,10 +1068,19 @@ def _setup_pr_worktree(
         if deleted:
             has_branch = False
             deleted_branch = True
-        elif not quiet:
-            console.print(
-                f"[yellow]Could not delete {branch_name} ({del_err.strip()}); "
-                f"reusing it via a forced PR worktree add.[/yellow]"
+        else:
+            holder = _worktree_holding_branch(git_root, branch_name)
+            location = f" (checked out at {holder})" if holder else ""
+            remove_hint = (
+                f"git worktree remove {holder}"
+                if holder
+                else f"git worktree remove <path> (or git branch -D {branch_name})"
+            )
+            return None, (
+                f"Cannot set up the PR #{pr_number} checkup worktree: branch "
+                f"{branch_name} is still checked out in another live worktree"
+                f"{location}. Remove it and retry: {remove_hint}. "
+                f"(git: {del_err.strip()})"
             )
 
     # Resolve which remote actually has this PR. Prefer a configured remote
