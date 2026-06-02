@@ -105,6 +105,16 @@ class GenerateCommand(click.Command):
     default=False,
     help="Write a machine-readable evidence manifest for this run.",
 )
+@click.option(
+    "--snapshot-context",
+    is_flag=True,
+    default=False,
+    help=(
+        "Write replayable expanded prompt context artifacts (single prompt-file "
+        "generation only; not global/agentic sync). Use pdd replay on the "
+        "snapshot manifest under .pdd/evidence/runs/."
+    ),
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -126,6 +136,7 @@ def generate(
     no_github_state: bool,
     project_root: Optional[str],
     evidence: bool,
+    snapshot_context: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -186,6 +197,8 @@ def generate(
         )
         if experimental_prd and not incremental:
             raise click.UsageError("--experimental-prd requires --incremental.")
+        if snapshot_context and (is_github_issue or experimental_prd):
+            raise click.UsageError("--snapshot-context is only supported for prompt-file generation.")
         if experimental_prd and has_code_generation_options:
             raise click.UsageError(
                 "--experimental-prd cannot be combined with code-generation "
@@ -338,7 +351,8 @@ def generate(
             force_incremental_flag=incremental,
             env_vars=env_vars if env_vars else None,
             unit_test_file=unit_test,
-            exclude_tests=exclude_tests
+            exclude_tests=exclude_tests,
+            snapshot_context=snapshot_context,
         )
 
         if evidence:
@@ -361,6 +375,7 @@ def generate(
                 cost_usd=cost,
                 temperature=ctx_obj.get("temperature", 0.0),
                 **grounding_kwargs_from_ctx(ctx_obj),
+                context_snapshot=ctx_obj.get("context_snapshot"),
             )
         return generated_code, cost, model
 
