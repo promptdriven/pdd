@@ -358,3 +358,37 @@ def test_build_smoke_passes_full_changed_set_to_discover_gates(monkeypatch, tmp_
     # The config files must reach discover_gates so its RCE-skip guards can fire.
     assert "package.json" in seen["changed_files"], seen
     assert "pyproject.toml" in seen["changed_files"], seen
+
+
+def test_targeted_tests_select_directly_changed_test_file(tmp_path):
+    """Issue #1293 (FM1): a PR that edits a test file directly must run that
+    test. The stem-based matching only finds tests *of* a changed module, so a
+    changed `tests/test_flow.py` was previously never selected and a failing
+    edited test could pass the gate."""
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_flow.py").write_text(
+        "def test_x():\n    assert True\n", encoding="utf-8"
+    )
+
+    candidates = pre_checkup_gate._targeted_test_candidates(
+        tmp_path, ["tests/test_flow.py"]
+    )
+
+    assert "tests/test_flow.py" in candidates, candidates
+
+
+def test_targeted_tests_failing_changed_test_blocks(tmp_path):
+    """End-to-end: a directly-changed test that FAILS must make the gate's
+    targeted-test phase fail (closing the FM1 hole at the run layer too)."""
+    tests_dir = tmp_path / "tests"
+    tests_dir.mkdir()
+    (tests_dir / "test_flow.py").write_text(
+        "def test_boom():\n    assert False\n", encoding="utf-8"
+    )
+
+    failures, _notes = pre_checkup_gate._run_targeted_tests(
+        tmp_path, ["tests/test_flow.py"], timeout=60.0
+    )
+
+    assert any("targeted-tests failed" in f for f in failures), failures

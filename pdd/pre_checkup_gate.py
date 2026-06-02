@@ -592,9 +592,17 @@ def _rebound_names(tree: ast.Module) -> Set[str]:
     Used as a shadowing guard for alias-style call resolution: ``ast.walk``
     ignores scope, so ``import pkg.api as api`` plus an unrelated
     ``def f(api): api.foo()`` would otherwise be misattributed to the module.
-    If an alias root is ever rebound in the file we skip attribute-call
-    resolution for it — favouring a missed catch (checkup still sees it) over a
-    false positive that hard-blocks a good PR.
+
+    This is intentionally FILE-scoped, not scope-aware: if an alias root is
+    rebound anywhere in the file we skip ALL of its attribute calls — even a
+    module-level ``api.build(...)`` that the unrelated ``def f(api)`` does not
+    actually shadow. That accepts a false negative (the cross-model checkup
+    still reviews the call) in exchange for a guard that is robust by
+    construction. A scope-aware resolver would catch that module-level case but
+    is a heuristic that could itself false-positive on global/nonlocal/
+    class-scope edge cases — and this check HARD-BLOCKS arbitrary external PRs,
+    where a wrongful block is strictly worse than a missed catch checkup will
+    still find.
     """
     bound: Set[str] = set()
 
@@ -802,6 +810,20 @@ def _targeted_test_candidates(worktree: Path, code_files: Sequence[str]) -> List
         path = Path(rel)
         if path.suffix != ".py":
             continue
+        # A directly-changed test file must itself be selected and run. The
+        # stem-based matching below only finds tests *of* a changed module, not
+        # a changed test file itself (e.g. `tests/test_flow.py` does not match
+        # `test_test_flow.py`), so a failing test edited by the PR would
+        # otherwise never run and could pass the gate (#1293: run the targeted
+        # tests over the touched modules — which includes touched test files).
+        name = path.name
+        if (
+            (name.startswith("test_") or name.endswith("_test.py"))
+            and path.parts
+            and path.parts[0] == tests_dir.name
+            and (worktree / rel).exists()
+        ):
+            candidates.add(path.as_posix())
         stem = path.stem
         patterns = [
             f"test_{stem}.py",
