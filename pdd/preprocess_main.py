@@ -8,7 +8,8 @@ from rich import print as rprint
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .preprocess import preprocess
-from .context_snapshot import detect_dynamic_tags, start_snapshot_run
+from .context_snapshot import start_snapshot_run
+from .context_snapshot_policy import declared_nondeterministic_tags
 from .xml_tagger import xml_tagger
 from .architecture_sync import (
     get_architecture_entry_for_prompt,
@@ -71,13 +72,6 @@ def preprocess_main(
                 if not ctx.obj.get("quiet", False):
                     rprint(f"[yellow]No architecture entry found for '{prompt_filename}', skipping PDD tags.[/yellow]")
 
-        if snapshot and recursive and detect_dynamic_tags(prompt):
-            raise click.UsageError(
-                "--snapshot cannot be combined with --recursive when the prompt "
-                "uses <shell>, <web>, or <include ... query=...>; run without "
-                "--recursive so dynamic context is captured."
-            )
-
         if xml:
             if snapshot:
                 raise click.UsageError("--snapshot is not supported with --xml.")
@@ -111,6 +105,16 @@ def preprocess_main(
                 _seen=initial_seen,
                 snapshot_recorder=recorder,
             )
+            if snapshot and recursive:
+                deferred_tags = declared_nondeterministic_tags(processed_prompt)
+                if deferred_tags:
+                    tag_list = ", ".join(deferred_tags)
+                    raise click.UsageError(
+                        "--snapshot --recursive left active nondeterministic tags "
+                        f"({tag_list}) in the expanded prompt (for example nested "
+                        "<shell>/<web>/query= includes). Run without --recursive "
+                        "so dynamic context is executed and recorded."
+                    )
             total_cost, model_name = 0.0, "N/A"
 
         # Save the preprocessed prompt

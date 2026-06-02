@@ -201,7 +201,7 @@ def test_preprocess_rejects_snapshot_with_recursive_dynamic_tags(tmp_path: Path)
     ctx = click.Context(click.Command("preprocess"))
     ctx.obj = {"quiet": True, "force": False}
 
-    with pytest.raises(click.UsageError, match="cannot be combined with --recursive"):
+    with pytest.raises(click.UsageError, match="active nondeterministic tags"):
         preprocess_main(
             ctx,
             str(prompt),
@@ -212,6 +212,62 @@ def test_preprocess_rejects_snapshot_with_recursive_dynamic_tags(tmp_path: Path)
             exclude=[],
             snapshot=True,
         )
+
+
+def test_recursive_snapshot_rejects_nested_dynamic_include(tmp_path: Path, monkeypatch) -> None:
+    """Parent-only include with child <shell> must not produce a passing snapshot."""
+    monkeypatch.chdir(tmp_path)
+    child = tmp_path / "prompts" / "child_python.prompt"
+    child.parent.mkdir(parents=True)
+    child.write_text("<shell>printf nested</shell>\n", encoding="utf-8")
+    parent = tmp_path / "prompts" / "parent_python.prompt"
+    parent.write_text(f"<include>{child}</include>\n", encoding="utf-8")
+    (tmp_path / "pdd").mkdir()
+    ctx = click.Context(click.Command("preprocess"))
+    ctx.obj = {"quiet": True, "force": True}
+
+    with pytest.raises(click.UsageError, match="active nondeterministic tags"):
+        preprocess_main(
+            ctx,
+            str(parent),
+            output=str(tmp_path / "pdd" / "parent_python_preprocessed.prompt"),
+            xml=False,
+            recursive=True,
+            double=False,
+            exclude=[],
+            snapshot=True,
+        )
+
+
+def test_recursive_snapshot_allows_documentation_fenced_shell(tmp_path: Path, monkeypatch) -> None:
+    """Fenced <shell> examples in the parent must not block snapshot+recursive."""
+    monkeypatch.chdir(tmp_path)
+    include_path = tmp_path / "context.txt"
+    include_path.write_text("static body\n", encoding="utf-8")
+    parent = tmp_path / "parent_python.prompt"
+    parent.write_text(
+        f"<include>{include_path}</include>\n"
+        "Example only:\n```text\n<shell>printf nope</shell>\n```\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "pdd").mkdir()
+    ctx = click.Context(click.Command("preprocess"))
+    ctx.obj = {"quiet": True, "force": True}
+
+    preprocess_main(
+        ctx,
+        str(parent),
+        output=str(tmp_path / "pdd" / "parent_python_preprocessed.prompt"),
+        xml=False,
+        recursive=True,
+        double=False,
+        exclude=[],
+        snapshot=True,
+    )
+    runs = list((tmp_path / ".pdd" / "evidence" / "runs").glob("*.json"))
+    assert runs
+    payload = json.loads(runs[-1].read_text(encoding="utf-8"))
+    assert payload["uses_nondeterministic_context"] is False
 
 
 def test_replay_from_evidence_manifest_with_context_snapshot(tmp_path):

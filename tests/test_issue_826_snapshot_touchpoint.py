@@ -123,6 +123,41 @@ def test_issue_826_preprocess_snapshot_replay_and_policy(tmp_path: Path, monkeyp
     assert via_checkup.exit_code == 0, via_checkup.output
 
 
+def test_issue_826_stale_snapshot_fails_policy_until_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Editing a snapshotted prompt must fail checkup snapshot until re-snapshotted."""
+    project = _copy_demo(tmp_path)
+    monkeypatch.chdir(project)
+    _mock_web(monkeypatch)
+    dynamic = project / "prompts" / "dynamic_python.prompt"
+    runner = CliRunner()
+
+    pre = runner.invoke(
+        preprocess,
+        [str(dynamic.relative_to(project)), "--snapshot"],
+        obj={"quiet": True, "force": True},
+    )
+    assert pre.exit_code == 0, pre.output
+
+    ok = runner.invoke(
+        checkup_snapshot,
+        [str(dynamic.relative_to(project)), "--project-root", str(project)],
+    )
+    assert ok.exit_code == 0, ok.output
+
+    dynamic.write_text(
+        dynamic.read_text(encoding="utf-8") + "\n# edited after snapshot\n",
+        encoding="utf-8",
+    )
+    stale = runner.invoke(
+        checkup_snapshot,
+        [str(dynamic.relative_to(project)), "--project-root", str(project)],
+    )
+    assert stale.exit_code == 1, stale.output
+    assert "content changed" in stale.output.lower()
+
+
 def test_issue_826_static_prompt_policy_passes_without_snapshot(tmp_path: Path) -> None:
     """Static prompts should not require a snapshot artifact."""
     project = _copy_demo(tmp_path)

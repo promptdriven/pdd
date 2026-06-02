@@ -1,12 +1,13 @@
 """Policy checks for snapshotted nondeterministic prompt context."""
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from .context_snapshot import replay_snapshot
+from .context_snapshot import redact_snapshot_text, replay_snapshot
 from .evidence_manifest import _has_active_tag, _NONDETERMINISTIC_TAG_RE
 
 _QUERY_INCLUDE_RE = re.compile(r"<include[^>]*\bquery\s*=", re.IGNORECASE)
@@ -27,6 +28,39 @@ def declared_nondeterministic_tags(prompt_text: str) -> list[str]:
 
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _prompt_sha256(prompt_text: str) -> str:
+    """Hash prompt text the same way snapshot manifests record ``prompt_sha256``."""
+    safe_text, _, _ = redact_snapshot_text(prompt_text)
+    return hashlib.sha256(safe_text.encode("utf-8")).hexdigest()
+
+
+def _manifest_prompt_sha256(manifest: Mapping[str, Any]) -> Optional[str]:
+    recorded = manifest.get("prompt_sha256")
+    if isinstance(recorded, str) and recorded:
+        return recorded
+    prompt_section = manifest.get("prompt")
+    if isinstance(prompt_section, Mapping):
+        sha = prompt_section.get("sha256")
+        if isinstance(sha, str) and sha:
+            return sha
+    return None
+
+
+def _snapshot_matches_current_prompt(
+    manifest_path: Path,
+    prompt_text: str,
+) -> bool:
+    """Return True when *manifest_path* was captured from the current prompt body."""
+    try:
+        payload = _load_json(manifest_path)
+    except (OSError, json.JSONDecodeError):
+        return False
+    recorded = _manifest_prompt_sha256(payload)
+    if not recorded:
+        return False
+    return recorded == _prompt_sha256(prompt_text)
 
 
 def _prompt_matches(manifest: Mapping[str, Any], prompt_path: Path, project_root: Path) -> bool:
@@ -68,22 +102,50 @@ def _snapshot_from_evidence(payload: Mapping[str, Any]) -> Optional[Path]:
 def find_latest_snapshot_manifest(
     prompt_path: Path,
     project_root: Path,
+    *,
+    prompt_text: Optional[str] = None,
+    require_matching_prompt_hash: bool = True,
 ) -> Optional[Path]:
-    """Return the newest replayable snapshot manifest for ``prompt_path``."""
+    """Return the newest replayable snapshot manifest for ``prompt_path``.
+
+    When ``require_matching_prompt_hash`` is True (default), only manifests whose
+    recorded ``prompt_sha256`` matches the current prompt body are considered.
+    """
 
     evidence_root = project_root / ".pdd" / "evidence"
     latest: Optional[tuple[str, Path]] = None
 
+    resolved_prompt = prompt_path if prompt_path.is_absolute() else project_root / prompt_path
+    if prompt_text is None:
+        try:
+            prompt_text = resolved_prompt.read_text(encoding="utf-8")
+        except OSError:
+            prompt_text = ""
+
+    def _consider(run_id: str, manifest_path: Path) -> None:
+        nonlocal latest
+        if not _snapshot_is_replayable(manifest_path):
+            return
+        if require_matching_prompt_hash and not _snapshot_matches_current_prompt(
+            manifest_path, prompt_text
+        ):
+            return
+        candidate = (run_id, manifest_path.resolve())
+        latest = max(latest, candidate) if latest else candidate
+
     latest_devunit = evidence_root / "devunits"
     if latest_devunit.is_dir():
         for path in sorted(latest_devunit.glob("*.latest.json")):
-            payload = _load_json(path)
+            try:
+                payload = _load_json(path)
+            except (OSError, json.JSONDecodeError):
+                continue
             if not _prompt_matches(payload, prompt_path, project_root):
                 continue
             snapshot_path = _snapshot_from_evidence(payload)
-            if snapshot_path and _snapshot_is_replayable(snapshot_path):
+            if snapshot_path:
                 run_id = str(payload.get("run", {}).get("id") or path.stem)
-                latest = max(latest, (run_id, snapshot_path)) if latest else (run_id, snapshot_path)
+                _consider(run_id, snapshot_path)
 
     runs_dir = evidence_root / "runs"
     if runs_dir.is_dir():
@@ -96,10 +158,8 @@ def find_latest_snapshot_manifest(
                 continue
             if not _prompt_matches(payload, prompt_path, project_root):
                 continue
-            if _snapshot_is_replayable(path):
-                run_id = str(payload.get("run_id") or payload.get("run", {}).get("id") or path.stem)
-                candidate = (run_id, path.resolve())
-                latest = max(latest, candidate) if latest else candidate
+            run_id = str(payload.get("run_id") or payload.get("run", {}).get("id") or path.stem)
+            _consider(run_id, path)
 
     return latest[1] if latest else None
 
@@ -120,14 +180,26 @@ def check_snapshot_policy(
     if not declared:
         return True, "Prompt has no active nondeterministic tags."
 
-    snapshot_manifest = find_latest_snapshot_manifest(path, root)
-    if snapshot_manifest is None:
-        tags = ", ".join(declared)
+    snapshot_manifest = find_latest_snapshot_manifest(
+        path, root, prompt_text=prompt_text, require_matching_prompt_hash=True
+    )
+    if snapshot_manifest is not None:
+        return True, f"Replayable snapshot found: {snapshot_manifest}"
+
+    stale_manifest = find_latest_snapshot_manifest(
+        path, root, prompt_text=prompt_text, require_matching_prompt_hash=False
+    )
+    if stale_manifest is not None:
         return (
             False,
-            "Prompt declares nondeterministic context "
-            f"({tags}) but no replayable snapshot was found under .pdd/evidence/. "
-            "Re-run with --snapshot or --snapshot-context.",
+            "Prompt content changed since the latest snapshot was captured. "
+            "Re-run with --snapshot or --snapshot-context to refresh .pdd/evidence/.",
         )
 
-    return True, f"Replayable snapshot found: {snapshot_manifest}"
+    tags = ", ".join(declared)
+    return (
+        False,
+        "Prompt declares nondeterministic context "
+        f"({tags}) but no replayable snapshot was found under .pdd/evidence/. "
+        "Re-run with --snapshot or --snapshot-context.",
+    )

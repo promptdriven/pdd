@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from pdd.commands.checkup import checkup
@@ -102,6 +103,64 @@ def test_policy_ignores_snapshot_for_other_prompt(tmp_path: Path, monkeypatch) -
     passed, message = check_snapshot_policy(prompt_b, tmp_path)
     assert passed is False
     assert "no replayable snapshot" in message
+
+
+def test_policy_rejects_stale_snapshot_after_prompt_edit(tmp_path: Path, monkeypatch) -> None:
+    """Editing a prompt after snapshotting must fail until a fresh snapshot exists."""
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "prompts" / "risky.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("<shell>printf v1</shell>\n", encoding="utf-8")
+
+    recorder = start_snapshot_run(prompt, evidence_root=tmp_path / ".pdd" / "evidence")
+    expanded = preprocess(
+        prompt.read_text(encoding="utf-8"),
+        recursive=False,
+        snapshot_recorder=recorder,
+    )
+    recorder.finalize(expanded_prompt=expanded, prompt_text=prompt.read_text(encoding="utf-8"))
+
+    passed, _ = check_snapshot_policy(prompt, tmp_path)
+    assert passed is True
+
+    prompt.write_text("<shell>printf v2</shell>\n", encoding="utf-8")
+    passed, message = check_snapshot_policy(prompt, tmp_path)
+    assert passed is False
+    assert "content changed" in message.lower()
+
+
+def test_policy_passes_after_refreshing_snapshot_post_edit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh snapshot after editing the prompt must satisfy policy again."""
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "prompts" / "risky.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("<shell>printf v1</shell>\n", encoding="utf-8")
+
+    recorder = start_snapshot_run(prompt, evidence_root=tmp_path / ".pdd" / "evidence")
+    expanded = preprocess(
+        prompt.read_text(encoding="utf-8"),
+        recursive=False,
+        snapshot_recorder=recorder,
+    )
+    recorder.finalize(expanded_prompt=expanded, prompt_text=prompt.read_text(encoding="utf-8"))
+
+    prompt.write_text("<shell>printf v2</shell>\n", encoding="utf-8")
+    passed, message = check_snapshot_policy(prompt, tmp_path)
+    assert passed is False
+    assert "content changed" in message.lower()
+
+    recorder = start_snapshot_run(prompt, evidence_root=tmp_path / ".pdd" / "evidence")
+    expanded = preprocess(
+        prompt.read_text(encoding="utf-8"),
+        recursive=False,
+        snapshot_recorder=recorder,
+    )
+    recorder.finalize(expanded_prompt=expanded, prompt_text=prompt.read_text(encoding="utf-8"))
+
+    passed, _ = check_snapshot_policy(prompt, tmp_path)
+    assert passed is True
 
 
 def test_checkup_snapshot_dispatched_via_checkup_group(tmp_path: Path) -> None:

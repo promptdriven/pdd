@@ -33,6 +33,9 @@ pdd preprocess prompts/foo_python.prompt --snapshot
 pdd checkup snapshot prompts/with_shell_python.prompt --project-root .
 # expect exit code 1
 
+# After editing a snapshotted prompt without re-running preprocess --snapshot,
+# checkup snapshot should fail with "content changed" until you refresh the artifact.
+
 # Replay the manifest written by preprocess
 RUN=$(ls -1t .pdd/evidence/runs/*.json | head -1)
 pdd replay "$RUN" --verify-only --json
