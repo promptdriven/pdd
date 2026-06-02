@@ -1,7 +1,7 @@
 # Issue #830 verification touchpoints
 
-Branch: `demo/issue-830-contract-summary-touchpoints`  
-Parent: `feat/issue-830-architecture-contract-summary`  
+Branch: `demo/issue-830-contract-summary-touchpoints`
+Parent: `feat/issue-830-architecture-contract-summary`
 PR: https://github.com/promptdriven/pdd/pull/1291
 
 ## One-liner
