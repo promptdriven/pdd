@@ -633,6 +633,65 @@ def test_codex_cloudflare_cache_bypass_exception_falls_back_to_vertex(monkeypatc
     assert result["model_name"] == "vertex_ai/gemini-3-flash-preview"
 
 
+def test_codex_cloudflare_initial_exception_skips_chatgpt_family(monkeypatch):
+    """Challenge HTML raised by the initial chatgpt call must jump to Vertex."""
+    monkeypatch.setenv("PDD_FORCE", "1")
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
+    monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
+    monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
+    monkeypatch.setenv("VERTEXAI_LOCATION", "global")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-should-not-be-used")
+
+    df = _fake_model_df()
+    df = pd.concat([
+        df,
+        pd.DataFrame([{
+            "provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.4",
+            "input": 0.0, "output": 0.0, "coding_arena_elo": 1449,
+            "base_url": "", "api_key": "",
+            "max_reasoning_tokens": 0, "structured_output": True,
+            "reasoning_type": "none", "location": "",
+            "avg_cost": 0.0,
+        }]),
+    ], ignore_index=True)
+    df["structured_output"] = df["structured_output"].astype(bool)
+    calls = []
+
+    def fake_completion(**kwargs):
+        model = kwargs.get("model")
+        calls.append(model)
+        if str(model).startswith("chatgpt/"):
+            raise RuntimeError(
+                '<span id="challenge-error-text">Enable JavaScript and cookies to continue</span>'
+            )
+        msg = type("M", (), {
+            "content": "def comment_line(line: str) -> str:\n    return '# ' + line",
+            "role": "assistant",
+        })()
+        choice = type("C", (), {"message": msg, "finish_reason": "stop"})()
+        usage = type("U", (), {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10})()
+        return type("R", (), {"choices": [choice], "usage": usage})()
+
+    with patch("pdd.llm_invoke._load_model_data", return_value=df), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
+         patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
+         patch("pdd.codex_subscription.apply_litellm_chatgpt_output_patch", return_value=True), \
+         patch("pdd.llm_invoke.count_tokens_for_messages", return_value=10), \
+         patch("pdd.llm_invoke.get_context_limit", return_value=1_000_000), \
+         patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
+        result = li.llm_invoke(
+            prompt="write code for {x}",
+            input_json={"x": "comment_line"},
+            strength=0.5,
+            verbose=False,
+        )
+
+    assert calls == ["chatgpt/gpt-5.5", "vertex_ai/gemini-3-flash-preview"]
+    assert result["model_name"] == "vertex_ai/gemini-3-flash-preview"
+
+
 def test_codex_cloudflare_pydantic_content_falls_back_to_vertex(monkeypatch):
     """Challenge HTML inside a structured object must also trigger fallback."""
     from pdd.postprocess import ExtractedCode

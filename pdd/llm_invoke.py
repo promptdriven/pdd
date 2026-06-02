@@ -2604,6 +2604,14 @@ def _is_provider_challenge_validation_error(error: BaseException) -> bool:
     )
 
 
+def _is_provider_challenge_exception(error: BaseException) -> bool:
+    """Return True when any exception carries provider-side challenge HTML."""
+    raw_response = getattr(error, "raw_response", None)
+    return _is_provider_challenge_response(raw_response) or _is_provider_challenge_response(
+        str(error)
+    )
+
+
 def _chatgpt_family(model_df: pd.DataFrame) -> pd.DataFrame:
     """Rows backed by the ChatGPT/Codex subscription provider."""
     return model_df[
@@ -5390,6 +5398,24 @@ def llm_invoke(
                 last_exception = e
                 error_type = type(e).__name__
                 error_str = str(e)
+
+                if _is_provider_challenge_exception(e):
+                    if is_chatgpt_candidate:
+                        skip_chatgpt_family = True
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.provider_challenge_error",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        **_safe_error_fields(e),
+                    )
+                    logger.warning(
+                        "[PROVIDER CHALLENGE] %s failed with provider challenge HTML. "
+                        "Trying next model.",
+                        model_name_litellm,
+                    )
+                    break
 
                 # Claude-specific handling for temperature + thinking/reasoning rules.
                 # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
