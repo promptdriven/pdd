@@ -446,6 +446,18 @@ _pdd_pytest_output() {
     '*:filename:_files'
 }
 
+# checkup gate
+# Usage: pdd [GLOBAL OPTIONS] checkup gate [TARGET] [OPTIONS]
+_pdd_checkup_gate() {
+  _arguments -s \
+    $_pdd_global_opts \
+    '--policy[Policy YAML file]:file:_files' \
+    '--stories-dir[User stories directory for contract coverage]:dir:_files -/' \
+    '--tests-dir[Tests directory for contract coverage]:dir:_files -/' \
+    '--json[Emit machine-readable JSON]' \
+    '*:target:_files'
+}
+
 # checkup simplify
 # Usage: pdd [GLOBAL OPTIONS] checkup simplify [OPTIONS]
 _pdd_checkup_simplify() {
@@ -466,6 +478,10 @@ _pdd_checkup_simplify() {
 # checkup
 # Usage: pdd [GLOBAL OPTIONS] checkup [OPTIONS]
 _pdd_checkup() {
+  if [[ $words[3] == gate ]]; then
+    _pdd_checkup_gate
+    return
+  fi
   if [[ $words[3] == simplify ]]; then
     _pdd_checkup_simplify
     return
