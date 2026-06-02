@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.236",
-  "timestamp": "2026-05-26T00:00:00.000000+00:00",
-  "command": "fix",
-  "prompt_hash": "d33d79202c9e395e9a2a43a67741d6578ca002d07dec20cdeec77f9af0849fd1",
-  "code_hash": "03f458276287612267b7a96b5cb2042df81fb6a15d57f531634094f5e921aef9",
+  "pdd_version": "0.0.260.dev0",
+  "timestamp": "2026-06-02T00:37:00.487462+00:00",
+  "command": "test",
+  "prompt_hash": "da257bc78150d91b41e773e7b3cfb0fec6337f7d03cd3ecfdda061ded6d5b195",
+  "code_hash": "9510241b29371c5eef4ead04456a4a690a9aed6b8e222737c8819d09d7bc519d",
   "example_hash": "23b545fc0f892e14ee9660902d3f7e04893f0b793246c1ea9d559656fd39ffe6",
-  "test_hash": "781fe2b15c71d3098e06d8845e8e03255d547093f65cb81a7d0b769d6c1a14e7",
+  "test_hash": "fe48a7a88df92d4feda231c8088c9728481ce3ad8c7dd4b0a260df979252fcd6",
   "test_files": {
-    "test_agentic_bug_orchestrator.py": "781fe2b15c71d3098e06d8845e8e03255d547093f65cb81a7d0b769d6c1a14e7",
+    "test_agentic_bug_orchestrator.py": "fe48a7a88df92d4feda231c8088c9728481ce3ad8c7dd4b0a260df979252fcd6",
     "test_agentic_bug_orchestrator_1.py": "8085e2041355e53aef1709eeba3591fa0f7c512a637038b8c48d633e4cd07aa2",
     "test_agentic_bug_orchestrator_step_comments.py": "693e1c1b571a1daee1013fb48bc8390f263a6544c163e3f55bcb60dafa1bb679"
   },

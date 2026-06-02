@@ -22,6 +22,7 @@
 <pdd-dependency>agentic_e2e_fix_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
+<pdd-dependency>pr_metadata_finalizer_python.prompt</pdd-dependency>
 
 % Goal
 Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
@@ -47,7 +48,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
    - Never re-create the worktree mid-loop. Fetch only the PR head for the bounded push-retry recovery path after a remote-advanced push rejection.
    - Reviewer, fixer, and verifier roles all run with this worktree as their `cwd`. They never operate on the user's primary checkout.
 5. Each reviewer/fixer/verifier role MUST be invoked with `cwd=worktree`. Document this in code comments and ensure no role escapes the worktree by computing paths via `_get_git_root` or by falling back to the current process cwd.
-6. The fixer mutates files in the worktree, then `_commit_and_push_if_changed` commits and pushes. The verifier MUST run only after a successful push, against the same worktree the fixer wrote. A failed push aborts the loop with `state.stop_reason` set; no verifier runs against unpushed local commits, and the failed reviewer's status remains non-clean.
+6. The fixer mutates files in the worktree, then `_commit_and_push_if_changed` finalizes deterministic PDD fingerprints for touched prompt/code/example/test modules, stages only expected fingerprints plus scoped non-metadata file paths, commits, and pushes. The verifier MUST run only after a successful push, against the same worktree the fixer wrote. A failed push aborts the loop with `state.stop_reason` set; no verifier runs against unpushed local commits, and the failed reviewer's status remains non-clean.
 
 % --no-github-state contract
 7. `use_github_state` is a write-only suppression switch:
