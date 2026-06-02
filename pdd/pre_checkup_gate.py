@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -66,6 +66,12 @@ class _CheckOutcome:
     ok: bool
     messages: List[str]
     cost: float = 0.0
+    # Repo-relative files the phase itself MUTATED (heal-regenerated code paths;
+    # architecture.json when sync ran). build/smoke validates these in addition
+    # to the PR diff so the gate checks the tree it PRODUCED, not just the tree
+    # it was handed (a prompt-only PR whose heal regenerated broken code would
+    # otherwise pass — the regenerated file was never in the original diff).
+    synced_paths: List[str] = field(default_factory=list)
 
 
 @contextlib.contextmanager
@@ -317,6 +323,28 @@ def _run_drift_sync(
     failures: List[str] = []
     warnings: List[str] = []
     cost = 0.0
+    # Repo-relative paths this phase MUTATED, fed back to build/smoke so the gate
+    # validates the tree it produced. architecture.json is added only when sync
+    # actually ran; healed code paths are added per regenerated module below. On
+    # an in-sync repo no module is healed (heal fires only on update-drift, which
+    # is empty on a clean tree), so this stays empty except architecture.json.
+    synced_paths: List[str] = []
+
+    # basename -> repo-relative code path, for attributing heal output to a file.
+    basename_to_code: Dict[str, str] = {}
+    for _fn, (prompt_path, code_path) in prompt_pairs.items():
+        if code_path is None:
+            continue
+        try:
+            basename, _lang = infer_module_identity(str(prompt_path))
+        except Exception:
+            basename = None
+        try:
+            rel_code = code_path.resolve().relative_to(worktree.resolve()).as_posix()
+        except ValueError:
+            rel_code = None
+        if basename and rel_code:
+            basename_to_code[basename] = rel_code
 
     if only_files:
         try:
@@ -333,6 +361,9 @@ def _run_drift_sync(
         except Exception as exc:
             target = failures if strict else warnings
             target.append(f"architecture-sync raised for {sorted(only_files)}: {_scrub(exc)}")
+        # sync_all_prompts_to_architecture may have rewritten architecture.json;
+        # revalidate it in build/smoke even if the PR diff did not include it.
+        synced_paths.append("architecture.json")
 
     for filename, (prompt_path, code_path) in prompt_pairs.items():
         try:
@@ -380,6 +411,22 @@ def _run_drift_sync(
                         )
                     elif healed is None:
                         warnings.append(f"heal-module skipped {drift.basename}")
+                    # heal regenerated this module's code (`pdd update`); validate
+                    # the regenerated file in build/smoke so a heal that produces
+                    # broken code is caught instead of passing (it was never in the
+                    # original PR diff).
+                    code_rel = basename_to_code.get(getattr(drift, "basename", None))
+                    if code_rel is None:
+                        dp = getattr(drift, "code_path", None)
+                        if dp:
+                            try:
+                                code_rel = Path(dp).resolve().relative_to(
+                                    worktree.resolve()
+                                ).as_posix()
+                            except (ValueError, TypeError):
+                                code_rel = None
+                    if code_rel:
+                        synced_paths.append(code_rel)
 
                 try:
                     remaining_updates, remaining_other = detect_drift(
@@ -412,7 +459,11 @@ def _run_drift_sync(
         messages.append("phase=drift-sync failures: " + " | ".join(failures))
     if not messages:
         messages.append("phase=drift-sync passed")
-    return _CheckOutcome(ok=not failures, messages=messages, cost=cost)
+    # De-dupe, preserve order.
+    synced_paths = list(dict.fromkeys(synced_paths))
+    return _CheckOutcome(
+        ok=not failures, messages=messages, cost=cost, synced_paths=synced_paths
+    )
 
 
 def _module_name_for_python_path(path: Path, worktree: Path) -> Optional[str]:
@@ -1301,9 +1352,14 @@ def run_pre_checkup_gate(
                 print(message)
             return False, message, total_cost
 
+        # Validate the tree drift-sync PRODUCED: the PR diff plus any files the
+        # heal/sync phase mutated (regenerated code, rewritten architecture.json).
+        # On an in-sync repo nothing is healed, so this is just `touched` (plus
+        # architecture.json, whose shape check is a no-op on a valid file).
+        validated = list(dict.fromkeys([*touched, *drift.synced_paths]))
         build = _run_build_smoke(
             root,
-            touched,
+            validated,
             base_ref=base_ref,
             issue_number=issue_number,
             timeout_per_check=timeout_per_check,

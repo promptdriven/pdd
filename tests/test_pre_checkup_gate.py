@@ -602,6 +602,71 @@ def test_nondict_arch_entry_does_not_crash_untouched_path(tmp_path):
     assert outcome.ok is True, outcome.messages
 
 
+def test_gate_validates_heal_regenerated_code(monkeypatch, tmp_path):
+    """Regression: drift-sync heal regenerates code; the gate MUST validate the
+    tree it PRODUCED, not just the pre-heal PR diff. A prompt-only PR whose heal
+    writes broken code must block (build/smoke runs on the regenerated file even
+    though it was never in changed_files). NOTE: heal is faked here (it is a real
+    LLM call); this closes the validate-our-own-output mechanism, not a sighting."""
+    (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+    (tmp_path / "pdd" / "foo.py").write_text("def ok():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "pdd" / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>x</pdd-reason>\n", encoding="utf-8"
+    )
+    (tmp_path / "architecture.json").write_text(
+        '[{"filename":"foo_python.prompt","filepath":"pdd/foo.py"}]', encoding="utf-8"
+    )
+    drift = SimpleNamespace(
+        basename="foo", operation="update", reason="r", language="python",
+        code_path=str(tmp_path / "pdd" / "foo.py"),
+    )
+
+    def fake_heal(_d, _env):
+        (tmp_path / "pdd" / "foo.py").write_text("def broken(:\n", encoding="utf-8")
+        return True
+
+    calls = {"n": 0}
+
+    def fake_detect(**_k):
+        calls["n"] += 1
+        return ([drift], []) if calls["n"] == 1 else ([], [])
+
+    monkeypatch.setattr(pre_checkup_gate, "sync_all_prompts_to_architecture", lambda **_k: {"success": True})
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None))
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", fake_detect)
+    monkeypatch.setattr(pre_checkup_gate, "heal_module", fake_heal)
+
+    passed, message, _cost = pre_checkup_gate.run_pre_checkup_gate(
+        tmp_path, ["pdd/prompts/foo_python.prompt"], quiet=True, timeout_per_check=30.0
+    )
+    assert passed is False, message
+    assert "foo.py" in message, message
+    assert "infrastructure error" not in message, message
+
+
+def test_drift_sync_reports_only_real_mutations(monkeypatch, tmp_path):
+    """The synced-paths feedback must NOT grow on an in-sync repo (heal fires only
+    on update-drift). With no drift, the only synced path is architecture.json
+    (whose shape check is a no-op on a valid file) — no spurious code files that
+    would false-block on a clean tree."""
+    (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+    (tmp_path / "pdd" / "foo.py").write_text("def ok():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "pdd" / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>x</pdd-reason>\n", encoding="utf-8"
+    )
+    (tmp_path / "architecture.json").write_text(
+        '[{"filename":"foo_python.prompt","filepath":"pdd/foo.py"}]', encoding="utf-8"
+    )
+    monkeypatch.setattr(pre_checkup_gate, "sync_all_prompts_to_architecture", lambda **_k: {"success": True})
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None))
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path, ["pdd/prompts/foo_python.prompt"], base_ref=None, strict=False
+    )
+    assert [p for p in outcome.synced_paths if p != "architecture.json"] == [], outcome.synced_paths
+
+
 def test_caller_compat_resolves_from_dot_import_submodule(tmp_path):
     """Regression: `from . import api; api.build(...)` (and `from . import api as a`)
     binds the SUBMODULE, so the call is a module.attr call. The sweep must resolve
