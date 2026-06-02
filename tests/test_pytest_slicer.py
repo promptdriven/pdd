@@ -45,7 +45,7 @@ def test_two():
 """
     slicer = PytestSlicer(source)
     sliced_code, manifest = slicer.slice(["test_one"])
-    
+
     assert "test_one" in manifest.selected_tests
     assert "helper" in manifest.included_helpers
     assert "test_two" not in sliced_code
@@ -69,12 +69,12 @@ def test_arg(fix_a):
     assert fix_a == 1
 """
     slicer = PytestSlicer(source)
-    
+
     # Test usefixtures
     sliced_code, manifest = slicer.slice(["test_fix"])
     assert "fix_a" in manifest.included_fixtures
     assert "def fix_a():" in sliced_code
-    
+
     # Test arg fixture
     sliced_code, manifest = slicer.slice(["test_arg"])
     assert "fix_a" in manifest.included_fixtures
@@ -94,7 +94,7 @@ class TestSuite:
 """
     slicer = PytestSlicer(source)
     sliced_code, manifest = slicer.slice(["TestSuite.test_method"])
-    
+
     assert "TestSuite.test_method" in manifest.selected_tests
     assert "TestSuite.class_fix" in manifest.included_fixtures
     assert "class TestSuite:" in sliced_code
@@ -105,7 +105,7 @@ def test_slice_conftest(tmp_path):
     project_root = tmp_path / "project"
     project_root.mkdir()
     (project_root / "GEMINI.md").touch() # Mark as root
-    
+
     conftest = project_root / "conftest.py"
     conftest.write_text("""
 import pytest
@@ -113,7 +113,7 @@ import pytest
 def global_fix():
     return "global"
 """, encoding="utf-8")
-    
+
     test_dir = project_root / "tests"
     test_dir.mkdir()
     test_file = test_dir / "test_something.py"
@@ -122,10 +122,10 @@ def test_global(global_fix):
     assert global_fix == "global"
 """
     test_file.write_text(test_source, encoding="utf-8")
-    
+
     slicer = PytestSlicer(test_source, file_path=str(test_file))
     sliced_code, manifest = slicer.slice(["test_global"])
-    
+
     assert "global_fix" in manifest.included_fixtures
     assert "def global_fix():" in sliced_code
     assert "# --- From " in sliced_code
@@ -208,6 +208,22 @@ class TestThing:
     slicer = PytestSlicer(source)
     sliced_code, manifest = slicer.slice(["TestThing.test_uses_helper"])
     assert "def helper(self):" in sliced_code
+    assert "TestThing.helper" in manifest.included_helpers
+
+
+def test_slice_includes_cls_referenced_helper():
+    source = """
+class TestThing:
+    @classmethod
+    def helper(cls):
+        return 1
+
+    def test_uses_helper(self):
+        assert cls.helper() == 1
+"""
+    slicer = PytestSlicer(source)
+    sliced_code, manifest = slicer.slice(["TestThing.test_uses_helper"])
+    assert "def helper(cls):" in sliced_code
     assert "TestThing.helper" in manifest.included_helpers
 
 

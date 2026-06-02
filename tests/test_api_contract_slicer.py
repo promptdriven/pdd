@@ -122,6 +122,20 @@ def test_seeds_from_test_module_alias_then_slice():
     ApiContractSlicer.verify_contract(output, manifest.included_symbols)
 
 
+def test_seeds_from_test_mocker_patch_object():
+    test_source = '''
+import myapp.worker as worker
+
+def test_run(mocker):
+    mocker.patch.object(worker, "_get_job_secrets")
+    worker.run_worker("1")
+'''
+    seeds = ApiContractSlicer.seeds_from_test(test_source, "myapp.worker")
+    assert "worker" not in seeds
+    assert "_get_job_secrets" in seeds
+    assert "run_worker" in seeds
+
+
 def test_content_selector_contract_kind():
     out = ContentSelector.select(MODULE_SOURCE, "contract:run_worker", file_path="worker.py")
     assert "def run_worker" in out

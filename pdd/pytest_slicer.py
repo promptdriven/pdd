@@ -28,7 +28,7 @@ class SlicedManifest:
     source_hashes: Dict[str, str] = field(default_factory=dict)
 
 
-class ASTVisitor(ast.NodeVisitor):  # pylint: disable=invalid-name,missing-function-docstring
+class ASTVisitor(ast.NodeVisitor):  # pylint: disable=invalid-name
     """Collect names, fixtures, and self/cls attribute refs from a test node."""
 
     def __init__(self) -> None:
@@ -37,25 +37,30 @@ class ASTVisitor(ast.NodeVisitor):  # pylint: disable=invalid-name,missing-funct
         self.instance_attrs: Set[str] = set()
 
     def visit_Name(self, node: ast.Name) -> None:  # pylint: disable=invalid-name
+        """Record loaded identifier names."""
         if isinstance(node.ctx, ast.Load):
             self.names.add(node.id)
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:  # pylint: disable=invalid-name
+        """Record self/cls attribute references."""
         if isinstance(node.ctx, ast.Load) and isinstance(node.value, ast.Name):
             if node.value.id in {"self", "cls"}:
                 self.instance_attrs.add(node.attr)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # pylint: disable=invalid-name
+        """Traverse call nodes."""
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # pylint: disable=invalid-name
+        """Traverse function decorators and body."""
         self._visit_function_like(node)
 
-    def visit_AsyncFunctionDef(
+    def visit_AsyncFunctionDef(  # pylint: disable=invalid-name
         self, node: ast.AsyncFunctionDef
-    ) -> None:  # pylint: disable=invalid-name
+    ) -> None:
+        """Traverse async function decorators and body."""
         self._visit_function_like(node)
 
     def _visit_function_like(
@@ -172,9 +177,9 @@ class PytestSlicer:  # pylint: disable=too-few-public-methods
                 break
             current_dir = current_dir.parent
 
-    def slice(
+    def slice(  # pylint: disable=duplicate-code,too-many-locals,too-many-branches,too-many-statements
         self, test_names: List[str]
-    ) -> Tuple[str, SlicedManifest]:  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    ) -> Tuple[str, SlicedManifest]:
         """Return sliced test context and a manifest of included symbols."""
         if not test_names:
             raise SlicerError("No tests specified for slicing.")

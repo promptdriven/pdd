@@ -292,7 +292,7 @@ class ApiContractSlicer:
         )
         return sorted(seeds)
 
-    def slice(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
+    def slice(  # pylint: disable=duplicate-code,too-many-locals,too-many-branches,too-many-statements
         self,
         seeds: List[str],
         *,
