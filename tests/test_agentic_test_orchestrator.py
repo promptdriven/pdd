@@ -312,6 +312,12 @@ def test_clean_restart_clears_state_and_skips_load(mock_deps, default_args):
         c.kwargs.get("step_num") == 0 and "Mode**: Clean restart" in c.kwargs.get("body", "")
         for c in mock_post_once.call_args_list
     )
+    # Issue #1306: the Step 0 banner must not advertise a model.
+    assert all(
+        "**Model**" not in c.kwargs.get("body", "")
+        for c in mock_post_once.call_args_list
+        if c.kwargs.get("step_num") == 0
+    )
 
 
 def test_resume_inherits_persisted_clean_restart_for_worktree_and_pr(
