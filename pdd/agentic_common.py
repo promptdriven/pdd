@@ -112,6 +112,13 @@ class SteerEntry:
     body: str
 
 
+def _steer_body_for_llm(body: str) -> str:
+    """Remove human-only ``<pdd>...</pdd>`` blocks before LLM-facing steer text."""
+    from pdd.preprocess import process_pdd_tags
+
+    return process_pdd_tags(body).strip()
+
+
 STEER_STATE_KEYS = (
     "last_steered_comment_id",
     "last_steer_at",
@@ -166,7 +173,9 @@ def merge_steers_into_issue_content(
         "Address them in this step:",
     ]
     for steer in steers:
-        block_lines.append(f"- @{steer.author} ({steer.comment_id}): {steer.body}")
+        block_lines.append(
+            f"- @{steer.author} ({steer.comment_id}): {_steer_body_for_llm(steer.body)}"
+        )
     return issue_content.rstrip() + "\n" + "\n".join(block_lines) + "\n"
 
 
@@ -2378,7 +2387,10 @@ def run_agentic_task(
             "The following comments arrived during this run. Factor them into this step:\n"
         )
         for steer in steers:
-            steering_section += f"- @{steer.author} ({steer.comment_id}): {steer.body}\n"
+            steering_section += (
+                f"- @{steer.author} ({steer.comment_id}): "
+                f"{_steer_body_for_llm(steer.body)}\n"
+            )
 
     full_instruction = (
         f"{instruction}{feedback_section}{steering_section}\n\n"
@@ -4788,11 +4800,12 @@ def drain_issue_steers(
                     continue
                 if cid_val <= last_id_val:
                     continue
+                raw_body = str(entry.get("body", ""))
                 steers.append(
                     SteerEntry(
                         comment_id=str(cid_val),
                         author=str(entry.get("author", "unknown")),
-                        body=str(entry.get("body", "")),
+                        body=_steer_body_for_llm(raw_body),
                     )
                 )
                 if cid_val > max_id_val:
@@ -4871,7 +4884,7 @@ def drain_issue_steers(
             SteerEntry(
                 comment_id=str(cid_val),
                 author=author,
-                body=body.strip(),
+                body=_steer_body_for_llm(body),
             )
         )
 

@@ -3314,6 +3314,67 @@ def test_steer_injection_into_prompt(mock_cwd, mock_env, mock_load_model_data, m
     assert "- @bob (456): Use library X" in prompt_input
 
 
+def test_steer_injection_strips_pdd_human_comments(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Human-only <pdd> blocks in steer bodies must not reach the LLM prompt."""
+    from pdd.agentic_common import SteerEntry
+
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    steers = [
+        SteerEntry(
+            comment_id="123",
+            author="alice",
+            body="Try approach A <pdd>internal note for humans</pdd> please",
+        ),
+    ]
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, _, _, _ = run_agentic_task("Fix the bug", mock_cwd, steers=steers)
+    assert success
+
+    prompt_input = mock_subprocess.call_args.kwargs.get("input", "")
+    assert "internal note for humans" not in prompt_input
+    assert "<pdd>" not in prompt_input
+    assert "Try approach A" in prompt_input
+    assert "please" in prompt_input
+
+
+def test_drain_issue_steers_strips_pdd_tags(mock_cwd):
+    """PDD_STEER_JSON bodies have human-only <pdd> blocks removed at drain time."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [
+        {
+            "comment_id": "101",
+            "author": "charlie",
+            "body": "Ship it <pdd>do not tell the model this</pdd> now",
+        }
+    ]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+
+    try:
+        state = {}
+        steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert "do not tell the model this" not in steers[0].body
+        assert "<pdd>" not in steers[0].body
+        assert "Ship it" in steers[0].body
+        assert "now" in steers[0].body
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
 def test_no_steer_injection_when_absent(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test that prompt is unchanged when steers list is absent."""
     mock_shutil_which.return_value = "/bin/claude"
