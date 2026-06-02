@@ -167,6 +167,30 @@ def test_empty_codex_api_key_is_not_a_signal(codex_env, monkeypatch):
     assert cs.bridge_codex_auth_for_litellm() is False
 
 
+@pytest.mark.parametrize("auth_json_state", ["absent", "malformed_no_token", "invalid_json", "usable"])
+def test_codex_api_key_keeps_gate_and_bridge_consistent(codex_env, monkeypatch, auth_json_state):
+    """Issue #1318 review FM2: a set CODEX_API_KEY must keep detection and the
+    bridge in lock-step — has()==bridge()==True regardless of the $CODEX_HOME/
+    auth.json state. The round-1 gap returned has=True / bridge=False when a
+    malformed auth.json coexisted with a valid env token, stranding the call.
+    """
+    codex_home, _ = codex_env
+    auth = codex_home / "auth.json"
+    if auth_json_state == "malformed_no_token":
+        auth.write_text(json.dumps({"tokens": {"refresh_token": "r"}}))  # no access_token
+    elif auth_json_state == "invalid_json":
+        auth.write_text("{ this is not valid json")
+    elif auth_json_state == "usable":
+        auth.write_text(json.dumps(_nested_auth(access="file-token-AAAA")))
+    # "absent": leave no auth.json
+
+    monkeypatch.setenv("CODEX_API_KEY", "env-injected-token-XXXX")
+    assert cs.has_codex_subscription_auth() is True
+    assert cs.bridge_codex_auth_for_litellm() is True  # never strands the chatgpt/ call
+    # A usable token actually landed where litellm reads it.
+    assert cs._token_dir_has_usable_auth(Path(os.environ["CHATGPT_TOKEN_DIR"])) is True
+
+
 # --------------------------------------------------------------------------- #
 # issue #1318 review FM2: the Codex-subscription default must not hijack an
 # explicit non-OpenAI provider pin whose model name merely contains "codex".

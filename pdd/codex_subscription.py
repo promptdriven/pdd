@@ -150,6 +150,27 @@ def _token_dir_has_usable_auth(token_dir: Path) -> bool:
         return False
 
 
+def _stage_codex_api_key_token(dest: Path, dest_dir: Path) -> bool:
+    """Stage a non-empty ``CODEX_API_KEY`` as the chatgpt/ ``access_token``.
+
+    Issue #1318: keeps :func:`bridge_codex_auth_for_litellm` consistent with
+    :func:`has_codex_subscription_auth`, which already treats a non-empty
+    ``CODEX_API_KEY`` as usable. Without this, a malformed/absent
+    ``$CODEX_HOME/auth.json`` alongside a valid env token gives ``has=True`` but
+    ``bridge=False`` — the chatgpt/ route is selected but cannot authenticate.
+    Returns ``True`` (and exports ``CHATGPT_TOKEN_DIR``) only when an env token is
+    present and lands as usable auth.
+    """
+    env_token = _codex_api_key_token()
+    if not env_token:
+        return False
+    _write_private_json(dest, {"access_token": env_token})
+    if _token_dir_has_usable_auth(dest_dir):
+        os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
+        return True
+    return False
+
+
 def bridge_codex_auth_for_litellm() -> bool:
     """Make a ``codex login`` token usable by litellm's ``chatgpt/`` provider.
 
@@ -184,46 +205,39 @@ def bridge_codex_auth_for_litellm() -> bool:
                 return True
             # Configured but unusable: fall through and populate from codex below.
 
+        # 2. Prefer a usable codex auth.json (rotation-aware): flatten and stage
+        #    it. A malformed/unreadable auth.json must NOT short-circuit to
+        #    failure while a usable env token or prior staged copy still exists —
+        #    that mismatch is the has=True/bridge=False stranding (issue #1318).
         source = _codex_auth_path()
-        if not source.is_file():
-            # No codex auth.json to bridge. A non-empty CODEX_API_KEY carries the
-            # token directly (headless/CI — issue #1318); stage it as the
-            # access_token litellm's chatgpt/ provider reads so the route can
-            # actually authenticate, not just pass the credential gate.
-            env_token = _codex_api_key_token()
-            if env_token:
-                _write_private_json(dest, {"access_token": env_token})
-                if _token_dir_has_usable_auth(dest_dir):
-                    os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
-                    return True
-            # Otherwise a previously staged *usable* file still works.
+        if source.is_file():
+            try:
+                if not (dest.is_file() and dest.stat().st_mtime >= source.stat().st_mtime):
+                    flat = _flatten_codex_tokens(json.loads(source.read_text()))
+                    if flat is not None:
+                        _write_private_json(dest, flat)
+                        logger.debug(
+                            "Bridged codex auth from %s to %s for litellm chatgpt/ provider.",
+                            source, dest,
+                        )
+            except (OSError, ValueError):
+                # Unreadable / invalid-JSON auth.json: fall through to the env
+                # token / prior staged copy below instead of failing the bridge.
+                pass
             if _token_dir_has_usable_auth(dest_dir):
                 os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
                 return True
-            return False
 
-        # 2. (Re)stage from the codex token, refreshing when the source has
-        #    rotated since we last wrote the bridged copy.
-        if not (dest.is_file() and dest.stat().st_mtime >= source.stat().st_mtime):
-            flat = _flatten_codex_tokens(json.loads(source.read_text()))
-            if flat is None:
-                # Source unusable; only succeed if a prior usable staged copy
-                # exists — and if so, export CHATGPT_TOKEN_DIR so litellm can
-                # actually find it (the bug: returning True without exporting).
-                if _token_dir_has_usable_auth(dest_dir):
-                    os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
-                    return True
-                return False
-            _write_private_json(dest, flat)
-            logger.debug(
-                "Bridged codex auth from %s to %s for litellm chatgpt/ provider.", source, dest
-            )
-
-        # Final guard: only claim success if what we staged is actually usable.
-        if not _token_dir_has_usable_auth(dest_dir):
-            return False
-        os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
-        return True
+        # 3. No usable codex auth.json. A non-empty CODEX_API_KEY carries the token
+        #    directly (headless/CI — issue #1318); stage it so detection
+        #    (has_codex_subscription_auth) and staging never disagree. Then fall
+        #    back to any previously-staged usable copy.
+        if _stage_codex_api_key_token(dest, dest_dir):
+            return True
+        if _token_dir_has_usable_auth(dest_dir):
+            os.environ["CHATGPT_TOKEN_DIR"] = str(dest_dir)
+            return True
+        return False
     except Exception as exc:  # pragma: no cover - defensive; never break callers
         logger.debug("Codex auth bridge skipped (%s): %s", type(exc).__name__, exc)
         return False
