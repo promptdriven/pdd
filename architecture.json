@@ -1814,9 +1814,14 @@
     }
   },
   {
-    "reason": "CLI entry point for the preprocess command.",
+    "reason": "CLI wrapper for preprocessing prompts, XML tagging, PDD tag injection, and context snapshots.",
     "description": "Command-line interface for preprocess. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [],
+    "dependencies": [
+      "preprocess_python.prompt",
+      "xml_tagger_python.prompt",
+      "architecture_sync_python.prompt",
+      "context_snapshot_python.prompt"
+    ],
     "priority": 51,
     "filename": "preprocess_main_python.prompt",
     "filepath": "pdd/preprocess_main.py",
@@ -1831,7 +1836,8 @@
         "commands": [
           {
             "name": "preprocess_main",
-            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list) -> Tuple[str, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list, pdd_tags: bool = False, snapshot: bool = False) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]"
           }
         ]
       }
@@ -1991,12 +1997,18 @@
     }
   },
   {
-    "reason": "CLI entry point for the code generator command.",
+    "reason": "Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.",
     "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method \u2014 declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter \u2014 declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift \u2014 annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default). Issue #1012 adds two additional repair-loop gates: (a) PublicSurfaceRegressionError \u2014 for mature modules (pre-existing non-empty code file), snapshots top-level functions, classes, recursively-walked nested classes/methods (so a method on `Outer.Inner` is captured as `Outer.Inner.method`), and module-level public `ast.Assign` / bound `ast.AnnAssign` (only when `node.value is not None`; bare annotations like `PUBLIC_NAME: int` don't bind a runtime attribute and are ignored) targets plus `ast.Import`/`ast.ImportFrom` aliases (so removing a re-export like `import git` or a public constant like `PUBLIC_SETTING = ...` surfaces as a regression). When the module declares `__all__` as a clean list/tuple of string constants, that list is AUTHORITATIVE per Python semantics: a name is public iff it appears in `__all__`, even if underscore-prefixed; names NOT in `__all__` are NOT public. Classes listed in `__all__` ALSO contribute their recursively-walked members (methods, nested classes, methods on nested classes at every depth) regardless of underscore prefix \u2014 so `__all__ = [\"Service\"]` protects `Service.run`, `Service.Inner`, and `Service.Inner.method`. Computed `__all__` (`sorted(...)`, `X + Y`) or AugAssign extension (`__all__ += [...]`) falls back to the heuristic. Without `__all__`, underscore-prefixed names (including dunders) are excluded at every level; `from X import *` contributes no fixed name and is ignored. The same `__all__` precedence rule (including the class-member recursion) is applied to the parallel `_snapshot_public_signatures` so signature-drift detection sees the same public set. `_snapshot_public_signatures` entries carry a leading kind prefix (`[function]`/`[async_function]`/`[class]` at top level; `[instance]`/`[staticmethod]`/`[classmethod]`/`[property:<roles>]` inside classes; `[assignment]` for module-level rebindings; and `[import]`/`[import:<module>]`/`[import:from <module>]`/`[import:from <module>:<source>]` for re-exports) so a binding-kind flip (e.g. a re-exported `pathlib.Path` replaced by a same-named `def`) diffs even when the parameter list happens to match. For `@dataclass` classes without an explicit `__init__`, `_snapshot_public_signatures` synthesises the constructor signature from class-body `AnnAssign` fields in source order: `@dataclass(kw_only=True)` emits a leading `*` so every field is kw-only; an in-body `_: KW_ONLY` sentinel (`KW_ONLY` Name or `dataclasses.KW_ONLY` Attribute) splits positional vs kw-only fields and is recognised before the underscore-prefix skip; when both decorator and sentinel are present only ONE `*` is emitted (decorator wins); `InitVar[...]` fields ARE included (they are runtime constructor params even though not stored as instance attributes); `ClassVar[...]` fields and `field(init=False, ...)` defaults are excluded; an explicit `__init__` still wins over synthesis. Inherited dataclass fields are collected in REVERSE-MRO order (matching Python's `@dataclass`: `__dataclass_fields__` is populated by walking bases right-to-left so later bases overwrite earlier ones in dict-insertion order) \u2014 `class C(A, B)` synthesises `(b, a, c)`. A base decorated with `@dataclass(init=False)` STILL contributes its annotated fields to a derived `@dataclass`'s synth; `init=False` only suppresses the base's OWN `__init__` synthesis. Cross-module bases that resolve to imports rather than same-module `ClassDef`s are marked `[inherited_unresolved]`. When a derived class redeclares a base's field name, the derived annotation/default wins but the field's POSITION matches the base's original slot (insertion-order dict semantics). The gate raises when public symbols are removed/renamed or their callable signature changes unless the prompt body contains an anchored `BREAKING-CHANGE:` directive (regex `^\\s*BREAKING-CHANGE:\\s*` with `re.MULTILINE`) whose tail starts with a `remove`/`delete`/`drop`/`rename` action verb (followed by a comma-separated symbol list) for removals or a `change signature`/`change api`/`change contract` verb pair for signature drift. Buried mid-line marker mentions and bare `BREAKING-CHANGE:` markers do NOT disable the gate. First-time generation is exempt. (b) TestChurnError \u2014 when overwriting an existing non-empty test file through code_generator_main or cmd_test_main, computes the stdlib `difflib.unified_diff` churn ratio between pre and post test bodies and raises when the ratio exceeds `PDD_TEST_CHURN_THRESHOLD` (default 0.40, accepts both decimal `0.40` and percent `40%` strings; defensive fallback to default on unparseable values) without an anchored `BREAKING-CHANGE:` directive that pairs an opt-out verb (`rewrite`/`replace`/`regenerate`/`overwrite`/`churn`/`remove`/`drop`) with `tests` as the verb's direct object. Both new exceptions share the existing PDD_REPAIR_DIRECTIVE plumbing so sync_main, sync_orchestration, and agentic_sync_runner route them through the same repair loop. The conformance and public-surface / test-churn gate-call sites in `code_generator_main` gate on `generated_code_content is not None` (NOT a truthy check) so an empty provider response over an existing module / test file still trips PublicSurfaceRegressionError / TestChurnError instead of silently truncating to 0 bytes; for non-Python artifacts the gates cannot inspect (JSON, YAML, prompts, etc.) `code_generator_main` additionally raises `click.UsageError(\"Refusing to overwrite ...\")` immediately before the write when existing content is non-empty and the generated content is empty/whitespace-only. `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape hatch for the rare intentional empty-output case.",
     "dependencies": [
+      "construct_paths_python.prompt",
+      "preprocess_python.prompt",
+      "code_generator_python.prompt",
+      "incremental_code_generator_python.prompt",
+      "core/cloud_python.prompt",
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
-      "_keyring_timeout_python.prompt"
+      "_keyring_timeout_python.prompt",
+      "context_snapshot_python.prompt"
     ],
     "priority": 57,
     "filename": "code_generator_main_python.prompt",
@@ -2028,7 +2040,7 @@
           },
           {
             "name": "code_generator_main",
-            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False) -> Tuple[str, bool, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, snapshot_context: bool = False) -> Tuple[str, bool, float, str]"
           },
           {
             "name": "ArchitectureConformanceError",
@@ -2864,7 +2876,7 @@
     }
   },
   {
-    "reason": "Coordinates sync workflow steps and state management.",
+    "reason": "Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.",
     "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
     "dependencies": [
       "code_generator_main_python.prompt",
@@ -2932,7 +2944,7 @@
           },
           {
             "name": "sync_orchestration",
-            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Dict[str, Any]",
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, snapshot_context: bool = False) -> Dict[str, Any]",
             "returns": "Dict[str, Any]",
             "sideEffects": [
               "None"
@@ -5370,7 +5382,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the unified sync workflow; auto-submit example helper short-circuits in cloud executors and bounds JWT auth so headless environments cannot stall the sync.",
+    "reason": "CLI entry point for the unified sync workflow, handling both single-module and global project-wide synchronization.",
     "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. In one-session mode, the generation phase catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name into pre_cost, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, passes only remaining budget after generation into one-session sync, and prints build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostics before re-raising the final failure. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
     "dependencies": [
       "core/cloud_python.prompt",
@@ -5391,7 +5403,8 @@
         "commands": [
           {
             "name": "sync_main",
-            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool) -> Tuple[Dict[str, Any], float, str]"
+            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, snapshot_context: bool = False) -> Tuple[Dict[str, Any], float, str]",
+            "returns": "Tuple[Dict[str, Any], float, str]"
           }
         ]
       }
@@ -7800,8 +7813,8 @@
     }
   },
   {
-    "reason": "Issue #1092: deterministic local gates the review loop runs before honoring any LLM 'clean' verdict.",
-    "description": "Discovers and executes a conservative, allowlisted set of repo-local checks (PR-range git diff --check, prettier --check via package.json, a non-mutating Python syntax check via the builtin compile() builtin per changed .py file, optional ruff/black/mypy when configured in pyproject.toml, optional `npx --no-install tsc --noEmit` when typescript is declared AND node_modules/typescript/bin/tsc is on disk). Per-file gates pass POSIX `--` end-of-options separator so paths cannot be parsed as flags. Each gate runs as a list-form subprocess with bounded timeout, output truncation, PDD_* env scrubbing, sanitized PATH, and secret redaction; gate discovery and changed-file git probes resolve a trusted absolute git binary outside the PR worktree so PATH=.:$PATH cannot run a PR-shipped ./git. Failing gates are converted into synthetic blocker ReviewFinding rows with reviewer prefix 'gate:' so the review loop refuses the clean verdict and routes the deterministic failure through the fixer.",
+    "reason": "Enforces deterministic-gate checks (linter, syntax, and doc-contract gates) in checkup review loops.",
+    "description": "Discovers and executes a conservative, allowlisted set of repo-local checks (PR-range git diff --check, doc-contract, prettier --check via package.json, a non-mutating Python syntax check via the builtin compile() builtin per changed .py file, optional ruff/black/mypy when configured in pyproject.toml, optional `npx --no-install tsc --noEmit` when typescript is declared AND node_modules/typescript/bin/tsc is on disk). The doc-contract gate supports repo-declared `.pdd/doc_contract.json` / `.pdd/doc-contract.json` rules for non-PDD projects; when a base-tree config exists it is authoritative so a reviewed PR cannot weaken its own documentation contract. It also enforces prompt-level story coverage for changed non-LLM `.prompt` files by requiring a linked `user_stories/story__*.md`, so user stories serve as the prompt regression-test artifact for `pdd detect --stories` (issue #560 bridge). Per-file gates pass POSIX `--` end-of-options separator so paths cannot be parsed as flags. Each gate runs as a list-form subprocess with bounded timeout, output truncation, PDD_* env scrubbing, sanitized PATH, and secret redaction; gate discovery and changed-file git probes resolve a trusted absolute git binary outside the PR worktree so PATH=.:$PATH cannot run a PR-shipped ./git. Failing gates are converted into synthetic blocker ReviewFinding rows with reviewer prefix 'gate:' so the review loop refuses the clean verdict and routes the deterministic failure through the fixer.",
     "dependencies": [
       "checkup_review_loop_python.prompt"
     ],
@@ -7859,6 +7872,11 @@
             "sideEffects": [
               "None"
             ]
+          },
+          {
+            "name": "run_doc_contract_check",
+            "signature": "(worktree_path: Path, base_ref: Optional[str] = None) -> int",
+            "returns": "int"
           }
         ],
         "dataclasses": [
@@ -7884,6 +7902,7 @@
   },
   {
     "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR. In PR mode the linked issue is OPTIONAL: with no issue (issue_url/issue_number absent) the PR is reviewed on its own merits and _step7_passed drops the issue_aligned requirement (verdict = code findings only), the issue-thread per-step/error/final posts are skipped, and _post_pr_mode_final_report posts only to the PR thread; with an issue present the issue-alignment gate is unchanged. Issue #1212 contract: Step 5 emits a structured failure_signal block normalised into context['step5_failure_signal']; Step 6.1's prompt renders that block. The Step 5 status word is parsed into three states \u2014 pass/ok/success/passed/clean (logically clean), skipped/skip/no_tests/n/a/n_a (verification did not run; sets context['step5_verification_skipped']=1 and is detected from the parsed status alone regardless of the provider success flag, round-10 #1), and everything else including a missing/malformed block (logical failure, fail closed). The fixer is skipped for both clean and skipped; a dedicated pre-push gate refuses any push when the skipped flag is set because tests never ran \u2014 including when the worktree is clean (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user). The gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time rather than trusting only the in-memory context cache (round-10 #3: context is not part of the saved workflow state, so a mid-loop interruption can resume with the cached Step 5 skipped block but an empty context cache). The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND context['pr_scope_changed_files'] (the local merge-base diff), tolerating GitHub API outages when the local base is healthy. The scope-allowed set extends pr_file_set with Step 5 failure paths and justified EXPANSION_ITEMS paths so the guard matches the Step 6 prompt's allowance for editing failing test files / causally-connected files without an explicit marker; the causal guard remains the backstop for zero-overlap fixes. EXPANSION_ITEMS justification is per-marker; trailing continuation lines only count when they carry semantic content (prefix marker, path mention, or causal keyword) so indented/bulleted padding cannot whitelist a path. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] (not from start_step) so a manual --start-step 7 still trips the side-effect guard. A clean Steps-3/4/5 run never commits or pushes side-effect edits left by non-fixer tooling. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is NOT guarded on the raw output being truthy, so an empty/missing Step 5 output is itself a fail-closed condition (no test evidence) that routes to the logical-failure branch (pass-17 #1: provider success with empty Step 5 output must not slip through as a verified result). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt, calls _post_pr_mode_final_report(refusal_message) to post the terminal status to PR/issue threads, calls clear_workflow_state(...) to discard the saved cache so the next rerun reruns Step 5 instead of replaying the stale skipped/failed output (and avoids a duplicate final-report comment), and returns (False, f'{refusal}{suffix}', ...) before Step 7 runs; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and follows the same post-then-clear-then-return pattern. Because load_workflow_state loads the GitHub state comment with PRIORITY over local state (round-17), clear_workflow_state now returns a bool and github_clear_state falls back to neutralising the state-comment body (stripping the PDD_WORKFLOW_STATE marker via _github_edit_comment) when a DELETE fails, so a token without delete scope can no longer leave stale remote state that replays the refusal forever; the orchestrator appends a cleanup warning to the returned message when the clear is still unconfirmed. The SAME unconfirmed-clear warning is appended on the terminal-success path (external review #1215 Finding 2): that path captures clear_workflow_state's bool instead of discarding it so a failed remote clear cannot let the next run resume from completed state \u2014 the checkup still returns success, the warning is informational. As a second, independent backstop for the same hole, load_workflow_state-side resume DISCARDS any cached state whose (FAILED-corrected) last_completed_step has already reached STEP_ORDER[-1] (the terminal step) when no start_step_override is given: a completed run's lingering state (left behind precisely because its best-effort remote clear failed) must not be resumed, or the rerun would skip every step and replay the cached Step 7 verdict as 'Checkup complete' without re-verifying the PR head. On discard it resets last_completed_step to 0 but preserves github_comment_id=loaded_gh_id so the fresh run PATCHes the lingering state comment rather than creating a duplicate. Because context persists across fix-verify iterations and context['step5_failure_signal'] is written ONLY on the failing Step 5 path, the orchestrator clears it (and step5_failure_signal_missing) to '' whenever a later iteration's Step 5 is clean or skipped so Step 6 is never driven by a prior iteration's stale failure block (external review #1215 Finding 1); the provider-success/logical-failure branch also prints the scrubbed failure detail unconditionally (even in quiet mode) like the provider-failure path (external review #1215 Finding 3). Non-PR no-fix runs are unaffected. The pre-push diff size gate (PDD_CHECKUP_DIFF_LOC_LIMIT, default 800 added LoC; 0 disables; unparseable falls back to default) refuses oversized pushes unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry. Small companion files are exempt; diffuse death-by-a-thousand-cuts diffs still require every path covered.",
+
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, resolves a trusted absolute git binary through checkup_gates for the base-refresh and changed-file prompt probes so PATH=.:$PATH cannot execute a PR-shipped ./git, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists. In PR mode _handle_step_result suppresses its per-step issue comment for Step 7 (the orchestrator's canonical final report already covers it) so the issue thread does not get duplicate Step 7 reporting; earlier-step progress comments and issue-mode Step 7 comments are unaffected (external review #1215 Finding 3). Issue #1212 safety contract: (a) Step 5 MUST emit a structured ```failure_signal``` block (command, exit_code, status, failing_ids, artifact_path, output); the orchestrator parses it via _parse_failure_signal_block, treats empty fail/error-status fields as missing, synthesises a normalised block into context['step5_failure_signal'] that Step 6's prompt explicitly references, and maps the status word to one of three states (clean / skipped / failure) with fail-closed defaults \u2014 a missing block or unrecognised status counts as a logical failure (round-8 #1) so the fixer runs rather than silently passing. A 'skipped'/'skip'/'no_tests'/'n/a'/'n_a' status sets context['step5_verification_skipped']=1 \u2014 detected from the parsed status INDEPENDENT of the provider success flag (round-10 #1: an agent can emit a coherent skipped block even when its provider call timed out) \u2014 and triggers a dedicated pre-push gate that refuses any commit/push because tests never ran (round-9 #1), including the no-changes-clean-worktree path (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user); the gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time so a mid-loop interruption + resume cannot slip past via a missing in-memory cache (round-10 #3). (b) The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND the local merge-base diff in context['pr_scope_changed_files'] (round-8 #2 \u2014 tolerates GitHub API outages), parses both formats with regex `^-\\s+([A-Z][A-Z0-9]*):\\s*(.+?)\\s*$` (uppercase words from the API formatter, short git statuses M/A/R100 from the local-diff formatter), extends the scope-allowed set with Step 5 failure paths (round-8 #3 \u2014 matches the Step 6 prompt's allowance for editing failing test files and causally-connected files without an EXPANSION_ITEMS marker; the causal guard remains the backstop for zero-overlap fixes), parses EXPANSION_ITEMS as a structured per-marker allowlist requiring BOTH a non-empty path list AND a per-marker causal justification (_parse_expansion_items); follow-up lines only count when they carry semantic content (round-7 #1: prefix marker, path mention, or causal keyword \u2014 bare indentation/bullets do not qualify). (c) A clean PR run (Steps 3, 4, AND 5 all reported success \u2192 fixer skipped) MUST NOT commit or push worktree changes from non-fixer steps; a dedicated clean-run side-effect guard fires before scope/causal/size checks. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] so a manual --start-step 7 without prior fixer state still trips the guard (round-7 #2). (d) Pre-push diff sanity gate (_diff_size_added_lines_by_path returning per-path counts; total via _diff_size_added_lines + DIFF_SIZE_ADDED_LOC_LIMIT, overridable via PDD_CHECKUP_DIFF_LOC_LIMIT \u2014 0 disables, unparseable falls back to default) refuses pushes adding more than the configured added-line threshold unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry; small companion files are exempt (round-9 #2). A diffuse over-limit diff with no individually oversized path falls back to the original strict 'every changed path covered' rule so death-by-a-thousand-cuts diffs are still blocked. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is not guarded on truthiness so an empty/missing Step 5 output fails closed as a logical failure (pass-17 #1). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt and returns (False, ...) \u2014 calling _post_pr_mode_final_report(refusal_message) before returning so PR/issue threads receive a terminal status comment even without a Step 7 output, then clear_workflow_state(...) so the next rerun reruns Step 5 rather than replaying the stale cache; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and returns (False, ...) the same way. clear_workflow_state returns a bool and github_clear_state neutralises a state comment that cannot be DELETEd (round-17) so stale GitHub state \u2014 which load_workflow_state prefers over local \u2014 cannot replay the refusal on the next run. Non-PR no-fix runs are unaffected.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -8277,7 +8296,9 @@
   {
     "reason": "Registers all PDD subcommands with the main CLI group in canonical order, determining `pdd --help` command listing.",
     "description": "Aggregates command functions from sibling modules in pdd/commands and registers them with the Click CLI group. Keeps the main cli.py clean and pins the registration order required by `pdd --help`.",
-    "dependencies": [],
+    "dependencies": [
+      "commands/replay_python.prompt"
+    ],
     "priority": 70,
     "filename": "commands/__init___python.prompt",
     "filepath": "pdd/commands/__init__.py",
@@ -9898,7 +9919,9 @@
   {
     "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance.",
     "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance when provided.",
-    "dependencies": [],
+    "dependencies": [
+      "context_snapshot_python.prompt"
+    ],
     "priority": 244,
     "filename": "pdd/evidence_manifest_python.prompt",
     "filepath": "pdd/evidence_manifest.py",
@@ -9913,7 +9936,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(*, command: str, grounding: Optional[Dict[str, Any]] = None, ...) -> Path",
+            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False) -> Path",
             "returns": "Path"
           },
           {
@@ -10011,6 +10034,136 @@
             "name": "ContentSelector.select",
             "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\")",
             "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
+    "description": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
+    "dependencies": [
+      "path_resolution_python.prompt",
+      "content_selector_python.prompt",
+      "include_query_extractor_python.prompt",
+      "context_snapshot_python.prompt"
+    ],
+    "priority": 243,
+    "filename": "preprocess_python.prompt",
+    "filepath": "pdd/preprocess.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "preprocess",
+            "signature": "(prompt, recursive, double_curly_brackets, exclude_keys, _seen)",
+            "returns": "str"
+          },
+          {
+            "name": "get_file_path",
+            "signature": "(file_name)",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Defines miscellaneous CLI commands, including preprocess with snapshot forwarding.",
+    "description": "Defines miscellaneous CLI commands, including preprocess with snapshot forwarding.",
+    "dependencies": [
+      "preprocess_main_python.prompt"
+    ],
+    "priority": 244,
+    "filename": "commands/misc_python.prompt",
+    "filepath": "pdd/commands/misc.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "preprocess",
+            "description": "Preprocess prompt files with optional XML tagging, PDD tag injection, and context snapshots"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Defines frontend TypeScript type contracts for commands, options, architecture, and config.",
+    "description": "Defines frontend TypeScript type contracts for commands, options, architecture, and config.",
+    "dependencies": [],
+    "priority": 246,
+    "filename": "frontend/types_typescript.prompt",
+    "filepath": "pdd/frontend/types.ts",
+    "tags": [
+      "module"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": []
+      }
+    }
+  },
+  {
+    "reason": "Owns durable snapshot and replay primitives for expanded prompt context.",
+    "description": "Owns durable snapshot and replay primitives for expanded prompt context.",
+    "dependencies": [],
+    "priority": 247,
+    "filename": "context_snapshot_python.prompt",
+    "filepath": "pdd/context_snapshot.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "start_snapshot_run",
+            "signature": "(prompt_path: str | Path, *, evidence_root: str | Path | None = None, command: str = \"\")",
+            "returns": "ContextSnapshotRecorder"
+          },
+          {
+            "name": "replay_snapshot",
+            "signature": "(run_artifact: str | Path)",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Implements the top-level replay command for auditing expanded prompt context snapshots.",
+    "description": "Implements the top-level replay command for auditing expanded prompt context snapshots.",
+    "dependencies": [
+      "context_snapshot_python.prompt"
+    ],
+    "priority": 248,
+    "filename": "commands/replay_python.prompt",
+    "filepath": "pdd/commands/replay.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "replay",
+            "description": "Reconstruct and audit expanded prompt context from a snapshot run artifact"
           }
         ]
       }
