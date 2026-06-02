@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "preprocess", "signature": "(prompt, recursive, double_curly_brackets, exclude_keys, _seen)", "returns": "str"},
+      {"name": "preprocess", "signature": "(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, _seen=None)", "returns": "str"},
       {"name": "get_file_path", "signature": "(file_name)", "returns": "str"}
     ]
   }
@@ -30,7 +30,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
    - Returns the preprocessed prompt string; preserve leading/trailing whitespace
    - If `prompt` is not a string, return `str(prompt)`; if empty, print error and return `""`
 2. Tags must be processed in this order: `<pdd>` → `<include>` (and backtick includes) → `<include-many>` → `<shell>` → `<web>`. This order matters because earlier tags can produce content containing later tags (e.g., an included file may contain `<shell>` tags). Apply curly-brace doubling last, only on the top-level call.
-3. Tags inside fenced code blocks (``` or ~~~) or inline backtick spans must NOT be processed. Tags that span into or overlap a code block must also be skipped.
+3. Tags inside fenced code blocks (``` or ~~~) or inline backtick spans must NOT be processed (except for backtick includes defined in Requirement 13). Tags that span into or overlap a code block must also be skipped.
 4. `<pdd>...</pdd>` — delete entire block including tags (human-only comment)
 5. `<include>path</include>` — read file as UTF-8 and replace tag with contents
    - Also supports self-closing syntax: `<include path="..." />`

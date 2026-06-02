@@ -34,13 +34,6 @@ from .architecture_sync import (
 from .architecture_registry import extract_modules
 from .architecture_include_validation import validate_prompt_contract_context
 from .validate_prompt_includes import validate_prompt_includes
-from .grounding_provenance import (
-    build_grounding_metadata,
-    grounding_reviewed_for_manifest,
-    review_pinned_examples_before_generation,
-    stash_grounding_overrides_on_ctx,
-    warn_cloud_examples_not_preapproved,
-)
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -707,7 +700,108 @@ def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
     return state
 
 
-def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
+def _symbols_from_patch_path(patch_path: str, module_stem: str) -> Set[str]:
+    symbols: Set[str] = set()
+    prefix = f"{module_stem}."
+    if patch_path.startswith(prefix):
+        symbols.add(patch_path[len(prefix) :])
+    parts = patch_path.split(".")
+    for index, part in enumerate(parts):
+        if part == module_stem and index < len(parts) - 1:
+            symbols.add(".".join(parts[index + 1 :]))
+    return symbols
+
+
+def _symbol_exists_in_module(tree: ast.Module, symbol: str) -> bool:
+    """Return True when *symbol* is defined in *tree* (supports dotted class paths)."""
+    if "." not in symbol:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name == symbol:
+                    return True
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id == symbol:
+                        return True
+        return False
+    cls_name, remainder = symbol.split(".", 1)
+    cls_node = next(
+        (node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == cls_name),
+        None,
+    )
+    if cls_node is None:
+        return False
+    if "." not in remainder:
+        return any(
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == remainder
+            for child in cls_node.body
+        )
+    inner_cls, method_name = remainder.split(".", 1)
+    for child in cls_node.body:
+        if isinstance(child, ast.ClassDef) and child.name == inner_cls:
+            return any(
+                isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and method.name == method_name
+                for method in child.body
+            )
+    return False
+
+
+def _effective_patch_targets(
+    existing_code: str,
+    language: str,
+    file_path: Optional[str],
+) -> Set[str]:
+    """Patch targets referenced by tests that are actually defined in *existing_code*."""
+    candidates = _collect_patch_targets(file_path)
+    if not candidates or (language or "").lower() not in {"python", "py"}:
+        return set()
+    try:
+        tree = ast.parse(existing_code or "")
+    except SyntaxError:
+        return set()
+    return {symbol for symbol in candidates if _symbol_exists_in_module(tree, symbol)}
+
+
+def _collect_patch_targets(file_path: Optional[str]) -> Set[str]:
+    """Return dotted symbol names patched by sibling tests for *file_path*."""
+    if not file_path:
+        return set()
+    path = pathlib.Path(file_path)
+    if not path.is_file() or path.suffix.lower() != ".py":
+        return set()
+    from .split_validation import _collect_patch_paths  # pylint: disable=import-outside-toplevel
+
+    module_stem = path.stem
+    targets: Set[str] = set()
+    candidates: list[pathlib.Path] = []
+    candidates.extend(path.parent.glob("test_*.py"))
+    tests_dir = path.parent / "tests"
+    if tests_dir.is_dir():
+        candidates.extend(tests_dir.glob("test_*.py"))
+    parent_tests = path.parent.parent / "tests"
+    if parent_tests.is_dir():
+        candidates.extend(parent_tests.glob("test_*.py"))
+    seen_files: Set[str] = set()
+    for test_file in candidates:
+        resolved = str(test_file.resolve())
+        if resolved in seen_files:
+            continue
+        seen_files.add(resolved)
+        try:
+            test_content = test_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for patch_path in _collect_patch_paths(test_content):
+            targets.update(_symbols_from_patch_path(patch_path, module_stem))
+    return targets
+
+
+def _snapshot_public_surface(
+    code_text: str,
+    language: str,
+    patch_targets: Optional[Set[str]] = None,
+) -> Set[str]:
     """Collect public top-level functions/classes plus public class methods.
 
     Recurses into public nested classes so a method on ``Outer.Inner`` is
@@ -793,6 +887,8 @@ def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
                 # User opted the whole class into __all__; treat its
                 # members (including underscore-prefixed) as public.
                 _walk_class(class_defs[name], name, include_underscore=True)
+        if patch_targets:
+            names.update(patch_targets)
         return names
 
     def _add_assign_targets(target: ast.AST) -> None:
@@ -855,6 +951,9 @@ def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
                 exposed = alias.asname or alias.name
                 if exposed and not exposed.startswith("_"):
                     names.add(exposed)
+
+    if patch_targets:
+        names.update(patch_targets)
 
     return names
 
@@ -1862,7 +1961,12 @@ def _verify_public_surface_regression(
     ):
         return
 
-    before = _snapshot_public_surface(existing_code, language or "python")
+    patch_targets = _effective_patch_targets(existing_code, language or "python", output_path)
+    before = _snapshot_public_surface(
+        existing_code,
+        language or "python",
+        patch_targets=patch_targets,
+    )
     after = _snapshot_public_surface(generated_code, language or "python")
     if not before:
         return
@@ -3107,10 +3211,7 @@ def code_generator_main(
             prompt_content = body
         else:
             prompt_content = raw_prompt_content
-
-        if isinstance(ctx.obj, dict):
-            stash_grounding_overrides_on_ctx(ctx.obj, prompt_content)
-
+        
         # Determine LLM state early to avoid unnecessary overwrite prompts
         llm_enabled: bool = True
         env_llm_raw = None
@@ -3697,29 +3798,10 @@ def code_generator_main(
                     current_execution_is_local = True
 
                 if jwt_token and not current_execution_is_local:
-                    payload = {
-                        "promptContent": processed_prompt_for_cloud,
-                        "searchInput": prompt_content,
-                        "language": language,
-                        "strength": strength,
-                        "temperature": temperature,
-                        "verbose": verbose,
-                    }
+                    payload = {"promptContent": processed_prompt_for_cloud, "searchInput": prompt_content, "language": language, "strength": strength, "temperature": temperature, "verbose": verbose}
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
                     try:
-                        ctx_obj = ctx.obj if isinstance(ctx.obj, dict) else None
-                        if ctx_obj is None:
-                            ctx.obj = {}
-                            ctx_obj = ctx.obj
-                        overrides = stash_grounding_overrides_on_ctx(ctx_obj, prompt_content)
-                        if cli_params.get("review_examples"):
-                            review_pinned_examples_before_generation(
-                                ctx_obj,
-                                prompt_content,
-                                force=force_overwrite,
-                                quiet=quiet,
-                            )
                         response = requests.post(cloud_url, json=payload, headers=headers, timeout=get_cloud_request_timeout())
                         response.raise_for_status()
                         
@@ -3730,26 +3812,6 @@ def code_generator_main(
 
                         # Extract example information from examplesUsed array (cloud returns this)
                         examples_used = response_data.get("examplesUsed", [])
-                        if cli_params.get("review_examples"):
-                            warn_cloud_examples_not_preapproved(
-                                examples_used,
-                                cli_params.get("grounding_review_decisions"),
-                                quiet=quiet,
-                            )
-                        grounding_meta = build_grounding_metadata(
-                            mode="cloud",
-                            examples_used=examples_used,
-                            grounding_overrides=overrides,
-                            reviewed=grounding_reviewed_for_manifest(
-                                cli_params,
-                                examples_used,
-                            ),
-                        )
-                        if ctx.obj is None:
-                            ctx.obj = {}
-                        if isinstance(ctx.obj, dict):
-                            ctx.obj["last_grounding"] = grounding_meta
-
                         if examples_used:
                             selected_example_id = examples_used[0].get("id")
                             selected_example_title = examples_used[0].get("title")
@@ -3782,10 +3844,6 @@ def code_generator_main(
                                  console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}{example_info}", title="[green]Cloud Success[/green]", expand=False))
                              else:
                                  console.print(Panel(f"Cloud generation successful. Model: {model_name}, Cost: ${total_cost:.6f}", title="[green]Cloud Success[/green]", expand=False))
-                             if grounding_meta.get("selected_examples"):
-                                 console.print("[cyan]Grounding examples selected:[/cyan]")
-                                 for example in grounding_meta["selected_examples"]:
-                                     console.print(f"  - {example.get('module', 'unknown')}")
                     except requests.exceptions.Timeout:
                         if cloud_only:
                             console.print(f"[red]Cloud execution timed out ({get_cloud_timeout()}s).[/red]")
@@ -4289,15 +4347,5 @@ def code_generator_main(
             console.print(traceback.format_exc())
 
         raise click.UsageError(f"An unexpected error occurred: {e}")
-
-    if isinstance(ctx.obj, dict) and "last_grounding" not in ctx.obj:
-        overrides = ctx.obj.get("grounding_overrides") or stash_grounding_overrides_on_ctx(
-            ctx.obj, prompt_content
-        )
-        ctx.obj["last_grounding"] = build_grounding_metadata(
-            mode="unavailable",
-            grounding_overrides=overrides,
-            reviewed=grounding_reviewed_for_manifest(cli_params, []),
-        )
-
+        
     return generated_code_content or "", was_incremental_operation, total_cost, model_name
