@@ -79,7 +79,13 @@ def _pushd(path: Path) -> Iterable[None]:
 
 
 def _norm(path: str) -> str:
-    return str(path).replace("\\", "/").strip().lstrip("./")
+    # NB: ``.removeprefix("./")`` not ``.lstrip("./")`` — lstrip strips a
+    # CHARACTER SET, so it would eat leading dots from real names
+    # (``.npmrc`` -> ``npmrc``, ``.github/...`` -> ``github/...``). That silently
+    # defeats the package-manager-config RCE skip-guard in checkup_gates (which
+    # matches the ``.npmrc`` basename) and the docs-only ``.github/`` short
+    # circuit. removeprefix strips only a literal leading ``./``.
+    return str(path).replace("\\", "/").strip().removeprefix("./")
 
 
 def _scrub(text: Any) -> str:
@@ -144,7 +150,7 @@ def _load_architecture(worktree: Path) -> List[Dict[str, Any]]:
         return []
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return []
     if isinstance(data, dict):
         modules = data.get("modules", [])
@@ -464,7 +470,31 @@ def _check_python_imports(
 
 
 def _route_like_source(text: str) -> bool:
-    return any(token in text for token in ("APIRouter(", "FastAPI(", "@app.route", "Blueprint("))
+    """True only if the source ACTUALLY constructs a web router/app or declares
+    a route, detected via the AST (real ``Call`` / decorator nodes) rather than
+    a raw substring scan. A substring match (``"APIRouter(" in text``) also
+    fires when a file merely *mentions* these names in a string or comment —
+    including this module's own token list — which made the route-probe
+    hard-block any PR that touches such a file. The AST sees those mentions as
+    ``ast.Constant`` strings, not calls, so they no longer false-trigger.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        return False
+    constructors = {"APIRouter", "FastAPI", "Blueprint"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            cname = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+            if cname in constructors:
+                return True
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for dec in node.decorator_list:
+                target = dec.func if isinstance(dec, ast.Call) else dec
+                if isinstance(target, ast.Attribute) and target.attr == "route":
+                    return True
+    return False
 
 
 def _check_route_probe(
@@ -493,7 +523,7 @@ def _check_route_probe(
             continue
         try:
             text = path.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             continue
         if not _route_like_source(text):
             continue
@@ -526,7 +556,7 @@ class _FunctionSig:
 def _public_function_sigs(path: Path) -> Dict[str, _FunctionSig]:
     try:
         tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (OSError, SyntaxError):
+    except (OSError, SyntaxError, UnicodeDecodeError):
         return {}
     sigs: Dict[str, _FunctionSig] = {}
     for node in tree.body:
@@ -741,7 +771,12 @@ def _check_caller_compatibility(
         scanned += 1
         try:
             text = py_file.read_text(encoding="utf-8")
-        except OSError:
+        except (OSError, UnicodeDecodeError):
+            # A non-UTF-8 source (e.g. a ``# coding: latin-1`` fixture) raises
+            # UnicodeDecodeError, which is a ValueError — NOT an OSError. Without
+            # catching it here the whole sweep escapes to run_pre_checkup_gate's
+            # top-level handler and fails the gate CLOSED ("infrastructure
+            # error") on EVERY PR, triggered by one unrelated repo file. Skip it.
             continue
         if not any(tail in text for tail in tails):
             continue
@@ -804,12 +839,27 @@ def _check_caller_compatibility(
                 continue
             pos_count = len(node.args)
             kw_names = {kw.arg for kw in node.keywords if kw.arg is not None}
-            if sig.max_positional is not None and pos_count > sig.max_positional:
+            # A positional ``*args`` spread (``f(*pair)`` / ``f(a, b, *rest)``)
+            # makes the static positional count meaningless — the runtime length
+            # is unknown — so skip BOTH arity checks when one is present (mirrors
+            # the ``**kwargs`` guard below). ``len(node.args)`` counts an
+            # ``ast.Starred`` as a single positional arg, which would otherwise
+            # false-block valid spread calls; this check HARD-BLOCKS the PR.
+            has_star_arg = any(isinstance(a, ast.Starred) for a in node.args)
+            if (
+                not has_star_arg
+                and sig.max_positional is not None
+                and pos_count > sig.max_positional
+            ):
                 failures.append(
                     f"caller-compat failed: {rel_caller} calls "
                     f"{name} with {pos_count} positional args, max {sig.max_positional}"
                 )
-            if pos_count < sig.min_positional and not any(kw.arg is None for kw in node.keywords):
+            if (
+                not has_star_arg
+                and pos_count < sig.min_positional
+                and not any(kw.arg is None for kw in node.keywords)
+            ):
                 supplied = pos_count + len(kw_names)
                 if supplied < sig.min_positional:
                     failures.append(

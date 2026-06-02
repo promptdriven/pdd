@@ -408,6 +408,81 @@ def test_targeted_tests_note_for_changed_js_ts_test(tmp_path):
     assert any("JS/TS test" in n and "foo.test.ts" in n for n in notes), notes
 
 
+def test_route_like_source_ignores_token_mentions_not_calls():
+    """Regression: _route_like_source must use the AST (real router/app calls,
+    @*.route decorators), NOT a raw substring scan. A file that merely MENTIONS
+    the framework tokens in a string/comment — e.g. this gate module's own token
+    list, or a test — must NOT be classified route-like, else the route-probe
+    hard-blocks any PR touching it. Real constructors/decorators must still match."""
+    # Tokens present only as string literals -> not route-like.
+    mentions = (
+        'TOKENS = ("APIRouter(", "FastAPI(", "@app.route", "Blueprint(")\n'
+        '# documents APIRouter( usage\n'
+    )
+    assert pre_checkup_gate._route_like_source(mentions) is False
+    # The gate module references those tokens itself; must not self-flag.
+    own = Path(pre_checkup_gate.__file__).read_text(encoding="utf-8")
+    assert pre_checkup_gate._route_like_source(own) is False
+    # Real constructs still detected.
+    assert pre_checkup_gate._route_like_source("from fastapi import APIRouter\nr = APIRouter()\n") is True
+    assert pre_checkup_gate._route_like_source("app = FastAPI()\n") is True
+    assert pre_checkup_gate._route_like_source("@app.route('/x')\ndef h():\n    pass\n") is True
+
+
+def test_caller_compat_allows_star_unpack_calls(tmp_path):
+    """Regression: a positional ``*args`` spread makes the static positional
+    count meaningless, so arity checks must be skipped — ``render(*pair)`` and
+    ``render(1, 2, *rest)`` are valid Python and must NOT be flagged. A genuine
+    over-supply without a spread must still be caught (teeth preserved)."""
+    _write_pkg_module(tmp_path, "api", "def render(a, b):\n    return a + b\n")
+    (tmp_path / "consumer.py").write_text(
+        "from pkg.api import render\n"
+        "pair = (1, 2)\nrender(*pair)\n"
+        "rest = [3]\nrender(1, 2, *rest)\n",
+        encoding="utf-8",
+    )
+    failures, _notes = pre_checkup_gate._check_caller_compatibility(
+        tmp_path, ["pkg/api.py"], timeout=30.0
+    )
+    assert failures == [], failures
+
+    (tmp_path / "bad.py").write_text(
+        "from pkg.api import render\nrender(1, 2, 3)\n", encoding="utf-8"
+    )
+    failures2, _ = pre_checkup_gate._check_caller_compatibility(
+        tmp_path, ["pkg/api.py"], timeout=30.0
+    )
+    assert any("positional" in f for f in failures2), failures2
+
+
+def test_non_utf8_file_does_not_fail_closed(tmp_path):
+    """Regression: a non-UTF-8 .py anywhere in the worktree raises
+    UnicodeDecodeError (a ValueError, NOT OSError). The caller-compat sweep reads
+    every .py, so an unrelated non-UTF-8 file would escape to the top-level
+    handler and fail the gate CLOSED on every PR. It must be skipped instead."""
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "api.py").write_text("def build(name):\n    return name\n", encoding="utf-8")
+    (tmp_path / "latin.py").write_bytes(b"# coding: latin-1\nx = '\xe9'\n")
+
+    passed, message, _cost = pre_checkup_gate.run_pre_checkup_gate(
+        tmp_path, ["pkg/api.py"], quiet=True, timeout_per_check=30.0
+    )
+    assert passed is True, message
+    assert "infrastructure error" not in message, message
+
+
+def test_norm_preserves_leading_dot():
+    """Regression: _norm must use removeprefix('./'), not lstrip('./') (which
+    strips a CHARACTER SET). Leading dots in real names must survive, or the
+    package-manager-config RCE skip-guard and the docs-only .github/ short
+    circuit silently break."""
+    assert pre_checkup_gate._norm(".npmrc") == ".npmrc"
+    assert pre_checkup_gate._norm(".github/workflows/ci.yml") == ".github/workflows/ci.yml"
+    assert pre_checkup_gate._norm(".pre-commit-config.yaml") == ".pre-commit-config.yaml"
+    assert pre_checkup_gate._norm("./rel/x.py") == "rel/x.py"
+
+
 def test_python_import_env_drops_secrets_keeps_pythonpath(monkeypatch, tmp_path):
     """Issue #1293 (security): the gate executes worktree code, so its subprocess
     env must drop secret-bearing vars (LLM/cloud/VCS keys + tokens) while keeping
