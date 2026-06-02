@@ -1874,7 +1874,6 @@ def run_agentic_bug_orchestrator(
     if clean_restart:
         startup_body = (
             "- **Mode**: Clean restart\n"
-            f"- **Model**: {model_used}\n"
             "- **Command**: pdd bug\n"
         )
         try:

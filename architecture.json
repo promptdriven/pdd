@@ -2449,9 +2449,10 @@
   },
   {
     "reason": "Iterative test-fix loop with verification, failure-aware retries, and agentic fallback for unresolved failures.",
-    "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations.",
+    "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations. Supports two-phase focused repair for large dev units via fix_focus, and failure-aware early exit for syntax/import and timeout/flaky failures.",
     "dependencies": [
-      "failure_classification_python.prompt"
+      "failure_classification_python.prompt",
+      "fix_focus_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2472,7 +2473,7 @@
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True)",
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False)",
             "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
@@ -2484,12 +2485,78 @@
     }
   },
   {
-    "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
-    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "reason": "Static analysis helpers for focused repair: skeleton extraction, function slicing, and reconstruction. Zero I/O. Phase-1 diagnosis uses one lightweight llm_invoke call when fast-path traceback parsing finds no targets or when fast-path targets do not match product-code slices.",
+    "description": "AST-based module used by fix_error_loop and fix_main for two-phase focused repair of large dev units. Provides skeleton extraction, function slicing, traceback parsing, focused test slicing, and source reconstruction. The prepare_focused_inputs Phase-1 path calls llm_invoke (lazy import) when fast-path traceback parsing returns no function names OR when fast-path names match no product-code slices (e.g. assertion-only failures where only test functions appear in the traceback), but skips that LLM call and returns [] when ast.parse(code) raises SyntaxError so syntax-broken large files fall back instead of sending an unchanged full source payload. Focused test slicing preserves setup/teardown, fixtures, class attributes, non-test helper methods, and referenced non-collecting top-level support definitions such as TestBase; it falls back to the full test file when the dependency-preserving slice is not meaningfully smaller.",
+    "dependencies": [
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 64,
+    "filename": "fix_focus_python.prompt",
+    "filepath": "pdd/fix_focus.py",
+    "tags": [
+      "fix",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "is_large",
+            "signature": "(code: str, unit_test: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "build_skeleton",
+            "signature": "(code: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "extract_function_names_from_traceback",
+            "signature": "(error: str) -> list[str]",
+            "returns": "list[str]"
+          },
+          {
+            "name": "prepare_focused_inputs",
+            "signature": "(code: str, unit_test: str, error: str, strength: float, temperature: float, time: float, verbose: bool, language: Optional[str]) -> Optional[FocusedInputs]",
+            "returns": "Optional[FocusedInputs]"
+          },
+          {
+            "name": "reconstruct_code",
+            "signature": "(original_code: str, fixed_focused_code: str, slices: list[FunctionSlice]) -> str",
+            "returns": "str"
+          }
+        ],
+        "models": [
+          {
+            "name": "DiagnosisResult",
+            "fields": ["function_names: list[str]"]
+          },
+          {
+            "name": "FunctionSlice",
+            "fields": ["name: str", "qualname: str", "start_line: int", "end_line: int", "source: str", "indent: int"]
+          },
+          {
+            "name": "FocusedInputs",
+            "fields": ["focused_code: str", "focused_tests: str", "slices: list[FunctionSlice]"]
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 9280,
+      "y": 1760
+    }
+  },
+  {
+    "reason": "CLI entry point for the fix command; single-pass cloud/local modes use fix_focus for large dev units and auto-submit short-circuits in cloud executors with a bounded Device Flow JWT call.",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
-      "core/cloud_python.prompt"
+      "core/cloud_python.prompt",
+      "fix_focus_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
@@ -2505,7 +2572,7 @@
         "commands": [
           {
             "name": "fix_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None) -> Tuple[bool, str, str, int, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True) -> Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -9708,10 +9775,45 @@
     }
   },
   {
-    "reason": "Optional per-run JSON evidence manifests for supported commands.",
-    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps.",
+    "reason": "Loads optional .pdd/grounding_policy.yaml and checks per-run grounding evidence against required-review and required-pin rules for critical modules.",
+    "description": "Policy library for the grounding evidence recorded by pdd generate. Library-only; CI integration (pdd gate) will be wired separately.",
     "dependencies": [],
-    "priority": 242,
+    "priority": 243,
+    "filename": "grounding_policy_python.prompt",
+    "filepath": "pdd/grounding_policy.py",
+    "tags": [
+      "module",
+      "python",
+      "grounding",
+      "policy"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "load_policy",
+            "signature": "(path: Optional[str] = None) -> GroundingPolicy",
+            "returns": "GroundingPolicy"
+          },
+          {
+            "name": "check",
+            "signature": "(policy: GroundingPolicy, module: str, grounding: Dict[str, Any]) -> List[PolicyViolation]",
+            "returns": "List[PolicyViolation]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance.",
+    "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance when provided.",
+    "dependencies": [],
+    "priority": 244,
     "filename": "pdd/evidence_manifest_python.prompt",
     "filepath": "pdd/evidence_manifest.py",
     "tags": [
@@ -9725,7 +9827,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(**, command: str, ...) -> Path",
+            "signature": "(*, command: str, grounding: Optional[Dict[str, Any]] = None, ...) -> Path",
             "returns": "Path"
           },
           {

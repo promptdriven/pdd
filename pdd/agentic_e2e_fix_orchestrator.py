@@ -2290,7 +2290,6 @@ def run_agentic_e2e_fix_orchestrator(
                 body=(
                     "## Step 0/11: Workflow Startup\n\n"
                     "- **Mode**: Clean restart\n"
-                    f"- **Model**: {model_used}\n"
                     "- **Command**: pdd fix"
                 ),
                 posted_steps=step_comments_set,

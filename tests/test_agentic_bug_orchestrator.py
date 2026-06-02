@@ -923,6 +923,12 @@ def test_clean_restart_clears_state_and_skips_load(mock_dependencies, default_ar
     mock_load.assert_not_called()
     assert "step1" in [call.kwargs["label"] for call in mock_run.call_args_list]
     assert any(c.kwargs.get("step_num") == 0 for c in mock_post.call_args_list)
+    # Issue #1306: the Step 0 banner must not advertise a model.
+    assert all(
+        "**Model**" not in c.kwargs.get("body", "")
+        for c in mock_post.call_args_list
+        if c.kwargs.get("step_num") == 0
+    )
     assert any(state.get("clean_restart") is True for state in saved_states)
 
 
