@@ -272,6 +272,52 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return False, e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
 
 
+def _prune_worktrees(cwd: Path) -> Tuple[bool, str]:
+    """Prune stale git worktree registrations."""
+    try:
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=cwd,
+            capture_output=True,
+            check=True,
+        )
+        return True, ""
+    except subprocess.CalledProcessError as e:
+        return False, e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+
+
+def _worktree_path_for_branch(cwd: Path, branch: str) -> Optional[str]:
+    """Return the registered worktree path currently using a local branch."""
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+
+    current_path: Optional[str] = None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_path = line.split(" ", 1)[1]
+        elif line == f"branch refs/heads/{branch}":
+            return current_path
+    return None
+
+
+def _format_branch_worktree_error(cwd: Path, branch: str, delete_error: str) -> str:
+    """Build a direct branch cleanup error with the conflicting worktree path."""
+    worktree_path = _worktree_path_for_branch(cwd, branch)
+    if worktree_path:
+        return (
+            f"Cannot reset branch {branch} because it is checked out in worktree "
+            f"{worktree_path}. Remove that worktree or run 'git worktree prune' and retry."
+        )
+    return f"Failed to delete existing branch {branch}: {delete_error}"
+
+
 def _pr_worktree_branch_name(git_root: Path, pr_number: int) -> str:
     """Return a PR worktree branch name scoped to this checkout root."""
     root_scope = hashlib.sha1(str(git_root.resolve()).encode("utf-8")).hexdigest()[:8]
@@ -992,10 +1038,16 @@ def _setup_pr_worktree(
                 console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
             shutil.rmtree(worktree_path)
 
+    prune_ok, prune_err = _prune_worktrees(git_root)
+    if not prune_ok:
+        return None, f"Failed to prune stale worktrees: {prune_err}"
+
     # 2. Fetch the PR's head into a local branch.
     #    Always refresh (force) so a re-run picks up new pushes to the PR.
     if _branch_exists(git_root, branch_name) and not resume_existing:
-        _delete_branch(git_root, branch_name)
+        delete_ok, delete_err = _delete_branch(git_root, branch_name)
+        if not delete_ok:
+            return None, _format_branch_worktree_error(git_root, branch_name, delete_err)
 
     # Resolve which remote actually has this PR. Prefer a configured remote
     # (uses the user's auth + caching); fall back to the explicit GitHub URL
@@ -1080,6 +1132,10 @@ def _setup_worktree(
                 console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
             shutil.rmtree(worktree_path)
 
+    prune_ok, prune_err = _prune_worktrees(git_root)
+    if not prune_ok:
+        return None, f"Failed to prune stale worktrees: {prune_err}"
+
     # 2. Handle existing branch
     has_branch = _branch_exists(git_root, branch_name)
     if has_branch:
@@ -1089,7 +1145,9 @@ def _setup_worktree(
         else:
             if not quiet:
                 console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
-            _delete_branch(git_root, branch_name)
+            delete_ok, delete_err = _delete_branch(git_root, branch_name)
+            if not delete_ok:
+                return None, _format_branch_worktree_error(git_root, branch_name, delete_err)
             has_branch = False
 
     # 3. Create worktree
