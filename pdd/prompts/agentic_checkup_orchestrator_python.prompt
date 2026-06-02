@@ -1,4 +1,4 @@
-<pdd-reason>Multi-step pdd checkup orchestrator; PR mode supports an optional issue, reviewing the PR on its own merits.</pdd-reason>
+<pdd-reason>Multi-step pdd checkup orchestrator; PR mode pushes back to the same PR and supports an optional issue, reviewing the PR on its own merits.</pdd-reason>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 <pdd-dependency>checkup_gates_python.prompt</pdd-dependency>

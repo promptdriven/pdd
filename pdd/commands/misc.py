@@ -25,7 +25,10 @@ from ..core.errors import handle_error
     "--recursive",
     is_flag=True,
     default=False,
-    help="Recursively preprocess includes.",
+    help=(
+        "Recursively preprocess includes. Incompatible with --snapshot when the "
+        "prompt uses <shell>, <web>, or query= includes (those tags are deferred)."
+    ),
 )
 @click.option(
     "--double",
@@ -45,6 +48,12 @@ from ..core.errors import handle_error
     default=False,
     help="Inject PDD metadata tags (<pdd-reason>, <pdd-interface>, <pdd-dependency>) from architecture.json.",
 )
+@click.option(
+    "--snapshot",
+    is_flag=True,
+    default=False,
+    help="Write replayable expanded prompt context artifacts.",
+)
 @click.pass_context
 # No @track_cost as preprocessing is local, but return dummy tuple for callback
 def preprocess(
@@ -56,6 +65,7 @@ def preprocess(
     double: bool,
     exclude: Optional[Tuple[str, ...]],
     pdd_tags: bool,
+    snapshot: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """Preprocess a prompt file to prepare it for LLM use."""
     try:
@@ -70,6 +80,7 @@ def preprocess(
             double=double,
             exclude=list(exclude) if exclude else [],
             pdd_tags=pdd_tags,
+            snapshot=snapshot,
         )
         
         # Handle the result from preprocess_main

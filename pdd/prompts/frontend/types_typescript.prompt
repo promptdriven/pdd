@@ -1,7 +1,18 @@
+<pdd-reason>Defines frontend TypeScript type contracts for commands, options, architecture, and config.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": []
+  }
+}
+</pdd-interface>
+
 % You are an expert TypeScript engineer. Generate `pdd/frontend/types.ts` as a pure type-contract module (`enum` + `interface` exports only).
 
 % Required exports (names, literal unions, and optionality must be exact)
-1) `CommandType` enum values: `SYNC='sync'`, `UPDATE='update'`, `GENERATE='generate'`, `TEST='test'`, `EXAMPLE='example'`, `FIX='fix'`, `BUG='bug'`, `CRASH='crash'`, `VERIFY='verify'`, `SUBMIT_EXAMPLE='submit-example'`, `SPLIT='split'`, `CHANGE='change'`, `DETECT='detect'`, `AUTO_DEPS='auto-deps'`, `CONFLICTS='conflicts'`, `PREPROCESS='preprocess'`.
+1) `CommandType` enum values: `SYNC='sync'`, `UPDATE='update'`, `GENERATE='generate'`, `TEST='test'`, `EXAMPLE='example'`, `FIX='fix'`, `BUG='bug'`, `CRASH='crash'`, `VERIFY='verify'`, `SUBMIT_EXAMPLE='submit-example'`, `SPLIT='split'`, `CHANGE='change'`, `DETECT='detect'`, `AUTO_DEPS='auto-deps'`, `CONFLICTS='conflicts'`, `PREPROCESS='preprocess'`, `REPLAY='replay'`.
 2) `CommandOption`: `{name:string; type:'text'|'textarea'|'file'|'number'|'checkbox'|'range'; placeholder:string; description:string; required?:boolean; defaultValue?:string|number|boolean; min?:number; max?:number; step?:number}`.
 3) `GlobalOption extends CommandOption`: `{cliFlag:string}`.
 4) `GlobalDefaults`: `{strength:number; temperature:number; time:number; verbose:boolean; quiet:boolean; force:boolean; local:boolean; reviewExamples:boolean}`.
@@ -19,3 +30,4 @@
 % Constraints
 - No imports, functions, classes, constants, or runtime logic.
 - Use `any` only in `api.requestSchema`, `api.responseSchema`, `message.topics.schema`, and `config.keys.default`.
+- Use the existing `file` `CommandOption.type` for replay run artifacts; do not add runtime selector logic in this pure type module.

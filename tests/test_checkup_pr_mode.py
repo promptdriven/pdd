@@ -5383,3 +5383,262 @@ class TestPrHeadAdvanceAutoRerun:
         # No restart budget consumed — fail-closed is not a lease event.
         assert _load_persisted_refresh_count(tmp_path, 200) == 0
         assert not self._refresh_counter_path(tmp_path, 200).exists()
+
+
+class TestSetupPrWorktreeStaleBranch:
+    """Regression for the PR-mode sibling of issue #1338/#1281.
+
+    A stale ``checkup/pr-*`` branch left registered to a *removed* worktree
+    directory is freed by ``git worktree prune`` and re-fetched (covered by the
+    real-git tests below). But when pruning does NOT free the branch — it is
+    genuinely checked out in another *live* worktree — ``_setup_pr_worktree``
+    must NOT proceed to ``git fetch pull/<n>/head:<branch>`` (git refuses to
+    fetch into a checked-out branch, producing a cryptic ``Failed to fetch PR``
+    error). It returns a clear, actionable conflict error instead.
+    """
+
+    def test_undeletable_branch_returns_clear_conflict_error(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import _setup_pr_worktree
+
+        fetch_attempted: list = []
+
+        def fake_run(cmd, **kwargs):
+            if list(cmd)[:2] == ["git", "fetch"]:
+                fetch_attempted.append(list(cmd))
+            return MagicMock(returncode=0, stderr=b"")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._branch_exists",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._delete_branch",
+            return_value=(
+                False,
+                "error: Cannot delete branch 'checkup/pr-77-abc' "
+                "checked out at '/live/path'\n",
+            ),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._worktree_holding_branch",
+            return_value="/live/path",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            wt_path, err = _setup_pr_worktree(
+                cwd=tmp_path,
+                pr_owner="acme",
+                pr_repo="thing",
+                pr_number=77,
+                quiet=True,
+                resume_existing=False,
+            )
+
+        assert wt_path is None
+        assert err is not None
+        # Actionable: names the live worktree and how to clear it, instead of
+        # the cryptic "Failed to fetch PR" the user used to get.
+        assert "live worktree" in err
+        assert "/live/path" in err
+        assert "git worktree remove" in err
+        assert "Failed to fetch PR" not in err
+        # Must bail out BEFORE fetching into the checked-out branch.
+        assert not fetch_attempted, (
+            "must not git-fetch into a branch checked out in a live worktree"
+        )
+
+    def test_successful_deletion_still_uses_normal_worktree_add(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import _setup_pr_worktree
+
+        worktree_add_calls: list = []
+
+        def fake_run(cmd, **kwargs):
+            if list(cmd)[:3] == ["git", "worktree", "add"]:
+                worktree_add_calls.append(list(cmd))
+            return MagicMock(returncode=0, stderr=b"")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._branch_exists",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._delete_branch",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            wt_path, err = _setup_pr_worktree(
+                cwd=tmp_path,
+                pr_owner="acme",
+                pr_repo="thing",
+                pr_number=77,
+                quiet=True,
+                resume_existing=False,
+            )
+
+        assert err is None, f"Expected no error but got: {err!r}"
+        assert wt_path is not None
+        assert worktree_add_calls, "Expected at least one 'git worktree add' call"
+
+
+class TestSetupPrWorktreeStaleBranchRealGit:
+    """Real-git regressions for ``_setup_pr_worktree`` stale/live branch
+    handling (#1338).
+
+    The mock-based tests above stub ``subprocess.run`` and return success for
+    the fetch path, so they cannot exercise git's real behavior: a branch
+    checked out in a live worktree is undeletable AND un-fetchable
+    ("refusing to fetch into branch ... checked out at ..."). These drive a
+    real local repo with a real ``refs/pull/<n>/head`` so the fetch step runs
+    for real.
+    """
+
+    @staticmethod
+    def _git(path: Path):
+        def run(*args: str) -> "subprocess.CompletedProcess[str]":
+            return subprocess.run(
+                ["git", *args], cwd=path, capture_output=True, text=True
+            )
+        return run
+
+    def _make_clone_with_pr(
+        self,
+        tmp_path: Path,
+        pr_number: int = 77,
+        owner: str = "acme",
+        repo: str = "thing",
+    ):
+        """Build a local working clone whose configured ``origin`` exposes
+        ``refs/pull/<pr_number>/head``.
+
+        The remote lives at a path containing ``<owner>/<repo>`` so the
+        production ``_resolve_pr_remote`` matches it and the fetch targets the
+        local path (no network)."""
+        remote = tmp_path / "remote" / owner / repo
+        remote.mkdir(parents=True)
+        rgit = self._git(remote)
+        rgit("init", "-q")
+        rgit("config", "user.email", "r@x")
+        rgit("config", "user.name", "r")
+        (remote / "pr.txt").write_text("pr head content\n")
+        rgit("add", ".")
+        rgit("commit", "-q", "-m", "pr head")
+        pr_sha = rgit("rev-parse", "HEAD").stdout.strip()
+        # Expose the commit as the PR head ref, mirroring GitHub's
+        # refs/pull/<n>/head namespace that `_setup_pr_worktree` fetches.
+        rgit("update-ref", f"refs/pull/{pr_number}/head", pr_sha)
+
+        local = tmp_path / "local"
+        local.mkdir()
+        lgit = self._git(local)
+        lgit("init", "-q")
+        lgit("config", "user.email", "l@x")
+        lgit("config", "user.name", "l")
+        (local / "f.txt").write_text("base\n")
+        lgit("add", ".")
+        lgit("commit", "-q", "-m", "init")
+        lgit("remote", "add", "origin", str(remote))
+        return local, lgit
+
+    def test_stale_branch_from_removed_worktree_is_re_fetched(self, tmp_path: Path) -> None:
+        import shutil
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_worktree_branch_name,
+            _setup_pr_worktree,
+        )
+
+        local, lgit = self._make_clone_with_pr(tmp_path)
+        branch = _pr_worktree_branch_name(local, 77)
+        # Branch registered to a worktree dir that is then removed out of band.
+        stale = tmp_path / "old-wt"
+        assert lgit("worktree", "add", "-q", "-b", branch, str(stale), "HEAD").returncode == 0
+        shutil.rmtree(stale)
+
+        wt, err = _setup_pr_worktree(local, "acme", "thing", 77, quiet=True)
+
+        assert err is None, err
+        assert wt is not None and wt.exists()
+        # The checkout reflects the freshly fetched PR head, not the stale base.
+        assert (wt / "pr.txt").exists()
+
+    def test_plain_leftover_branch_is_re_fetched(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_worktree_branch_name,
+            _setup_pr_worktree,
+        )
+
+        local, lgit = self._make_clone_with_pr(tmp_path)
+        branch = _pr_worktree_branch_name(local, 77)
+        lgit("branch", branch)  # leftover ref, not checked out anywhere
+
+        wt, err = _setup_pr_worktree(local, "acme", "thing", 77, quiet=True)
+
+        assert err is None, err
+        assert wt is not None and wt.exists()
+        assert (wt / "pr.txt").exists()
+
+    def test_branch_in_live_worktree_returns_actionable_error(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_worktree_branch_name,
+            _setup_pr_worktree,
+        )
+
+        local, lgit = self._make_clone_with_pr(tmp_path)
+        branch = _pr_worktree_branch_name(local, 77)
+        # Branch genuinely checked out in another LIVE worktree: pruning cannot
+        # free it, and git refuses to fetch into it. Pre-fix this surfaced as a
+        # cryptic "Failed to fetch PR #77 ...".
+        live = tmp_path / "live-wt"
+        assert lgit("worktree", "add", "-q", "-b", branch, str(live), "HEAD").returncode == 0
+
+        wt, err = _setup_pr_worktree(local, "acme", "thing", 77, quiet=True)
+
+        assert wt is None
+        assert err is not None
+        assert "live worktree" in err
+        assert "git worktree remove" in err
+        # Names the offending worktree so the operator knows what to remove.
+        assert "live-wt" in err
+        # NOT the old cryptic fetch failure.
+        assert "Failed to fetch PR" not in err
+        assert "refusing to fetch" not in err
+
+    def test_resume_branch_in_live_worktree_returns_actionable_error(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import (
+            _pr_worktree_branch_name,
+            _setup_pr_worktree,
+        )
+
+        local, lgit = self._make_clone_with_pr(tmp_path)
+        branch = _pr_worktree_branch_name(local, 77)
+        # Resume mode is used when saved PR state points at a missing checkup
+        # worktree. If the scoped branch is still checked out in another live
+        # worktree, git refuses the fetch into that branch. This must surface as
+        # the same actionable conflict as fresh setup, not "Failed to fetch PR".
+        live = tmp_path / "live-resume-wt"
+        assert lgit("worktree", "add", "-q", "-b", branch, str(live), "HEAD").returncode == 0
+
+        wt, err = _setup_pr_worktree(
+            local,
+            "acme",
+            "thing",
+            77,
+            quiet=True,
+            resume_existing=True,
+        )
+
+        assert wt is None
+        assert err is not None
+        assert "live worktree" in err
+        assert "git worktree remove" in err
+        assert "live-resume-wt" in err
+        assert "Failed to fetch PR" not in err
+        assert "refusing to fetch" not in err

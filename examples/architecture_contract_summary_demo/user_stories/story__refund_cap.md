@@ -1,4 +1,4 @@
-<!-- pdd-story-prompts: refund_python.prompt -->
+<!-- pdd-story-prompts: refund_python.prompt, legacy_python.prompt -->
 
 # Refund cap story
 

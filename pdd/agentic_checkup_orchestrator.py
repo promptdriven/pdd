@@ -20,7 +20,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from rich.console import Console
 
@@ -37,6 +37,9 @@ from .agentic_common import (
     run_agentic_task,
     save_workflow_state,
     substitute_template_variables,
+    drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
+    STEER_STATE_KEYS,
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
@@ -270,6 +273,59 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return True, ""
     except subprocess.CalledProcessError as e:
         return False, e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+
+
+def _prune_worktrees(cwd: Path) -> None:
+    """Drop registrations for worktrees whose directories no longer exist.
+
+    A crashed or out-of-band-cleaned-up checkup run can leave a
+    ``checkup/issue-N`` branch registered to a worktree directory that has since
+    been removed. Git then refuses to delete OR re-add that branch ("Cannot
+    delete branch ... checked out at <gone path>" / "a branch named ... already
+    exists"), which fails the whole checkup the next time it runs. Pruning the
+    stale registration lets the branch be deleted and recreated. Best-effort.
+    """
+    try:
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=cwd,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        pass
+
+
+def _worktree_holding_branch(cwd: Path, branch: str) -> Optional[str]:
+    """Return the path of the live worktree that has ``branch`` checked out.
+
+    Parses ``git worktree list --porcelain``. Returns ``None`` if no live
+    worktree currently has the branch checked out (e.g. it is just a plain
+    leftover ref, or it was only registered to a directory that has since been
+    pruned). Used to turn git's cryptic "refusing to fetch into branch ...
+    checked out at <path>" failure into an actionable message that names the
+    worktree the operator must remove. Best-effort: returns ``None`` on any
+    git error.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+    target = f"refs/heads/{branch}"
+    current_path: Optional[str] = None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_path = line[len("worktree "):].strip()
+        elif line.startswith("branch ") and line[len("branch "):].strip() == target:
+            return current_path
+    return None
 
 
 def _pr_worktree_branch_name(git_root: Path, pr_number: int) -> str:
@@ -994,8 +1050,50 @@ def _setup_pr_worktree(
 
     # 2. Fetch the PR's head into a local branch.
     #    Always refresh (force) so a re-run picks up new pushes to the PR.
-    if _branch_exists(git_root, branch_name) and not resume_existing:
-        _delete_branch(git_root, branch_name)
+    #    A crashed or manually cleaned run can leave the checkup/pr-* branch
+    #    registered to a worktree directory that no longer exists, so prune
+    #    first: that frees the branch so it can be deleted and re-fetched.
+    #    If the branch survives the delete even after pruning, it is genuinely
+    #    checked out in a LIVE worktree (a concurrent or abandoned checkup on
+    #    this same PR in this clone). We must NOT proceed to fetch in that case:
+    #    git refuses to update a checked-out branch
+    #    ("refusing to fetch into branch ... checked out at ..."), so the user
+    #    would otherwise see a cryptic "Failed to fetch PR" error. Surface a
+    #    clear, actionable conflict instead. (Unlike issue mode, reusing the
+    #    branch via a forced worktree add is not viable here: we could not
+    #    refresh it to the PR head, so verification would run against stale
+    #    code — exactly what PR mode exists to avoid.)
+    _prune_worktrees(git_root)
+    has_branch = _branch_exists(git_root, branch_name)
+    deleted_branch = False
+    if has_branch and not resume_existing:
+        deleted, del_err = _delete_branch(git_root, branch_name)
+        if deleted:
+            has_branch = False
+            deleted_branch = True
+        else:
+            holder = _worktree_holding_branch(git_root, branch_name)
+            location = f" (checked out at {holder})" if holder else ""
+            remove_hint = (
+                f"git worktree remove {holder}"
+                if holder
+                else f"git worktree remove <path> (or git branch -D {branch_name})"
+            )
+            return None, (
+                f"Cannot set up the PR #{pr_number} checkup worktree: branch "
+                f"{branch_name} is still checked out in another live worktree"
+                f"{location}. Remove it and retry: {remove_hint}. "
+                f"(git: {del_err.strip()})"
+            )
+    elif has_branch and resume_existing:
+        holder = _worktree_holding_branch(git_root, branch_name)
+        if holder:
+            return None, (
+                f"Cannot resume the PR #{pr_number} checkup worktree: branch "
+                f"{branch_name} is still checked out in another live worktree "
+                f"(checked out at {holder}). Remove it and retry: "
+                f"git worktree remove {holder}."
+            )
 
     # Resolve which remote actually has this PR. Prefer a configured remote
     # (uses the user's auth + caching); fall back to the explicit GitHub URL
@@ -1029,12 +1127,20 @@ def _setup_pr_worktree(
     # 3. Create worktree on the fetched branch.
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "worktree", "add", str(worktree_path), branch_name],
-            cwd=git_root,
-            capture_output=True,
-            check=True,
-        )
+        if has_branch and not deleted_branch:
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
         return None, f"Failed to create PR worktree: {err_msg}"
@@ -1080,8 +1186,16 @@ def _setup_worktree(
                 console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
             shutil.rmtree(worktree_path)
 
-    # 2. Handle existing branch
+    # 2. Handle existing branch. Prune stale worktree registrations first: a
+    #    crashed or cleaned-up prior run can leave `checkup/issue-N` registered
+    #    to a worktree directory that no longer exists, which makes `git branch
+    #    -D` fail ("Cannot delete branch ... checked out at <gone path>") and the
+    #    later `git worktree add -b` fail ("a branch named ... already exists"),
+    #    failing the whole checkup whenever a stale checkup/issue-* branch is
+    #    present.
+    _prune_worktrees(git_root)
     has_branch = _branch_exists(git_root, branch_name)
+    deleted_branch = False
     if has_branch:
         if resume_existing:
             if not quiet:
@@ -1089,8 +1203,20 @@ def _setup_worktree(
         else:
             if not quiet:
                 console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
-            _delete_branch(git_root, branch_name)
-            has_branch = False
+            deleted, del_err = _delete_branch(git_root, branch_name)
+            if deleted:
+                has_branch = False
+                deleted_branch = True
+            elif not quiet:
+                # Pruning could not free the branch (it is still checked out by
+                # another worktree). Do NOT hard-fail the checkup: reuse the
+                # existing branch via a forced worktree add (step 3) instead of
+                # recreating it with `-b` (which would raise "a branch named ...
+                # already exists").
+                console.print(
+                    f"[yellow]Could not delete {branch_name} ({del_err.strip()}); "
+                    f"reusing it via a forced worktree add.[/yellow]"
+                )
 
     # 3. Create worktree
     try:
@@ -1099,6 +1225,16 @@ def _setup_worktree(
         if has_branch and resume_existing:
             subprocess.run(
                 ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        elif has_branch and not deleted_branch:
+            # The branch survived deletion (still checked out elsewhere). Reuse
+            # it with --force so a stale/duplicate worktree registration cannot
+            # block setup, rather than `-b` (which would fail: branch exists).
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
                 cwd=git_root,
                 capture_output=True,
                 check=True,
@@ -1752,6 +1888,7 @@ def _run_single_step(
     label: str,
     timeout_adder: float,
     reasoning_time: Optional[float] = None,
+    steers: Optional[List[Any]] = None,
 ) -> Optional[Tuple[bool, str, float, str]]:
     """Load template, preprocess, format, and run a single LLM step.
 
@@ -1787,6 +1924,7 @@ def _run_single_step(
         timeout=CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=reasoning_time,
+        steers=steers,
     )
     return (success, output, cost, model)
 
@@ -2248,6 +2386,12 @@ def _run_agentic_checkup_orchestrator_inner(
     last_completed_step_to_save = last_completed_step
     consecutive_provider_failures = 0
 
+    steer_state: Dict[str, Any] = {}
+    if state is not None:
+        for _steer_key in STEER_STATE_KEYS:
+            if _steer_key in state:
+                steer_state[_steer_key] = state[_steer_key]
+
     # ---- Helper closures for state management ----
 
     def _save_state() -> None:
@@ -2266,6 +2410,9 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_head_sha=current_pr_head_sha if pr_mode else None,
             step_comments=sorted(step_comments_set),
         )
+        for _steer_key in STEER_STATE_KEYS:
+            if _steer_key in steer_state:
+                new_state[_steer_key] = steer_state[_steer_key]
         github_comment_id = save_workflow_state(
             cwd=cwd, issue_number=issue_number, workflow_type="checkup",
             state=new_state, state_dir=state_dir,
@@ -2273,6 +2420,24 @@ def _run_agentic_checkup_orchestrator_inner(
             use_github_state=use_github_state,
             github_comment_id=github_comment_id,
         )
+
+    def _issue_step_steers():
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            steer_state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if step_steers:
+            _save_state()
+        return step_steers
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, steer_state, cwd=cwd, quiet=quiet
+    ):
+        _save_state()
 
     def _step_comment_key(step_num: Union[int, float], iteration: int = 1) -> int:
         """Project (step_num, iteration) -> deterministic non-negative int.
@@ -2449,6 +2614,7 @@ def _run_agentic_checkup_orchestrator_inner(
             label="step7_post_push_reverify",
             timeout_adder=timeout_adder,
             reasoning_time=reasoning_time,
+            steers=_issue_step_steers() or None,
         )
         if result is None:
             template_name = f"agentic_checkup_step7_{name7}_LLM"
@@ -2662,6 +2828,7 @@ def _run_agentic_checkup_orchestrator_inner(
             label=f"step{step_num}",
             timeout_adder=timeout_adder,
             reasoning_time=reasoning_time,
+            steers=_issue_step_steers() or None,
         )
 
         if result is None:
@@ -2709,6 +2876,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 label=f"step{step_num}",
                 timeout_adder=timeout_adder,
                 reasoning_time=reasoning_time,
+                steers=_issue_step_steers() or None,
             )
 
             if result is None:
@@ -2851,6 +3019,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 label="step7",
                 timeout_adder=timeout_adder,
                 reasoning_time=reasoning_time,
+                steers=_issue_step_steers() or None,
             )
 
             if result is None:
@@ -3138,6 +3307,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     label=iter_label,
                     timeout_adder=timeout_adder,
                     reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
                 )
 
                 if result is None:
@@ -4184,6 +4354,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 label="step8",
                 timeout_adder=timeout_adder,
                 reasoning_time=reasoning_time,
+                steers=_issue_step_steers() or None,
             )
 
             if result is None:

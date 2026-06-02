@@ -604,6 +604,7 @@ def sync_main(
     steer_timeout: Optional[float] = None,
     agentic_mode: bool = False,
     one_session: bool = False,
+    snapshot_context: bool = False,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,
@@ -767,6 +768,7 @@ def sync_main(
                 no_steer=no_steer,
                 steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
                 agentic_mode=agentic_mode,
+                snapshot_context=snapshot_context,
             )
         return {}, 0.0, ""
 
@@ -1002,6 +1004,7 @@ def sync_main(
                                         # output is .pddrc-derived (get_pdd_file_paths uses
                                         # context config), so let front-matter override it.
                                         output_from_config=True,
+                                        snapshot_context=snapshot_context,
                                     )
                                     last_exc = None
                                     break
@@ -1189,6 +1192,7 @@ def sync_main(
                     no_steer=no_steer,
                     steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
                     agentic_mode=agentic_mode,
+                    snapshot_context=snapshot_context,
                 )
 
                 # Post-sync: auto-submit example to cloud on success (multi-step path)

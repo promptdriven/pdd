@@ -241,6 +241,7 @@ def run_agentic_test(
             issue_number=issue_number,
             issue_author=issue_author,
             issue_title=issue_title,
+            issue_updated_at=issue_data.get("updated_at", "") or "",
             cwd=repo_path,
             verbose=verbose,
             quiet=quiet,

@@ -1,0 +1,9 @@
+<pdd-reason>Demo prompt with nondeterministic tags for snapshot QA.</pdd-reason>
+
+Use local context and live shell/web expansion:
+
+<include>context/note.prompt</include>
+
+<shell>printf pdd-snapshot-demo-shell</shell>
+
+<web>https://example.test/pdd-snapshot-demo</web>

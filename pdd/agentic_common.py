@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import signal
 import sys
@@ -12,12 +13,15 @@ import time
 import uuid
 import re
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 
 from rich.console import Console
+
+_steer_logger = logging.getLogger(__name__ + ".steer")
+
 
 def _load_model_data(*args, **kwargs):
     """Lazily load model data from ``pdd.llm_invoke``.
@@ -106,6 +110,164 @@ class SteerEntry:
     comment_id: str
     author: str
     body: str
+
+
+def _steer_body_for_llm(body: str) -> str:
+    """Remove human-only ``<pdd>...</pdd>`` blocks before LLM-facing steer text."""
+    from pdd.preprocess import process_pdd_tags
+
+    return process_pdd_tags(body).strip()
+
+
+STEER_STATE_KEYS = (
+    "last_steered_comment_id",
+    "last_steer_at",
+    "steer_generation",
+    "steer_cursor_seeded",
+)
+
+
+def merge_steer_state(from_state: Dict[str, Any], into_state: Dict[str, Any]) -> None:
+    """Copy steer cursor fields from *from_state* into *into_state*."""
+    for key in STEER_STATE_KEYS:
+        if key in from_state:
+            into_state[key] = from_state[key]
+
+
+def _step_output_awaiting_clarification(output: str) -> bool:
+    """True when a cached step output indicates a clarification hard-stop."""
+    if not isinstance(output, str) or not output:
+        return False
+    if re.search(r"STOP_CONDITION:\s*.+", output, re.IGNORECASE):
+        return True
+    # Bug orchestrator step 3 uses substring matching (no STOP_CONDITION tag).
+    if re.search(r"Needs\s+More\s+Info", output, re.IGNORECASE):
+        return True
+    return False
+
+
+def workflow_awaiting_clarification(
+    state: Dict[str, Any],
+    clarification_step_numbers: Set[int],
+) -> bool:
+    """True when cached outputs show the workflow paused for user clarification."""
+    outputs = state.get("step_outputs") or {}
+    for step in clarification_step_numbers:
+        out = outputs.get(str(step), "")
+        if _step_output_awaiting_clarification(out):
+            return True
+    return False
+
+
+def merge_steers_into_issue_content(
+    issue_content: str,
+    steers: List[SteerEntry],
+) -> str:
+    """Append drained mid-run steers so clarification steps see new user input."""
+    if not steers:
+        return issue_content
+    block_lines = [
+        "",
+        "## Mid-run user comments (since workflow pause)",
+        "The following issue comments arrived while the workflow was paused. "
+        "Address them in this step:",
+    ]
+    for steer in steers:
+        block_lines.append(
+            f"- @{steer.author} ({steer.comment_id}): {_steer_body_for_llm(steer.body)}"
+        )
+    return issue_content.rstrip() + "\n" + "\n".join(block_lines) + "\n"
+
+
+def issue_update_should_clear_workflow_state(
+    state: Dict[str, Any],
+    stored_updated_at: str,
+    current_updated_at: str,
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    cwd: Path,
+    clarification_step_numbers: Optional[Set[int]] = None,
+) -> bool:
+    """Return True when ``issue_updated_at`` drift should wipe cached workflow state.
+
+    Preserves state when pending human steers exist (comment-only activity) or when
+    the workflow is paused awaiting clarification responses.
+    """
+    if not stored_updated_at or not current_updated_at:
+        return False
+    if stored_updated_at == current_updated_at:
+        return False
+
+    scratch = _steer_state_slice(state)
+    pending = drain_issue_steers(
+        repo_owner, repo_name, issue_number, scratch, cwd=cwd
+    )
+    if pending:
+        merge_steer_state(scratch, state)
+        return False
+
+    if clarification_step_numbers and workflow_awaiting_clarification(
+        state, clarification_step_numbers
+    ):
+        return False
+
+    return True
+
+
+def apply_clarification_steers_on_resume(
+    issue_content: str,
+    state: Dict[str, Any],
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    clarification_step_numbers: Set[int],
+    *,
+    cwd: Path,
+    quiet: bool = False,
+) -> str:
+    """Merge newly drained steers into *issue_content* when resuming clarification."""
+    if not workflow_awaiting_clarification(state, clarification_step_numbers):
+        return issue_content
+    steers = drain_issue_steers(
+        repo_owner, repo_name, issue_number, state, cwd=cwd
+    )
+    if not steers:
+        return issue_content
+    if not quiet:
+        preview = ", ".join(f"@{s.author}" for s in steers[:3])
+        suffix = f" (+{len(steers) - 3} more)" if len(steers) > 3 else ""
+        console.print(
+            f"[cyan]Resuming clarification with new feedback from {preview}{suffix}[/cyan]"
+        )
+    return merge_steers_into_issue_content(issue_content, steers)
+
+
+def _steer_state_slice(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: state[key] for key in STEER_STATE_KEYS if key in state}
+
+
+def append_agentic_progress_steer_note(count: int, preview: str) -> None:
+    """Attach pending-steer metadata to the current interrupt/progress context."""
+    global _agentic_interrupt_context
+    if _agentic_interrupt_context is None:
+        _agentic_interrupt_context = {}
+    _agentic_interrupt_context["pending_steers"] = count
+    _agentic_interrupt_context["steer_preview"] = preview
+
+
+def peek_agentic_progress_steer_metadata() -> Dict[str, Any]:
+    """Return pending-steer fields from interrupt context without clearing it."""
+    global _agentic_interrupt_context
+    if not _agentic_interrupt_context:
+        return {}
+    meta: Dict[str, Any] = {}
+    if "pending_steers" in _agentic_interrupt_context:
+        meta["pending_steers"] = _agentic_interrupt_context["pending_steers"]
+    if "steer_preview" in _agentic_interrupt_context:
+        meta["steer_preview"] = _agentic_interrupt_context["steer_preview"]
+    return meta
 
 
 def detect_control_token(
@@ -2225,7 +2387,10 @@ def run_agentic_task(
             "The following comments arrived during this run. Factor them into this step:\n"
         )
         for steer in steers:
-            steering_section += f"- @{steer.author} ({steer.comment_id}): {steer.body}\n"
+            steering_section += (
+                f"- @{steer.author} ({steer.comment_id}): "
+                f"{_steer_body_for_llm(steer.body)}\n"
+            )
 
     full_instruction = (
         f"{instruction}{feedback_section}{steering_section}\n\n"
@@ -4444,10 +4609,13 @@ def _fetch_issue_comments_via_gh(
     *,
     cwd: Path,
     since: Optional[str] = None,
-) -> List[Dict]:
-    """List issue comments via ``gh api``; returns [] on failure."""
+) -> Tuple[Optional[List[Dict]], Optional[str]]:
+    """List issue comments via ``gh api``.
+
+    Returns ``(comments, None)`` on success and ``(None, reason)`` on failure.
+    """
     if not _find_cli_binary("gh"):
-        return []
+        return None, "gh CLI not found on PATH"
     cmd = _gh_api_list_issue_comments_cmd(
         repo_owner, repo_name, issue_number, since=since
     )
@@ -4459,11 +4627,27 @@ def _fetch_issue_comments_via_gh(
             text=True,
             start_new_session=True,
         )
-    except Exception:
-        return []
+    except Exception as exc:
+        return None, f"gh api error: {exc}"
     if res.returncode != 0:
-        return []
-    return _load_gh_paginated_comments(res.stdout)
+        detail = (res.stderr or res.stdout or "").strip()
+        if len(detail) > 200:
+            detail = detail[:200] + "…"
+        suffix = f": {detail}" if detail else ""
+        return None, f"gh api failed (exit {res.returncode}){suffix}"
+    return _load_gh_paginated_comments(res.stdout), None
+
+
+def _log_steer_seed_skipped(reason: Optional[str], *, quiet: bool) -> None:
+    """Warn when baseline steer cursor seed could not run."""
+    detail = reason or "could not fetch issue comments"
+    msg = (
+        f"Mid-run steering: skipped steer cursor seed ({detail}). "
+        "GitHub issue comments will not be drained until a successful seed."
+    )
+    _steer_logger.warning(msg)
+    if not quiet:
+        console.print(f"[yellow]Warning: {msg}[/yellow]")
 
 
 def seed_issue_steer_cursor(
@@ -4473,6 +4657,7 @@ def seed_issue_steer_cursor(
     state: Dict[str, Any],
     *,
     cwd: Path,
+    quiet: bool = False,
 ) -> bool:
     """Set steer cursor to the current issue comment tail without returning steers.
 
@@ -4481,9 +4666,12 @@ def seed_issue_steer_cursor(
     authors, including bots) so later bot progress comments do not rewind the id
     cursor.
     """
-    comments = _fetch_issue_comments_via_gh(
+    comments, fetch_err = _fetch_issue_comments_via_gh(
         repo_owner, repo_name, issue_number, cwd=cwd
     )
+    if comments is None:
+        _log_steer_seed_skipped(fetch_err, quiet=quiet)
+        return False
     max_id_val = -1
     latest_timestamp: Optional[str] = None
     for comment in comments:
@@ -4508,6 +4696,59 @@ def seed_issue_steer_cursor(
         state["last_steer_at"] = latest_timestamp
     state["steer_cursor_seeded"] = True
     return True
+
+
+def fetch_issue_updated_at(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    cwd: Path,
+) -> str:
+    """Return the GitHub issue ``updated_at`` timestamp, or empty string on failure."""
+    if not _find_cli_binary("gh"):
+        return ""
+    try:
+        res = _subprocess_run(
+            [
+                "gh",
+                "api",
+                f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
+                "--jq",
+                ".updated_at",
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            start_new_session=True,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def ensure_issue_steer_cursor_seeded(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+    quiet: bool = False,
+) -> bool:
+    """Seed the steer cursor at workflow start when not yet established.
+
+    Returns True when ``state`` was updated (caller should persist workflow state).
+    """
+    if not repo_owner or not repo_name or not issue_number:
+        return False
+    if _steer_cursor_initialized(state):
+        return False
+    return seed_issue_steer_cursor(
+        repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
+    )
 
 
 def drain_issue_steers(
@@ -4559,17 +4800,22 @@ def drain_issue_steers(
                     continue
                 if cid_val <= last_id_val:
                     continue
+                raw_body = str(entry.get("body", ""))
                 steers.append(
                     SteerEntry(
                         comment_id=str(cid_val),
                         author=str(entry.get("author", "unknown")),
-                        body=str(entry.get("body", "")),
+                        body=_steer_body_for_llm(raw_body),
                     )
                 )
                 if cid_val > max_id_val:
                     max_id_val = cid_val
             if steers:
                 state["last_steered_comment_id"] = str(max_id_val)
+                state["last_steer_at"] = (
+                    state.get("last_steer_at")
+                    or datetime.now(timezone.utc).isoformat()
+                )
                 state["steer_generation"] = state.get("steer_generation", 0) + 1
                 return steers
 
@@ -4585,13 +4831,15 @@ def drain_issue_steers(
     since = state.get("last_steer_at")
     last_id = state.get("last_steered_comment_id")
 
-    comments = _fetch_issue_comments_via_gh(
+    comments, _fetch_err = _fetch_issue_comments_via_gh(
         repo_owner,
         repo_name,
         issue_number,
         cwd=cwd,
         since=since if since else None,
     )
+    if comments is None:
+        return []
 
     try:
         last_id_val = int(last_id) if last_id is not None else -1
@@ -4636,7 +4884,7 @@ def drain_issue_steers(
             SteerEntry(
                 comment_id=str(cid_val),
                 author=author,
-                body=body.strip(),
+                body=_steer_body_for_llm(body),
             )
         )
 
@@ -4652,6 +4900,32 @@ def drain_issue_steers(
         return new_steers
 
     return []
+
+
+def drain_step_steers(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+    quiet: bool = False,
+) -> List[SteerEntry]:
+    """Drain pending issue comments for the next orchestrator agentic step.
+
+    No-op when *issue_number* or repo coordinates are missing (e.g. split flows).
+    """
+    if not repo_owner or not repo_name or not issue_number:
+        return []
+    steers = drain_issue_steers(repo_owner, repo_name, issue_number, state, cwd=cwd)
+    if steers and not quiet:
+        preview = ", ".join(f"@{entry.author}" for entry in steers[:3])
+        suffix = f" (+{len(steers) - 3} more)" if len(steers) > 3 else ""
+        console.print(
+            f"[cyan]Incorporating mid-run feedback from {preview}{suffix}[/cyan]"
+        )
+        append_agentic_progress_steer_note(len(steers), preview + suffix)
+    return steers
 
 
 def load_workflow_state(

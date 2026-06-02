@@ -463,6 +463,7 @@ def test_sync_dry_run_mode(mock_project_dir, mock_construct_paths, mock_sync_orc
             no_steer=False,
             steer_timeout=8.0,
             agentic_mode=False,
+            snapshot_context=False,
         ),
         call(
             basename='log_test',
@@ -478,6 +479,7 @@ def test_sync_dry_run_mode(mock_project_dir, mock_construct_paths, mock_sync_orc
             no_steer=False,
             steer_timeout=8.0,
             agentic_mode=False,
+            snapshot_context=False,
         ),
     ]
     mock_sync_orchestration.assert_has_calls(calls, any_order=True)

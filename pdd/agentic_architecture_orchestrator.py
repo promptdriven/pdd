@@ -39,6 +39,8 @@ from pdd.agentic_common import (
     clear_workflow_state,
     validate_cached_state,
     DEFAULT_MAX_RETRIES,
+    drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
 )
 from pdd.architecture_registry import extract_modules, merge_architecture, record_generation
 from pdd.architecture_sync import normalize_architecture_filenames
@@ -531,6 +533,23 @@ def run_agentic_architecture_orchestrator(
         model_used = "unknown"
         github_comment_id = None
 
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
+    ):
+        seed_save = save_workflow_state(
+            cwd,
+            issue_number,
+            "architecture",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if seed_save:
+            github_comment_id = seed_save
+
     context = {
         "issue_url": issue_url,
         "issue_content": issue_content,
@@ -643,6 +662,33 @@ def run_agentic_architecture_orchestrator(
     # Total step count for display (1, 1b, 2, 2b, 3-5, 5b, 6-7, 7b, 8, 8.5, 9, 9b, 10-13)
     TOTAL_STEPS = 19
 
+    def _issue_step_steers():
+        nonlocal github_comment_id
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if step_steers:
+            save_result = save_workflow_state(
+                cwd,
+                issue_number,
+                "architecture",
+                state,
+                state_dir,
+                repo_owner,
+                repo_name,
+                use_github_state,
+                github_comment_id,
+            )
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        return step_steers
+
     # --- Steps 1-5: Analysis and Design ---
     steps_1_5 = [
         (1, "analyze_prd", "Extract features, tech stack, requirements from PRD"),
@@ -689,6 +735,7 @@ def run_agentic_architecture_orchestrator(
             timeout=timeout,
             label=f"step{step_num}",
             max_retries=DEFAULT_MAX_RETRIES,
+            steers=_issue_step_steers() or None,
         )
 
         total_cost += step_cost
@@ -798,6 +845,7 @@ def run_agentic_architecture_orchestrator(
                         timeout=timeout_1b,
                         label="step1b",
                         max_retries=DEFAULT_MAX_RETRIES,
+                        steers=_issue_step_steers() or None,
                     )
 
                     total_cost += c_cost
@@ -850,6 +898,7 @@ def run_agentic_architecture_orchestrator(
                     timeout=timeout_2b,
                     label="step2b",
                     max_retries=DEFAULT_MAX_RETRIES,
+                    steers=_issue_step_steers() or None,
                 )
 
                 total_cost += scan_cost
@@ -937,6 +986,7 @@ def run_agentic_architecture_orchestrator(
                 timeout=timeout_5b,
                 label=f"step5b_attempt{attempt_5b}",
                 max_retries=DEFAULT_MAX_RETRIES,
+                steers=_issue_step_steers() or None,
             )
 
             total_cost += gate_cost
@@ -975,6 +1025,7 @@ def run_agentic_architecture_orchestrator(
                         timeout=fix_timeout,
                         label=f"step5b_fix{attempt_5b}",
                         max_retries=DEFAULT_MAX_RETRIES,
+                        steers=_issue_step_steers() or None,
                     )
 
                     total_cost += fix_cost
@@ -1076,6 +1127,7 @@ def run_agentic_architecture_orchestrator(
             timeout=timeout,
             label=f"step{step_num}",
             max_retries=DEFAULT_MAX_RETRIES,
+            steers=_issue_step_steers() or None,
         )
 
         total_cost += step_cost
@@ -1293,6 +1345,7 @@ def run_agentic_architecture_orchestrator(
                     timeout=timeout_7b,
                     label="step7b",
                     max_retries=DEFAULT_MAX_RETRIES,
+                    steers=_issue_step_steers() or None,
                 )
 
                 total_cost += review_cost
@@ -1428,6 +1481,7 @@ def run_agentic_architecture_orchestrator(
                 timeout=timeout_8_5,
                 label="step8_5",
                 max_retries=DEFAULT_MAX_RETRIES,
+                steers=_issue_step_steers() or None,
             )
 
             total_cost += ctx_cost
@@ -1512,6 +1566,7 @@ def run_agentic_architecture_orchestrator(
             timeout=timeout_9,
             label="step9",
             max_retries=DEFAULT_MAX_RETRIES,
+            steers=_issue_step_steers() or None,
         )
 
         total_cost += cost_9
@@ -1576,6 +1631,7 @@ def run_agentic_architecture_orchestrator(
                 timeout=timeout_9b,
                 label="step9b",
                 max_retries=DEFAULT_MAX_RETRIES,
+                steers=_issue_step_steers() or None,
             )
 
             total_cost += audit_cost
@@ -1639,6 +1695,7 @@ def run_agentic_architecture_orchestrator(
                 timeout=timeout_9c,
                 label="step9c",
                 max_retries=DEFAULT_MAX_RETRIES,
+                steers=_issue_step_steers() or None,
             )
 
             total_cost += reconcile_cost
@@ -1732,6 +1789,7 @@ def run_agentic_architecture_orchestrator(
                     timeout=timeout,
                     label=f"step{step_num}_attempt{attempt}",
                     max_retries=DEFAULT_MAX_RETRIES,
+                    steers=_issue_step_steers() or None,
                 )
 
                 total_cost += cost
@@ -1773,6 +1831,7 @@ def run_agentic_architecture_orchestrator(
                             timeout=fix_timeout,
                             label=f"step{step_num}_fix{attempt}",
                             max_retries=DEFAULT_MAX_RETRIES,
+                            steers=_issue_step_steers() or None,
                         )
 
                         total_cost += fix_cost

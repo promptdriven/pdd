@@ -210,6 +210,7 @@ class TestTestOrchestratorE2E:
         console, buf = _make_capturing_console()
 
         with patch("pdd.agentic_test_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_test_orchestrator.drain_step_steers", return_value=[]), \
              patch("pdd.agentic_test_orchestrator.load_workflow_state") as mock_load, \
              patch("pdd.agentic_test_orchestrator.save_workflow_state"), \
              patch("pdd.agentic_test_orchestrator.clear_workflow_state"), \
@@ -227,7 +228,7 @@ class TestTestOrchestratorE2E:
 
             def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                             timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                            use_playwright=False):
+                            use_playwright=False, steers=None, **kwargs):
                 if label == "step4":
                     return (True, "TEST_TYPE: api\nTEST_FRAMEWORK: pytest", 0.1, "anthropic")
                 if label == "step12":
