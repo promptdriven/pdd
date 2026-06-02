@@ -2523,16 +2523,50 @@ def _is_openai_codex_default(model_name: Any) -> bool:
     return value.startswith("gpt-5") or "codex" in value
 
 
+def _provider_challenge_text_fragments(content: Any, depth: int = 0) -> List[str]:
+    """Return string fragments worth scanning for provider-side HTML challenges."""
+    if depth > 5 or content is None:
+        return []
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, BaseModel):
+        try:
+            return _provider_challenge_text_fragments(content.model_dump(), depth + 1)
+        except Exception:
+            return []
+    if isinstance(content, dict):
+        fragments: List[str] = []
+        for value in content.values():
+            fragments.extend(_provider_challenge_text_fragments(value, depth + 1))
+        return fragments
+    if isinstance(content, (list, tuple, set)):
+        fragments = []
+        for item in content:
+            fragments.extend(_provider_challenge_text_fragments(item, depth + 1))
+        return fragments
+    fragments = []
+    for attr_name in ("text", "content", "extracted_code", "output_text"):
+        try:
+            value = getattr(content, attr_name)
+        except Exception:
+            continue
+        if value is content:
+            continue
+        fragments.extend(_provider_challenge_text_fragments(value, depth + 1))
+    return fragments
+
+
 def _is_provider_challenge_response(content: Any) -> bool:
     """Detect provider-side HTML challenges that should trigger model fallback."""
-    if not isinstance(content, str):
-        return False
-    lowered = content.lower()
-    return (
-        "challenge-error-text" in lowered
-        or "enable javascript and cookies to continue" in lowered
-        or "cf_chl_opt" in lowered
-    )
+    for fragment in _provider_challenge_text_fragments(content):
+        lowered = fragment.lower()
+        if (
+            "challenge-error-text" in lowered
+            or "enable javascript and cookies to continue" in lowered
+            or "cf_chl_opt" in lowered
+        ):
+            return True
+    return False
 
 
 def _raise_if_provider_challenge_response(
