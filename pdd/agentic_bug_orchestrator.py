@@ -26,6 +26,7 @@ from .agentic_common import (
     _sanitize_comment_body,
     DEFAULT_MAX_RETRIES,
     drain_step_steers,
+    apply_clarification_steers_on_resume,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -1181,6 +1182,10 @@ def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: 
     return None
 
 
+# Step 3 clarification hard-stop: resume must re-run triage with new user comments.
+_CLARIFICATION_STEPS = {3}
+
+
 def _state_safe_step_output(output: str) -> str:
     """Redact secrets before persisting step output to resumable/GitHub state."""
     if not isinstance(output, str):
@@ -1854,6 +1859,32 @@ def run_agentic_bug_orchestrator(
 
     if effective_clean_restart:
         state["clean_restart"] = True
+
+    steer_generation_before = state.get("steer_generation", 0)
+    issue_content = apply_clarification_steers_on_resume(
+        issue_content,
+        state,
+        repo_owner,
+        repo_name,
+        issue_number,
+        _CLARIFICATION_STEPS,
+        cwd=cwd,
+        quiet=quiet,
+    )
+    if state.get("steer_generation", 0) != steer_generation_before:
+        save_result = save_workflow_state(
+            cwd,
+            issue_number,
+            "bug",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
 
     context = {
         "issue_url": issue_url,
@@ -3200,7 +3231,10 @@ def run_agentic_bug_orchestrator(
         if stop_reason:
             if not quiet:
                 console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-            state["last_completed_step"] = step_num
+            # Clarification stops save step_num - 1 so triage re-runs on resume.
+            state["last_completed_step"] = (
+                step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
+            )
             state["step_outputs"][str(step_num)] = _state_safe_step_output(step_output)
             save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if save_result:

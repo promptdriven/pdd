@@ -3482,6 +3482,18 @@ def test_issue_update_should_not_clear_during_clarification_pause(mock_cwd):
     ) is False
 
 
+def test_workflow_awaiting_clarification_needs_more_info_without_stop_tag():
+    from pdd.agentic_common import workflow_awaiting_clarification
+
+    state = {
+        "step_outputs": {
+            "3": "**Status:** Needs More Info\nPlease provide repro steps.",
+        },
+    }
+    assert workflow_awaiting_clarification(state, {3}) is True
+    assert workflow_awaiting_clarification(state, {4}) is False
+
+
 def test_apply_clarification_steers_on_resume_merges_content(mock_cwd):
     from pdd.agentic_common import apply_clarification_steers_on_resume
 
@@ -3504,6 +3516,36 @@ def test_apply_clarification_steers_on_resume_merges_content(mock_cwd):
         )
         assert "Use pytest markers" in merged
         assert "Original issue body" in merged
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_apply_clarification_steers_bug_step3_needs_more_info(mock_cwd):
+    """Bug orchestrator stores Needs More Info without a STOP_CONDITION tag."""
+    from pdd.agentic_common import apply_clarification_steers_on_resume
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "8", "author": "alice", "body": "Here is the stack trace"}]
+    )
+    try:
+        state = {
+            "step_outputs": {
+                "3": "**Status:** Needs More Info\nMissing repro command.",
+            },
+            "last_steered_comment_id": "1",
+        }
+        merged = apply_clarification_steers_on_resume(
+            "Bug report body",
+            state,
+            "owner",
+            "repo",
+            42,
+            {3},
+            cwd=mock_cwd,
+            quiet=True,
+        )
+        assert "stack trace" in merged
+        assert "Bug report body" in merged
     finally:
         os.environ.pop("PDD_STEER_JSON", None)
 

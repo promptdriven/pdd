@@ -118,6 +118,18 @@ def merge_steer_state(from_state: Dict[str, Any], into_state: Dict[str, Any]) ->
             into_state[key] = from_state[key]
 
 
+def _step_output_awaiting_clarification(output: str) -> bool:
+    """True when a cached step output indicates a clarification hard-stop."""
+    if not isinstance(output, str) or not output:
+        return False
+    if re.search(r"STOP_CONDITION:\s*.+", output, re.IGNORECASE):
+        return True
+    # Bug orchestrator step 3 uses substring matching (no STOP_CONDITION tag).
+    if re.search(r"Needs\s+More\s+Info", output, re.IGNORECASE):
+        return True
+    return False
+
+
 def workflow_awaiting_clarification(
     state: Dict[str, Any],
     clarification_step_numbers: Set[int],
@@ -126,9 +138,7 @@ def workflow_awaiting_clarification(
     outputs = state.get("step_outputs") or {}
     for step in clarification_step_numbers:
         out = outputs.get(str(step), "")
-        if isinstance(out, str) and re.search(
-            r"STOP_CONDITION:\s*.+", out, re.IGNORECASE
-        ):
+        if _step_output_awaiting_clarification(out):
             return True
     return False
 
