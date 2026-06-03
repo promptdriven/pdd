@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -313,16 +314,26 @@ def change(
                     "--clean-restart can only be used with an agentic GitHub issue URL."
                 )
 
-            # Call run_agentic_change
-            success, message, cost, model, changed_files = run_agentic_change(
-                issue_url=issue_url,
-                verbose=verbose,
-                quiet=quiet,
-                timeout_adder=timeout_adder,
-                use_github_state=not no_github_state,
-                clean_restart=clean_restart,
-                reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
-            )
+            previous_no_github_state = os.environ.get("PDD_NO_GITHUB_STATE")
+            if no_github_state:
+                os.environ["PDD_NO_GITHUB_STATE"] = "1"
+            try:
+                # Call run_agentic_change
+                success, message, cost, model, changed_files = run_agentic_change(
+                    issue_url=issue_url,
+                    verbose=verbose,
+                    quiet=quiet,
+                    timeout_adder=timeout_adder,
+                    use_github_state=not no_github_state,
+                    clean_restart=clean_restart,
+                    reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
+                )
+            finally:
+                if no_github_state:
+                    if previous_no_github_state is None:
+                        os.environ.pop("PDD_NO_GITHUB_STATE", None)
+                    else:
+                        os.environ["PDD_NO_GITHUB_STATE"] = previous_no_github_state
 
             # Display results using click.echo as requested
             if not quiet:
