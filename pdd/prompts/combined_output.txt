@@ -1936,7 +1936,7 @@ Make your tone concise and professional. Follow this structure:
     3. **Select Model Candidates:**
         a. Determine the base model name (from $PDD_MODEL_DEFAULT or default value).
         b. Filter models from the CSV based on the presence of the `api_key` field (initial availability check).
-        c. Based on `strength`, select and sort candidate models (interpolating by cost or ELO using data from the CSV).
+        c. Based on `strength`, select and sort candidate models (interpolating by cost or model_rank_score using data from the CSV).
     4. **Iterate through Candidates:** For each candidate model:
         a. **Get API Key Name:** Retrieve the API key *environment variable name* from the `api_key` column in the CSV.
         b. **Check Key Existence:** Check if the environment variable named `key_name` is set using `os.getenv()`.
@@ -2026,7 +2026,7 @@ Make your tone concise and professional. Follow this structure:
     - **The function will NOT pass a `max_tokens` parameter to LiteLLM.** Rely on the default maximum completion tokens set by the provider for the specific model.
 
 % If verbose is set to True, print the following information:
-    - **The ordered list of candidate models selected based on strength/ELO and availability (before attempting invocation).**
+    - **The ordered list of candidate models selected based on strength/model_rank_score and availability (before attempting invocation).**
     - The selected model name passed to LiteLLM (at the time of the attempt).
     - The per input and output token cost (in dollars per million tokens) of the selected model (as read from the CSV used for selection) and the number of input and output tokens (obtainable from LiteLLM's response).
     - The total cost of the invoke run (calculated/reported by LiteLLM in the response).

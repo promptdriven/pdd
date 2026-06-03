@@ -27,6 +27,34 @@ INT_COLUMNS = ['coding_arena_elo', 'model_rank_score', 'max_reasoning_tokens']
 # Placeholder for missing numeric values (optional, pd.NA is generally better)
 # MISSING_VALUE_PLACEHOLDER = -1.0 # Not used in current logic, pd.NA preferred
 
+
+def _parse_true_false_or_na(value):
+    """Parse literal true/false CSV values while preserving unknown/missing as NA."""
+    if pd.isna(value):
+        return pd.NA
+    normalized = str(value).strip().lower()
+    if normalized in ['', 'na', 'nan', '<na>']:
+        return pd.NA
+    if normalized == 'true':
+        return True
+    if normalized == 'false':
+        return False
+    return pd.NA
+
+
+def _parse_interactive_only(value):
+    """Parse interactive_only like runtime selection does."""
+    if pd.isna(value):
+        return pd.NA
+    normalized = str(value).strip().lower()
+    if normalized in ['', 'na', 'nan', '<na>']:
+        return pd.NA
+    if normalized in {'true', '1', 'yes'}:
+        return True
+    if normalized in {'false', '0', 'no'}:
+        return False
+    return pd.NA
+
 def update_model_data(csv_path: str) -> None:
     """
     Reads the llm_model.csv file, updates missing costs and structured output
@@ -79,21 +107,9 @@ def update_model_data(csv_path: str) -> None:
         # Boolean/Object (allow NA)
         if 'structured_output' in df.columns:
             # Convert common string representations to bool or NA
-            df['structured_output'] = df['structured_output'].apply(
-                lambda x: pd.NA if pd.isna(x) or str(x).strip().lower() in ['', 'na', 'nan', '<na>'] else (
-                    True if str(x).strip().lower() == 'true' else (
-                        False if str(x).strip().lower() == 'false' else pd.NA
-                    )
-                )
-            ).astype('object') # Keep as object to hold True, False, pd.NA
+            df['structured_output'] = df['structured_output'].apply(_parse_true_false_or_na).astype('object')
         if 'interactive_only' in df.columns:
-            df['interactive_only'] = df['interactive_only'].apply(
-                lambda x: pd.NA if pd.isna(x) or str(x).strip().lower() in ['', 'na', 'nan', '<na>'] else (
-                    True if str(x).strip().lower() == 'true' else (
-                        False if str(x).strip().lower() == 'false' else pd.NA
-                    )
-                )
-            ).astype('object')
+            df['interactive_only'] = df['interactive_only'].apply(_parse_interactive_only).astype('object')
 
         # Integers (allow NA)
         for col in INT_COLUMNS:
