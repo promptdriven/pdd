@@ -11,6 +11,7 @@ pdd checkup drift <devunit> --model <model>
 pdd checkup drift <devunit> --from-evidence .pdd/evidence/devunits/<devunit>.latest.json
 pdd checkup drift <devunit> --json
 pdd checkup drift <devunit> --max-cost 5.0
+pdd checkup drift <devunit> --review explain   # advisory LLM summary appended
 ```
 
 ## What It Checks
@@ -48,3 +49,7 @@ pdd checkup drift <devunit> --max-cost 5.0
 - `--from-evidence` resolves prompt/code from manifest data and output paths.
 - Behavior drift is stricter than implementation drift: hash changes can be acceptable when behavior remains stable.
 - This command is distinct from `pdd/ci_drift_heal` (CI prompt/example auto-heal) and `pdd contracts drift` (contract/code conformance).
+
+## Advisory LLM layer (`--review explain`)
+
+Pass `--review explain` to append a read-only LLM advisory pass after the deterministic stability checks. Exit codes are unchanged. JSON output gains an additive `"advisory": {"status": ..., "findings": [...]}` field as a top-level sibling key in the report object.

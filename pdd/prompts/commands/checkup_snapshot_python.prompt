@@ -1,0 +1,32 @@
+<pdd-reason>Enforces snapshot policy for nondeterministic prompts and explicitly rejects --review.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "snapshot", "description": "Enforce snapshot policy via pdd checkup snapshot; rejects --review flag"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>commands/checkup_review_options_python.prompt</pdd-dependency>
+
+% Write `pdd/commands/checkup_snapshot.py`, implementing the `snapshot` Click command used by `pdd checkup snapshot`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+This module implements the `snapshot` Click command, which enforces snapshot policy for nondeterministic prompts. It explicitly rejects the `--review` flag with a usage error because advisory LLM passes are not supported for snapshot checks.
+
+% Requirements
+1. Implement `@click.command("snapshot")` with the existing interface: `PROMPT_FILE` argument (Path, must exist), `--project-root` (Path, default `.`), `--json` flag.
+2. Wire `--review off|explain` (default `off`) using the `review_option` decorator from `pdd.commands.checkup_review_options`.
+3. At the start of the command body, call `reject_review_on_snapshot(review)` from `pdd.commands.checkup_review_options` to raise `click.UsageError` when `review != "off"`, before any deterministic work begins.
+4. Preserve existing behavior: call `check_snapshot_policy(prompt_file, project_root)` from `pdd.context_snapshot_policy`, emit JSON or human-readable output, exit 1 on failure.
+5. JSON payload shape is unchanged: `{"passed": bool, "prompt": str, "message": str}`.
+6. Import `check_snapshot_policy` from `pdd.context_snapshot_policy`.
+
+% Deliverables
+- Code: `pdd/commands/checkup_snapshot.py`

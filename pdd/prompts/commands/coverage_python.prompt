@@ -1,0 +1,36 @@
+<pdd-reason>Exposes deterministic contract coverage matrix with an optional advisory LLM pass.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "coverage_cmd", "description": "Check contract coverage via pdd checkup coverage with optional advisory LLM pass"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>coverage_contracts_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_advisory_python.prompt</pdd-dependency>
+<pdd-dependency>commands/checkup_review_options_python.prompt</pdd-dependency>
+
+% Write `pdd/commands/coverage.py`, implementing the `coverage` Click command used by `pdd checkup coverage`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+This module implements the `coverage` Click command, which builds a deterministic contract coverage matrix from prompt files and user stories. It optionally appends a read-only advisory LLM pass when `--review explain` is set.
+
+% Requirements
+1. Implement `@click.command("coverage")` with arguments and options matching the existing `coverage_cmd` implementation: `TARGET` (optional, default `prompts/`), `--json`, `--stories-dir`/`--stories`, `--tests-dir`, `--contracts` (hidden compat alias).
+2. Wire `--review off|explain` (default `off`) using the `review_option` decorator from `pdd.commands.checkup_review_options`.
+3. Compute the deterministic exit code (0/1/2) before any LLM call; the advisory pass MUST NOT alter the exit code.
+4. When `--review explain` is set: call the advisory LLM pass after deterministic checks; on any exception set `advisory.status="failed"` and continue; inject `"advisory": report_as_dict(report)` as a top-level sibling key in the JSON envelope alongside existing keys (`results`, `total_prompts`, `prompts_with_contracts`); in non-JSON mode, print a brief advisory summary to stderr.
+5. When `--review off` (default): output is byte-for-byte identical to current behavior; no advisory key in JSON.
+6. Exit codes: 0 all checked/waived, 1 gaps or read errors, 2 fatal (missing target, unreadable prompt).
+7. Import `build_coverage`, `build_coverage_directory`, `CoverageResult`, and status constants from `pdd.coverage_contracts`. Import `CheckupReport`, `SKIPPED_REPORT`, `failed_report`, `final_exit_code`, `report_as_dict` from `pdd.checkup_advisory`.
+8. Preserve existing Rich table rendering for human-readable output.
+
+% Deliverables
+- Code: `pdd/commands/coverage.py`

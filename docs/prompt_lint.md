@@ -12,10 +12,12 @@ The PDD Prompt Linter analyzes prompt files (`*.prompt`) and user stories (`stor
 |---------|---------|
 | `pdd checkup lint TARGET` | Fast local heuristic scan (default; suitable for CI) |
 | `pdd checkup lint --stories DIRECTORY` | Scan user-story markdown files (`story__*.md`) |
-| `pdd checkup lint TARGET --llm` | Add advisory LLM review for prompt authoring |
+| `pdd checkup lint TARGET --review explain` | Add advisory LLM review for prompt authoring (preferred) |
+| `pdd checkup lint TARGET --review off` | Explicit default; no LLM invoked |
+| `pdd checkup lint TARGET --llm` | **Deprecated** — alias for `--review explain`; emits a stderr warning |
 | `pdd checkup lint TARGET --strict` | Promote all warnings to errors |
 
-For day-to-day prompt authoring, use `--llm`. The default scan is deterministic and needs no network access.
+For day-to-day prompt authoring, use `--review explain`. The default scan is deterministic and needs no network access.
 
 ---
 
@@ -32,8 +34,32 @@ By default, the linter performs a local, instant scan of your prompt sections (s
 - **Vague terms** (e.g., `valid`, `safe`, `gracefully`, `successful`) used without a corresponding `<vocabulary>` or glossary definition.
 - **Observable outcome gaps**: Behavioral rules containing a vague term must also contain an observable outcome verb (e.g., `returns`, `raises`, `writes`, `emits`, `logs`, `rejects`) to ensure the rule represents a testable invariant.
 
-### 2. LLM-Assisted Review (`--llm`)
-For active prompt engineering, you can enable the LLM-assisted review path by passing the `--llm` flag. This pass uses PDD Cloud or local providers to perform a deep semantic analysis of your prompt prose. The LLM identifies potential double-meanings, flags subjective constraints, and lists alternative interpretations to help you tighten your specifications.
+### 2. LLM-Assisted Review (`--review explain`)
+For active prompt engineering, enable the advisory LLM review pass with `--review explain`. This uses PDD Cloud or local providers to perform a deep semantic analysis of your prompt prose — identifying double-meanings, flagging subjective constraints, and listing alternative interpretations to help tighten specifications.
+
+The `--llm` flag is a deprecated alias for `--review explain` and emits a one-line deprecation warning on stderr. It will be removed in a future release.
+
+The advisory pass is strictly read-only: exit codes and core heuristic output are identical to the default scan. LLM failure sets `advisory.status=failed` and leaves the exit code unchanged. JSON output gains an additive `"advisory"` field per result item only when `--review explain` is active (see §JSON output below).
+
+**JSON additive field** (present per result item only with `--review explain`):
+
+```json
+{
+  "advisory": {
+    "status": "ok",
+    "findings": [
+      {
+        "severity": "warn",
+        "area": "contract_rules",
+        "message": "The term 'valid' in R1 is ambiguous without a Vocabulary entry.",
+        "evidence": "R1 - Reject invalid input"
+      }
+    ]
+  }
+}
+```
+
+*(Omitted entirely with `--review off`.)*
 
 ---
 
@@ -60,7 +86,7 @@ Draft the initial `.prompt` file containing your `<contract_rules>` and `<requir
 ### Step 2: Lint the Prompt (Primary Quality Gate)
 Run the linter early and often during draft authoring:
 ```bash
-pdd checkup lint prompts/my_feature_python.prompt --llm
+pdd checkup lint prompts/my_feature_python.prompt --review explain
 ```
 Review the advisory warnings, refine any vague terms, and build a precise `<vocabulary>` block in the prompt to define what ambiguous terms mean in your domain. Rerun the linter until the scan is clean.
 

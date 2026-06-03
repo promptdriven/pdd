@@ -350,3 +350,9 @@ W1:
 - `<waivers>` handles exceptions explicitly, avoiding silent unchecked rules.
 - Prompts without `<contract_rules>` are never hard-failed (legacy-safe by design).
 - The test heuristic is conservative and fully documented; no semantic inference is performed.
+
+## Advisory LLM layer (`--review explain`)
+
+Pass `--review explain` to append an advisory LLM pass after the static coverage analysis. The LLM summarises unchecked rules and suggests stories, tests, or waivers to close coverage gaps.
+
+Deterministic exit codes and the coverage matrix are unchanged. JSON output gains an additive `"advisory": {"status": ..., "findings": [...]}` field at the top level of the envelope only when `--review explain` is active.

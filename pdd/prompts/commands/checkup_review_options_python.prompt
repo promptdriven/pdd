@@ -1,0 +1,36 @@
+<pdd-reason>Shared Click decorator and snapshot-rejection helper for the --review off|explain advisory layer.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "review_option", "signature": "(func)", "returns": "Callable"},
+      {"name": "reject_review_on_snapshot", "signature": "(review: str) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>checkup_advisory_python.prompt</pdd-dependency>
+
+% Write `pdd/commands/checkup_review_options.py`, the shared advisory-layer helpers for `pdd checkup` subcommands.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+This module exports a single Click option decorator (`review_option`) that attaches `--review off|explain` to any checkup subcommand, plus `reject_review_on_snapshot` to raise a usage error when `--review` is passed to `checkup snapshot`.
+
+% Non-responsibilities
+- Does not invoke LLM calls.
+- Does not perform any deterministic checks.
+- Does not define `--interactive`, `--apply`, or `--dry-run` in any usable form (write-layer, out of scope).
+
+% Requirements
+1. Export `review_option(func)`: a `click.option` decorator that adds `--review` with `type=click.Choice(["off", "explain"])`, `default="off"`, and a help string describing the advisory pass.
+2. Export `reject_review_on_snapshot(review: str) -> None`: raises `click.UsageError` when `review != "off"`, with a message stating that `--review` is not supported on `checkup snapshot`.
+3. Stub `--interactive`, `--apply`, and `--dry-run` as `hidden=True` options that raise `click.UsageError("not yet implemented")` when invoked; attach them via a separate exported decorator `_reserved_write_layer_options(func)` so they are never wired to production commands until the write-layer issue lands.
+4. All exported names are importable from `pdd.commands.checkup_review_options`.
+
+% Deliverables
+- Code: `pdd/commands/checkup_review_options.py`

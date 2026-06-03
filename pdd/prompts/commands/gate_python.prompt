@@ -1,18 +1,37 @@
+<pdd-reason>Exposes evidence policy enforcement under the checkup command group with an optional advisory LLM pass.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "gate_cmd", "description": "Evaluate evidence policy gate via pdd checkup gate with optional advisory LLM pass"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>gate_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_advisory_python.prompt</pdd-dependency>
+<pdd-dependency>commands/checkup_review_options_python.prompt</pdd-dependency>
+
 % Write `pdd/commands/gate.py`, Click CLI for ``pdd checkup gate``.
 
 <include>context/python_preamble.prompt</include>
-<pdd-dependency>gate_python.prompt</pdd-dependency>
-
-<pdd-reason>Exposes evidence policy enforcement under the checkup command group (no top-level ``pdd gate``).</pdd-reason>
 
 % Public API
-- `gate_cmd` Click command: `pdd checkup gate [TARGET] [--policy PATH] [--stories-dir PATH] [--tests-dir PATH] [--json]`
+- `gate_cmd` Click command: `pdd checkup gate [TARGET] [--policy PATH] [--stories-dir PATH] [--tests-dir PATH] [--json] [--review off|explain]`
 
 % Behavior
 - `TARGET` omitted: evaluate all `.pdd/evidence/devunits/*.latest.json` under the project root.
 - `TARGET` basename: evaluate one dev unit's latest manifest.
 - `TARGET` path ending in `.latest.json`: evaluate that manifest file.
 - Exit 0 on pass, 1 on failure; `--json` emits structured `GateResult`.
+- Wire `--review off|explain` (default `off`) using the `review_option` decorator from `pdd.commands.checkup_review_options`.
+- Compute the deterministic exit code before any LLM advisory call; the advisory pass MUST NOT alter the exit code.
+- When `--review explain` is set: call the advisory LLM pass after gate evaluation; on any exception set `advisory.status="failed"` and continue; inject `"advisory": report_as_dict(advisory_report)` as a top-level sibling key in the JSON dict; in non-JSON mode print a brief advisory summary to stderr.
+- When `--review off` (default): output is unchanged.
+- Import `SKIPPED_REPORT`, `failed_report`, `final_exit_code`, `report_as_dict` from `pdd.checkup_advisory`.
 
 % Code output
 - Code: `pdd/commands/gate.py`

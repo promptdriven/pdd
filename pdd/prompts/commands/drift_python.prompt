@@ -1,0 +1,35 @@
+<pdd-reason>Exposes regeneration stability checks with an optional advisory LLM pass.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "drift", "description": "Check regeneration stability via pdd checkup drift with optional advisory LLM pass"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>checkup_advisory_python.prompt</pdd-dependency>
+<pdd-dependency>commands/checkup_review_options_python.prompt</pdd-dependency>
+
+% Write `pdd/commands/drift.py`, implementing the `drift` Click command used by `pdd checkup drift`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+This module implements the `drift` Click command, which checks regeneration stability for a PDD dev unit. It optionally appends a read-only advisory LLM pass when `--review explain` is set.
+
+% Requirements
+1. Implement `@click.command("drift")` with all existing options: `DEVUNIT` argument, `--runs`, `--model`, `--from-evidence`, `--code-file`, `--dry-run`, `--json`, `--max-cost`.
+2. Wire `--review off|explain` (default `off`) using the `review_option` decorator from `pdd.commands.checkup_review_options`.
+3. Capture the deterministic exit code from `report.exit_code` before any LLM advisory call; the advisory pass MUST NOT alter the exit code.
+4. When `--review explain` is set: call the advisory LLM pass after `run_drift` returns; on any exception set `advisory.status="failed"` and continue; inject `"advisory": report_as_dict(advisory_report)` as a top-level sibling key in the JSON dict (alongside existing keys from `report.as_dict()`); in non-JSON mode, print a brief advisory summary to stderr.
+5. When `--review off` (default): output is byte-for-byte identical to current behavior.
+6. Import `run_drift`, `DEFAULT_MAX_COST_USD` from `pdd.drift_main`. Import `CheckupReport`, `SKIPPED_REPORT`, `failed_report`, `final_exit_code`, `report_as_dict` from `pdd.checkup_advisory`.
+7. Preserve existing human-readable output format (runs, tests, stories, verify, policy, drift status lines).
+8. Exit via `raise click.exceptions.Exit(final_exit_code(deterministic, advisory_report))`.
+
+% Deliverables
+- Code: `pdd/commands/drift.py`

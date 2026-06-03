@@ -174,3 +174,43 @@ JSON output shape: `{policy, waivers, violations, ok}`.
 ## Stretch goal (not in default CLI)
 
 An optional LLM ambiguity pass exists in `contract_check.run_llm_ambiguity_pass` for future `--llm-ambiguity` wiring; it is not required for CI.
+
+## Advisory LLM layer (`--review explain`)
+
+Pass `--review explain` to append a read-only advisory LLM pass after the deterministic scan. The LLM summarises contract findings and provides coaching hints for fixing them.
+
+```bash
+pdd checkup contract check prompts/ --review explain
+pdd checkup contract check prompts/ --review explain --json
+```
+
+**Contract:**
+- Deterministic checks always run first and alone control exit codes.
+- LLM failure → `advisory.status=failed`; exit code unchanged.
+- `--review off` (default) is identical to current behavior.
+
+**JSON additive field** (present per item only with `--review explain`):
+
+```json
+[
+  {
+    "path": "prompts/foo_python.prompt",
+    "warn_count": 0,
+    "error_count": 1,
+    "issues": [],
+    "advisory": {
+      "status": "ok",
+      "findings": [
+        {
+          "severity": "warn",
+          "area": "contract_rules",
+          "message": "R1 uses 'valid' without a Vocabulary definition.",
+          "evidence": "R1 - Reject invalid input"
+        }
+      ]
+    }
+  }
+]
+```
+
+The `"advisory"` key is additive — existing consumers that ignore unknown keys are unaffected.

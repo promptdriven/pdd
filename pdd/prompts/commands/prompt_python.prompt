@@ -1,6 +1,19 @@
 <pdd-reason>Exposes deterministic prompt and user-story ambiguity linting with an explicitly opted-in advisory LLM pass.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "prompt_lint", "description": "Lint prompts and user stories; exposed as pdd checkup lint with --review off|explain advisory pass"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>prompt_lint_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_advisory_python.prompt</pdd-dependency>
+<pdd-dependency>commands/checkup_review_options_python.prompt</pdd-dependency>
 
 % Write `pdd/commands/prompt.py`, implementing the shared `prompt_lint` command used by `pdd checkup lint`.
 
@@ -11,9 +24,13 @@
 - Accept an optional prompt TARGET and optional `--stories <directory>`; require at least one.
 - Run `scan_prompt` and `scan_stories` deterministically without network access.
 - Support `--json` machine-readable output and `--strict` warning escalation.
-- Accept `--llm` to enable advisory LLM-assisted ambiguity review on top of the default deterministic scan. Without `--llm`, never invoke LLM or cloud-backed work.
+- Accept `--review off|explain` (default `off`) using the `review_option` decorator from `pdd.commands.checkup_review_options` to enable the advisory LLM pass. Without `--review explain`, never invoke LLM or cloud-backed work.
+- Keep `--llm` as a deprecated alias for `--review explain`: emit one stderr deprecation warning (`click.echo("DeprecationWarning: --llm is deprecated; use --review explain", err=True)`) before forwarding to the advisory path. Keep `--llm` functional.
+- Compute the deterministic exit code before any LLM call; the advisory pass MUST NOT alter the exit code.
+- When `--review explain` (or `--llm`): inject `"advisory": report_as_dict(report)` as a sibling key per result item in the JSON list; in non-JSON mode print a brief advisory summary to stderr.
 - Explicitly document the read-only, advisory nature of the linter in the docstring and help texts.
 - Preserve exit codes: 0 for clean, 1 for warnings, 2 for errors or strict warnings.
+- Import `SKIPPED_REPORT`, `failed_report`, `final_exit_code`, `report_as_dict` from `pdd.checkup_advisory`.
 
 % Deliverables
 - Code: `pdd/commands/prompt.py`

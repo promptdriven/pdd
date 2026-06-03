@@ -1,6 +1,19 @@
-<pdd-reason>Defines the `pdd contracts check` CLI group for deterministic contract checks.</pdd-reason>
+<pdd-reason>Defines the `pdd contracts check` CLI group for deterministic contract checks with an optional advisory LLM pass.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "contracts", "description": "Click group exposing pdd contracts check with --review off|explain advisory pass"}
+    ]
+  }
+}
+</pdd-interface>
 
 <pdd-dependency>contract_check_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_advisory_python.prompt</pdd-dependency>
+<pdd-dependency>commands/checkup_review_options_python.prompt</pdd-dependency>
 
 % Write `pdd/commands/contracts.py`.
 
@@ -11,7 +24,12 @@
 - `contracts check TARGET` accepts file or directory, plus optional `--stories` directory.
 - Support `--json` output and `--strict` warning escalation.
 - Exit codes: 0 clean, 1 warnings, 2 errors or strict warnings.
-- Use `pdd.contract_check` public API for evaluation (no LLM calls).
+- Use `pdd.contract_check` public API for evaluation.
+- Wire `--review off|explain` (default `off`) using the `review_option` decorator from `pdd.commands.checkup_review_options`.
+- Compute the deterministic exit code before any LLM call; the advisory pass MUST NOT alter the exit code.
+- When `--review explain` is set: call the advisory LLM pass per result; on any exception set `advisory.status="failed"` and continue; inject `"advisory": report_as_dict(report)` as a sibling key per item in the JSON array (parallel to the existing `"waivers"` key); in non-JSON mode print a brief advisory summary to stderr.
+- When `--review off` (default): no LLM calls; JSON output is unchanged.
+- Import `SKIPPED_REPORT`, `failed_report`, `final_exit_code`, `report_as_dict` from `pdd.checkup_advisory`.
 
 % Deliverables
 - Code: `pdd/commands/contracts.py`
