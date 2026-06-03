@@ -245,7 +245,6 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
                         "errors": 1,
                         "failures": 0,
                         "passed": 0,
-                        "skipped_by_compression": 0,
                     }
                 ],
             }
@@ -292,11 +291,6 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
                     "errors": errors,
                     "failures": failures,
                     "passed": passed,
-                    "skipped_by_compression": (
-                        _count_skipped_by_compression(stdout)
-                        if _test_context_compression_active()
-                        else 0
-                    ),
                 }
             ],
         }
@@ -312,7 +306,6 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
                     "errors": 1,
                     "failures": 0,
                     "passed": 0,
-                    "skipped_by_compression": 0,
                 }
             ],
         }
