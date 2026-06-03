@@ -171,6 +171,34 @@ referencing unknown rule IDs always fail regardless of allow/forbid mode.
 
 JSON output shape: `{policy, waivers, violations, ok}`.
 
-## Stretch goal (not in default CLI)
+## Agentic evidence collector (not in default CLI)
 
-An optional LLM ambiguity pass exists in `contract_check.run_llm_ambiguity_pass` for future `--llm-ambiguity` wiring; it is not required for CI.
+An optional LLM-backed pass follows local import/wrapper chains to collect evidence for
+effects that deterministic checks cannot resolve (e.g. `notificationClient.sendRefundNotice()`
+resolving to `resend.emails.send()`).
+
+```python
+from pdd.agentic_reviewer import run_agentic_reviewer
+
+findings = run_agentic_reviewer(
+    contract_effects=[{"modal": "MUST_NOT", "action": "send email", "resource": "*"}],
+    artifact_paths=["src/billing.ts", "clients/notificationClient.ts"],
+    bounds={"max_files": 20, "max_follow_depth": 2,
+            "max_search_results": 50, "max_runtime_seconds": 30},
+)
+```
+
+Each finding carries `source: "agentic_reviewer"`, `severity: "warning"`,
+a `confidence` float, `effect: {action, resource}`, supporting `evidence` excerpts, and
+`agent_steps` for audit.  When evidence is insufficient the module returns
+`{"judgment": "unknown", "confidence": 0.0}` rather than an empty list, so callers
+can distinguish "no evidence found" from "no findings generated".
+
+The reviewer is read-only (no network access, no code execution).  Bounds
+(`max_files`, `max_follow_depth`, `max_search_results`, `max_runtime_seconds`) are
+hard stops checked before each file read.  On invalid LLM JSON or LLM unavailability
+the call degrades gracefully: no findings are emitted and no exception is raised.
+
+The underlying hook point in the contract-check engine is
+`contract_check.run_llm_ambiguity_pass`; the `--llm-ambiguity` CLI flag is not
+yet wired to CI.
