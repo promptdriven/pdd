@@ -1633,6 +1633,16 @@ def run_agentic_change_orchestrator(
     for s_num, s_out in step_outputs.items():
         context[f"step{s_num}_output"] = s_out
 
+    cached_step6_output = str(context.get("step6_output", ""))
+    if (
+        last_completed_step >= 6
+        and cached_step6_output
+        and not cached_step6_output.startswith("FAILED:")
+    ):
+        context["direct_edit_candidates"] = _parse_direct_edit_candidates(
+            cached_step6_output
+        )
+
     changed_files = []
     
     if "step9_output" in context:
