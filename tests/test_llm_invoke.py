@@ -4977,6 +4977,18 @@ class TestSelectModelCandidates:
         assert candidates[0]["model"] == "gemini-3.1-pro-preview"
         assert candidates[0]["provider"] == "Google Vertex AI"
 
+    def test_vertex_gemini_3_5_flash_resolves_directly_from_packaged_catalog(self, llm_mod):
+        """Issue #1364 / #1136: the cloud default must have an exact catalog row."""
+        df = llm_mod._load_model_data(None)
+        candidates = llm_mod._select_model_candidates(
+            0.5, "vertex_ai/gemini-3.5-flash", df
+        )
+
+        assert candidates[0]["model"] == "vertex_ai/gemini-3.5-flash"
+        assert candidates[0]["provider"] == "Google Vertex AI"
+        assert candidates[0]["input"] == 1.5
+        assert candidates[0]["output"] == 9.0
+
 
 # ============================================================================
 # TESTS: interactive_only column + PDD_ALLOW_INTERACTIVE opt-in (#1164)
@@ -6847,6 +6859,7 @@ class TestGemini3TemperatureClamp:
         assert is_g3("gemini-3.1-pro-preview") is True
         assert is_g3("gemini-3.1-pro-preview-customtools") is True
         assert is_g3("gemini/gemini-3.1-pro-preview") is True
+        assert is_g3("vertex_ai/gemini-3.5-flash") is True
         # GMI / GitHub Copilot routes
         assert is_g3("gmi/google/gemini-3-pro-preview") is True
         assert is_g3("gmi/google/gemini-3-flash-preview") is True
