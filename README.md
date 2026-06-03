@@ -2859,6 +2859,8 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 **Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, **`pdd checkup snapshot`** for nondeterministic-prompt snapshot policy (prompts with `<shell>`, `<web>`, or `query=` includes must have a replayable artifact under `.pdd/evidence/`), and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` or `pdd policy snapshot` command—use `pdd checkup snapshot` only.
 
+`pdd checkup coach --interactive --apply` applies coaching suggestions (vocabulary, coverage, contract rule, story) to `.prompt` and `user_stories/story__*.md` files after per-patch human approval (`[y]es / [n]o / [e]dit / [s]kip remaining`); `--dry-run` shows diffs without writing; `--verify-strict` re-runs `contract check --strict` on touched prompts post-apply. Both `--interactive` and `--apply` are required together — `--apply` alone is an error and non-TTY contexts always fail. `pdd checkup lint --interactive --apply` restricts apply to vocabulary patches only. See [docs/checkup_apply.md](docs/checkup_apply.md).
+
 `pdd checkup gate` accepts `--policy-file` to load waiver policy keys from a YAML file instead of `.pddrc`; `--skip-evidence` to run only waiver-policy checks; and `--skip-waivers` to run only evidence-manifest checks.
 
 `pdd checkup simplify` is a local subcommand for candidate cleanup rather than

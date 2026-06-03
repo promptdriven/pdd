@@ -1,0 +1,167 @@
+<pdd-reason>Human-approved, deterministic patch applicator for .prompt and user_stories/story__*.md files (Layer 3 write).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_checkup_apply", "signature": "(patches, *, run_id=None, dry_run, force_apply, verify_strict, force_overwrite_story) -> ApplyRunResult", "returns": "ApplyRunResult"},
+      {"name": "apply_patch", "signature": "(patch: ApplyPatch, file_text: str) -> str", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+
+% Write `pdd/checkup_apply.py` implementing human-approved patch application for prompt coaching suggestions.
+
+<include>context/python_preamble.prompt</include>
+
+<responsibility>
+This module validates, presents, and applies `ApplyPatch` objects to `.prompt` and
+`user_stories/story__*.md` files after per-patch human approval. It owns the TTY
+guard, interactive approval loop, atomic backup+write, and apply log. It does NOT
+generate coaching suggestions — the caller (checkup coach) provides the patches.
+</responsibility>
+
+<non_responsibilities>
+- Does not generate or score coaching suggestions.
+- Does not authenticate users or check permissions.
+- Does not modify `src/`, generated `pdd/` modules, or policy-review targets.
+- Does not auto-apply by confidence score.
+- Does not perform CI or non-interactive apply.
+</non_responsibilities>
+
+<vocabulary>
+- ApplyPatch: A Pydantic model representing one proposed edit (patch_kind, target_path, draft, section_tag, patch_id).
+- DeterministicError: An exception raised when a patch cannot safely be applied (section absent, path traversal, etc.).
+- patch_kind: One of `vocabulary_line`, `vocabulary_section_create`, `coverage_line`, `contract_rule_line`, `waiver_entry`, `story_create`, `story_covers_append`.
+- dry_run: When True, diffs are computed and displayed but no files are written and no backups are created.
+- already_present: A patch status used when the canonical content already appears verbatim in the target section; treated as a no-op.
+- approved patch: A patch the user accepted via the [y]es prompt choice.
+- TTY context: A context where both sys.stdin.isatty() and sys.stdout.isatty() return True.
+</vocabulary>
+
+<contract_rules>
+R1 - apply requires interactive
+The system MUST NOT write any file when `--apply` is used without `--interactive`.
+The system MUST raise `click.UsageError` with a message mentioning both flags before loading any patches.
+
+R2 - TTY guard
+The system MUST check `sys.stdin.isatty() and sys.stdout.isatty()` before presenting any patch.
+When not in a TTY context, the system MUST raise `click.UsageError` before reading or displaying patches.
+The system MUST NOT check TTY per-patch; the check fires once at session start.
+
+R3 - dry-run leaves files unchanged
+When `dry_run=True`, the system MUST compute and display the unified diff for each approved patch but MUST NOT write any file and MUST NOT create any backup.
+The system MUST record `dry_run: true` in the apply log.
+
+R4 - interactive approval choices
+For each patch, the system MUST prompt `[y]es / [n]o / [e]dit / [s]kip remaining` with default `n`.
+`y` — accept and apply the patch.
+`n` — skip this patch (status: `skipped`).
+`e` — open `patch.draft` in `$EDITOR` via `click.edit()`; if the user saves, replace draft with edited text, then apply.
+`s` — skip this patch and all remaining patches immediately.
+
+R5 - path safety
+The system MUST resolve `target_path` relative to the repo root and MUST raise `DeterministicError` when the resolved path escapes the repo root or when the path does not end in `.prompt` or match `user_stories/story__*.md`.
+
+R6 - section-aware insertion
+For section-insert patch kinds (`vocabulary_line`, `coverage_line`, `contract_rule_line`, `waiver_entry`), the applicator MUST locate the closing `</tag>` of the target section and insert the new content immediately before it.
+When the target section tag is absent, the applicator MUST raise `DeterministicError` unless `force_apply=True`.
+
+R7 - idempotency
+Before inserting content, the applicator MUST check whether the canonical content already appears verbatim in the section. If it does, the applicator MUST return the text unchanged and record `status: already_present`.
+
+R8 - story_create uniqueness
+`story_create` MUST use `open(path, 'x')` (exclusive-create mode) so it fails if the file already exists, unless `force_overwrite_story=True`.
+
+R9 - atomic backup and write
+For each approved, non-dry-run patch, the system MUST:
+  1. Create parent directories for the backup path `.pdd/evidence/checkups/backups/<run_id>/<original_filename>`.
+  2. Copy the original file to the backup path before writing.
+  3. Write the modified content via `atomic_write_text` (temp-in-dir + fsync + os.replace).
+
+R10 - apply log
+The system MUST write `.pdd/evidence/checkups/apply-<run_id>.json` after all patches are processed.
+The apply log MUST validate against schema version `pdd.checkup_apply.v1`.
+The apply log MUST be written via `atomic_write_json` even on partial failure (patches applied before error retain their records).
+
+R11 - deterministic error blocking
+Patches that raise `DeterministicError` MUST be recorded with `status: error` and MUST NOT be written unless `force_apply=True`.
+When `force_apply=False` and a deterministic error occurs, the system MUST display the error to the user and skip the patch.
+
+R12 - postflight contract check
+After apply (non-dry-run), the system MUST re-run `pdd checkup contract check` on every touched `.prompt` file and print suggested next steps.
+When `verify_strict=True`, the postflight exit code MUST propagate to the command's exit code.
+
+R13 - privacy
+The system MUST NOT log, display, or write raw bearer tokens, API keys, or secrets appearing in patch drafts.
+</contract_rules>
+
+<capabilities>
+- MAY read `.prompt` and `user_stories/story__*.md` files.
+- MAY write `.prompt` and `user_stories/story__*.md` files (only after human approval).
+- MAY write backup files under `.pdd/evidence/checkups/backups/<run_id>/`.
+- MAY write apply log at `.pdd/evidence/checkups/apply-<run_id>.json`.
+- MAY invoke `$EDITOR` via `click.edit()` for the `[e]dit` path.
+- MAY invoke `pdd checkup contract check` as a subprocess for postflight.
+- MUST NOT write to `src/`, generated `pdd/` modules, or policy-check targets.
+- MUST NOT auto-apply without human approval.
+- MUST NOT call any LLM or cloud service.
+</capabilities>
+
+<coverage>
+R1: acceptance criteria "–apply without –interactive → clear error"
+R2: acceptance criteria "non-TTY → error, no silent write"
+R3: acceptance criteria "–dry-run leaves file bytes unchanged"
+R4: TODO add story for interactive y/n/e/s loop before production use
+R5: TODO add story for path traversal rejection
+R6: TODO add story for section-not-found deterministic error
+R7: TODO add idempotency story
+R8: acceptance criteria "story_create fails if file exists"
+R9: TODO add atomic backup+write story
+R10: acceptance criteria "Apply log JSON validates against pdd.checkup_apply.v1"
+R11: acceptance criteria "Deterministic errors block apply unless –force-apply"
+R12: TODO add postflight story
+R13: TODO add privacy story
+</coverage>
+
+% Requirements
+1. Define `ApplyPatch` (Pydantic v2 `BaseModel`): fields `patch_id` (str, default uuid4), `patch_kind` (Literal of 7 kinds), `target_path` (str), `draft` (str), `section_tag` (Optional[str], default None), `description` (Optional[str], default None).
+2. Define `PatchStatus` enum: `applied`, `skipped`, `error`, `already_present`, `dry_run_preview`.
+3. Define `PatchResult` (Pydantic v2): `patch_id`, `patch_kind`, `target_path`, `status` (PatchStatus), `diff_unified` (Optional[str]), `backup_path` (Optional[str]), `error_message` (Optional[str]), `ts` (str ISO-8601).
+4. Define `ApplyRunResult` (Pydantic v2): `schema_version` (Literal "pdd.checkup_apply.v1"), `run_id`, `dry_run` (bool), `patches` (List[PatchResult]), `postflight` (Optional[dict]).
+5. Define `DeterministicError(Exception)`.
+6. Implement six pure applicator functions — each accepts `(patch: ApplyPatch, file_text: str) -> str` and raises `DeterministicError` on invalid state:
+   - `apply_vocabulary_line`: inserts `draft` before `</vocabulary>`.
+   - `apply_vocabulary_section_create`: creates a `<vocabulary>\n{draft}\n</vocabulary>` block before `<contract_rules>` opening or at end of file if absent.
+   - `apply_coverage_line`: inserts `draft` before `</coverage>`.
+   - `apply_contract_rule_line`: inserts `draft` before `</contract_rules>`.
+   - `apply_waiver_entry`: inserts `draft` before `</waivers>`.
+   - `apply_story_covers_append`: appends `draft` to the `## Covers` section of a story file.
+7. For `story_create`: handled in `run_checkup_apply` directly (not a pure applicator), using `open(path, 'x')`.
+8. Implement `apply_patch(patch, file_text) -> str` — dispatcher calling the correct applicator by `patch_kind`; raises `DeterministicError` for unknown kinds.
+9. Implement `run_checkup_apply(patches, *, run_id: Optional[str] = None, dry_run, force_apply, verify_strict, force_overwrite_story) -> ApplyRunResult`. When `run_id` is `None`, auto-generate a UUID4 string at session start (same pattern as `patch_id` in `ApplyPatch`).
+   - Validate TTY upfront (R2).
+   - Validate each `target_path` (R5).
+   - For each patch: display unified diff via `difflib.unified_diff` with Click colour, prompt `[y/n/e/s]`, apply, backup, write atomically.
+   - Write apply log (R10).
+   - Run postflight contract check on touched prompts (R12).
+10. Use `atomic_write_text` from `pdd.json_atomic` for all prompt/story file writes.
+11. Use `atomic_write_json` from `pdd.json_atomic` for the apply log.
+12. Colour diff output: red for `-` lines, green for `+` lines, via `click.style`.
+13. Import `parse_prompt_contracts` from `pdd.contract_ir` for postflight (not for applicators).
+
+% Dependencies
+<pdd.contract_ir>
+<include mode="interface">pdd/contract_ir.py</include>
+</pdd.contract_ir>
+<pdd.json_atomic>
+<include>pdd/json_atomic.py</include>
+</pdd.json_atomic>
+
+% Deliverables
+- Code: `pdd/checkup_apply.py`
+- Code: `pdd/json_atomic.py` — add `atomic_write_text(path: Path, text: str) -> None` following the same `tempfile.mkstemp + fsync + os.replace` pattern as `atomic_write_json`.

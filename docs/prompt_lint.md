@@ -21,7 +21,18 @@ For day-to-day prompt authoring, use `--llm`. The default scan is deterministic 
 
 ## Out of Scope (Follow-up)
 
-Interactive apply/writeback (accept suggested vocabulary, `--apply`, accept-all) is intentionally deferred. The linter is read-only advisory only; incorporate suggestions manually in your prompt editor.
+The base linter (`pdd checkup lint`) is advisory only — it reports issues but
+does not write files.
+
+Vocabulary-only apply patches are available via `pdd checkup lint --interactive
+--apply TARGET`: both flags are required in v1, only `vocabulary_line` and
+`vocabulary_section_create` patches are supported, and the operator is prompted
+`[y]es / [n]o / [e]dit / [s]kip remaining` (default **n**) per patch.
+Non-TTY environments produce an error rather than silently applying patches.
+
+For the full coaching suite (contract rules, coverage entries, story creation),
+use `pdd checkup coach --interactive --apply`. See
+[docs/checkup_apply.md](checkup_apply.md).
 
 ---
 

@@ -1,6 +1,7 @@
 <pdd-reason>Defines the `pdd contracts check` CLI group for deterministic contract checks.</pdd-reason>
 
 <pdd-dependency>contract_check_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_apply_python.prompt</pdd-dependency>
 
 % Write `pdd/commands/contracts.py`.
 
@@ -12,6 +13,14 @@
 - Support `--json` output and `--strict` warning escalation.
 - Exit codes: 0 clean, 1 warnings, 2 errors or strict warnings.
 - Use `pdd.contract_check` public API for evaluation (no LLM calls).
+- Add apply flags to `contracts check`:
+  - `--interactive` flag (required with `--apply`)
+  - `--apply` flag (required with `--interactive`; delegates to `run_checkup_apply` with patches from contract check findings — missing vocabulary or coverage entries)
+  - `--dry-run` flag (diff preview only; no file writes)
+  - `--force-apply` flag (apply even when deterministic errors exist)
+  - `--verify-strict` flag (re-run `contract check --strict` on touched prompts post-apply; propagate exit code)
+  - When `--apply` is present without `--interactive`, MUST raise `click.UsageError` ("--apply requires --interactive") before evaluating any contract checks.
+  - When `--apply` and `--interactive` are both set, pass contract-check findings as `ApplyPatch` objects to `run_checkup_apply`.
 
 % Deliverables
 - Code: `pdd/commands/contracts.py`

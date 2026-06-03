@@ -1,6 +1,7 @@
 <pdd-reason>Exposes deterministic prompt and user-story ambiguity linting with an explicitly opted-in advisory LLM pass.</pdd-reason>
 
 <pdd-dependency>prompt_lint_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_apply_python.prompt</pdd-dependency>
 
 % Write `pdd/commands/prompt.py`, implementing the shared `prompt_lint` command used by `pdd checkup lint`.
 
@@ -14,6 +15,13 @@
 - Accept `--llm` to enable advisory LLM-assisted ambiguity review on top of the default deterministic scan. Without `--llm`, never invoke LLM or cloud-backed work.
 - Explicitly document the read-only, advisory nature of the linter in the docstring and help texts.
 - Preserve exit codes: 0 for clean, 1 for warnings, 2 for errors or strict warnings.
+- Add vocabulary apply flags (restricted patch kinds: `vocabulary_line` and `vocabulary_section_create` only):
+  - `--interactive` flag (required with `--apply`)
+  - `--apply` flag (required with `--interactive`; delegates to `run_checkup_apply` from `pdd.checkup_apply` with vocabulary patches from lint findings)
+  - `--dry-run` flag (diff preview only; no file writes)
+  - `--force-apply` flag (apply even when deterministic errors exist)
+  - When `--apply` is present without `--interactive`, MUST raise `click.UsageError` ("--apply requires --interactive") before running any lint scan.
+  - When `--apply` and `--interactive` are both set, convert lint findings to `ApplyPatch` objects (`patch_kind` restricted to `vocabulary_line` or `vocabulary_section_create`) and pass to `run_checkup_apply`.
 
 % Deliverables
 - Code: `pdd/commands/prompt.py`
