@@ -871,15 +871,62 @@ def test_detect_interactive_auth_failure_ignores_ordinary_login_prose(tmp_path):
         "API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
         "API Error: The socket connection was closed unexpectedly.",
         "Request timed out",
-        "You've hit your session limit · resets 7pm (America/Los_Angeles)",
     ],
 )
 def test_detect_interactive_auth_failure_ignores_transient_synthetic(tmp_path, text):
-    """Synthetic rows that are not auth failures (transient / usage cap) are left
-    alone so an in-flight, recoverable turn is never killed (Issue #1365)."""
+    """Genuinely transient synthetic rows (server-side rate limiting, dropped
+    socket, timeout) are left alone so an in-flight, recoverable turn is never
+    killed (Issue #1365). Subscription/usage *caps* are NOT transient — they are
+    handled by test_detect_interactive_credential_limit_fast_fails below."""
     home = tmp_path / "home"
     session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000004"
     _write_session_transcript(home, session_id, [_synthetic_auth_row(text)])
+
+    assert _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)}) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "You've hit your limit · resets May 18, 11pm (UTC)",                   # weekly/overall
+        "You've hit your session limit · resets 3:30pm (America/Los_Angeles)",  # 5-hour session
+        "You've hit your usage limit · resets 9pm",                            # usage
+    ],
+)
+def test_detect_interactive_credential_limit_fast_fails(tmp_path, text):
+    """A mid-run subscription/usage cap arms a credential-limit fast-fail so the
+    caller rotates to the next OAuth token instead of parking at the prompt
+    until the step timeout. Symmetric to the auth fast-fail (Issue #1365); the
+    cap reset window is hours-to-days, so retrying the same credential is futile.
+    The returned message itself classifies as ``credential-limit`` so the
+    pdd_cloud OAuth waterfall force-rotates on it."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-00000000000c"
+    _write_session_transcript(home, session_id, [_synthetic_auth_row(text)])
+
+    message = _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)})
+
+    assert message is not None
+    assert _classify_permanent_error(message) == "credential-limit"
+    assert _is_permanent_error(message)
+    assert "credential-limit" in message
+
+
+def test_detect_interactive_credential_limit_ignores_benign_prose(tmp_path):
+    """The time-token guard keeps benign prose that merely strings 'hit your
+    limit' and 'resets' together out of the credential-limit class — no false
+    fast-fail (mirrors the auth detector's ordinary-prose guard)."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-00000000000d"
+    _write_session_transcript(
+        home,
+        session_id,
+        [
+            _synthetic_auth_row(
+                "If you hit your limit, nothing resets automatically — contact support."
+            )
+        ],
+    )
 
     assert _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)}) is None
 
