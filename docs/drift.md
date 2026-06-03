@@ -48,3 +48,8 @@ pdd checkup drift <devunit> --max-cost 5.0
 - `--from-evidence` resolves prompt/code from manifest data and output paths.
 - Behavior drift is stricter than implementation drift: hash changes can be acceptable when behavior remains stable.
 - This command is distinct from `pdd/ci_drift_heal` (CI prompt/example auto-heal) and `pdd contracts drift` (contract/code conformance).
+
+## See also
+
+- [docs/checkup_verifier.md](checkup_verifier.md) — all local verifier subcommands and CI recipe
+- [docs/checkup_prompt_coaching.md](checkup_prompt_coaching.md) — prompt coaching (Mode B)

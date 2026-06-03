@@ -58,6 +58,11 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
 For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
+
+For the `pdd checkup` verifier namespace (local CI checks: lint, contract, coverage, gate, snapshot, drift), see [docs/checkup_verifier.md](docs/checkup_verifier.md).
+
+For prompt coaching — the incremental authoring loop against the contract schema (Mode B), see [docs/checkup_prompt_coaching.md](docs/checkup_prompt_coaching.md).
+
 ## Installation
 
 ### Prerequisites for macOS

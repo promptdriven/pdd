@@ -19,7 +19,6 @@ from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .gate import gate_cmd
 from .drift import drift_cmd
-from .gate import gate_cmd
 from .prompt import prompt_lint
 
 
@@ -348,33 +347,39 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     gate_allow: Tuple[str, ...],
 ) -> Optional[Tuple[str, float, str]]:
     """
-    Run agentic health checkup from a GitHub issue, or local diagnostics.
+    Local evidence & contracts verifier, or agentic project health-check.
 
     \b
-    GitHub mode (default): TARGET is an issue URL.
-    PR mode: pass --pr <pr-url> to run the full checkup against an existing
-             PR. With no --issue the PR is reviewed on its own merits;
-             add --issue <issue-url> to also verify the PR resolves that
-             issue. Unless --no-fix is set, the fix/verify loop runs against
-             the PR worktree and any eligible generated fixes are committed
-             and pushed back to the PR head ref. Step 8 (create PR) is
-             skipped — no second PR is opened.
-    Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
-    architecture.json entries against module prompt <include> tags.
-    Simplify (Claude Code /simplify, requires --apply):
-      pdd checkup simplify [PATH] [OPTIONS]
-    Prompt lint:
-      pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
-    Contract checks:
-      pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
-    Contract coverage:
+    Local evidence & contracts:
+      pdd checkup lint TARGET [OPTIONS]
+          Lint prompts and user stories for quality and ambiguity.
+      pdd checkup contract check TARGET [OPTIONS]
+          Validate contract sections (<contract_rules>, <coverage>, waivers).
+          Alias: pdd checkup contracts check
       pdd checkup coverage [OPTIONS] TARGET
-    Snapshot policy (nondeterministic prompt context):
+          Build the rule-to-story/test coverage matrix.
+      pdd checkup gate [TARGET] [OPTIONS]
+          Enforce waiver policy and evidence manifests.
       pdd checkup snapshot PROMPT_FILE [OPTIONS]
-    Evidence and waiver gate:
-      pdd checkup gate [TARGET] [OPTIONS]  →  evidence manifests and waiver policy.
-    Regeneration drift:
+          Verify nondeterministic prompt context snapshot policy.
       pdd checkup drift <DEVUNIT> [OPTIONS]
+          Check regeneration stability across repeated runs (uses LLM).
+      pdd checkup coach PROMPT [OPTIONS]
+          Schema-aware prompt coaching authoring loop. (Coming in a follow-up.)
+      pdd checkup simplify [PATH] [OPTIONS]
+          Claude Code /simplify candidate cleanup.
+
+    \b
+    Mental model:
+      generate | sync | test | verify  →  action verbs (produce artifacts)
+      checkup                          →  verifier + coaching (inspect artifacts)
+
+    \b
+    Agentic issue / PR review:
+      pdd checkup <issue-url>
+          Run the full agentic health-check orchestrator from a GitHub issue.
+      pdd checkup --pr <pr-url> [--issue <issue-url>]
+          Run the full checkup against an existing pull request.
     """
     ctx.ensure_object(dict)
 
@@ -382,6 +387,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "lint",
         "contract",
         "contracts",
+        "coach",
         "coverage",
         "drift",
         "gate",
@@ -541,6 +547,15 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         )
         if exit_code:
             raise click.exceptions.Exit(exit_code)
+        return None
+
+    if target == "coach":
+        click.echo(
+            "pdd checkup coach is not yet implemented. "
+            "It is planned as part of the checkup verifier + coaching stack "
+            "(follow-up issues #1379–#1381, epic #833)."
+        )
+        ctx.exit(0)
         return None
 
     if ctx.args:

@@ -226,6 +226,8 @@ The coverage matrix (**#823**) is static analysis only; it does not call an LLM.
 
 Some PRs stack contract check, lint, coverage, and evidence for one review pass. That is a release convenience, not a runtime dependency.
 
+For the full list of local verifier subcommands and CI recipe, see [docs/checkup_verifier.md](checkup_verifier.md).
+
 ---
 
 ## JSON schema

@@ -1,4 +1,15 @@
-<pdd-reason>Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.</pdd-reason>
+<pdd-reason>Registers pdd checkup as a dual-mode CLI: local verifier namespace (lint, contract check, coverage, gate, snapshot, drift, coach) and agentic project health-check / PR review from a GitHub issue.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "checkup", "description": "Local verifier namespace (lint, contract check, coverage, gate, snapshot, drift, coach) and agentic project health-check / PR review from a GitHub issue"}
+    ]
+  }
+}
+</pdd-interface>
 
 <pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
 <pdd-dependency>commands/prompt_python.prompt</pdd-dependency>
@@ -51,12 +62,21 @@
   - `--gate-timeout` (float, default `60.0`; per-gate wall-clock cap in seconds — a gate exceeding the cap is recorded as a runner-side failure and treated as a blocker finding rather than blocking the loop)
   - `--gate-allow` (repeatable string, default `()`; forward-compatibility hook for opting extra gate names into discovery beyond the conservative v1 set — discovery remains allowlist-only; this argument is threaded through so the CLI surface and discovery surface can co-evolve)
 - Signature returns `Optional[Tuple[str, float, str]]`.
+- Help-text ordering: the `checkup` command docstring MUST open with a `\b`-guarded
+  "Local evidence & contracts" section listing all local verifier subcommands
+  (lint, contract check, coverage, gate, snapshot, drift, coach) with brief
+  examples, before any agentic / PR-review content. The agentic / PR-review
+  description MUST appear after the local section (e.g. in Click's `epilog=`
+  parameter or as the final block in the docstring). Import `gate_cmd` from
+  `.gate` exactly once (no duplicate import).
 - Local utility dispatch before mode validation:
   - Import `prompt_lint` from `.prompt`, `contracts_group` from `.contracts`, and `coverage_cmd` from `.coverage`.
+  - Import `gate_cmd` from `.gate` exactly once.
   - For `target == "lint"`, delegate remaining args to `prompt_lint.main(...)`, enabling `pdd checkup lint`.
   - For `target in {"contract", "contracts"}`, delegate remaining args to `contracts_group.main(...)`, enabling `pdd checkup contract check`.
   - For `target == "coverage"`, delegate remaining args to `coverage_cmd.main(...)`, enabling deterministic `pdd checkup coverage`; contract-rule analysis is implied and no `--contracts` flag is required.
   - For `target == "gate"`, delegate remaining args to `gate_cmd.main(...)` with `prog_name="pdd checkup gate"`; do not register a top-level `pdd gate` command.
+  - For `target == "coach"`: print a message indicating `pdd checkup coach` is not yet implemented and is coming in a follow-up issue; call `ctx.exit(0)`. Add `"coach"` to the set of reserved targets recognised by the `show_help` guard so `pdd checkup coach -h` renders the placeholder text rather than the parent help.
   - For a non-utility target, reject any remaining unknown arguments.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.

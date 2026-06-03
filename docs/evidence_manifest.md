@@ -57,6 +57,8 @@ pdd checkup gate <devunit> --json
 pdd checkup snapshot prompts/critical_python.prompt
 ```
 
+For the full verifier namespace and CI recipe, see [docs/checkup_verifier.md](checkup_verifier.md).
+
 ## Contents
 
 Schema version 2 records:
