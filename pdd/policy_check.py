@@ -687,11 +687,24 @@ class PolicyVisitor(ast.NodeVisitor):
         ):
             self._check_file_operation(node, label=f"{var_name}.open()")
 
+    def _register_path_instances_from_constructor(
+        self,
+        value: ast.AST,
+        targets: list[ast.AST],
+    ) -> None:
+        if not isinstance(value, ast.Call) or not self._pathlib_constructor_call(value):
+            return
+        for target in targets:
+            if isinstance(target, ast.Name):
+                self.path_instance_names.add(target.id)
+
     def visit_Assign(self, node: ast.Assign) -> None:
-        if isinstance(node.value, ast.Call) and self._pathlib_constructor_call(node.value):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    self.path_instance_names.add(target.id)
+        self._register_path_instances_from_constructor(node.value, node.targets)
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        if node.target is not None:
+            self._register_path_instances_from_constructor(node.value, [node.target])
         self.generic_visit(node)
 
     def _check_file_operation(

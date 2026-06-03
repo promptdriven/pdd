@@ -337,6 +337,23 @@ def test_path_variable_bound_write_text_blocked(tmp_path: Path) -> None:
     assert any(i.category == "file" for i in result.issues)
 
 
+def test_path_annassign_bound_write_text_blocked(tmp_path: Path) -> None:
+    """``p: Path = Path(...); p.write_text(...)`` is enforced like plain assignment."""
+    prompt = tmp_path / "records_only.prompt"
+    prompt.write_text("<capabilities>\n- MAY read records.\n</capabilities>\n", encoding="utf-8")
+    target = tmp_path / "path_annassign.py"
+    target.write_text(
+        "from pathlib import Path\n\n"
+        "def f() -> None:\n"
+        '    p: Path = Path("/tmp/pdd_probe")\n'
+        '    p.write_text("x")\n',
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "file" for i in result.issues)
+
+
 def test_pathlib_path_alias_write_text_blocked(tmp_path: Path) -> None:
     prompt = tmp_path / "no_file.prompt"
     prompt.write_text("<capabilities>\n- MAY read configuration.\n</capabilities>\n", encoding="utf-8")
