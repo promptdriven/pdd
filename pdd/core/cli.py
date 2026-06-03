@@ -456,19 +456,26 @@ def cli(
         from ..reasoning import time_to_effort_level
         os.environ["PDD_REASONING_EFFORT"] = time_to_effort_level(time)
     
-    # Context compression options
+    # Context compression options (issue #877)
+    from ..compression_reporting import clear_compression_fallback_events
+    from ..config_resolution import apply_compression_env
+
+    clear_compression_fallback_events()
     ctx.obj["compress_examples"] = compress_examples
-    if compress_examples:
-        os.environ['PDD_COMPRESS_EXAMPLES'] = '1'
     ctx.obj["compress_test_context"] = compress_test_context
-    if compress_test_context:
-        os.environ['PDD_COMPRESS_TEST_CONTEXT'] = '1'
     ctx.obj["context_compression"] = context_compression
-    if context_compression:
-        os.environ['PDD_CONTEXT_COMPRESSION'] = context_compression
     ctx.obj["compression_fallback"] = compression_fallback
-    if compression_fallback:
-        os.environ['PDD_COMPRESSION_FALLBACK'] = compression_fallback
+    cli_compression: dict[str, Any] = {}
+    if compress_examples is not None:
+        cli_compression["compress_examples"] = compress_examples
+    if compress_test_context is not None:
+        cli_compression["compress_test_context"] = compress_test_context
+    if context_compression is not None:
+        cli_compression["context_compression"] = context_compression
+    if compression_fallback is not None:
+        cli_compression["compression_fallback"] = compression_fallback
+    if cli_compression:
+        apply_compression_env(cli_compression)
 
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
@@ -686,6 +693,10 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
 
     if not ctx.obj.get("quiet"):
+        from ..compression_reporting import format_compression_summary_lines
+
+        for line in format_compression_summary_lines():
+            console.print(f"[info]{line}[/info]")
         # Only print total cost if at least one command potentially contributed cost
         if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in normalized_results):
             console.print(f"[info]Total Estimated Cost:[/info] ${total_cost:.6f}")

@@ -51,6 +51,9 @@ def _warn_selector_fallback(
             "Falling back to full content."
         )
     warnings.warn(message, UserWarning, stacklevel=4)
+    from pdd.compression_reporting import record_compression_fallback
+
+    record_compression_fallback(message)
     if not _is_quiet_mode():
         console.print(f"[yellow]Warning: {message}[/yellow]")
 
@@ -371,6 +374,10 @@ def preprocess(
             raise
         raise
     except Exception as e:
+        from pdd.compression_reporting import CompressionFallbackError
+
+        if isinstance(e, CompressionFallbackError):
+            raise
         console.print(f"[bold red]Error during preprocessing:[/bold red] {str(e)}")
         console.print(Panel(traceback.format_exc(), title="Error Details", style="red"))
         _dbg(f"Exception: {str(e)}")
@@ -793,7 +800,9 @@ def process_include_tags(
                         except Exception as e:
                             fallback_strategy = os.environ.get("PDD_COMPRESSION_FALLBACK", "full").lower()
                             if fallback_strategy == "error":
-                                raise
+                                from pdd.compression_reporting import CompressionFallbackError
+
+                                raise CompressionFallbackError(str(e)) from e
                             fallback_query = attrs.get('query')
                             if fallback_query:
                                 try:
@@ -905,6 +914,10 @@ def process_include_tags(
             _dbg(f"OSError processing XML include {file_path}: {e}")
             return match.group(0)
         except Exception as e:
+            from pdd.compression_reporting import CompressionFallbackError
+
+            if isinstance(e, CompressionFallbackError):
+                raise
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing XML include {file_path}: {e}")
             if recursive:
