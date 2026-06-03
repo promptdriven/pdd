@@ -215,6 +215,78 @@ def test_sync_orchestration_operation_log_records_compression_metadata(orchestra
     assert fallback["used"] is False
 
 
+def test_compressed_context_generate_verify_fix_loop_records_phase_metadata(
+    orchestration_fixture,
+):
+    """Compressed context flows through generate, verify, and fix with per-phase telemetry."""
+    import subprocess
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='verify', reason='Verify example'),
+        SyncDecision(operation='fix', reason='Test failures'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+
+    pdd_files = orchestration_fixture['get_pdd_file_paths'].return_value
+    for path in (pdd_files['code'], pdd_files['example'], pdd_files['test']):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# stub\n", encoding="utf-8")
+
+    mock_code_gen = orchestration_fixture['code_generator_main']
+    mock_verify = orchestration_fixture['fix_verification_main']
+    mock_fix = orchestration_fixture['fix_main']
+
+    failing_cp = subprocess.CompletedProcess(
+        args=["pytest"],
+        returncode=1,
+        stdout="FAILED test_calculator.py::test_x",
+        stderr="",
+    )
+
+    with patch(
+        "pdd.sync_orchestration._run_fix_operation_test_subprocess",
+        return_value=failing_cp,
+    ), patch(
+        "pdd.sync_orchestration.extract_failing_files_from_output",
+        return_value=[],
+    ):
+        result = sync_orchestration(
+            basename="calculator",
+            language="python",
+            compressed_context=True,
+            quiet=True,
+            budget=1.0,
+        )
+
+    assert result['success'] is True
+    assert mock_code_gen.call_count >= 1
+    assert mock_verify.call_count >= 1
+    assert mock_fix.call_count >= 1
+
+    for mock_phase, phase_name in (
+        (mock_code_gen, "generate"),
+        (mock_verify, "verify"),
+        (mock_fix, "fix"),
+    ):
+        compressed = mock_phase.call_args.kwargs.get("compressed_context")
+        assert compressed is not None, f"{phase_name} missing compressed_context"
+        assert compressed.get("phase") == phase_name
+
+    from pdd.operation_log import load_operation_log
+
+    entries = load_operation_log("calculator", "python")
+    for op_name in ("generate", "verify", "fix"):
+        op_entries = [entry for entry in entries if entry.get("operation") == op_name]
+        assert op_entries, f"missing operation log for {op_name}"
+        compression = op_entries[-1]["compression"]
+        assert compression["enabled"] is True
+        assert compression["used"] is True
+        assert any(phase.get("phase") == op_name for phase in compression["phases"])
+        assert "content" not in json.dumps(compression)
+
+
 def test_generate_conformance_retry_cost_is_counted(orchestration_fixture):
     """Conformance retry cost must be included in orchestration totals/logs."""
     from pdd.code_generator_main import ArchitectureConformanceError
