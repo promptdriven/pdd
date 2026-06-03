@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
+import click
 import pytest
 import yaml
 
@@ -15,7 +16,7 @@ from pdd.compression_reporting import (
     format_compression_summary_lines,
     record_compression_fallback,
 )
-from pdd.config_resolution import apply_compression_env
+from pdd.config_resolution import apply_compression_env, resolve_effective_config
 from pdd.construct_paths import construct_paths
 from pdd.preprocess import preprocess
 from pdd.pytest_output import _count_skipped_by_compression, _test_context_compression_active
@@ -111,6 +112,154 @@ def test_apply_compression_env_off_unsets_context_compression(
     monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "examples")
     apply_compression_env({"context_compression": "off"})
     assert "PDD_CONTEXT_COMPRESSION" not in os.environ
+
+
+def _cli_ctx_with_unset_compression() -> click.Context:
+    """Simulate global CLI entry without compression flags."""
+    ctx = click.Context(click.Command("pdd"))
+    ctx.obj = {
+        "compress_examples": None,
+        "compress_test_context": None,
+        "context_compression": None,
+        "compression_fallback": None,
+    }
+    return ctx
+
+
+def test_resolve_effective_config_uses_pddrc_when_global_compression_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unset ctx.obj compression keys must not shadow .pddrc defaults."""
+    monkeypatch.delenv("PDD_COMPRESS_TEST_CONTEXT", raising=False)
+    monkeypatch.delenv("PDD_CONTEXT_COMPRESSION", raising=False)
+    monkeypatch.delenv("PDD_COMPRESS_EXAMPLES", raising=False)
+
+    resolved_config = {
+        "compress_test_context": True,
+        "context_compression": "test",
+        "compress_examples": True,
+        "compression_fallback": "error",
+    }
+    effective = resolve_effective_config(
+        _cli_ctx_with_unset_compression(),
+        resolved_config,
+        param_overrides={},
+    )
+
+    assert effective["compress_test_context"] is True
+    assert effective["context_compression"] == "test"
+    assert effective["compress_examples"] is True
+    assert effective["compression_fallback"] == "error"
+    assert os.environ.get("PDD_COMPRESS_TEST_CONTEXT") == "1"
+    assert os.environ.get("PDD_CONTEXT_COMPRESSION") == "test"
+    assert os.environ.get("PDD_COMPRESS_EXAMPLES") == "1"
+    assert os.environ.get("PDD_COMPRESSION_FALLBACK") == "error"
+
+
+def test_resolve_effective_config_cli_compression_overrides_pddrc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PDD_COMPRESS_TEST_CONTEXT", raising=False)
+
+    ctx = _cli_ctx_with_unset_compression()
+    ctx.obj["compress_test_context"] = True
+
+    resolved_config = {"compress_test_context": False}
+    effective = resolve_effective_config(ctx, resolved_config, param_overrides={})
+
+    assert effective["compress_test_context"] is True
+    assert os.environ.get("PDD_COMPRESS_TEST_CONTEXT") == "1"
+
+
+def test_resolve_effective_config_fix_command_local_flag_overrides_pddrc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Command-local fix flags must beat .pddrc when explicitly set."""
+    monkeypatch.delenv("PDD_COMPRESS_TEST_CONTEXT", raising=False)
+
+    resolved_config = {"compress_test_context": True}
+    effective = resolve_effective_config(
+        _cli_ctx_with_unset_compression(),
+        resolved_config,
+        param_overrides={"compress_test_context": False},
+    )
+
+    assert effective["compress_test_context"] is False
+    assert "PDD_COMPRESS_TEST_CONTEXT" not in os.environ
+
+
+def test_fix_main_preserves_pddrc_compress_test_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pdd fix without compression CLI flags must keep .pddrc test compression."""
+    from pdd.fix_main import fix_main
+
+    monkeypatch.delenv("PDD_COMPRESS_TEST_CONTEXT", raising=False)
+    monkeypatch.delenv("PDD_CONTEXT_COMPRESSION", raising=False)
+
+    prompt_file = tmp_path / "demo_python.prompt"
+    code_file = tmp_path / "demo.py"
+    test_file = tmp_path / "test_demo.py"
+    error_file = tmp_path / "error.txt"
+    prompt_file.write_text("prompt", encoding="utf-8")
+    code_file.write_text("x = 1\n", encoding="utf-8")
+    test_file.write_text("def test_demo():\n    assert x == 2\n", encoding="utf-8")
+    error_file.write_text("AssertionError\n", encoding="utf-8")
+
+    ctx = click.Context(click.Command("fix"))
+    ctx.obj = {
+        "force": True,
+        "quiet": True,
+        "local": True,
+        "compress_examples": None,
+        "compress_test_context": None,
+        "context_compression": None,
+        "compression_fallback": None,
+    }
+
+    resolved_config = {
+        "compress_test_context": True,
+        "context_compression": "test",
+        "compress_examples": False,
+        "compression_fallback": "full",
+        "strength": 0.5,
+        "temperature": 0.0,
+        "time": 0.25,
+    }
+    input_strings = {
+        "prompt_file": prompt_file.read_text(encoding="utf-8"),
+        "code_file": code_file.read_text(encoding="utf-8"),
+        "unit_test_file": test_file.read_text(encoding="utf-8"),
+        "error_file": error_file.read_text(encoding="utf-8"),
+    }
+
+    with patch(
+        "pdd.fix_main.construct_paths",
+        return_value=(resolved_config, input_strings, {}, None),
+    ), patch(
+        "pdd.fix_main.fix_errors_from_unit_tests",
+        return_value=(False, False, "", "", None, 0.0, "test-model"),
+    ):
+        fix_main(
+            ctx,
+            str(prompt_file),
+            str(code_file),
+            str(test_file),
+            str(error_file),
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=False,
+            verification_program=None,
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False,
+            compress_test_context=None,
+        )
+
+    assert os.environ.get("PDD_COMPRESS_TEST_CONTEXT") == "1"
+    assert os.environ.get("PDD_CONTEXT_COMPRESSION") == "test"
 
 
 def test_preprocess_test_compression_without_failing_tests_keeps_full(

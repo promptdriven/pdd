@@ -289,7 +289,7 @@ def fix(
                 temperature=None,
                 protect_tests=protect_tests,
                 failure_aware_retries=failure_aware_retries,
-                compress_test_context=bool(compress_test_context),
+                compress_test_context=compress_test_context,
                 context_compression=context_compression,
                 compression_fallback=compression_fallback,
             )

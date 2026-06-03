@@ -319,7 +319,7 @@ def test_cli_fix_multiple_test_files(tmp_path):
         assert result.exit_code == 0
         assert mock_fix_main.call_count == 2
         compression_kwargs = {
-            "compress_test_context": False,
+            "compress_test_context": None,
             "context_compression": None,
             "compression_fallback": None,
         }

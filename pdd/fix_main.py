@@ -66,7 +66,7 @@ def fix_main(
     protect_tests: bool = False,
     test_files: list[str] | None = None,
     failure_aware_retries: bool = True,
-    compress_test_context: bool = False,
+    compress_test_context: bool | None = None,
     context_compression: str | None = None,
     compression_fallback: str | None = None,
 ) -> Tuple[bool, str, str, int, float, str]:
@@ -138,14 +138,18 @@ def fix_main(
             confirm_callback=ctx.obj.get('confirm_callback')
         )
 
+        compression_overrides: dict[str, bool | str] = {}
+        if compress_test_context is not None:
+            compression_overrides["compress_test_context"] = compress_test_context
+        if context_compression is not None:
+            compression_overrides["context_compression"] = context_compression
+        if compression_fallback is not None:
+            compression_overrides["compression_fallback"] = compression_fallback
+
         effective_config = resolve_effective_config(
             ctx,
             resolved_config,
-            param_overrides={
-                "compress_test_context": compress_test_context,
-                "context_compression": context_compression,
-                "compression_fallback": compression_fallback,
-            },
+            param_overrides=compression_overrides,
         )
 
         # Get parameters from context (prefer passed parameters over ctx.obj)

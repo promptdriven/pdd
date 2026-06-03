@@ -789,7 +789,7 @@ def process_include_tags(
                                     record_compression_applied(full_path, mode)
                         except CompressionFallbackError:
                             raise
-                        except SelectorError as e:
+                        except ImportError as e:
                             fallback_query = attrs.get('query')
                             if fallback_query:
                                 try:
@@ -812,7 +812,7 @@ def process_include_tags(
                                             output=f"[query_include failed: {inner_e}]",
                                         )
                             _warn_selector_fallback(file_path, mode, e, selectors=selectors_str)
-                        except ImportError as e:
+                        except SelectorError as e:
                             fallback_query = attrs.get('query')
                             if fallback_query:
                                 try:

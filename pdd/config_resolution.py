@@ -79,8 +79,8 @@ def resolve_effective_config(
         # Priority 1: Command parameter override
         if key in param_overrides and param_overrides[key] is not None:
             return param_overrides[key]
-        # Priority 2: CLI global option (only if key IS in ctx.obj - meaning CLI passed it)
-        if key in ctx_obj:
+        # Priority 2: CLI global option (only when explicitly set, not Click default None)
+        if key in ctx_obj and ctx_obj[key] is not None:
             return ctx_obj[key]
         # Priority 3: pddrc context default
         if key in resolved_config and resolved_config[key] is not None:
