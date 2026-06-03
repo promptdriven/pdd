@@ -2682,6 +2682,13 @@ def _gemini_subscription_fallback_family(model_df: pd.DataFrame) -> pd.DataFrame
     return model_df[gemini & ~chatgpt & ~direct_anthropic].copy()
 
 
+def _codex_subscription_fallback_family(model_df: pd.DataFrame) -> pd.DataFrame:
+    """Rows available after the ChatGPT/Codex subscription family fails."""
+    return model_df[
+        ~model_df["model"].astype(str).str.lower().str.startswith("chatgpt/")
+    ].copy()
+
+
 def _chatgpt_default_for_request(family_df: pd.DataFrame, requested_model: Any) -> str:
     """Resolve the ChatGPT-family default model for the current request."""
     requested = str(requested_model or "").strip()
@@ -2703,6 +2710,36 @@ def _chatgpt_default_for_request(family_df: pd.DataFrame, requested_model: Any) 
     if not preferred.empty:
         return "chatgpt/gpt-5.5"
     return str(family_df.loc[family_df["coding_arena_elo"].idxmax()]["model"])
+
+
+def _fallback_default_for_request(
+    fallback_df: pd.DataFrame,
+    requested_model: Any,
+    chatgpt_default: Any,
+) -> Any:
+    """Resolve a non-chatgpt base model for normal fallback selection."""
+    if fallback_df.empty:
+        return None
+
+    candidates = []
+    requested = str(requested_model or "").strip()
+    if requested:
+        candidates.append(requested.split("/", 1)[-1])
+        candidates.append(requested)
+
+    chatgpt_default_name = str(chatgpt_default or "").strip()
+    if chatgpt_default_name.lower().startswith("chatgpt/"):
+        candidates.append(chatgpt_default_name.split("/", 1)[1])
+    elif chatgpt_default_name:
+        candidates.append(chatgpt_default_name)
+
+    model_names = fallback_df["model"].astype(str)
+    for candidate in candidates:
+        exact = fallback_df[model_names.str.lower() == str(candidate).lower()]
+        if not exact.empty:
+            return str(exact.iloc[0]["model"])
+
+    return str(fallback_df.iloc[0]["model"])
 
 
 def _apply_codex_subscription_default(
@@ -2729,15 +2766,13 @@ def _apply_codex_subscription_default(
         return model_df, effective_default_model, False
 
     family = _chatgpt_family(model_df)
-    gemini_fallback = _gemini_subscription_fallback_family(model_df)
+    fallback_family = _codex_subscription_fallback_family(model_df)
     if family.empty:
         try:
             packaged_df = _load_model_data(None)
             packaged_family = _chatgpt_family(packaged_df)
-            packaged_gemini_fallback = _gemini_subscription_fallback_family(packaged_df)
         except Exception:
             packaged_family = pd.DataFrame()
-            packaged_gemini_fallback = pd.DataFrame()
         if packaged_family.empty:
             raise ValueError(
                 "Codex subscription auth is available, but the active model catalog "
@@ -2749,20 +2784,87 @@ def _apply_codex_subscription_default(
             "ChatGPT subscription rows for Codex default."
         )
         family = packaged_family
-        if gemini_fallback.empty:
-            gemini_fallback = packaged_gemini_fallback
 
     resolved_default = _chatgpt_default_for_request(family, requested)
     candidate_df = family
-    if not gemini_fallback.empty:
-        candidate_df = pd.concat([family, gemini_fallback], ignore_index=True)
+    if not fallback_family.empty:
+        candidate_df = pd.concat([family, fallback_family], ignore_index=True)
     logger.info(
         "Using Codex subscription default for llm_invoke: provider=OpenAI ChatGPT model=%s "
-        "with %d Gemini fallback candidate(s)",
+        "with %d fallback candidate(s)",
         resolved_default,
-        len(gemini_fallback.index),
+        len(fallback_family.index),
     )
     return candidate_df, resolved_default, True
+
+
+def _select_codex_subscription_candidates(
+    strength: float,
+    effective_default_model: Any,
+    model_df: pd.DataFrame,
+) -> List[Dict[str, Any]]:
+    """Select ChatGPT/Codex candidates by strength, then append normal fallbacks.
+
+    Strength must choose inside the subscription-backed family first. If the
+    fallback rows are mixed into the same selector pass, higher-ELO fallback
+    models can become the first/default attempt, which defeats the Codex-first
+    goal even though fallback remains allowed.
+    """
+    family = _chatgpt_family(model_df)
+    fallback_family = _codex_subscription_fallback_family(model_df)
+    if family.empty:
+        return _select_model_candidates(strength, effective_default_model, model_df)
+
+    family = family.copy()
+    if "interactive_only" in family.columns:
+        # We already confirmed Codex/ChatGPT auth before entering this path, so
+        # the subscription family can participate in normal strength ranking
+        # even in headless/force mode.
+        family["interactive_only"] = False
+
+    primary_candidates = _select_model_candidates(
+        strength,
+        str(effective_default_model),
+        family,
+    )
+
+    fallback_candidates: List[Dict[str, Any]] = []
+
+    gemini_fallback = _gemini_subscription_fallback_family(model_df)
+    gemini_models = (
+        set(gemini_fallback["model"].astype(str))
+        if not gemini_fallback.empty
+        else set()
+    )
+    remaining_fallback = fallback_family[
+        ~fallback_family["model"].astype(str).isin(gemini_models)
+    ].copy()
+
+    for fallback_df in (gemini_fallback, remaining_fallback):
+        if fallback_df.empty:
+            continue
+        fallback_default = _fallback_default_for_request(
+            fallback_df,
+            os.getenv("PDD_MODEL_DEFAULT", DEFAULT_BASE_MODEL),
+            effective_default_model,
+        )
+        try:
+            fallback_candidates.extend(_select_model_candidates(
+                strength,
+                str(fallback_default),
+                fallback_df,
+            ))
+        except (ValueError, RuntimeError):
+            continue
+
+    seen_models = {str(candidate.get("model")) for candidate in primary_candidates}
+    for candidate in fallback_candidates:
+        model_name = str(candidate.get("model"))
+        if model_name in seen_models:
+            continue
+        primary_candidates.append(candidate)
+        seen_models.add(model_name)
+    return primary_candidates
 
 
 def _pin_default_model_first(
@@ -3964,7 +4066,7 @@ def llm_invoke(
         # import-frozen DEFAULT_BASE_MODEL) so an in-process override such as
         # `pdd sync --model` takes effect this run (issue #1269).
         _effective_default_model = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_BASE_MODEL)
-        model_df, _effective_default_model, _ = (
+        model_df, _effective_default_model, _codex_subscription_default_used = (
             _apply_codex_subscription_default(model_df, _effective_default_model)
         )
         # Diagnostic for the CSV-shadowing trap (issue #1269): llm_invoke prefers
@@ -3987,7 +4089,14 @@ def llm_invoke(
                     _effective_default_model,
                     LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
                 )
-        candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
+        if _codex_subscription_default_used:
+            candidate_models = _select_codex_subscription_candidates(
+                strength,
+                _effective_default_model,
+                model_df,
+            )
+        else:
+            candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
         candidate_models = _pin_default_model_first(
             candidate_models,
             _effective_default_model,
