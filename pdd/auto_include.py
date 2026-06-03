@@ -21,6 +21,28 @@ from .summarize_directory import summarize_directory
 
 console = Console()
 
+_INCLUDE_TAG_RE = re.compile(
+    r"<include(?P<attrs>[^>]*)>(?P<path>[^<]+)</include>",
+    re.DOTALL,
+)
+
+
+def _apply_compress_to_include_tags(text: str, *, compress: bool) -> str:
+    """Add mode=\"compressed\" to Python include tags when *compress* is True."""
+    if not compress:
+        return text
+
+    def _repl(match: re.Match[str]) -> str:
+        attrs = match.group("attrs") or ""
+        if re.search(r"\bmode\s*=", attrs, re.IGNORECASE):
+            return match.group(0)
+        path = match.group("path").strip()
+        if not path.lower().endswith(".py"):
+            return match.group(0)
+        return f'<include{attrs} mode="compressed">{path}</include>'
+
+    return _INCLUDE_TAG_RE.sub(_repl, text)
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models for structured LLM output
@@ -138,9 +160,11 @@ def _enforce_select_query_exclusivity(result: AutoIncludeResult) -> None:
                 ann.query = None
 
 
-def _build_new_block(inc: NewInclude) -> str:
+def _build_new_block(inc: NewInclude, *, compress: bool = False) -> str:
     """Build a <new> block from a NewInclude."""
     attrs = ""
+    if compress and inc.file.lower().endswith(".py"):
+        attrs += ' mode="compressed"'
     if inc.select:
         attrs += f' select="{inc.select}"'
     if inc.query:
@@ -149,7 +173,7 @@ def _build_new_block(inc: NewInclude) -> str:
     return f"<new>\n<{inc.module}>{inner}</{inc.module}>\n</new>"
 
 
-def _build_update_block(ann: IncludeAnnotation) -> str:
+def _build_update_block(ann: IncludeAnnotation, *, compress: bool = False) -> str:
     """Build an <update> block from an IncludeAnnotation.
 
     Skip entries with neither select nor query.
@@ -157,6 +181,8 @@ def _build_update_block(ann: IncludeAnnotation) -> str:
     if not ann.select and not ann.query:
         return ""
     attrs = ""
+    if compress and ann.file.lower().endswith(".py"):
+        attrs += ' mode="compressed"'
     if ann.select:
         attrs += f' select="{ann.select}"'
     if ann.query:
@@ -164,16 +190,17 @@ def _build_update_block(ann: IncludeAnnotation) -> str:
     return f"<update>\n<include{attrs}>{ann.file}</include>\n</update>"
 
 
-def _build_include_directives(result: AutoIncludeResult) -> str:
+def _build_include_directives(result: AutoIncludeResult, *, compress: bool = False) -> str:
     """Build the include_directives string from the structured LLM result."""
     blocks = []
     for inc in result.new_includes:
-        blocks.append(_build_new_block(inc))
+        blocks.append(_build_new_block(inc, compress=compress))
     for ann in result.existing_include_annotations:
-        block = _build_update_block(ann)
+        block = _build_update_block(ann, compress=compress)
         if block:
             blocks.append(block)
-    return "\n".join(blocks)
+    directives = "\n".join(blocks)
+    return _apply_compress_to_include_tags(directives, compress=compress)
 
 
 def _extract_module_name(prompt_filename: Optional[str]) -> Optional[str]:
@@ -391,6 +418,7 @@ def auto_include(
     include_docs: bool = False,
     max_workers: int = 1,
     csv_path: Optional[str] = None,
+    compress: bool = False,
 ) -> Tuple[str, str, float, str]:
     """
     Automatically find and generate proper dependencies with selective
@@ -473,7 +501,7 @@ def auto_include(
     _enforce_select_query_exclusivity(llm_result)
 
     # Req 4: build include_directives from structured result
-    include_directives = _build_include_directives(llm_result)
+    include_directives = _build_include_directives(llm_result, compress=compress)
 
     # Req 5a: filter duplicates (file path already in input_prompt)
     include_directives = _filter_duplicates(include_directives, input_prompt)

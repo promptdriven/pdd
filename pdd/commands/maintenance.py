@@ -195,6 +195,15 @@ def _write_sync_evidence_manifest(
     ),
 )
 @click.option(
+    "--compress",
+    is_flag=True,
+    default=False,
+    help=(
+        "Use AST-based compression for Python few-shot includes during sync "
+        "(auto-deps tags and generate preprocess expansion)."
+    ),
+)
+@click.option(
     "--model",
     "model",
     default=None,
@@ -228,6 +237,7 @@ def sync(
     durable_max_parallel: Optional[int],
     evidence: bool,
     snapshot_context: bool,
+    compress: bool,
     model: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """
@@ -374,6 +384,7 @@ def sync(
             agentic_mode=agentic,
             one_session=effective_one_session,
             snapshot_context=snapshot_context,
+            compress=compress,
         )
         if evidence:
             _write_sync_evidence_manifest(
@@ -749,6 +760,15 @@ def sync_architecture(
     default=1,
     help="Maximum number of parallel LLM calls for dependency analysis (default: 1).",
 )
+@click.option(
+    "--compress",
+    is_flag=True,
+    default=False,
+    help=(
+        "Tag discovered Python dependencies with mode=\"compressed\" for "
+        "few-shot context reduction."
+    ),
+)
 @click.pass_context
 @track_cost
 def auto_deps(
@@ -761,6 +781,7 @@ def auto_deps(
     include_docs: bool,
     no_dedup: bool,
     concurrency: int,
+    compress: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """Analyze project dependencies and update the prompt file."""
     try:
@@ -784,6 +805,7 @@ def auto_deps(
             include_docs=include_docs,
             no_dedup=no_dedup,
             concurrency=concurrency,
+            compress=compress,
         )
         return result, total_cost, model_name
     except click.Abort:

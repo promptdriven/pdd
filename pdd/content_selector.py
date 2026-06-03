@@ -19,6 +19,10 @@ from typing import Optional
 from rich.console import Console
 from rich.theme import Theme
 
+from ._selector_parse import parse_selectors_string
+from .api_contract_slicer import ApiContractSlicer, ContractSlicerError
+from .pytest_slicer import PytestSlicer, SlicerError
+
 # Conditional YAML support
 try:
     import yaml
@@ -93,7 +97,7 @@ def _extract_spans(lines: list[str], spans: list[_Span]) -> str:
 # ---------------------------------------------------------------------------
 
 _SELECTOR_RE = re.compile(
-    r"^(?P<kind>lines|def|class|section|pattern|path):(?P<value>.+)$"
+    r"^(?P<kind>lines|def|class|section|pattern|path|pytest|contract):(?P<value>.+)$"
 )
 
 
@@ -115,7 +119,8 @@ def _parse_selectors(selectors: list[str]) -> list[_ParsedSelector]:
             raise SelectorError(
                 f"Malformed selector: '{raw}'. "
                 "Expected format: lines:N-M | def:name | class:Name[.method] "
-                "| section:Heading | pattern:/regex/ | path:key.path"
+                "| section:Heading | pattern:/regex/ | path:key.path "
+                "| pytest:test_name | contract:symbol"
             )
         parsed.append(_ParsedSelector(kind=m.group("kind"), value=m.group("value")))
     return parsed
@@ -747,7 +752,8 @@ class ContentSelector:
         selectors:
             A list of selector strings **or** a single comma-separated string.
             Each selector has the form ``kind:value`` where *kind* is one of
-            ``lines``, ``def``, ``class``, ``section``, ``pattern``, ``path``.
+            ``lines``, ``def``, ``class``, ``section``, ``pattern``, ``path``,
+            ``pytest``, ``contract``.
         file_path:
             Optional file path used to infer the file type (e.g. ``.py``,
             ``.md``, ``.json``, ``.yaml``).  When ``None``, AST-based
@@ -764,9 +770,11 @@ class ContentSelector:
         str
             The selected (and possibly transformed) content.
         """
-        # Normalise selectors to a list
+        # Normalise selectors to a list (preserve commas inside kind:value)
         if isinstance(selectors, str):
-            selectors = [s.strip() for s in selectors.split(",") if s.strip()]
+            selectors = parse_selectors_string(selectors)
+        else:
+            selectors = [s.strip() for s in selectors if s.strip()]
 
         if not selectors and mode == "interface":
             # No selectors but interface mode → produce interface for whole file
@@ -831,6 +839,16 @@ class ContentSelector:
                 f"Section selector requires a .md file, got '{file_path}'"
             )
 
+        needs_slicer = any(p.kind in ("pytest", "contract") for p in parsed)
+        if needs_slicer and not is_python and file_path is not None:
+            _report_error(
+                f"pytest/contract selectors require a Python file, got '{file_path}'",
+                file_path,
+            )
+            raise SelectorError(
+                f"pytest/contract selectors require a .py file, got '{file_path}'"
+            )
+
         needs_path = any(p.kind == "path" for p in parsed)
         if needs_path and not is_json_or_yaml:
             _report_error(
@@ -858,6 +876,22 @@ class ContentSelector:
                     all_spans.extend(_resolve_pattern(source_lines, sel.value))
                 elif sel.kind == "path":
                     path_results.append(_resolve_path(content, sel.value, file_path))
+                elif sel.kind == "pytest":
+                    test_names = [t.strip() for t in sel.value.split(",") if t.strip()]
+                    try:
+                        slicer = PytestSlicer(content, file_path=file_path)
+                        sliced_content, _ = slicer.slice(test_names)
+                    except SlicerError as exc:
+                        raise SelectorError(str(exc)) from exc
+                    path_results.append(sliced_content)
+                elif sel.kind == "contract":
+                    symbols = [t.strip() for t in sel.value.split(",") if t.strip()]
+                    try:
+                        slicer = ApiContractSlicer(content, file_path=file_path)
+                        sliced_content, _ = slicer.slice(symbols)
+                    except ContractSlicerError as exc:
+                        raise SelectorError(str(exc)) from exc
+                    path_results.append(sliced_content)
                 else:
                     raise SelectorError(f"Unknown selector kind: '{sel.kind}'")
             except SelectorError:

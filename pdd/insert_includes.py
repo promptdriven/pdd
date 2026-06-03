@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from .llm_invoke import llm_invoke
 from .load_prompt_template import load_prompt_template
-from .auto_include import auto_include
+from .auto_include import _apply_compress_to_include_tags, auto_include
 from .preprocess import preprocess
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
@@ -123,6 +123,7 @@ def insert_includes(
     include_docs: bool = False,
     max_workers: int = 1,
     dedup: bool = True,
+    compress: bool = False,
 ) -> Tuple[str, str, float, str]:
     """
     Determine needed dependencies and insert them into a prompt.
@@ -145,6 +146,8 @@ def insert_includes(
             summarization. Defaults to 1. Passed through to auto_include.
         dedup (bool, optional): Whether to remove redundant inline content after
             inserting includes. Defaults to True.
+        compress (bool, optional): When True, tag new Python includes with
+            ``mode="compressed"``. Defaults to False.
 
     Returns:
         Tuple[str, str, float, str]: Tuple containing:

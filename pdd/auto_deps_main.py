@@ -31,6 +31,7 @@ def auto_deps_main(
     include_docs: bool = False,
     no_dedup: bool = False,
     concurrency: int = 1,
+    compress: bool = False,
     _skip_finalization: bool = False,
 ) -> Tuple[str, float, str]:
     """
@@ -111,6 +112,7 @@ def auto_deps_main(
                 include_docs=include_docs,
                 dedup=(not no_dedup),
                 max_workers=concurrency,
+                compress=compress,
             )
 
             # Sanitize prompt output before persisting (removes invalid <include>

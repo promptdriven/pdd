@@ -115,6 +115,15 @@ class GenerateCommand(click.Command):
         "snapshot manifest under .pdd/evidence/runs/."
     ),
 )
+@click.option(
+    "--compress",
+    is_flag=True,
+    default=False,
+    help=(
+        "Use AST-based compression for Python includes when expanding the "
+        "prompt (few-shot context reduction)."
+    ),
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -137,6 +146,7 @@ def generate(
     project_root: Optional[str],
     evidence: bool,
     snapshot_context: bool,
+    compress: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -353,6 +363,7 @@ def generate(
             unit_test_file=unit_test,
             exclude_tests=exclude_tests,
             snapshot_context=snapshot_context,
+            compress=compress,
         )
 
         if evidence:
