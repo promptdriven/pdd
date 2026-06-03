@@ -5012,10 +5012,11 @@ class TestIssue1201GenerateOutputPathInArchBranch:
 from datetime import datetime, timezone
 from pathlib import Path
 
-from pdd.sync_determine_operation import Fingerprint, _handle_missing_expected_files
+from pdd.sync_determine_operation import _handle_missing_expected_files
 
 
 def test_missing_example_schedules_example_by_default(tmp_path: Path) -> None:
+    from pdd.sync_determine_operation import Fingerprint
     prompt = tmp_path / "prompts" / "calc_python.prompt"
     code = tmp_path / "pdd" / "calc.py"
     example = tmp_path / "context" / "calc_example.py"
@@ -5041,6 +5042,8 @@ def test_missing_example_schedules_example_by_default(tmp_path: Path) -> None:
 
 
 def test_missing_example_is_bypassed_for_isolated_repair_or_replay(tmp_path: Path) -> None:
+    from pdd.sync_determine_operation import Fingerprint
+
     prompt = tmp_path / "prompts" / "calc_python.prompt"
     code = tmp_path / "pdd" / "calc.py"
     example = tmp_path / "context" / "calc_example.py"

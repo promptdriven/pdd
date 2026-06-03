@@ -46,6 +46,17 @@ except ImportError:
     get_cloud_request_timeout = None
 
 
+def _call_fix_verification_errors(
+    *,
+    compressed_context: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Call fix_verification_errors, omitting compressed_context when unset."""
+    if compressed_context is not None:
+        kwargs["compressed_context"] = compressed_context
+    return fix_verification_errors(**kwargs)
+
+
 def cloud_verify_fix(
     program: str,
     prompt: str,
@@ -562,7 +573,7 @@ def fix_verification_errors_loop(
                 except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
                     # Cloud failed - fall back to local
                     console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
-                    initial_fix_result = fix_verification_errors(
+                    initial_fix_result = _call_fix_verification_errors(
                         program=initial_program_content,
                         prompt=prompt,
                         code=initial_code_content,
@@ -574,7 +585,7 @@ def fix_verification_errors_loop(
                         compressed_context=compressed_context,
                     )
             else:
-                initial_fix_result = fix_verification_errors(
+                initial_fix_result = _call_fix_verification_errors(
                     program=initial_program_content,
                     prompt=prompt,
                     code=initial_code_content,
@@ -582,7 +593,7 @@ def fix_verification_errors_loop(
                     strength=strength,
                     temperature=temperature,
                     verbose=verbose,
-                    time=llm_time, # Pass time
+                    time=llm_time,
                     compressed_context=compressed_context,
                 )
             # 3e: Add cost
@@ -797,7 +808,7 @@ def fix_verification_errors_loop(
                 except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
                     # Cloud failed - fall back to local
                     console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
-                    fix_result = fix_verification_errors(
+                    fix_result = _call_fix_verification_errors(
                         program=program_contents,
                         prompt=prompt,
                         code=code_contents,
@@ -809,7 +820,7 @@ def fix_verification_errors_loop(
                         compressed_context=compressed_context,
                     )
             else:
-                fix_result = fix_verification_errors(
+                fix_result = _call_fix_verification_errors(
                     program=program_contents,
                     prompt=prompt,
                     code=code_contents,
@@ -817,7 +828,7 @@ def fix_verification_errors_loop(
                     strength=strength,
                     temperature=temperature,
                     verbose=verbose,
-                    time=llm_time, # Pass time
+                    time=llm_time,
                     compressed_context=compressed_context,
                 )
 
