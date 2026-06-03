@@ -1,0 +1,54 @@
+<pdd-reason>AST-based pytest context slicer for precise extraction of test context and dependencies.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "PytestSlicer.__init__", "signature": "(main_source: str, file_path: str | None = None)", "returns": "None"},
+      {"name": "PytestSlicer.slice", "signature": "(test_names: List[str])", "returns": "Tuple[str, SlicedManifest]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/pytest_slicer.py` module.
+
+% Role & Scope
+A specialized Python module responsible for precisely slicing pytest files to include only relevant test context and its transitive closure of dependencies. Used by `ContentSelector` to handle `pytest:` selectors.
+
+% Requirements
+1. Class: `PytestSlicer` with constructor `__init__(self, main_source: str, file_path: str | None = None)`
+2. Dataclass: `SlicedManifest` with fields `selected_tests`, `included_fixtures`, `included_helpers`, and `source_hashes` (mapping of file/path to MD5 hash)
+3. Method: `slice(self, test_names: List[str]) -> Tuple[str, SlicedManifest]`
+   - Return the concatenated source code of all selected tests and their dependencies
+   - Return a `SlicedManifest` describing what was included
+4. Dependency Resolution:
+   - Recursively find all fixtures, helper functions, and global variables referenced by selected tests
+   - Walk the AST to identify name accesses and function calls
+   - Resolve fixtures requested via function arguments or `@pytest.mark.usefixtures`
+5. Conftest Support:
+   - If `file_path` is provided, automatically discover and load `conftest.py` files by walking up the directory tree to the project root
+   - Include relevant fixtures and helpers from discovered `conftest.py` files
+6. Structural Integrity:
+   - Include all necessary imports for the selected tests and their transitive dependencies (top-level only)
+   - Include decorators for all selected functions/classes
+   - Support parametrization (`@pytest.mark.parametrize`)
+   - Handle class-nested tests (include class header and decorators if a method is selected)
+7. Output Manifest & Determinism:
+   - Include a manifest comment at the top of the sliced output listing the selected tests and their resolved dependencies.
+   - Include hashes of the original source files for traceability.
+   - The slicing method MUST prepend the `SlicedManifest` and source hashes to the final returned source code as a formatted block of comments (the "test contract").
+   - Output must be deterministic (stable order of included symbols).
+   - Preserve original indentation and whitespace.
+   - Separate sources from different files with clear comments (e.g., `# --- From conftest.py ---`).
+8. Error Handling:
+   - Define and raise `SlicerError(Exception)` for slicing failures.
+   - Raise `SlicerError` if the main source file contains syntax errors or if a requested test cannot be found.
+   - Gracefully handle syntax errors in external source files (like `conftest.py`) by skipping them (best-effort resolution).
+
+% Deliverables
+- Code: `pdd/pytest_slicer.py`
