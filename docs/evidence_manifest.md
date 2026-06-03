@@ -133,6 +133,33 @@ provenance (`.pdd/grounding_policy.yaml`, future grounding `pdd checkup gate`
 integration). Contract waivers appear under `contracts.waivers` when prompts
 include `<waivers>` blocks.
 
+### Policy-Check Semantic Review
+
+When `pdd checkup policy check` is run with `--evidence`, the manifest includes
+a `policy_check.semantic_review` block:
+
+```json
+"policy_check": {
+  "semantic_review": {
+    "enabled": true,
+    "mode": "agentic",
+    "max_files": 20,
+    "max_follow_depth": 2,
+    "finding_count": 1,
+    "max_confidence": 0.93
+  }
+}
+```
+
+- `enabled` is `false` and `mode` is `"off"` when `--semantic-review off` (the default).
+- `mode` is one of `"off"`, `"llm"`, or `"agentic"`.
+- `max_files` and `max_follow_depth` reflect `--max-agent-files` / `--max-agent-depth`.
+- `finding_count` is the number of agentic findings returned; `max_confidence` is the
+  highest confidence score among those findings, or `null` when there are none.
+
+When `--semantic-review off`, only `enabled: false` and `mode: "off"` are recorded;
+the numeric fields are omitted.
+
 ## Verification
 
 For this feature, use the focused pytest gate (not full `pytest -q` collection
