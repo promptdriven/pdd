@@ -313,6 +313,9 @@ def test_build_rows_accepts_custom_score_manifest(tmp_path, monkeypatch):
     }
     fake_litellm = type("L", (), {"model_cost": fake_cost})
     monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    # Disable deepswe so the custom arena manifest wins over static fallback
+    # without interference from the real deepswe_manifest.json.
+    monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {})
 
     rows = gmc.build_rows(score_manifest=manifest)
 
@@ -724,3 +727,143 @@ def test_prod_cloud_default_models_present_in_catalog():
         f"cloud default model(s) missing from bundled llm_model.csv: {missing}. "
         "Add the exact row (see issue #1364) before the cloud default advances."
     )
+
+
+# ==============================================================================
+# DeepSWE manifest — four-tier ELO resolution (issue #1375)
+#
+# Score resolution order:
+#   1. deepswe-exact — DeepSWE SWE-bench manifest (primary coding-task ranking)
+#   2. arena-exact   — Arena leaderboard manifest (fallback for non-DeepSWE models)
+#   3. static        — STATIC_ELO_FALLBACK exact key
+#   4. static-prefix — STATIC_ELO_FALLBACK canonical-prefix match
+# ==============================================================================
+
+
+def test_module_exports_deepswe_surface():
+    """DEEPSWE_MANIFEST_PATH, DEEPSWE_MANIFEST_SCHEMA_VERSION, and
+    _fetch_deepswe_elo must be importable from the module."""
+    required = [
+        "DEEPSWE_MANIFEST_PATH",
+        "DEEPSWE_MANIFEST_SCHEMA_VERSION",
+        "_fetch_deepswe_elo",
+    ]
+    missing = [name for name in required if not hasattr(gmc, name)]
+    assert not missing
+
+
+def test_deepswe_manifest_file_is_checked_in_and_loadable():
+    """pdd/data/deepswe_manifest.json must exist and load correctly."""
+    assert gmc.DEEPSWE_MANIFEST_PATH.exists()
+    index = gmc._fetch_deepswe_elo()
+    assert index
+    # The manifest has at least Claude Opus 4.7 as the top-ranked model.
+    assert "claude-opus-4-7" in index
+    assert index["claude-opus-4-7"]["elo"] >= 1500
+
+
+def test_deepswe_wins_over_arena_when_both_have_model():
+    """When a model appears in both DeepSWE and Arena, DeepSWE score wins."""
+    deepswe = {
+        "claude-opus-4-6": {
+            "elo": 1539.0,
+            "votes": 0,
+            "raw_name": "claude-opus-4-6",
+        }
+    }
+    arena = {
+        "claude-opus-4-6": {
+            "elo": 1400.0,
+            "votes": 0,
+            "raw_name": "claude-opus-4-6",
+        }
+    }
+    elo, source = gmc._get_elo("claude-opus-4-6", arena, deepswe)
+    assert source == "deepswe-exact"
+    assert elo == 1539
+
+
+def test_arena_used_when_deepswe_lacks_model():
+    """When a model is absent from DeepSWE, Arena score is the fallback."""
+    deepswe: dict = {}
+    arena = {
+        "arena-only-model": {
+            "elo": 1420.0,
+            "votes": 0,
+            "raw_name": "arena-only-model",
+        }
+    }
+    elo, source = gmc._get_elo("arena-only-model", arena, deepswe)
+    assert source == "arena-exact"
+    assert elo == 1420
+
+
+def test_static_fallback_when_neither_deepswe_nor_arena_has_model():
+    """When neither manifest has the model, static fallback is used."""
+    elo, source = gmc._get_elo("gpt-4.1", {}, {})
+    assert source == "static"
+    assert elo == gmc.STATIC_ELO_FALLBACK["gpt-4.1"]
+
+
+def test_fetch_deepswe_elo_rejects_python_refresh(tmp_path):
+    """_fetch_deepswe_elo(refresh=True) must raise RuntimeError."""
+    manifest = tmp_path / "deepswe.json"
+    manifest.write_text(json.dumps({
+        "schema_version": gmc.DEEPSWE_MANIFEST_SCHEMA_VERSION,
+        "policy": {"summary": "test"},
+        "scores": [],
+    }), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="not a Python live-fetch path"):
+        gmc._fetch_deepswe_elo(refresh=True, manifest_path=manifest)
+
+
+def test_fetch_deepswe_elo_missing_manifest_gracefully_falls_back(tmp_path):
+    """A missing DeepSWE manifest path returns {} without crashing."""
+    missing = tmp_path / "missing_deepswe.json"
+    assert gmc._fetch_deepswe_elo(manifest_path=missing) == {}
+
+
+def test_parse_deepswe_manifest_rejects_conflicting_aliases():
+    """Two DeepSWE entries sharing a normalized alias must cause the entire
+    parse to return {}, just like the Arena manifest parser does."""
+    payload = _manifest([
+        {
+            "model": "model-alpha",
+            "elo": 1500,
+            "source": "agent-reviewed:deepswe",
+            "raw_model_name": "model-alpha",
+            "aliases": ["shared-alias"],
+        },
+        {
+            "model": "model-beta",
+            "elo": 1450,
+            "source": "agent-reviewed:deepswe",
+            "raw_model_name": "model-beta",
+            "aliases": ["shared-alias"],
+        },
+    ])
+    assert gmc._parse_agentic_elo_manifest(payload) == {}
+
+
+def test_cli_refresh_elo_mentions_both_manifests(tmp_path):
+    """--refresh-elo error message must name both manifest files so maintainers
+    know to update both pdd/data/deepswe_manifest.json and arena_elo_manifest.json."""
+    output = tmp_path / "llm_model.csv"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_ROOT / "pdd" / "generate_model_catalog.py"),
+            "--refresh-elo",
+            "--output",
+            str(output),
+        ],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "deepswe_manifest.json" in result.stderr
+    assert "arena_elo_manifest.json" in result.stderr

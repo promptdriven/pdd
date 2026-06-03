@@ -3476,7 +3476,7 @@ This tiered approach allows for both shared project configurations and individua
 
 **Note:** You can manually edit this CSV, but running `pdd setup` again is the recommended way to add providers and update models.
 
-**ELO scores are agent-reviewed.** The `coding_arena_elo` column is populated from the checked-in `pdd/data/arena_elo_manifest.json` score manifest plus a curated static fallback for local and niche models. The intended refresh path is agentic: inspect current Arena source rows, record the raw model row, leaderboard/category, publish date, rank, rating bounds, vote count, match reason, and aliases in the manifest, then run the deterministic generator. See [Regenerate Model Catalog](#regenerate-model-catalog-pddgenerate_model_catalogpy) under Utilities.
+**ELO scores are agent-reviewed.** The `coding_arena_elo` column is resolved through a four-tier priority chain: (1) `pdd/data/deepswe_manifest.json` — primary coding-task ranking from DeepSWE SWE-bench solve rates converted to ELO (`1300 + round(solve_rate × 4)`); (2) `pdd/data/arena_elo_manifest.json` — Arena leaderboard fallback for models absent from DeepSWE; (3) a curated static fallback for local, niche, or not-yet-reviewed models; (4) canonical-prefix match against the same static fallback. The intended refresh path is agentic: inspect current DeepSWE and Arena source rows, record the raw model row, leaderboard/category, publish date, rank, rating bounds, vote count, match reason, and aliases in the respective manifest, then run the deterministic generator. See [Regenerate Model Catalog](#regenerate-model-catalog-pddgenerate_model_catalogpy) under Utilities.
 
 *Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*
 
@@ -3843,29 +3843,40 @@ python pdd/update_model_costs.py [--csv-path path/to/your/project/llm_model.csv]
 
 ### Regenerate Model Catalog (`pdd/generate_model_catalog.py`)
 
-This script rebuilds the bundled `pdd/data/llm_model.csv` catalog from `litellm.model_cost` metadata, enriched with agent-reviewed coding-arena scores from `pdd/data/arena_elo_manifest.json`. Python generation is intentionally deterministic: it does not scrape or fetch leaderboard data at runtime.
+This script rebuilds the bundled `pdd/data/llm_model.csv` catalog from `litellm.model_cost` metadata, enriched with agent-reviewed coding scores from two checked-in manifests. Python generation is intentionally deterministic: it does not scrape or fetch leaderboard data at runtime.
+
+**Score resolution order (four-tier chain):**
+
+1. `deepswe-exact` — exact normalized alias match in `pdd/data/deepswe_manifest.json` (primary coding-task ranking via DeepSWE SWE-bench solve rates; ELO = `1300 + round(solve_rate × 4)`)
+2. `arena-exact` — exact normalized alias match in `pdd/data/arena_elo_manifest.json` (Arena leaderboard fallback for models absent from DeepSWE)
+3. `static` — exact key in the curated `STATIC_ELO_FALLBACK` dict (local-runner roots, niche models, not-yet-reviewed models)
+4. `static-prefix` — longest canonical-prefix match in `STATIC_ELO_FALLBACK`
+
+If no tier produces a non-zero score the row is excluded (below `ELO_CUTOFF = 1300`).
 
 It performs the following steps:
-*   **Loads** reviewed scores, aliases, and row-level provenance from `pdd/data/arena_elo_manifest.json`.
-*   **Normalizes** LiteLLM model IDs and applies only exact reviewed aliases from the manifest. Runtime fuzzy matching is intentionally disabled so model identity decisions stay reviewable. Reasoning-effort variants such as `-high`, `-medium`, `-low`, and `-minimal` remain distinct unless the manifest explicitly maps them.
-*   **Falls back** gracefully — if the manifest is missing or malformed, the run still succeeds using a curated static fallback dict for local-runner roots like `lm_studio/`, `ollama/`, aliases, and not-yet-reviewed models.
+*   **Loads** reviewed scores, aliases, and row-level provenance from both manifests. Each DeepSWE entry carries a `match_reason` explaining the harness, effort level, and date rationale for the mapping.
+*   **Normalizes** LiteLLM model IDs and applies only exact reviewed aliases from the manifests. Runtime fuzzy matching is intentionally disabled so model identity decisions stay reviewable. Reasoning-effort variants such as `-high`, `-medium`, `-low`, and `-minimal` remain distinct unless the manifest explicitly maps them.
+*   **Falls back** gracefully — if either manifest is missing or malformed, the run still succeeds using lower-priority sources or the curated static fallback dict for local-runner roots like `lm_studio/`, `ollama/`, aliases, and not-yet-reviewed models.
 *   Applies pricing overrides, deprecation/placeholder filtering, dedup, and a per-provider Pareto filter, then writes the resulting CSV.
 *   **Emits** the `interactive_only` column, setting it to `True` for the provider roots that require interactive human auth or a running local server (`github_copilot`, `chatgpt`, `lm_studio`, `ollama`) and `False` for everyone else. Automatic model selection skips `interactive_only` rows unless `PDD_ALLOW_INTERACTIVE` is set (see [Core Environment Variables](#core-environment-variables)).
+*   **Prints** an ELO diagnostic breakdown reporting counts for all five source labels: `deepswe-exact`, `arena-exact`, `static`, `static-prefix`, and `none`.
 
 **Usage:**
 
 ```bash
 conda activate pdd
-# Use the checked-in agentic score manifest.
+# Use the checked-in agentic score manifests (DeepSWE primary, Arena fallback).
 python pdd/generate_model_catalog.py [--output path/to/llm_model.csv]
 
-# Test with an alternate reviewed manifest.
+# Test with alternate reviewed manifests.
 python pdd/generate_model_catalog.py --score-manifest path/to/arena_elo_manifest.json
+python pdd/generate_model_catalog.py --deepswe-manifest path/to/deepswe_manifest.json
 ```
 
-To refresh scores, use a PDD agent to inspect the current public Arena sources, update `pdd/data/arena_elo_manifest.json` with exact aliases and provenance, then run the command above. This keeps policy choices such as WebDev vs Text/Coding explicit in review instead of hidden in Python fetch logic.
+To refresh scores, use a PDD agent to inspect the current public DeepSWE and Arena sources, update `pdd/data/deepswe_manifest.json` and/or `pdd/data/arena_elo_manifest.json` with exact aliases, provenance, and match reasons, then run the command above. This keeps policy choices explicit in review instead of hidden in Python fetch logic. DeepSWE entries require a `match_reason` field documenting why the DeepSWE row (harness, effort level, date) maps to the catalog model.
 
-`--refresh-elo` is intentionally not a live Python fetch path. It exits with an instruction to perform the agentic manifest refresh instead of silently producing a stale refresh.
+`--refresh-elo` is intentionally not a live Python fetch path. It exits with an instruction to perform the agentic manifest refresh of both manifests instead of silently producing a stale refresh.
 
 ## Patents
 
