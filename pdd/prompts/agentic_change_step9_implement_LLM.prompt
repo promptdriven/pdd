@@ -185,13 +185,9 @@ Code generation for prompt-based modules happens separately via `pdd sync` after
 
 % Output
 
-After completing your changes, use `gh issue comment` to post your findings to issue #{issue_number}:
+After completing your changes, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+Your final response must include exactly one `<step_report>...</step_report>` block. The report should follow this format:
 
 **If changes successful:**
 ```markdown
@@ -268,7 +264,7 @@ After review, run `pdd sync` on modified prompts to regenerate code.
 - All changes must be in the worktree, not the main repo
 - Follow PDD prompt conventions strictly
 - If implementation fails, STOP the workflow
-- Always post your findings as a GitHub comment before completing
+- Always include exactly one `<step_report>...</step_report>` block before completing
 
 % CRITICAL: Scope Validation
 
