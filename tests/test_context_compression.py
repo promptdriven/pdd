@@ -188,3 +188,130 @@ def test_pytest_output_skipped_by_compression_from_deselected(
     monkeypatch.setenv("PDD_COMPRESS_TEST_CONTEXT", "1")
     assert _test_context_compression_active()
     assert _count_skipped_by_compression("===== 1 passed, 3 deselected in 0.12s =====") == 3
+
+
+def test_test_interface_mode_includes_helper_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """PytestSlicer must pull helper functions required by the failing test."""
+    from pdd.content_selector import ContentSelector
+
+    source = (
+        "def helper():\n"
+        "    return 3\n\n"
+        "def test_fails():\n"
+        "    assert helper() == 3\n\n"
+        "def test_passes():\n"
+        "    assert True\n"
+    )
+    monkeypatch.setenv("PDD_FAILING_TESTS", "tests/test_sample.py::test_fails")
+    result = ContentSelector.select(source, selectors=[], mode="test_interface", file_path="tests/test_sample.py")
+    assert "def test_fails" in result
+    assert "def helper" in result
+    assert "def test_passes" not in result
+
+
+def test_test_interface_mode_matches_exact_test_not_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Node ids must not over-select prefix test names (test_foo vs test_foobar)."""
+    import re
+
+    from pdd.content_selector import ContentSelector
+
+    source = (
+        "def test_foo():\n"
+        "    assert True\n\n"
+        "def test_foobar():\n"
+        "    assert False\n"
+    )
+    monkeypatch.setenv("PDD_FAILING_TESTS", "tests/test_sample.py::test_foobar")
+    result = ContentSelector.select(source, selectors=[], mode="test_interface", file_path="tests/test_sample.py")
+    assert "def test_foobar():" in result
+    assert not re.search(r"def test_foo\(\):", result)
+
+
+def test_contracts_mode_preserves_tagged_section_content() -> None:
+    from pdd.content_selector import ContentSelector
+
+    source = (
+        "<pdd-reason>Keep this reason text.</pdd-reason>\n"
+        "<contract_rules>\nR2 - Also keep\n- MUST validate\n</contract_rules>\n"
+    )
+    result = ContentSelector.select(source, selectors=[], mode="contracts")
+    assert "Keep this reason text." in result
+    assert "R2 - Also keep" in result
+    assert "- MUST validate" in result
+
+
+def test_contracts_mode_plain_markdown_unchanged() -> None:
+    from pdd.content_selector import ContentSelector
+
+    source = "# Title\n\nNarrative documentation without PDD tags.\n"
+    result = ContentSelector.select(source, selectors=[], mode="contracts", file_path="docs/guide.md")
+    assert result == source
+
+
+def test_preprocess_contracts_mode_plain_markdown_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_QUIET", "1")
+    monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "contracts")
+    (tmp_path / "guide.md").write_text("# Title\n\nPlain narrative docs.\n", encoding="utf-8")
+    result = preprocess("<include>guide.md</include>", recursive=False, double_curly_brackets=False)
+    assert "Plain narrative docs." in result
+
+
+def test_fix_error_loop_compresses_unit_test_before_fix_call(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """--compress-test-context must slice the unit test sent to fix_errors_from_unit_tests."""
+    from unittest.mock import patch
+
+    from pdd.fix_error_loop import fix_error_loop
+
+    code = tmp_path / "widget.py"
+    test = tmp_path / "test_widget.py"
+    prompt = tmp_path / "widget_python.prompt"
+    error_log = tmp_path / "error.log"
+
+    unit_test_content = (
+        "from widget import add\n\n"
+        "def test_passes():\n"
+        "    assert add(1, 1) == 2\n\n"
+        "def test_fails():\n"
+        "    assert add(2, 3) == 5\n"
+    )
+    code.write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    test.write_text(unit_test_content, encoding="utf-8")
+    prompt.write_text("Fix the code.", encoding="utf-8")
+
+    captured: dict[str, str] = {}
+    pytest_output = f"FAILED {test.name}::test_fails - AssertionError\n"
+
+    def _fake_fix(unit_test: str, code: str, *args, **kwargs):  # type: ignore[no-untyped-def]
+        captured["unit_test"] = unit_test
+        return False, True, unit_test, code, "analysis", 0.0, "mock"
+
+    monkeypatch.chdir(tmp_path)
+    with patch("pdd.fix_error_loop.run_pytest_on_file", return_value=(1, 0, 0, pytest_output)), patch(
+        "pdd.fix_error_loop.fix_errors_from_unit_tests", side_effect=_fake_fix
+    ):
+        fix_error_loop(
+            unit_test_file=str(test),
+            code_file=str(code),
+            prompt_file=str(prompt),
+            prompt="Fix",
+            verification_program="",
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=1,
+            budget=5.0,
+            error_log_file=str(error_log),
+            agentic_fallback=False,
+            compress_test_context=True,
+        )
+
+    sent = captured.get("unit_test", "")
+    assert "def test_fails" in sent
+    assert "def test_passes" not in sent
+    assert sent != unit_test_content

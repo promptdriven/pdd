@@ -26,10 +26,11 @@ from .failure_classification import (
 )
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .config_resolution import apply_compression_env
+from .content_selector import slice_test_interface_context
 from .fix_focus import FocusedInputs, is_large, prepare_focused_inputs, reconstruct_code
 from .get_language import get_language
 from .get_test_command import TestCommand, get_test_command_for_file
-from .pytest_output import run_pytest_and_capture_output
+from .pytest_output import _test_context_compression_active, run_pytest_and_capture_output
 from .python_env_detector import detect_host_python_executable
 
 console = Console()
@@ -478,6 +479,14 @@ def fix_error_loop(
             os.environ["PDD_FAILING_TESTS"] = ",".join(failing_tests)
         else:
             os.environ.pop("PDD_FAILING_TESTS", None)
+        if (
+            focused_inputs is None
+            and _test_context_compression_active()
+            and failing_tests
+        ):
+            compressed_test = slice_test_interface_context(unit_test_content, unit_test_file)
+            if compressed_test:
+                target_test = compressed_test
         # Track whether *this* attempt's fix came from the cloud path (vs a
         # local fallback) so the success log line can prove the cloud path.
         attempt_used_cloud = False

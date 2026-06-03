@@ -861,99 +861,92 @@ def _report_error(message: str, file_path: str | None = None) -> None:
 # Contract and Test Interface Modes
 # ---------------------------------------------------------------------------
 
+_PDD_META_TAGS = ("pdd-reason", "pdd-interface", "pdd-dependency")
+_LOGICAL_SECTION_TAGS = (
+    "responsibility",
+    "non_responsibilities",
+    "vocabulary",
+    "contract_rules",
+    "capabilities",
+    "waivers",
+    "coverage",
+)
+
+
+def _node_id_to_slicer_name(ftid: str) -> str | None:
+    """Map a pytest node id to a ``PytestSlicer`` symbol name."""
+    parts = [part for part in ftid.split("::") if part]
+    if not parts:
+        return None
+    if parts[0].endswith(".py") or "/" in parts[0]:
+        parts = parts[1:]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0]}.{parts[1]}"
+
+
+def slice_test_interface_context(content: str, file_path: str | None = None) -> str:
+    """Slice test source to failing tests and dependency-aware helpers via ``PytestSlicer``."""
+    failing_tests_env = os.environ.get("PDD_FAILING_TESTS", "")
+    failing_test_ids = [item.strip() for item in failing_tests_env.split(",") if item.strip()]
+    if not failing_test_ids:
+        return content
+
+    test_names: list[str] = []
+    seen: set[str] = set()
+    for ftid in failing_test_ids:
+        name = _node_id_to_slicer_name(ftid)
+        if name and name not in seen:
+            test_names.append(name)
+            seen.add(name)
+
+    if not test_names:
+        return content
+
+    try:
+        slicer = PytestSlicer(content, file_path=file_path)
+        sliced_content, _ = slicer.slice(test_names)
+    except SlicerError:
+        return content
+    return sliced_content
+
+
 def _contracts_mode(content: str) -> str:
     """Extract contract-related elements from prompt or documentation files."""
-    lines = content.splitlines()
-    output = []
-    
-    # Architecture metadata tags
-    meta_tags = re.findall(r'<(pdd-reason|pdd-interface|pdd-dependency)>.*?</\1>', content, re.DOTALL)
-    output.extend(meta_tags)
-    
-    # Logical sections
-    logical_sections = re.findall(r'<(responsibility|non_responsibilities|vocabulary|contract_rules|capabilities|waivers|coverage)>.*?</\1>', content, re.DOTALL)
-    output.extend(logical_sections)
-    
-    # Specific elements
-    for line in lines:
+    output_parts: list[str] = []
+
+    for tag in _PDD_META_TAGS:
+        output_parts.extend(
+            re.findall(rf"<{tag}>.*?</{tag}>", content, re.DOTALL)
+        )
+
+    for tag in _LOGICAL_SECTION_TAGS:
+        output_parts.extend(
+            re.findall(rf"<{tag}>.*?</{tag}>", content, re.DOTALL)
+        )
+
+    rule_lines: list[str] = []
+    for line in content.splitlines():
         stripped = line.strip()
-        # Contract rules: R\d+ -
-        if re.match(r'^R\d+ -', stripped):
-            output.append(line)
-        # Capabilities: - MAY, - MUST, - MUST NOT
-        elif re.match(r'^- (MAY|MUST|MUST NOT)\b', stripped):
-            output.append(line)
-            
-    return "\n".join(output)
+        if re.match(r"^R\d+ -", stripped):
+            rule_lines.append(line)
+        elif re.match(r"^- (MAY|MUST|MUST NOT)\b", stripped):
+            rule_lines.append(line)
+
+    if rule_lines:
+        output_parts.append("\n".join(rule_lines))
+
+    if not output_parts:
+        return content
+
+    return "\n".join(output_parts)
 
 
 def _test_interface_mode(content: str, file_path: str | None) -> str:
-    """Extract only failing tests and necessary fixtures using AST slicing."""
+    """Extract only failing tests and necessary fixtures using ``PytestSlicer``."""
     failing_tests_env = os.environ.get("PDD_FAILING_TESTS", "")
-    failing_test_ids = [t.strip() for t in failing_tests_env.split(",") if t.strip()]
-    
-    if not failing_test_ids:
+    if not failing_tests_env.strip():
         return ""
-        
-    try:
-        tree = ast.parse(content)
-    except SyntaxError:
-        return ""
-        
-    source_lines = _splitlines(content)
-    
-    # Helper to get node spans
-    def get_node_span(node):
-        start = node.lineno - 1
-        if hasattr(node, 'decorator_list') and node.decorator_list:
-            start = node.decorator_list[0].lineno - 1
-        end = node.end_lineno
-        return _Span(start, end)
-
-    # 1. Identify fixtures
-    fixtures = {}
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            is_fixture = False
-            for dec in node.decorator_list:
-                if (isinstance(dec, ast.Name) and dec.id == "fixture") or \
-                   (isinstance(dec, ast.Attribute) and dec.attr == "fixture") or \
-                   (isinstance(dec, ast.Call) and (
-                       (isinstance(dec.func, ast.Name) and dec.func.id == "fixture") or
-                       (isinstance(dec.func, ast.Attribute) and dec.func.attr == "fixture")
-                   )):
-                    is_fixture = True
-                    break
-            if is_fixture:
-                fixtures[node.name] = node
-
-    # 2. Identify failing tests and their used fixtures
-    failing_test_nodes = []
-    used_fixture_names = set()
-    
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            is_failing = False
-            for ftid in failing_test_ids:
-                if node.name in ftid:
-                    is_failing = True
-                    break
-            
-            if is_failing:
-                failing_test_nodes.append(node)
-                for arg in node.args.args:
-                    if arg.arg in fixtures:
-                        used_fixture_names.add(arg.arg)
-
-    # 3. Collect spans
-    all_spans = []
-    for node in failing_test_nodes:
-        all_spans.append(get_node_span(node))
-    
-    for fname in used_fixture_names:
-        all_spans.append(get_node_span(fixtures[fname]))
-        
-    if not all_spans:
-        return ""
-        
-    return _extract_spans(source_lines, all_spans)
+    return slice_test_interface_context(content, file_path)

@@ -554,5 +554,7 @@ These flags are particularly useful when you encounter "context window exceeded"
 
 ```bash
 # Sync with full compression and a higher budget
-pdd --force sync --context-compression all --budget 15.0 my_complex_module
+# Global flags must precede the subcommand, or use sync-local options:
+pdd --context-compression all --force sync --budget 15.0 my_complex_module
+# pdd sync --context-compression all --force --budget 15.0 my_complex_module
 ```
