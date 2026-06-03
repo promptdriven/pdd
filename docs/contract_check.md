@@ -120,6 +120,7 @@ JSON mode suppresses unrelated CLI noise on stdout (auto-update banners, etc.).
 - **Architecture alignment:** `pdd checkup --validate-arch-includes`.
 - **Contract coverage:** `pdd checkup coverage`.
 - **Waiver policy gate:** `pdd checkup gate` (see below).
+- **Coaching apply:** `pdd checkup coach --interactive --apply` applies LLM coach suggestions to prompt files after human approval (vocabulary, coverage, contract rule, waiver, story patches); `--dry-run` previews without writing. When used with `--interactive --apply`, `pdd checkup contract check` can also produce apply patches for missing vocabulary or coverage entries. See [docs/checkup_apply.md](checkup_apply.md).
 
 ## Waiver policy gate (`pdd checkup gate`)
 
