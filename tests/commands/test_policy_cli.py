@@ -87,6 +87,32 @@ def test_policy_check_evidence_writes_validation_policy(
     assert data["validation"]["policy"] == "failed"
 
 
+def test_policy_check_evidence_includes_capability_warnings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--evidence`` persists capability authoring warnings in context_snapshot."""
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "ambiguous.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY persist audit records.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "noop.py"
+    target.write_text("def noop() -> None:\n    pass\n", encoding="utf-8")
+    result = CliRunner().invoke(
+        cli.cli,
+        ["policy", "check", str(target), "--prompt", str(prompt), "--evidence"],
+        env=_CLI_ENV,
+    )
+    assert result.exit_code == 0, result.output
+    manifest = tmp_path / ".pdd" / "evidence" / "runs"
+    data = json.loads(next(manifest.glob("*.json")).read_text(encoding="utf-8"))
+    targets = data["context_snapshot"]["policy_check"]["targets"]
+    assert targets[0]["capability_warning_count"] == 1
+    assert targets[0]["capability_warnings"][0]["kind"] == "unmapped_capability"
+
+
 def test_policy_check_json_lists_targets() -> None:
     """JSON mode returns one record per scanned file."""
     target = FIXTURE_DIR / "forbidden_network.py"

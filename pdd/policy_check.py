@@ -475,7 +475,54 @@ class PolicyVisitor(ast.NodeVisitor):
         self.allowed_env = resolved.allowed_env
         self.allowed_email = resolved.allowed_email
 
-    def _is_waived(self, node: ast.AST, category: str, message: str) -> bool:
+    def _prompt_waiver_matches(
+        self,
+        category: str,
+        message: str,
+        *,
+        kind: str = "",
+        effect: str = "",
+    ) -> bool:
+        if not self.prompt_ir or not self.prompt_ir.waivers:
+            return False
+        cat = category.lower()
+        msg = message.lower()
+        kind_lower = kind.lower()
+        effect_phrase = effect.replace("_", " ").lower()
+        legacy_phrases = {
+            "network": (
+                "unauthorized network",
+                "network library",
+                "external call",
+                "blocked_by_must_not",
+            ),
+            "file": ("unauthorized file", "filesystem", "file operation", "file writes"),
+            "env": ("unauthorized environment", "environment access", "environ"),
+            "shell": ("unauthorized shell", "shell execution"),
+            "email": ("unauthorized email", "email library"),
+            "leakage": ("sensitive data", "logging secrets", "leakage"),
+        }
+        for waiver in self.prompt_ir.waivers:
+            block = f"{waiver.raw_block}\n{waiver.reason}".lower()
+            if cat not in block:
+                continue
+            if msg in block or (kind_lower and kind_lower in block):
+                return True
+            if effect_phrase and effect_phrase in block:
+                return True
+            if any(phrase in block for phrase in legacy_phrases.get(cat, ())):
+                return True
+        return False
+
+    def _is_waived(
+        self,
+        node: ast.AST,
+        category: str,
+        message: str,
+        *,
+        kind: str = "",
+        effect: str = "",
+    ) -> bool:
         if hasattr(node, "lineno") and node.lineno <= len(self.source_lines):
             line_text = self.source_lines[node.lineno - 1]
             if "# pdd-policy-ignore" in line_text:
@@ -483,12 +530,7 @@ class PolicyVisitor(ast.NodeVisitor):
             if node.lineno > 1 and "# pdd-policy-ignore" in self.source_lines[node.lineno - 2]:
                 return True
 
-        if self.prompt_ir and self.prompt_ir.waivers:
-            for waiver in self.prompt_ir.waivers:
-                block = f"{waiver.raw_block}\n{waiver.reason}".lower()
-                if category.lower() in block and message.lower() in block:
-                    return True
-        return False
+        return self._prompt_waiver_matches(category, message, kind=kind, effect=effect)
 
     def _add_issue(
         self,
@@ -500,7 +542,9 @@ class PolicyVisitor(ast.NodeVisitor):
         suggestions: Optional[list[str]] = None,
         kind: str = "",
     ) -> None:
-        if not self.should_check or self._is_waived(node, category, message):
+        if not self.should_check or self._is_waived(
+            node, category, message, kind=kind, effect=effect
+        ):
             return
         lineno = getattr(node, "lineno", 0) or 0
         col = getattr(node, "col_offset", 0) or 0

@@ -663,6 +663,9 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
             "artifacts": artifacts,
             "run_id": snapshot_context.get("run_id"),
         }
+        policy_check = snapshot_context.get("policy_check")
+        if policy_check is not None:
+            manifest["context_snapshot"]["policy_check"] = policy_check
 
     runs_dir = root / ".pdd" / "evidence" / "runs"
     latest_dir = root / ".pdd" / "evidence" / "devunits"

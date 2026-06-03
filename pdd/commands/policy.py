@@ -4,13 +4,42 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Any, Iterator, Optional
 
 import click
 
 from ..evidence_manifest import write_evidence_manifest
 from ..path_resolution import get_default_resolver
 from ..policy_check import PolicyResult, run_policy_check
+
+def _policy_evidence_context(results: list[PolicyResult]) -> dict[str, Any]:
+    """Serialize policy scan summaries for evidence manifests."""
+    return {
+        "policy_check": {
+            "targets": [
+                {
+                    "path": str(result.target_path),
+                    "passed": result.passed,
+                    "issue_count": len(result.issues),
+                    "capability_warning_count": len(result.capability_warnings),
+                    "capability_warnings": [
+                        {
+                            "severity": warning.severity,
+                            "source": warning.source,
+                            "kind": warning.kind,
+                            "capability": warning.capability,
+                            "message": warning.message,
+                            "suggestions": warning.suggestions,
+                            "line": warning.line,
+                        }
+                        for warning in result.capability_warnings
+                    ],
+                }
+                for result in results
+            ]
+        }
+    }
+
 
 _SKIP_DIR_NAMES = frozenset(
     {
@@ -188,6 +217,7 @@ def check(
             prompt_file=prompt_path,
             output_files=[r.target_path for r in results],
             validation={"policy": policy_status},
+            context_snapshot=_policy_evidence_context(results),
         )
 
     if any_violations:

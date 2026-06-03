@@ -34,7 +34,7 @@ CLI developer. This module implements the `policy_group` Click group registered 
 3. Options:
    - `--prompt PATH`: Explicitly specify the prompt file to use for capability rules.
    - `--json`: Output results in machine-readable JSON (`capabilities`, `issues`, `capability_warnings`, unified `findings`).
-   - `--evidence`: Write findings to an evidence manifest.
+   - `--evidence`: Write findings to an evidence manifest (`validation.policy` plus `context_snapshot.policy_check` with capability warnings).
    - `--strict`: Enable strict mode in the policy engine.
 4. Logic:
    - For each target file, resolve its associated prompt (if not overridden).

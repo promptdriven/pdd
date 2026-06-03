@@ -443,6 +443,22 @@ def test_must_not_overrides_later_may_same_category(tmp_path: Path) -> None:
     assert any(i.category == "network" for i in result.issues)
 
 
+def test_must_not_only_blocked_by_must_not_diagnostic(tmp_path: Path) -> None:
+    """MUST NOT without a conflicting MAY still uses blocked_by_must_not messaging."""
+    prompt = tmp_path / "must_not_only.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MUST NOT call external APIs.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "network.py"
+    target.write_text("import requests\n", encoding="utf-8")
+    result = run_policy_check(target, prompt)
+    issue = next(i for i in result.issues if i.category == "network")
+    assert issue.kind == "blocked_by_must_not"
+    assert "MUST NOT" in issue.message
+    assert "forbids" in issue.message.lower()
+
+
 def test_deny_wins_diagnostic_blocked_by_must_not_not_missing_capability(tmp_path: Path) -> None:
     """Deny-wins failures explain MUST NOT blocking, not adding an existing MAY bullet."""
     prompt = tmp_path / "deny_diag.prompt"
@@ -513,6 +529,23 @@ def test_must_not_overrides_earlier_may_same_category(tmp_path: Path) -> None:
     result = run_policy_check(target, prompt)
     assert not result.passed
     assert any(i.category == "network" for i in result.issues)
+
+
+def test_prompt_waiver_matches_category_without_exact_message(tmp_path: Path) -> None:
+    """Prompt waivers match category/kind/effect without the full denial message text."""
+    prompt = tmp_path / "waiver_network.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY read payment records.\n</capabilities>\n"
+        "<waivers>\n"
+        "W-1: network integration fixture\n"
+        "Reason: allow network library for approved integration tests.\n"
+        "</waivers>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "network.py"
+    target.write_text("import requests\n", encoding="utf-8")
+    result = run_policy_check(target, prompt)
+    assert result.passed
 
 
 def test_human_output_includes_capability_authoring_warnings(tmp_path: Path) -> None:
