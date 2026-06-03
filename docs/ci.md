@@ -12,7 +12,7 @@ Longer suites remain separate:
 - `make regression` and `make sync-regression` exercise LLM-backed CLI flows.
 - `make cloud-regression` and cloud batch targets require cloud authentication and should run only in protected or private CI.
 
-Projects with critical modules may add a **snapshot reproducibility** check that rejects unsnapshotted nondeterministic prompt context. Use **`pdd checkup snapshot`** only (there is no top-level `pdd policy` command). The check fails when a protected prompt uses `<shell>`, `<web>`, or `<include ... query="...">` without a replayable snapshot under `.pdd/evidence/`. Keep this separate from public fork-safe regression jobs if it requires private snapshot artifacts or secret-gated web access.
+Projects with critical modules may add a **snapshot reproducibility** check that rejects unsnapshotted nondeterministic prompt context. Use **`pdd checkup snapshot`** for that gate (there is no top-level `pdd snapshot` command). Capability side-effect enforcement is separate: use **`pdd policy check`** or **`pdd checkup policy check`** when prompts define `<capabilities>` (see `docs/policy_check.md`). The snapshot check fails when a protected prompt uses `<shell>`, `<web>`, or `<include ... query="...">` without a replayable snapshot under `.pdd/evidence/`. Keep snapshot checks separate from public fork-safe regression jobs if they require private snapshot artifacts or secret-gated web access.
 
 ```bash
 pdd checkup snapshot prompts/critical_python.prompt

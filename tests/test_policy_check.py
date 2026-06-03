@@ -288,6 +288,55 @@ def test_explicit_filesystem_capability_allows_pathlib_write(tmp_path: Path) -> 
     assert result.passed
 
 
+def test_urllib_request_urlopen_import_from_blocked(tmp_path: Path) -> None:
+    """Stdlib ``from urllib.request import urlopen`` is treated as network I/O."""
+    prompt = tmp_path / "records_only.prompt"
+    prompt.write_text("<capabilities>\n- MAY read records.\n</capabilities>\n", encoding="utf-8")
+    target = tmp_path / "urllib_from.py"
+    target.write_text(
+        "from urllib.request import urlopen\n\n"
+        "def fetch() -> bytes:\n"
+        '    return urlopen("https://example.com").read()\n',
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "network" for i in result.issues)
+
+
+def test_urllib_request_module_urlopen_blocked(tmp_path: Path) -> None:
+    """Stdlib ``import urllib.request; urllib.request.urlopen`` is network I/O."""
+    prompt = tmp_path / "records_only.prompt"
+    prompt.write_text("<capabilities>\n- MAY read records.\n</capabilities>\n", encoding="utf-8")
+    target = tmp_path / "urllib_module.py"
+    target.write_text(
+        "import urllib.request\n\n"
+        "def fetch() -> bytes:\n"
+        '    return urllib.request.urlopen("https://example.com").read()\n',
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "network" for i in result.issues)
+
+
+def test_path_variable_bound_write_text_blocked(tmp_path: Path) -> None:
+    """``p = Path(...); p.write_text(...)`` is enforced like ``Path(...).write_text``."""
+    prompt = tmp_path / "records_only.prompt"
+    prompt.write_text("<capabilities>\n- MAY read records.\n</capabilities>\n", encoding="utf-8")
+    target = tmp_path / "path_var.py"
+    target.write_text(
+        "from pathlib import Path\n\n"
+        "def save() -> None:\n"
+        '    p = Path("/tmp/pdd_probe")\n'
+        '    p.write_text("x")\n',
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "file" for i in result.issues)
+
+
 def test_pathlib_path_alias_write_text_blocked(tmp_path: Path) -> None:
     prompt = tmp_path / "no_file.prompt"
     prompt.write_text("<capabilities>\n- MAY read configuration.\n</capabilities>\n", encoding="utf-8")

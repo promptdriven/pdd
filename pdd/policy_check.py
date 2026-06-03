@@ -68,6 +68,32 @@ NETWORK_LIBS = {
     "email",
 }
 
+_STDLIB_NETWORK_CALLS = frozenset(
+    {
+        "urlopen",
+        "urlretrieve",
+        "URLopener",
+        "FancyURLopener",
+        "HTTPConnection",
+        "HTTPSConnection",
+        "request",
+    }
+)
+
+
+def _is_network_module(module: str) -> bool:
+    """Return True for third-party and stdlib modules that perform network I/O."""
+    if not module:
+        return False
+    root = module.split(".")[0]
+    if root in NETWORK_LIBS:
+        return True
+    if root == "urllib" or module.startswith("urllib."):
+        return True
+    if module == "http.client" or module.startswith("http.client"):
+        return True
+    return False
+
 SHELL_LIBS = {"subprocess", "os", "shutil", "pty"}
 
 SENSITIVE_KEYS = frozenset(
@@ -463,6 +489,7 @@ class PolicyVisitor(ast.NodeVisitor):
         self.prompt_ir = prompt_ir
         self.issues: list[PolicyIssue] = []
         self.imported_names: dict[str, str] = {}
+        self.path_instance_names: set[str] = set()
 
         self.has_capabilities = len(capabilities) > 0
         self.should_check = self.strict or self.has_capabilities
@@ -597,7 +624,7 @@ class PolicyVisitor(ast.NodeVisitor):
 
     def _check_import(self, module: str, node: ast.AST) -> None:
         base_module = module.split(".")[0]
-        if base_module in NETWORK_LIBS and not self.allowed_network:
+        if _is_network_module(module) and not self.allowed_network:
             self._add_missing_capability(node, "network", _EFFECT_NETWORK)
         if base_module in {"smtplib", "email"} and not self.allowed_email:
             self._add_missing_capability(node, "email", _EFFECT_EMAIL)
@@ -649,6 +676,24 @@ class PolicyVisitor(ast.NodeVisitor):
             return True
         return False
 
+    def _name_is_path_instance(self, name: str) -> bool:
+        return name in self.path_instance_names
+
+    def _check_path_instance_call(self, node: ast.Call, *, var_name: str, func_name: str) -> None:
+        if func_name in PATHLIB_WRITE_METHODS:
+            self._check_file_operation(node, label=f"{var_name}.{func_name}")
+        elif func_name == "open" and (
+            self._open_looks_like_write(node) or self._pathlib_open_single_arg_is_write_mode(node)
+        ):
+            self._check_file_operation(node, label=f"{var_name}.open()")
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if isinstance(node.value, ast.Call) and self._pathlib_constructor_call(node.value):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self.path_instance_names.add(target.id)
+        self.generic_visit(node)
+
     def _check_file_operation(
         self,
         node: ast.Call,
@@ -685,6 +730,12 @@ class PolicyVisitor(ast.NodeVisitor):
             module_name = self.imported_names.get(func_name, "")
 
         resolved_module = self._call_module_root(module_name)
+
+        if not self.allowed_network:
+            bound_module = self.imported_names.get(func_name, module_name)
+            if _is_network_module(bound_module) or _is_network_module(module_name):
+                if func_name in _STDLIB_NETWORK_CALLS or func_name == "urlopen":
+                    self._add_missing_capability(node, "network", _EFFECT_NETWORK)
 
         if (resolved_module == "os" and func_name in SHELL_METHODS) or (
             resolved_module == "subprocess"
@@ -734,6 +785,16 @@ class PolicyVisitor(ast.NodeVisitor):
         ):
             label = f"{node.func.value.id}.{func_name}"
             self._check_file_operation(node, label=label)
+        elif (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and self._name_is_path_instance(node.func.value.id)
+        ):
+            self._check_path_instance_call(
+                node,
+                var_name=node.func.value.id,
+                func_name=func_name,
+            )
 
         if (resolved_module == "os" and func_name in ENV_METHODS) or (
             func_name in ENV_METHODS
