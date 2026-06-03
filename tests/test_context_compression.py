@@ -320,6 +320,48 @@ def test_preprocess_examples_compression_lists_target_in_summary(
     )
 
 
+def test_pytest_selector_slice_failure_honors_compression_fallback_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit select=pytest:… must use the same fallback policy as test_interface."""
+    from pdd.content_selector import ContentSelector
+
+    source = "def test_foo():\n    assert True\n"
+    monkeypatch.setenv("PDD_COMPRESSION_FALLBACK", "error")
+    clear_compression_fallback_events()
+
+    with pytest.raises(CompressionFallbackError, match="pytest slice failed"):
+        ContentSelector.select(
+            source,
+            selectors=["pytest:test_missing"],
+            file_path="tests/test_sample.py",
+        )
+
+
+def test_pytest_selector_records_compressed_target_in_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pdd.content_selector import ContentSelector
+
+    source = (
+        "def test_foo():\n"
+        "    assert True\n\n"
+        "def test_bar():\n"
+        "    assert False\n"
+    )
+    clear_compression_fallback_events()
+    result = ContentSelector.select(
+        source,
+        selectors=["pytest:test_foo"],
+        file_path="tests/test_sample.py",
+    )
+    assert "def test_bar" not in result
+    assert any(
+        "Context compressed:" in line and "pytest:test_foo" in line
+        for line in format_compression_summary_lines()
+    )
+
+
 def test_test_interface_slice_failure_honors_compression_fallback_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

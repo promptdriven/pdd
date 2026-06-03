@@ -780,12 +780,13 @@ def process_include_tags(
                                 file_path=full_path,
                                 mode=mode,
                             )
-                            if (
-                                mode != "full"
-                                and content != original_content
-                                and not selectors
-                            ):
-                                record_compression_applied(full_path, mode)
+                            if content != original_content:
+                                if selectors_str:
+                                    record_compression_applied(
+                                        full_path, f"select:{selectors_str}"
+                                    )
+                                elif mode != "full":
+                                    record_compression_applied(full_path, mode)
                         except CompressionFallbackError:
                             raise
                         except ImportError as e:

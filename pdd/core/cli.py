@@ -455,7 +455,7 @@ def cli(
     if time is not None:
         from ..reasoning import time_to_effort_level
         os.environ["PDD_REASONING_EFFORT"] = time_to_effort_level(time)
-    
+
     # Context compression options (issue #877)
     from ..compression_reporting import clear_compression_fallback_events
     from ..config_resolution import apply_compression_env

@@ -2138,8 +2138,8 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 - `--max-cycles INT`: Maximum number of outer loop cycles before giving up (default: 5).
 - `--resume/--no-resume`: Resume from saved state if available (default: `--resume`).
 - `--clean-restart`: Discard saved agentic E2E fix state and ignore sibling `pdd bug` analysis state before starting fresh. Implies `--no-resume`.
-- `--context-compression {off,test,examples,contracts,all}`: Set the context compression mode (default: `off`).
-- `--compression-fallback {full,error}`: Set the fallback behavior when compression fails (default: `full`).
+- `--context-compression {off,test,examples,contracts,all}`: **Command-local** on `pdd fix` (and also available globally before the subcommand). Unlike `generate` and `preprocess`, `fix` accepts these flags after `fix` in the argv list.
+- `--compression-fallback {full,error}`: Same placement as `--context-compression` on `fix` (command-local or global before `fix`).
 - `--force`: Override the branch mismatch safety check. By default, the command aborts if the current git branch doesn't match the expected branch from the issue (to prevent accidentally modifying the wrong codebase).
 
 #### Manual Mode Options
@@ -2151,8 +2151,7 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
   - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
   - `--budget FLOAT`: Set the maximum cost allowed for the fixing process (default is $5.0).
 - `--auto-submit`: Automatically submit the example if all unit tests pass during the fix loop.
-- `--context-compression {off,test,examples,contracts,all}`: Set the context compression mode (default: `off`).
-- `--compression-fallback {full,error}`: Set the fallback behavior when compression fails (default: `full`).
+- `--context-compression` / `--compression-fallback`: Same **command-local** `fix` options as in Agentic E2E Fix Options above (not accepted after `generate` or `preprocess`).
 
 When the `--loop` option is used, the fix command will attempt to fix errors through multiple iterations. It will use the specified verification program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 

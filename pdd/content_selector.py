@@ -21,7 +21,11 @@ from rich.theme import Theme
 
 from ._selector_parse import parse_selectors_string
 from .api_contract_slicer import ApiContractSlicer, ContractSlicerError
-from .compression_reporting import CompressionFallbackError, record_compression_fallback
+from .compression_reporting import (
+    CompressionFallbackError,
+    record_compression_applied,
+    record_compression_fallback,
+)
 from .pytest_slicer import PytestSlicer, SlicerError
 
 # Conditional YAML support
@@ -727,7 +731,14 @@ class ContentSelector:
                         slicer = PytestSlicer(content, file_path=file_path)
                         sliced_content, _ = slicer.slice(test_names)
                     except SlicerError as exc:
-                        raise SelectorError(str(exc)) from exc
+                        sliced_content = _handle_selector_slice_failure(
+                            exc,
+                            slice_kind="pytest",
+                            file_path=file_path,
+                            content=content,
+                        )
+                    if sliced_content != content and file_path:
+                        record_compression_applied(file_path, f"pytest:{sel.value}")
                     path_results.append(sliced_content)
                 elif sel.kind == "contract":
                     symbols = [t.strip() for t in sel.value.split(",") if t.strip()]
@@ -735,11 +746,18 @@ class ContentSelector:
                         slicer = ApiContractSlicer(content, file_path=file_path)
                         sliced_content, _ = slicer.slice(symbols)
                     except ContractSlicerError as exc:
-                        raise SelectorError(str(exc)) from exc
+                        sliced_content = _handle_selector_slice_failure(
+                            exc,
+                            slice_kind="contract",
+                            file_path=file_path,
+                            content=content,
+                        )
+                    if sliced_content != content and file_path:
+                        record_compression_applied(file_path, f"contract:{sel.value}")
                     path_results.append(sliced_content)
                 else:
                     raise SelectorError(f"Unknown selector kind: '{sel.kind}'")
-            except SelectorError:
+            except (SelectorError, CompressionFallbackError):
                 raise
             except Exception as exc:
                 _report_error(
@@ -892,15 +910,28 @@ def _compression_fallback_policy() -> str:
     return (os.environ.get("PDD_COMPRESSION_FALLBACK", "full") or "full").lower()
 
 
-def _handle_test_slice_failure(exc: SlicerError, *, file_path: str | None, content: str) -> str:
-    """Apply ``PDD_COMPRESSION_FALLBACK`` when pytest slicing fails."""
-    label = file_path or "<test>"
-    message = f"pytest slice failed for {label}: {exc}"
+def _handle_selector_slice_failure(
+    exc: Exception,
+    *,
+    slice_kind: str,
+    file_path: str | None,
+    content: str,
+) -> str:
+    """Apply ``PDD_COMPRESSION_FALLBACK`` when pytest/contract slicing fails."""
+    label = file_path or "<file>"
+    message = f"{slice_kind} slice failed for {label}: {exc}"
     if _compression_fallback_policy() == "error":
         record_compression_fallback(message)
         raise CompressionFallbackError(message) from exc
     record_compression_fallback(message)
     return content
+
+
+def _handle_test_slice_failure(exc: SlicerError, *, file_path: str | None, content: str) -> str:
+    """Apply ``PDD_COMPRESSION_FALLBACK`` when pytest test_interface slicing fails."""
+    return _handle_selector_slice_failure(
+        exc, slice_kind="pytest", file_path=file_path, content=content
+    )
 
 
 def slice_test_interface_context(content: str, file_path: str | None = None) -> str:
