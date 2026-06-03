@@ -1,3 +1,17 @@
+<pdd-reason>Iteratively fixes verification failures with cloud hybrid mode and compressed context support.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "cloud_verify_fix", "signature": "(program, prompt, code, output, strength, temperature, time_param, verbose, language, compressed_context=None) -> Dict[str, Any]", "returns": "Dict[str, Any]"},
+      {"name": "fix_verification_errors_loop", "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = \"verification.log\", output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]", "returns": "Dict[str, Any]"}
+    ]
+  }
+}
+</pdd-interface>
+
 % Write function "fix_verification_errors_loop" that iteratively fixes code errors by comparing program execution output against the original prompt's intent, with hybrid cloud support for LLM calls.
 
 <include>context/python_preamble.prompt</include>
@@ -21,6 +35,7 @@ def fix_verification_errors_loop(
     llm_time: float = DEFAULT_TIME,
     agentic_fallback: bool = True,
     use_cloud: bool = False,     # Hybrid cloud: LLM calls via cloud verifyCode endpoint, local program execution
+    compressed_context: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:  # Returns: success, final_program, final_code, total_attempts, total_cost, model_name, statistics
 
 % Dependencies:
@@ -32,7 +47,7 @@ def fix_verification_errors_loop(
 <get_language_example><include>context/get_language_example.py</include></get_language_example>
 
 % Helpers:
-  - `cloud_verify_fix(program, prompt, code, output, strength, temperature, time_param, verbose, language)`: Call cloud verifyCode endpoint for LLM verification fix. Returns dict with fixed_code, fixed_program, explanation, verification_issues_count, total_cost, model_name. Falls back to local on cloud failure.
+  - `cloud_verify_fix(program, prompt, code, output, strength, temperature, time_param, verbose, language, compressed_context=None)`: Call cloud verifyCode endpoint for LLM verification fix. Returns dict with fixed_code, fixed_program, explanation, verification_issues_count, total_cost, model_name. Falls back to local on cloud failure.
 
 % Algorithm:
 1. Non-Python targets (.py check): bypass loop, use get_language()/default_verify_cmd_for(), invoke run_agentic_verify
@@ -47,6 +62,8 @@ def fix_verification_errors_loop(
    - Break on success (0 issues + verified) or no effective changes
 5. Final: return success if any verification passed; else restore best/original state
 6. Agentic fallback: if failed and agentic_fallback=True, invoke run_agentic_verify with `cwd=Path(prompt_file).parent` to ensure paths resolve correctly
+7. Compressed context: when provided, include compressed example/contract/prompt context in verification-fix LLM calls while always retaining actual program output. The non-Python agentic path should also receive compressed context or record an explicit unavailable reason.
+8. Result metadata: include `agentic_fallback_used` and compression metadata in the returned result dictionary.
 
 % XML Logging (xml.sax.saxutils.escape):
 <InitialState>, <Iteration attempt="N"> (with <SecondaryVerification passed="true/false">), <FinalActions>

@@ -5,7 +5,7 @@ import click
 import logging
 import json
 from pathlib import Path
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Mapping, Optional, Tuple, List, Dict, Any
 
 import requests
 
@@ -134,6 +134,7 @@ def fix_verification_main(
     agentic_fallback: bool = True,
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
+    compressed_context: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     CLI wrapper for the 'verify' command. Verifies code correctness by running
@@ -330,6 +331,7 @@ def fix_verification_main(
                     "verbose": verbose,
                     "program_args": [],
                     "agentic_fallback": agentic_fallback,
+                    "compressed_context": compressed_context,
                 }
                 # Only pass use_cloud when explicitly True (cloud not ready for prod yet)
                 if use_cloud_for_loop:
@@ -529,7 +531,8 @@ def fix_verification_main(
                     strength=strength,
                     temperature=temperature,
                     verbose=verbose,
-                    time=time # Pass time to single pass function
+                    time=time, # Pass time to single pass function
+                    compressed_context=compressed_context,
                 )
 
                 # Determine success: If no issues were found OR if fixes were applied

@@ -11,7 +11,7 @@ import subprocess
 import requests
 import tempfile
 import sys
-from typing import Optional, Tuple, Dict, Any, List, Set
+from typing import Optional, Tuple, Dict, Any, List, Set, Mapping
 
 import click
 from rich.console import Console
@@ -41,6 +41,7 @@ from .grounding_provenance import (
     stash_grounding_overrides_on_ctx,
     warn_cloud_examples_not_preapproved,
 )
+from .compressed_sync_context import render_for_prompt
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -3048,6 +3049,7 @@ def code_generator_main(
     language: Optional[str] = None,
     output_from_config: bool = False,
     snapshot_context: bool = False,
+    compressed_context: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -3220,6 +3222,9 @@ def code_generator_main(
                 f"{repair_directive_env.strip()}\n"
                 "</architecture_repair_directive>\n"
             )
+        rendered_compressed_context = render_for_prompt(compressed_context)
+        if rendered_compressed_context:
+            prompt_content += "\n\n" + rendered_compressed_context
 
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")

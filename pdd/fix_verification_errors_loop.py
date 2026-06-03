@@ -5,7 +5,7 @@ import subprocess
 import datetime
 import sys
 from pathlib import Path
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Mapping, Tuple, Any, Optional
 from xml.sax.saxutils import escape
 import time
 
@@ -233,6 +233,7 @@ def fix_verification_errors_loop(
     llm_time: float = DEFAULT_TIME, # Add time parameter
     agentic_fallback: bool = True,
     use_cloud: bool = False,
+    compressed_context: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Attempts to fix errors in a code file based on program execution output
@@ -569,7 +570,8 @@ def fix_verification_errors_loop(
                         strength=strength,
                         temperature=temperature,
                         verbose=verbose,
-                        time=llm_time
+                        time=llm_time,
+                        compressed_context=compressed_context,
                     )
             else:
                 initial_fix_result = fix_verification_errors(
@@ -580,7 +582,8 @@ def fix_verification_errors_loop(
                     strength=strength,
                     temperature=temperature,
                     verbose=verbose,
-                    time=llm_time # Pass time
+                    time=llm_time, # Pass time
+                    compressed_context=compressed_context,
                 )
             # 3e: Add cost
             initial_cost = initial_fix_result.get('total_cost', 0.0)
@@ -802,7 +805,8 @@ def fix_verification_errors_loop(
                         strength=strength,
                         temperature=temperature,
                         verbose=verbose,
-                        time=llm_time
+                        time=llm_time,
+                        compressed_context=compressed_context,
                     )
             else:
                 fix_result = fix_verification_errors(
@@ -813,7 +817,8 @@ def fix_verification_errors_loop(
                     strength=strength,
                     temperature=temperature,
                     verbose=verbose,
-                    time=llm_time # Pass time
+                    time=llm_time, # Pass time
+                    compressed_context=compressed_context,
                 )
 
             # 4f: Add cost

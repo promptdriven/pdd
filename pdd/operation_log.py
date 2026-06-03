@@ -19,6 +19,48 @@ logger = logging.getLogger(__name__)
 PDD_DIR = ".pdd"
 META_DIR = os.path.join(PDD_DIR, "meta")
 
+_SENSITIVE_METADATA_KEYS = {
+    "content",
+    "compressed_content",
+    "compressed_context",
+    "context",
+    "prompt",
+    "raw",
+    "raw_context",
+    "rendered",
+    "rendered_context",
+    "text",
+}
+
+
+def _safe_metadata(value: Any) -> Any:
+    """Copy log metadata while omitting raw prompt/context payload fields."""
+    if isinstance(value, dict):
+        safe: Dict[str, Any] = {}
+        for key, item in value.items():
+            key_str = str(key)
+            if key_str.lower() in _SENSITIVE_METADATA_KEYS:
+                continue
+            safe[key_str] = _safe_metadata(item)
+        return safe
+    if isinstance(value, (list, tuple)):
+        return [_safe_metadata(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _attach_safe_metadata(
+    entry: Dict[str, Any],
+    *,
+    compression: Any = None,
+    agentic_fallback: Any = None,
+) -> None:
+    if compression is not None:
+        entry["compression"] = _safe_metadata(compression)
+    if agentic_fallback is not None:
+        entry["agentic_fallback"] = _safe_metadata(agentic_fallback)
+
 
 def _detect_project_root(start: Optional[Path] = None) -> Optional[Path]:
     """Walk up from `start` (or CWD) to find the nearest .pddrc.
@@ -365,9 +407,13 @@ def append_log_entry(
     """
     log_path = get_log_path(basename, language, paths=paths)
     
-    # Ensure standard fields exist
+    # Ensure standard fields exist and raw context payloads never reach disk.
     if "timestamp" not in entry:
         entry["timestamp"] = datetime.now().isoformat()
+    if "compression" in entry:
+        entry["compression"] = _safe_metadata(entry["compression"])
+    if "agentic_fallback" in entry:
+        entry["agentic_fallback"] = _safe_metadata(entry["agentic_fallback"])
     
     try:
         with open(log_path, 'a', encoding='utf-8') as f:
@@ -384,12 +430,14 @@ def create_log_entry(
     invocation_mode: str = "sync",
     estimated_cost: float = 0.0,
     confidence: float = 0.0,
-    decision_type: str = "unknown"
+    decision_type: str = "unknown",
+    compression: Any = None,
+    agentic_fallback: Any = None,
 ) -> Dict[str, Any]:
     """
     Create a new log entry dictionary structure.
     """
-    return {
+    entry = {
         "timestamp": datetime.now().isoformat(),
         "operation": operation,
         "reason": reason,
@@ -403,6 +451,12 @@ def create_log_entry(
         "model": "unknown",
         "error": None
     }
+    _attach_safe_metadata(
+        entry,
+        compression=compression,
+        agentic_fallback=agentic_fallback,
+    )
+    return entry
 
 
 def create_manual_log_entry(operation: str) -> Dict[str, Any]:
@@ -422,7 +476,9 @@ def update_log_entry(
     cost: float,
     model: str,
     duration: float,
-    error: Optional[str] = None
+    error: Optional[str] = None,
+    compression: Any = None,
+    agentic_fallback: Any = None,
 ) -> Dict[str, Any]:
     """
     Update a log entry with execution results.
@@ -432,6 +488,11 @@ def update_log_entry(
     entry["model"] = model
     entry["duration"] = duration
     entry["error"] = error
+    _attach_safe_metadata(
+        entry,
+        compression=compression,
+        agentic_fallback=agentic_fallback,
+    )
     return entry
 
 
@@ -442,6 +503,8 @@ def log_event(
     details: Any,
     invocation_mode: str = "manual",
     paths: Optional[Dict[str, Any]] = None,
+    compression: Any = None,
+    agentic_fallback: Any = None,
 ) -> None:
     """
     Log a special event to the sync log.
@@ -456,6 +519,11 @@ def log_event(
         "details": details,
         "invocation_mode": invocation_mode
     }
+    _attach_safe_metadata(
+        entry,
+        compression=compression,
+        agentic_fallback=agentic_fallback,
+    )
     append_log_entry(basename, language, entry, paths=paths)
 
 

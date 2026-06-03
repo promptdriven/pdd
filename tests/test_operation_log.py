@@ -1427,3 +1427,45 @@ def test_prompts_root_for_fingerprint_uses_base_prompts_dir_issue_1305(tmp_path)
     assert got == (tmp_path / "prompts" / "repo" / "prompts").resolve(), (
         f"must anchor at the 'prompts' nearest the file, got {got}"
     )
+
+
+def test_operation_log_sanitizes_compression_and_fallback_metadata(temp_pdd_env):
+    """Compression telemetry must be metadata-only when written to sync logs."""
+    entry = operation_log.create_log_entry(
+        operation="sync",
+        reason="compressed context enabled",
+        compression={
+            "enabled": True,
+            "used": True,
+            "phase": "generate",
+            "content": "raw prompt/test/example context",
+            "nested": {"raw_context": "secret", "source_count": 2},
+        },
+        agentic_fallback={
+            "attempted": True,
+            "used": False,
+            "raw_context": "raw fallback context",
+        },
+    )
+    operation_log.update_log_entry(
+        entry,
+        success=True,
+        cost=0.1,
+        model="mock",
+        duration=0.2,
+        compression={"compressed_context": "raw", "compressed_sha256": "abc"},
+    )
+
+    operation_log.append_log_entry("telemetry", "python", entry)
+    operation_log.log_event(
+        "telemetry",
+        "python",
+        "sync_phase",
+        {"phase": "fix"},
+        compression={"phase": "fix", "compressed_content": "raw"},
+    )
+
+    entries = operation_log.load_operation_log("telemetry", "python")
+    assert entries[0]["compression"] == {"compressed_sha256": "abc"}
+    assert entries[0]["agentic_fallback"] == {"attempted": True, "used": False}
+    assert entries[1]["compression"] == {"phase": "fix"}

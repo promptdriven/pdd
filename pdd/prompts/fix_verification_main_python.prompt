@@ -1,3 +1,17 @@
+<pdd-reason>CLI wrapper for functional verification and verification-fix loops with compressed context.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "run_program", "signature": "(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]", "returns": "Tuple[bool, str, str]"},
+      {"name": "fix_verification_main", "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[bool, str, str, int, float, str]", "returns": "Tuple[bool, str, str, int, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function `fix_verification_main` that serves as the CLI wrapper for the PDD "verify" command.
 
 <include>context/python_preamble.prompt</include>
@@ -35,6 +49,7 @@ Output & Logging:
 Success Semantics:
 14. Single-pass: success is True if no issues found OR if fixes are proposed
 15. Loop mode: success is whatever `fix_verification_errors_loop` returns
+16. Accept optional sync-provided `compressed_context`. Direct CLI verify behavior is unchanged when it is absent.
 
 % Dependencies
 
@@ -67,6 +82,7 @@ Inputs:
 - `agentic_fallback` (bool): Enable agentic fallback in loop mode (default: True)
 - `strength` (Optional[float]): Model strength, overrides ctx.obj if provided
 - `temperature` (Optional[float]): Model temperature, overrides ctx.obj if provided
+- `compressed_context` (Optional[Mapping[str, Any]]): phase-aware compressed verify context from sync, including prompt/interface/contract/example evidence and recent repair output.
 
 Outputs:
 - Tuple[bool, str, str, int, float, str]: (success, final_program, final_code, attempts, total_cost, model_name)
@@ -80,9 +96,11 @@ Outputs:
    - Execute the program locally and capture stdout/stderr
    - Combine output (add "--- STDERR ---" delimiter when stderr present)
    - Use Cloud vs Local Execution Strategy (see below) to call `fix_verification_errors`
+   - Forward `compressed_context` to `fix_verification_errors` and cloud payloads when supplied
    - Determine success based on issues found and fixes proposed
 5. For loop mode:
    - Call `fix_verification_errors_loop` with paths, content, budget parameters, and `use_cloud` flag
+   - Forward `compressed_context` to the loop and include compression plus agentic-fallback metadata in logs/results consumed by sync
    - Cloud hybrid mode is enabled by default: LLM fix calls go to cloud, program execution stays local
    - Pass `use_cloud=False` only if `ctx.obj.get('local')` is True (local execution preferred)
    - Auto-detect cloud availability via JWT token; if available and not forcing local, use cloud

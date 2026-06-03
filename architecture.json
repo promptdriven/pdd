@@ -742,7 +742,7 @@
     }
   },
   {
-    "reason": "Fixes issues found during functional verification.",
+    "reason": "Repairs verification issues by identifying prompt-intent mismatches and proposing code fixes.",
     "description": "Corrects code that fails verification checks. Addresses logic errors and specification mismatches.",
     "dependencies": [],
     "priority": 20,
@@ -759,11 +759,8 @@
         "functions": [
           {
             "name": "fix_verification_errors",
-            "signature": "(program: str, prompt: str, code: str, output: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, verbose: bool = False, time: float = DEFAULT_TIME) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(program: str, prompt: str, code: str, output: str, strength: float, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[str, str, str, float, str, int]",
+            "returns": "Tuple[str, str, str, float, str, int]"
           }
         ]
       }
@@ -1719,7 +1716,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the fix verification command.",
+    "reason": "CLI wrapper for functional verification and verification-fix loops with compressed context.",
     "description": "Command-line interface for fix verification. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [],
     "priority": 48,
@@ -1736,11 +1733,13 @@
         "commands": [
           {
             "name": "run_program",
-            "signature": "(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]"
+            "signature": "(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]",
+            "returns": "Tuple[bool, str, str]"
           },
           {
             "name": "fix_verification_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None) -> Tuple[bool, str, str, int, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[bool, str, str, int, float, str]",
+            "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -1969,7 +1968,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the cmd test command.",
+    "reason": "CLI wrapper for generating or enhancing unit tests with optional compressed sync context.",
     "description": "Command-line interface for cmd test. Parses arguments, orchestrates the workflow, and formats output. Before overwriting an existing non-empty test file in either native or agentic generation, applies the shared TestChurnError gate from code_generator_main; high-churn agentic rewrites restore the pre-existing file before raising so broad regression coverage is not discarded.",
     "dependencies": [],
     "priority": 56,
@@ -1986,7 +1985,8 @@
         "commands": [
           {
             "name": "cmd_test_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None = None, language: str | None = None, coverage_report: str | None = None, existing_tests: list[str] | None = None, target_coverage: float | None = None, merge: bool = False, strength: float | None = None, temperature: float | None = None, manual: bool = False, *, repair_directive: str | None = None) -> TestResult"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None = None, language: str | None = None, coverage_report: str | None = None, existing_tests: list[str] | None = None, target_coverage: float | None = None, merge: bool = False, strength: float | None = None, temperature: float | None = None, manual: bool = False, *, repair_directive: str | None = None, compressed_context: Optional[Mapping[str, Any]] = None) -> TestResult",
+            "returns": "TestResult"
           }
         ]
       }
@@ -2008,7 +2008,8 @@
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
       "_keyring_timeout_python.prompt",
-      "context_snapshot_python.prompt"
+      "context_snapshot_python.prompt",
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 57,
     "filename": "code_generator_main_python.prompt",
@@ -2024,37 +2025,42 @@
         "commands": [
           {
             "name": "is_git_repository",
-            "signature": "(path: Optional[str] = None) -> bool"
+            "signature": "(path: Optional[str] = None) -> bool",
+            "returns": "bool"
           },
           {
             "name": "get_git_content_at_ref",
-            "signature": "(file_path: str, git_ref: str = 'HEAD') -> Optional[str]"
+            "signature": "(file_path: str, git_ref: str = \"HEAD\") -> Optional[str]",
+            "returns": "Optional[str]"
           },
           {
             "name": "get_file_git_status",
-            "signature": "(file_path: str) -> str"
+            "signature": "(file_path: str) -> str",
+            "returns": "str"
           },
           {
             "name": "git_add_files",
-            "signature": "(file_paths: List[str], verbose: bool = False) -> bool"
+            "signature": "(file_paths: List[str], verbose: bool = False) -> bool",
+            "returns": "bool"
           },
           {
             "name": "code_generator_main",
-            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, snapshot_context: bool = False) -> Tuple[str, bool, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, snapshot_context: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[str, bool, float, str]",
+            "returns": "Tuple[str, bool, float, str]"
           },
           {
             "name": "ArchitectureConformanceError",
-            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
+            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
             "returns": "ArchitectureConformanceError"
           },
           {
             "name": "PublicSurfaceRegressionError",
-            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
+            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
             "returns": "PublicSurfaceRegressionError"
           },
           {
             "name": "TestChurnError",
-            "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
+            "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
             "returns": "TestChurnError"
           }
         ]
@@ -2178,7 +2184,7 @@
     }
   },
   {
-    "reason": "Iteratively fixes verification failures.",
+    "reason": "Iteratively fixes verification failures with cloud hybrid mode and compressed context support.",
     "description": "Runs verification-fix cycles until code meets specifications or retry limit reached.",
     "dependencies": [],
     "priority": 59,
@@ -2195,19 +2201,13 @@
         "functions": [
           {
             "name": "cloud_verify_fix",
-            "signature": "(program: str, prompt: str, code: str, output: str, strength: float, temperature: float, time_param: float, verbose: bool, language: str = 'python') -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(program, prompt, code, output, strength, temperature, time_param, verbose, language, compressed_context=None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           },
           {
             "name": "fix_verification_errors_loop",
-            "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = 'verification.log', output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = \"verification.log\", output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           }
         ]
       }
@@ -2462,7 +2462,8 @@
     "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations. Supports two-phase focused repair for large dev units via fix_focus, and failure-aware early exit for syntax/import and timeout/flaky failures.",
     "dependencies": [
       "failure_classification_python.prompt",
-      "fix_focus_python.prompt"
+      "fix_focus_python.prompt",
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2478,12 +2479,12 @@
         "functions": [
           {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)",
+            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None, compressed_context=None)",
             "returns": "Tuple[bool, bool, str, str, str, float, str]"
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False)",
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False, compressed_context=None)",
             "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
@@ -2573,13 +2574,15 @@
     }
   },
   {
-    "reason": "CLI entry point for the fix command; single-pass cloud/local modes use fix_focus for large dev units and auto-submit short-circuits in cloud executors with a bounded Device Flow JWT call.",
+    "reason": "CLI wrapper for unit-test repair with loop mode, cloud/local execution, and compressed repair context.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
+      "fix_error_loop_python.prompt",
+      "fix_focus_python.prompt",
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
       "core/cloud_python.prompt",
-      "fix_focus_python.prompt"
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
@@ -2595,7 +2598,8 @@
         "commands": [
           {
             "name": "fix_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True) -> Tuple[bool, str, str, int, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, compressed_context: Mapping[str, Any] | None = None) -> Tuple[bool, str, str, int, float, str]",
+            "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -2606,7 +2610,7 @@
     }
   },
   {
-    "reason": "Intelligently determines which sync operations to run.",
+    "reason": "Determines the next sync operation, including isolated replay/repair decisions.",
     "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed.",
     "dependencies": [
       "agentic_langtest_python.prompt"
@@ -2624,164 +2628,19 @@
       "module": {
         "functions": [
           {
-            "name": "get_pdd_dir",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_meta_dir",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_locks_dir",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_extension",
-            "signature": "(language: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
             "name": "get_pdd_file_paths",
-            "signature": "(basename: str, language: str, prompts_dir: str = 'prompts', context_override: Optional[str] = None) -> Dict[str, Path]",
-            "returns": "Dict[str, Path]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "calculate_sha256",
-            "signature": "(file_path: Path) -> Optional[str]",
-            "returns": "Optional[str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "read_fingerprint",
-            "signature": "(basename: str, language: str) -> Optional[Fingerprint]",
-            "returns": "Optional[Fingerprint]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "read_run_report",
-            "signature": "(basename: str, language: str) -> Optional[RunReport]",
-            "returns": "Optional[RunReport]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "calculate_current_hashes",
-            "signature": "(paths: Dict[str, Any]) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_git_diff",
-            "signature": "(file_path: Path) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "estimate_operation_cost",
-            "signature": "(operation: str, language: str = 'python') -> float",
-            "returns": "float",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "validate_expected_files",
-            "signature": "(fingerprint: Optional[Fingerprint], paths: Dict[str, Path]) -> Dict[str, bool]",
-            "returns": "Dict[str, bool]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "check_for_dependencies",
-            "signature": "(prompt_content: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(basename: str, language: str, prompts_dir: str = \"prompts\", context_override: Optional[str] = None) -> Dict[str, Path]",
+            "returns": "Dict[str, Path]"
           },
           {
             "name": "sync_determine_operation",
-            "signature": "(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = 'prompts', skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None, read_only: bool = False) -> SyncDecision",
-            "returns": "SyncDecision",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = \"prompts\", skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None, read_only: bool = False, isolated_replay_or_repair: bool = False) -> SyncDecision",
+            "returns": "SyncDecision"
           },
           {
             "name": "analyze_conflict_with_llm",
-            "signature": "(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = 'prompts', context_override: Optional[str] = None) -> SyncDecision",
-            "returns": "SyncDecision",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__init__",
-            "signature": "(self, basename: str, language: str)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__enter__",
-            "signature": "(self)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__exit__",
-            "signature": "(self, exc_type, exc_val, exc_tb)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "acquire",
-            "signature": "(self)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "release",
-            "signature": "(self)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = \"prompts\", context_override: Optional[str] = None) -> SyncDecision",
+            "returns": "SyncDecision"
           }
         ]
       }
@@ -2880,7 +2739,8 @@
     "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
     "dependencies": [
       "code_generator_main_python.prompt",
-      "agentic_sync_runner_python.prompt"
+      "agentic_sync_runner_python.prompt",
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 70,
     "filename": "sync_orchestration_python.prompt",
@@ -2895,148 +2755,9 @@
       "module": {
         "functions": [
           {
-            "name": "load_sync_log",
-            "signature": "(basename: str, language: str) -> List[Dict[str, Any]]",
-            "returns": "List[Dict[str, Any]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_sync_log_entry",
-            "signature": "(decision, budget_remaining: float) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "update_sync_log_entry",
-            "signature": "(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "append_sync_log",
-            "signature": "(basename: str, language: str, entry: Dict[str, Any])",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "log_sync_event",
-            "signature": "(basename: str, language: str, event: str, details: Dict[str, Any] = None)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "save_run_report",
-            "signature": "(report: Dict[str, Any], basename: str, language: str, atomic_state: Optional['AtomicStateUpdate'] = None)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
             "name": "sync_orchestration",
-            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, snapshot_context: bool = False) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__init__",
-            "signature": "(self, rc, out, err, basename: str, language: str)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__enter__",
-            "signature": "(self)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__exit__",
-            "signature": "(self, exc_type, exc_val, exc_tb)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "set_run_report",
-            "signature": "(self, report: Dict[str, Any], path: Path)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "set_fingerprint",
-            "signature": "(self, fingerprint: Dict[str, Any], path: Path)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "read_pipe",
-            "signature": "(pipe, chunks)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_confirm_callback",
-            "signature": "() -> Optional[Callable[[str, str], bool]]",
-            "returns": "Optional[Callable[[str, str], bool]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "sync_worker_logic",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "confirming_callback",
-            "signature": "(msg: str, title: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "headless_confirming_callback",
-            "signature": "(msg: str, title: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__init__",
-            "signature": "(self, rc, out, err)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           }
         ]
       }
@@ -5387,7 +5108,8 @@
     "dependencies": [
       "core/cloud_python.prompt",
       "code_generator_main_python.prompt",
-      "agentic_sync_runner_python.prompt"
+      "agentic_sync_runner_python.prompt",
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 148,
     "filename": "sync_main_python.prompt",
@@ -5403,7 +5125,7 @@
         "commands": [
           {
             "name": "sync_main",
-            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, snapshot_context: bool = False) -> Tuple[Dict[str, Any], float, str]",
+            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, snapshot_context: bool = False, compressed_context: Optional[bool] = None) -> Tuple[Dict[str, Any], float, str]",
             "returns": "Tuple[Dict[str, Any], float, str]"
           }
         ]
@@ -7225,7 +6947,7 @@
     }
   },
   {
-    "reason": "Provides operation logging and state tracking for PDD commands via @log_operation decorator.",
+    "reason": "Provides sync operation logging, fingerprints, run reports, and compression metadata storage.",
     "description": "Decorator-based operation logging that tracks PDD command executions. Manages fingerprints, run reports, and event logs. Works with Click commands to extract module identity from prompt_file parameter.",
     "dependencies": [],
     "priority": 210,
@@ -7243,10 +6965,17 @@
           {
             "name": "log_operation",
             "signature": "(updates_fingerprint: bool, updates_run_report: bool, clears_run_report: bool) -> Callable",
-            "returns": "Callable (decorator)",
-            "sideEffects": [
-              "Writes to .pdd/meta/ state files"
-            ]
+            "returns": "Callable"
+          },
+          {
+            "name": "append_log_entry",
+            "signature": "(basename: str, language: str, entry: Mapping[str, Any], project_root=None, paths=None) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "log_event",
+            "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None) -> None",
+            "returns": "None"
           }
         ]
       }
@@ -7509,7 +7238,7 @@
     }
   },
   {
-    "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
+    "reason": "Parallel dependency-aware sync runner that forwards compressed-context sync settings.",
     "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects three repairable generation failures from per-module sync subprocesses \u2014 architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), and test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012) \u2014 and retries each up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry forwards the parent's resolved .pddrc context, --strength, and --temperature on the retry command so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block \u2014 '=== architecture conformance failure ===', '=== public surface regression ===', or '=== test churn threshold exceeded ===' (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) \u2014 plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
     "dependencies": [
       "architecture_sync_python.prompt",
@@ -7531,51 +7260,38 @@
         "functions": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, initial_cost: float = 0.0)",
-            "returns": "AsyncSyncRunner",
-            "sideEffects": [
-              "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child/per-retry remaining-budget caps; computes strongly connected components of the basename-induced dep graph so cyclic dependency sets are scheduled with soft intra-SCC edges and serialized cycle execution"
-            ]
+            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner",
+            "returns": "AsyncSyncRunner"
           },
           {
             "name": "AsyncSyncRunner.run",
             "signature": "() -> Tuple[bool, str, float]",
-            "returns": "Tuple[bool, str, float]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[bool, str, float]"
           },
           {
             "name": "build_dep_graph_from_architecture",
             "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult",
-            "returns": "DepGraphFromArchitectureResult",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "DepGraphFromArchitectureResult"
           },
           {
             "name": "build_dep_graph_from_architecture_data",
-            "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult",
-            "returns": "DepGraphFromArchitectureResult",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = \"architecture.json\") -> DepGraphFromArchitectureResult",
+            "returns": "DepGraphFromArchitectureResult"
+          },
+          {
+            "name": "build_conformance_hard_failure_from_error",
+            "signature": "(exc: ArchitectureConformanceError, basename: str) -> str",
+            "returns": "str"
           },
           {
             "name": "build_public_surface_hard_failure_from_error",
             "signature": "(exc: PublicSurfaceRegressionError, basename: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           },
           {
             "name": "build_test_churn_hard_failure_from_error",
             "signature": "(exc: TestChurnError, basename: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           }
         ]
       }
@@ -7902,7 +7618,6 @@
   },
   {
     "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR. In PR mode the linked issue is OPTIONAL: with no issue (issue_url/issue_number absent) the PR is reviewed on its own merits and _step7_passed drops the issue_aligned requirement (verdict = code findings only), the issue-thread per-step/error/final posts are skipped, and _post_pr_mode_final_report posts only to the PR thread; with an issue present the issue-alignment gate is unchanged. Issue #1212 contract: Step 5 emits a structured failure_signal block normalised into context['step5_failure_signal']; Step 6.1's prompt renders that block. The Step 5 status word is parsed into three states \u2014 pass/ok/success/passed/clean (logically clean), skipped/skip/no_tests/n/a/n_a (verification did not run; sets context['step5_verification_skipped']=1 and is detected from the parsed status alone regardless of the provider success flag, round-10 #1), and everything else including a missing/malformed block (logical failure, fail closed). The fixer is skipped for both clean and skipped; a dedicated pre-push gate refuses any push when the skipped flag is set because tests never ran \u2014 including when the worktree is clean (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user). The gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time rather than trusting only the in-memory context cache (round-10 #3: context is not part of the saved workflow state, so a mid-loop interruption can resume with the cached Step 5 skipped block but an empty context cache). The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND context['pr_scope_changed_files'] (the local merge-base diff), tolerating GitHub API outages when the local base is healthy. The scope-allowed set extends pr_file_set with Step 5 failure paths and justified EXPANSION_ITEMS paths so the guard matches the Step 6 prompt's allowance for editing failing test files / causally-connected files without an explicit marker; the causal guard remains the backstop for zero-overlap fixes. EXPANSION_ITEMS justification is per-marker; trailing continuation lines only count when they carry semantic content (prefix marker, path mention, or causal keyword) so indented/bulleted padding cannot whitelist a path. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] (not from start_step) so a manual --start-step 7 still trips the side-effect guard. A clean Steps-3/4/5 run never commits or pushes side-effect edits left by non-fixer tooling. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is NOT guarded on the raw output being truthy, so an empty/missing Step 5 output is itself a fail-closed condition (no test evidence) that routes to the logical-failure branch (pass-17 #1: provider success with empty Step 5 output must not slip through as a verified result). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt, calls _post_pr_mode_final_report(refusal_message) to post the terminal status to PR/issue threads, calls clear_workflow_state(...) to discard the saved cache so the next rerun reruns Step 5 instead of replaying the stale skipped/failed output (and avoids a duplicate final-report comment), and returns (False, f'{refusal}{suffix}', ...) before Step 7 runs; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and follows the same post-then-clear-then-return pattern. Because load_workflow_state loads the GitHub state comment with PRIORITY over local state (round-17), clear_workflow_state now returns a bool and github_clear_state falls back to neutralising the state-comment body (stripping the PDD_WORKFLOW_STATE marker via _github_edit_comment) when a DELETE fails, so a token without delete scope can no longer leave stale remote state that replays the refusal forever; the orchestrator appends a cleanup warning to the returned message when the clear is still unconfirmed. The SAME unconfirmed-clear warning is appended on the terminal-success path (external review #1215 Finding 2): that path captures clear_workflow_state's bool instead of discarding it so a failed remote clear cannot let the next run resume from completed state \u2014 the checkup still returns success, the warning is informational. As a second, independent backstop for the same hole, load_workflow_state-side resume DISCARDS any cached state whose (FAILED-corrected) last_completed_step has already reached STEP_ORDER[-1] (the terminal step) when no start_step_override is given: a completed run's lingering state (left behind precisely because its best-effort remote clear failed) must not be resumed, or the rerun would skip every step and replay the cached Step 7 verdict as 'Checkup complete' without re-verifying the PR head. On discard it resets last_completed_step to 0 but preserves github_comment_id=loaded_gh_id so the fresh run PATCHes the lingering state comment rather than creating a duplicate. Because context persists across fix-verify iterations and context['step5_failure_signal'] is written ONLY on the failing Step 5 path, the orchestrator clears it (and step5_failure_signal_missing) to '' whenever a later iteration's Step 5 is clean or skipped so Step 6 is never driven by a prior iteration's stale failure block (external review #1215 Finding 1); the provider-success/logical-failure branch also prints the scrubbed failure detail unconditionally (even in quiet mode) like the provider-failure path (external review #1215 Finding 3). Non-PR no-fix runs are unaffected. The pre-push diff size gate (PDD_CHECKUP_DIFF_LOC_LIMIT, default 800 added LoC; 0 disables; unparseable falls back to default) refuses oversized pushes unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry. Small companion files are exempt; diffuse death-by-a-thousand-cuts diffs still require every path covered.",
-
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, start-step recovery, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree using a checkout-scoped local branch name, refreshes the PR base into a dedicated local ref before recording merge-base changed files for PR-scoped test prompts, resolves a trusted absolute git binary through checkup_gates for the base-refresh and changed-file prompt probes so PATH=.:$PATH cannot execute a PR-shipped ./git, falls back to GitHub's PR files API when the local base refresh is unavailable, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists. In PR mode _handle_step_result suppresses its per-step issue comment for Step 7 (the orchestrator's canonical final report already covers it) so the issue thread does not get duplicate Step 7 reporting; earlier-step progress comments and issue-mode Step 7 comments are unaffected (external review #1215 Finding 3). Issue #1212 safety contract: (a) Step 5 MUST emit a structured ```failure_signal``` block (command, exit_code, status, failing_ids, artifact_path, output); the orchestrator parses it via _parse_failure_signal_block, treats empty fail/error-status fields as missing, synthesises a normalised block into context['step5_failure_signal'] that Step 6's prompt explicitly references, and maps the status word to one of three states (clean / skipped / failure) with fail-closed defaults \u2014 a missing block or unrecognised status counts as a logical failure (round-8 #1) so the fixer runs rather than silently passing. A 'skipped'/'skip'/'no_tests'/'n/a'/'n_a' status sets context['step5_verification_skipped']=1 \u2014 detected from the parsed status INDEPENDENT of the provider success flag (round-10 #1: an agent can emit a coherent skipped block even when its provider call timed out) \u2014 and triggers a dedicated pre-push gate that refuses any commit/push because tests never ran (round-9 #1), including the no-changes-clean-worktree path (round-10 #2: returning 'Checkup complete' on a clean worktree without test evidence misleads the user); the gate re-derives the skipped state from the persisted step_outputs['5'] via _step5_was_skipped at gate time so a mid-loop interruption + resume cannot slip past via a missing in-memory cache (round-10 #3). (b) The scope guard builds pr_file_set from the UNION of pr_metadata['api_changed_files_full'|'api_changed_files'] AND the local merge-base diff in context['pr_scope_changed_files'] (round-8 #2 \u2014 tolerates GitHub API outages), parses both formats with regex `^-\\s+([A-Z][A-Z0-9]*):\\s*(.+?)\\s*$` (uppercase words from the API formatter, short git statuses M/A/R100 from the local-diff formatter), extends the scope-allowed set with Step 5 failure paths (round-8 #3 \u2014 matches the Step 6 prompt's allowance for editing failing test files and causally-connected files without an EXPANSION_ITEMS marker; the causal guard remains the backstop for zero-overlap fixes), parses EXPANSION_ITEMS as a structured per-marker allowlist requiring BOTH a non-empty path list AND a per-marker causal justification (_parse_expansion_items); follow-up lines only count when they carry semantic content (round-7 #1: prefix marker, path mention, or causal keyword \u2014 bare indentation/bullets do not qualify). (c) A clean PR run (Steps 3, 4, AND 5 all reported success \u2192 fixer skipped) MUST NOT commit or push worktree changes from non-fixer steps; a dedicated clean-run side-effect guard fires before scope/causal/size checks. fixer_invoked is seeded ONLY from persisted step_outputs['6_1'|'6_2'|'6_3'] so a manual --start-step 7 without prior fixer state still trips the guard (round-7 #2). (d) Pre-push diff sanity gate (_diff_size_added_lines_by_path returning per-path counts; total via _diff_size_added_lines + DIFF_SIZE_ADDED_LOC_LIMIT, overridable via PDD_CHECKUP_DIFF_LOC_LIMIT \u2014 0 disables, unparseable falls back to default) refuses pushes adding more than the configured added-line threshold unless every OVERSIZED dirty path (>= OVERSIZED_PATH_ADDED_LOC_FLOOR added lines, default 50) is covered by its OWN justified EXPANSION_ITEMS entry; small companion files are exempt (round-9 #2). A diffuse over-limit diff with no individually oversized path falls back to the original strict 'every changed path covered' rule so death-by-a-thousand-cuts diffs are still blocked. In --no-fix --pr mode the orchestrator applies the same three-state Step 5 parse AFTER the Steps-3/4/5 loop (reading from step_outputs['5'] to cover both fresh and resumed runs); the parse is not guarded on truthiness so an empty/missing Step 5 output fails closed as a logical failure (pass-17 #1). A skipped status writes .pdd/checkup-pr-N/nofix-step5-skipped-refusal.txt and returns (False, ...) \u2014 calling _post_pr_mode_final_report(refusal_message) before returning so PR/issue threads receive a terminal status comment even without a Step 7 output, then clear_workflow_state(...) so the next rerun reruns Step 5 rather than replaying the stale cache; a logical failure (fail/error/empty/missing block) writes .pdd/checkup-pr-N/nofix-step5-failure-refusal.txt and returns (False, ...) the same way. clear_workflow_state returns a bool and github_clear_state neutralises a state comment that cannot be DELETEd (round-17) so stale GitHub state \u2014 which load_workflow_state prefers over local \u2014 cannot replay the refusal on the next run. Non-PR no-fix runs are unaffected.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -10082,6 +9797,70 @@
           {
             "name": "replay",
             "description": "Reconstruct and audit expanded prompt context from a snapshot run artifact"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Builds deterministic phase-aware compressed context packages for sync LLM phases.",
+    "dependencies": [
+      "context_snapshot_python.prompt",
+      "contract_ir_python.prompt",
+      "operation_log_python.prompt"
+    ],
+    "priority": 249,
+    "filename": "compressed_sync_context_python.prompt",
+    "filepath": "pdd/compressed_sync_context.py",
+    "tags": [
+      "module",
+      "sync",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_compressed_sync_context",
+            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None) -> CompressedSyncContext",
+            "returns": "CompressedSyncContext"
+          },
+          {
+            "name": "render_for_prompt",
+            "signature": "(context: CompressedSyncContext) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance.",
+    "dependencies": [
+      "context_snapshot_python.prompt"
+    ],
+    "priority": 250,
+    "filename": "evidence_manifest_python.prompt",
+    "filepath": "pdd/evidence_manifest.py",
+    "tags": [
+      "module",
+      "evidence",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "write_evidence_manifest",
+            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = '', cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None) -> Path",
+            "returns": "Path"
+          },
+          {
+            "name": "validation_from_sync",
+            "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False)",
+            "returns": "Mapping[str, str]"
           }
         ]
       }

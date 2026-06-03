@@ -183,6 +183,38 @@ def test_happy_path_full_sync(orchestration_fixture):
     mock_sync_app.assert_called_once()
 
 
+def test_sync_orchestration_operation_log_records_compression_metadata(orchestration_fixture):
+    """Per-operation sync log entries must record compression/fallback telemetry."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+
+    result = sync_orchestration(
+        basename="calculator",
+        language="python",
+        compressed_context=True,
+        quiet=True,
+    )
+
+    assert result['success'] is True
+    from pdd.operation_log import load_operation_log
+
+    entries = load_operation_log("calculator", "python")
+    generate_entries = [entry for entry in entries if entry.get("operation") == "generate"]
+    assert generate_entries
+    compression = generate_entries[-1]["compression"]
+    assert compression["enabled"] is True
+    assert compression["requested"] is True
+    assert compression["used"] is True
+    assert any(phase.get("phase") == "generate" for phase in compression["phases"])
+    assert "content" not in json.dumps(compression)
+    fallback = generate_entries[-1]["agentic_fallback"]
+    assert fallback["attempted"] is False
+    assert fallback["used"] is False
+
+
 def test_generate_conformance_retry_cost_is_counted(orchestration_fixture):
     """Conformance retry cost must be included in orchestration totals/logs."""
     from pdd.code_generator_main import ArchitectureConformanceError

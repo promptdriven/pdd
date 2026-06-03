@@ -178,6 +178,8 @@ While PDD offers significant advantages, potential challenges exist:
 
 ## The PDD Workflow: A Synchronized Cycle
 
+A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contrasting with the constant supervision model of interactive patching. For large or repair-heavy runs, sync may first compress the relevant prompt, examples when present, tests, contract rules, and repair evidence into phase-aware context packages. The compressed-context setting is resolved explicitly from the CLI, then `.pddrc`, then the default off state; when enabled, generation, verification, testing, and fixing receive packages rather than a raw boolean flag. Isolated code repair or generation replay consumes existing examples as evidence but does not schedule unrelated example generation just to build repair context.
+
 ```mermaid
 flowchart TD
     subgraph Initialization
