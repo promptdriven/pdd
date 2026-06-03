@@ -19,6 +19,7 @@ from pdd.compression_reporting import (
 from pdd.config_resolution import (
     apply_compression_env,
     effective_compression_config,
+    merge_cli_compression_override,
     resolve_effective_config,
     set_cli_compression_override,
 )
@@ -183,6 +184,52 @@ def test_construct_paths_respects_cli_compression_off_over_pddrc(
                 force=True,
                 quiet=True,
                 command="generate",
+                command_options={},
+            )
+    finally:
+        set_cli_compression_override(None)
+
+    assert "PDD_CONTEXT_COMPRESSION" not in os.environ
+    assert "PDD_COMPRESS_EXAMPLES" not in os.environ
+
+
+def test_sync_local_context_compression_off_overrides_pddrc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Command-local ``sync --context-compression off`` must survive ``construct_paths``."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_CONTEXT_COMPRESSION", raising=False)
+    monkeypatch.delenv("PDD_COMPRESS_EXAMPLES", raising=False)
+    set_cli_compression_override(None)
+
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "contexts": {
+                    "default": {
+                        "defaults": {
+                            "context_compression": "examples",
+                            "compress_examples": True,
+                        }
+                    }
+                },
+            }
+        )
+    )
+    prompt_file = tmp_path / "demo_python.prompt"
+    prompt_file.write_text("prompt body")
+
+    merge_cli_compression_override({"context_compression": "off"})
+    try:
+        with patch("pdd.construct_paths.generate_output_paths", return_value={"output": str(tmp_path / "out.py")}):
+            construct_paths(
+                {"prompt_file": str(prompt_file)},
+                force=True,
+                quiet=True,
+                command="sync",
                 command_options={},
             )
     finally:

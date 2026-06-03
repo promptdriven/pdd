@@ -265,7 +265,7 @@ def sync(
     'prompts/my_module_python.prompt'), a GitHub issue URL for agentic
     multi-module sync, or omitted for project-wide Tier 1 architecture sync.
     """
-    from ..config_resolution import apply_compression_env
+    from ..config_resolution import merge_cli_compression_override
 
     ctx.ensure_object(dict)
     cli_compression: dict[str, object] = {}
@@ -282,7 +282,7 @@ def sync(
         ctx.obj["compression_fallback"] = compression_fallback
         cli_compression["compression_fallback"] = compression_fallback
     if cli_compression:
-        apply_compression_env(cli_compression)
+        merge_cli_compression_override(cli_compression)
 
     # Honor an explicit per-run model override (CLI > env, issue #1269).
     # Set PDD_MODEL_DEFAULT: subprocess/agentic sync paths inherit the env and

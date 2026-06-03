@@ -29,6 +29,16 @@ def set_cli_compression_override(cli_config: Optional[Dict[str, Any]]) -> None:
     _CLI_COMPRESSION_OVERRIDE = dict(cli_config) if cli_config else None
 
 
+def merge_cli_compression_override(additional: Dict[str, Any]) -> None:
+    """Merge command-local compression flags into the CLI override snapshot (CLI wins over ``.pddrc``)."""
+    if not additional:
+        return
+    merged = dict(get_cli_compression_override() or {})
+    merged.update(additional)
+    set_cli_compression_override(merged)
+    apply_compression_env(effective_compression_config({}))
+
+
 def get_cli_compression_override() -> Optional[Dict[str, Any]]:
     """Return global CLI compression flags set at ``pdd`` entry, if any."""
     return _CLI_COMPRESSION_OVERRIDE
