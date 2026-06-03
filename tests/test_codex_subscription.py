@@ -517,46 +517,18 @@ def test_codex_family_strength_orders_by_elo(monkeypatch):
     assert cands[0]["model"] == "chatgpt/gpt-5.5", [c["model"] for c in cands]
 
 
-def test_codex_default_uses_strength_inside_chatgpt_before_fallback(monkeypatch):
-    """Codex default scopes provider first, then lets strength rank the family."""
-    monkeypatch.delenv("PDD_ALLOW_INTERACTIVE", raising=False)
-    df = li._load_model_data(_packaged_csv_path())
-    monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
-    restricted, default_model, used = li._apply_codex_subscription_default(
-        df,
-        "chatgpt/gpt-5.3-codex",
-    )
-    candidates = li._select_codex_subscription_candidates(1.0, default_model, restricted)
-
-    assert used is True
-    assert candidates[0]["model"] == "chatgpt/gpt-5.5"
-    assert candidates[0]["provider"] == "OpenAI ChatGPT"
-    assert any(
-        str(candidate.get("model")).startswith("claude")
-        or "claude" in str(candidate.get("model"))
-        for candidate in candidates[1:]
-    )
-
-
-def test_codex_subscription_default_uses_codex_first_when_auth_exists(monkeypatch):
-    """With codex auth, default selection is Codex first; Anthropic is fallback only."""
+def test_codex_subscription_default_excludes_anthropic_when_auth_exists(monkeypatch):
+    """With codex auth, default selection is Codex first plus Gemini fallback."""
     df = li._load_model_data(_packaged_csv_path())
     monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
     monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
     restricted, default_model, used = li._apply_codex_subscription_default(df, None)
-    candidates = li._select_codex_subscription_candidates(1.0, default_model, restricted)
 
     assert used is True
     assert default_model == "chatgpt/gpt-5.5"
     assert "OpenAI ChatGPT" in set(restricted["provider"])
     assert any(restricted["model"].astype(str).str.contains("gemini"))
-    assert any(restricted["api_key"].astype(str).str.contains("ANTHROPIC_API_KEY"))
-    assert candidates[0]["model"] == "chatgpt/gpt-5.5"
-    assert candidates[0]["provider"] == "OpenAI ChatGPT"
-    assert any(
-        str(candidate.get("api_key")).find("ANTHROPIC_API_KEY") >= 0
-        for candidate in candidates[1:]
-    )
+    assert not any(restricted["api_key"].astype(str).str.contains("ANTHROPIC_API_KEY"))
 
 
 def test_codex_subscription_maps_gpt55_default_to_chatgpt(monkeypatch):
@@ -564,18 +536,12 @@ def test_codex_subscription_maps_gpt55_default_to_chatgpt(monkeypatch):
     df = li._load_model_data(_packaged_csv_path())
     monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
     restricted, default_model, used = li._apply_codex_subscription_default(df, "gpt-5.5")
-    candidates = li._select_codex_subscription_candidates(1.0, default_model, restricted)
 
     assert used is True
     assert default_model == "chatgpt/gpt-5.5"
     assert "OpenAI ChatGPT" in set(restricted["provider"])
     assert any(restricted["model"].astype(str).str.contains("gemini"))
-    assert candidates[0]["model"] == "chatgpt/gpt-5.5"
-    first_non_chatgpt = next(
-        candidate for candidate in candidates
-        if not str(candidate.get("model")).startswith("chatgpt/")
-    )
-    assert "gemini" in str(first_non_chatgpt.get("model")).lower()
+    assert not any(restricted["api_key"].astype(str).str.contains("ANTHROPIC_API_KEY"))
 
 
 def test_codex_subscription_uses_packaged_rows_when_active_catalog_is_stale(monkeypatch):
@@ -614,10 +580,7 @@ def test_codex_subscription_uses_packaged_rows_when_active_catalog_is_stale(monk
 
     assert used is True
     assert default_model == "chatgpt/gpt-5.5"
-    assert restricted["model"].tolist() == ["chatgpt/gpt-5.5", "claude-sonnet-4-6"]
-    candidates = li._select_codex_subscription_candidates(1.0, default_model, restricted)
-    assert candidates[0]["model"] == "chatgpt/gpt-5.5"
-    assert candidates[1]["model"] == "claude-sonnet-4-6"
+    assert restricted["model"].tolist() == ["chatgpt/gpt-5.5"]
 
 
 def test_codex_cloudflare_falls_back_to_vertex_gemini_not_anthropic(monkeypatch):
