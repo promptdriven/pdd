@@ -215,6 +215,66 @@ def test_sync_orchestration_operation_log_records_compression_metadata(orchestra
     assert fallback["used"] is False
 
 
+def test_sync_orchestration_agentic_fallback_metadata_reflects_fix_events(
+    orchestration_fixture,
+):
+    """Operation logs must record real agentic fallback, not only --agentic sync mode."""
+    mock_determine = orchestration_fixture["sync_determine_operation"]
+    mock_determine.side_effect = [
+        SyncDecision(operation="fix", reason="Test failures"),
+        SyncDecision(operation="all_synced", reason="Done"),
+    ]
+
+    pdd_files = orchestration_fixture["get_pdd_file_paths"].return_value
+    for path in (pdd_files["code"], pdd_files["example"], pdd_files["test"]):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# stub\n", encoding="utf-8")
+
+    def _fake_fix_main(*_args, **kwargs):
+        events = kwargs.get("agentic_fallback_events")
+        if events is not None:
+            events.append(
+                {"phase": "fix", "attempted": True, "used": True, "detail": "test fallback"}
+            )
+        return (True, "", "", 1, 0.05, "mock-model")
+
+    orchestration_fixture["fix_main"].side_effect = _fake_fix_main
+
+    import subprocess
+
+    failing_cp = subprocess.CompletedProcess(
+        args=["pytest"], returncode=1, stdout="FAILED", stderr=""
+    )
+    with patch(
+        "pdd.sync_orchestration._run_fix_operation_test_subprocess",
+        return_value=failing_cp,
+    ), patch(
+        "pdd.sync_orchestration.extract_failing_files_from_output",
+        return_value=[],
+    ):
+        result = sync_orchestration(
+            basename="calculator",
+            language="python",
+            quiet=True,
+            budget=1.0,
+            agentic_mode=False,
+        )
+
+    assert result["success"] is True
+    assert result["agentic_fallback"]["used"] is True
+    assert result["agentic_fallback"]["phases"]
+    assert result["agentic_fallback"]["agentic_sync_mode"] is False
+
+    from pdd.operation_log import load_operation_log
+
+    fix_entries = [
+        entry
+        for entry in load_operation_log("calculator", "python")
+        if entry.get("operation") == "fix"
+    ]
+    assert fix_entries[-1]["agentic_fallback"]["used"] is True
+
+
 def test_compressed_context_generate_verify_fix_loop_records_phase_metadata(
     orchestration_fixture,
 ):

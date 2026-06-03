@@ -135,6 +135,7 @@ def fix_verification_main(
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
     compressed_context: Optional[Mapping[str, Any]] = None,
+    agentic_fallback_events: Optional[list[dict[str, Any]]] = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     CLI wrapper for the 'verify' command. Verifies code correctness by running
@@ -334,6 +335,8 @@ def fix_verification_main(
                 }
                 if compressed_context is not None:
                     loop_kwargs["compressed_context"] = compressed_context
+                if agentic_fallback_events is not None:
+                    loop_kwargs["agentic_fallback_events"] = agentic_fallback_events
                 # Only pass use_cloud when explicitly True (cloud not ready for prod yet)
                 if use_cloud_for_loop:
                     loop_kwargs["use_cloud"] = True

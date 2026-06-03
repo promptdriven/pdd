@@ -3,7 +3,9 @@ import ast
 from pathlib import Path
 
 from pdd.compressed_sync_context import (
+    DEFAULT_BUDGET,
     build_compressed_sync_context,
+    compressed_context_is_active,
     metadata,
     render_for_prompt,
 )
@@ -62,6 +64,42 @@ def test_render_for_prompt_escapes_content_and_omits_raw_metadata(tmp_path: Path
     assert "&lt;contract_rules&gt;" in rendered
     metadata_text = rendered.split("<metadata>", 1)[1].split("</metadata>", 1)[0]
     assert "content" not in json.loads(metadata_text)
+
+
+def test_compressed_sync_context_respects_global_budget_with_many_sources(
+    tmp_path: Path,
+) -> None:
+    """Rendered package must stay within budget even with many test sources."""
+    prompt = tmp_path / "prompts" / "mod_python.prompt"
+    code = tmp_path / "pdd" / "mod.py"
+    prompt.parent.mkdir(parents=True)
+    code.parent.mkdir()
+    prompt.write_text("<contract_rules>R1</contract_rules>\n", encoding="utf-8")
+    code.write_text("x = 1\n", encoding="utf-8")
+
+    test_paths = []
+    for idx in range(40):
+        test_file = tmp_path / "tests" / f"test_mod_{idx}.py"
+        test_file.parent.mkdir(parents=True, exist_ok=True)
+        test_file.write_text(f"def test_case_{idx}():\n    assert {idx} == {idx}\n", encoding="utf-8")
+        test_paths.append(test_file)
+
+    package = build_compressed_sync_context(
+        "generate",
+        prompt,
+        code_path=code,
+        test_paths=test_paths,
+        budget=DEFAULT_BUDGET,
+    )
+
+    assert package.char_count <= DEFAULT_BUDGET
+    assert package.source_count == 42
+
+
+def test_compressed_context_is_active_requires_used_flag() -> None:
+    assert compressed_context_is_active({"used": True, "content": "x"}) is True
+    assert compressed_context_is_active({"used": False, "content": "x"}) is False
+    assert compressed_context_is_active(None) is False
 
 
 def test_compressed_sync_context_dev_unit_resolves_package_import_path() -> None:

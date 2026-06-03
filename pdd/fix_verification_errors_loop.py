@@ -245,6 +245,7 @@ def fix_verification_errors_loop(
     agentic_fallback: bool = True,
     use_cloud: bool = False,
     compressed_context: Optional[Mapping[str, Any]] = None,
+    agentic_fallback_events: Optional[list[dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Attempts to fix errors in a code file based on program execution output
@@ -1294,6 +1295,19 @@ def fix_verification_errors_loop(
                 console.print(f"[yellow]Warning: Could not read files after successful agentic fix: {rich_escape(str(e))}[/yellow]")
         else:
             console.print("[bold red]Agentic fallback failed.[/bold red]")
+        if agentic_fallback_events is not None:
+            agentic_fallback_events.append(
+                {
+                    "phase": "verify",
+                    "attempted": True,
+                    "used": True,
+                    "detail": (
+                        "agentic verify fallback succeeded"
+                        if agent_success
+                        else "agentic verify fallback failed"
+                    ),
+                }
+            )
 
     return {
         "success": overall_success,

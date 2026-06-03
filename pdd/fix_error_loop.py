@@ -334,6 +334,7 @@ def fix_error_loop(
     failure_aware_retries: bool = True,
     no_local_fallback: bool = False,
     compressed_context: Mapping[str, Any] | None = None,
+    agentic_fallback_events: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, str, str, int, float, str]:
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
@@ -347,10 +348,22 @@ def fix_error_loop(
     code_content = ""
     last_attempt = 0
 
+    def _record_agentic_fallback(used: bool, detail: str) -> None:
+        if agentic_fallback_events is not None:
+            agentic_fallback_events.append(
+                {
+                    "phase": "fix",
+                    "attempted": True,
+                    "used": used,
+                    "detail": detail,
+                }
+            )
+
     def call_agentic() -> tuple[bool, str, str, int, float, str]:
         nonlocal total_cost, model_name, unit_test_content, code_content, total_attempts
         if not agentic_fallback:
             return False, unit_test_content, code_content, total_attempts, total_cost, model_name
+        _record_agentic_fallback(False, "invoking agentic fix fallback")
         success, _message, cost, agent_model, _changed = _safe_run_agentic_fix(
             prompt_file,
             code_file,
@@ -371,6 +384,10 @@ def fix_error_loop(
                 unit_test_content = content
             else:
                 code_content = content
+        _record_agentic_fallback(
+            True,
+            "agentic fix fallback succeeded" if success else "agentic fix fallback failed",
+        )
         return success, unit_test_content, code_content, total_attempts, total_cost, model_name
 
     if not os.path.isfile(unit_test_file) or not os.path.isfile(code_file):

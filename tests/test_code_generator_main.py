@@ -254,6 +254,52 @@ def create_file(path, content=""):
 
 # === Test Cases ===
 
+def test_code_generator_skips_full_unit_test_content_when_compressed_context_active(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_env_vars,
+):
+    """Compressed sync context must replace raw <unit_test_content>, not supplement it."""
+    mock_ctx.obj["local"] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "compressed_prompt_python.prompt"
+    create_file(prompt_file_path, "Generate module from compressed context.")
+    output_file_path_str = str(temp_dir_setup["output_dir"] / "compressed_output.py")
+    tests_dir = temp_dir_setup["tmp_path"] / "tests"
+    test_file_path = tests_dir / "test_compressed_output.py"
+    create_file(test_file_path, "def test_huge_body():\n    assert 'FULL_TEST_BODY_MARKER' in 'FULL_TEST_BODY_MARKER'\n")
+
+    mock_construct_paths_fixture.return_value = (
+        {"tests_dir": str(tests_dir)},
+        {"prompt_file": "Generate module from compressed context."},
+        {"output": output_file_path_str},
+        "python",
+    )
+
+    with patch(
+        "pdd.code_generator_main._find_default_test_files",
+        return_value=[str(test_file_path)],
+    ):
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            output_file_path_str,
+            None,
+            False,
+            compressed_context={
+                "used": True,
+                "phase": "generate",
+                "content": "<test>compressed slice</test>",
+            },
+        )
+
+    sent_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert "<unit_test_content>" not in sent_prompt
+    assert "FULL_TEST_BODY_MARKER" not in sent_prompt
+    assert "<compressed_sync_context" in sent_prompt
+
+
 # A. Full Generation - Local Execution
 def test_full_gen_local_no_output_file(
     mock_ctx, temp_dir_setup, mock_construct_paths_fixture, mock_local_generator_fixture, mock_env_vars

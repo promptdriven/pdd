@@ -67,6 +67,7 @@ def fix_main(
     test_files: list[str] | None = None,
     failure_aware_retries: bool = True,
     compressed_context: Mapping[str, Any] | None = None,
+    agentic_fallback_events: list[dict[str, Any]] | None = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -397,6 +398,7 @@ def fix_main(
                 failure_aware_retries=failure_aware_retries,
                 no_local_fallback=cloud_only,
                 compressed_context=compressed_context,
+                agentic_fallback_events=agentic_fallback_events,
             )
         elif not cloud_execution_succeeded:
             # Use fix_errors_from_unit_tests for single-pass fixing (local fallback)

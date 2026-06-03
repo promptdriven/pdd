@@ -2087,6 +2087,7 @@ def sync_orchestration(
     example_box_color_ref = ["blue"]
     tests_box_color_ref = ["blue"]
     compression_phase_metadata: List[Dict[str, Any]] = []
+    agentic_fallback_events: List[Dict[str, Any]] = []
 
     # Mutable container for the app reference (set after app creation)
     # This allows the worker to access app.request_confirmation()
@@ -2178,11 +2179,22 @@ def sync_orchestration(
         }
 
     def _agentic_fallback_log_metadata() -> Dict[str, Any]:
+        fallback_attempted = any(event.get("attempted") for event in agentic_fallback_events)
+        fallback_used = any(event.get("used") for event in agentic_fallback_events)
         return {
-            "attempted": bool(agentic_mode),
-            "used": bool(agentic_mode),
-            "phases": [],
-            "reason": "agentic mode requested" if agentic_mode else "local sync path",
+            "attempted": fallback_attempted,
+            "used": fallback_used,
+            "phases": list(agentic_fallback_events),
+            "agentic_sync_mode": bool(agentic_mode),
+            "reason": (
+                "agentic fallback invoked during fix/verify"
+                if fallback_used
+                else (
+                    "agentic sync mode enabled"
+                    if agentic_mode
+                    else "local sync path"
+                )
+            ),
         }
 
     def sync_worker_logic():
@@ -3051,7 +3063,7 @@ def sync_orchestration(
                                     _verify_pre_code = pdd_files['code'].read_text(encoding="utf-8")
                                 except OSError:
                                     _verify_pre_code = ""
-                                result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename.replace('/', '_')}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature, compressed_context=_phase_compressed_context('verify'))
+                                result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename.replace('/', '_')}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature, compressed_context=_phase_compressed_context('verify'), agentic_fallback_events=agentic_fallback_events)
                                 _verify_surface_exc = _verify_code_surface_after_write(
                                     code_path=pdd_files['code'],
                                     pre_code=_verify_pre_code,
@@ -3313,7 +3325,7 @@ def sync_orchestration(
                                     _fix_pre_code = pdd_files['code'].read_text(encoding="utf-8")
                                 except OSError:
                                     _fix_pre_code = ""
-                                result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=output_test_for_fix, output_code=str(pdd_files['code']), output_results=f"{basename.replace('/', '_')}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], auto_submit=(not local), strength=strength, temperature=temperature, test_files=test_files_for_fix, compressed_context=_phase_compressed_context('fix'))
+                                result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=output_test_for_fix, output_code=str(pdd_files['code']), output_results=f"{basename.replace('/', '_')}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], auto_submit=(not local), strength=strength, temperature=temperature, test_files=test_files_for_fix, compressed_context=_phase_compressed_context('fix'), agentic_fallback_events=agentic_fallback_events)
                                 _fix_surface_exc = _verify_code_surface_after_write(
                                     code_path=pdd_files['code'],
                                     pre_code=_fix_pre_code,
@@ -3651,12 +3663,7 @@ def sync_orchestration(
                 'mode': 'compressed-sync-context',
                 'phases': compression_phase_metadata,
             },
-            'agentic_fallback': {
-                'attempted': bool(agentic_mode),
-                'used': bool(agentic_mode),
-                'phases': [],
-                'reason': 'agentic mode requested' if agentic_mode else 'local sync path',
-            },
+            'agentic_fallback': _agentic_fallback_log_metadata(),
         }
 
     # Detect headless mode (no TTY, CI environment, or quiet mode)

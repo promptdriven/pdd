@@ -83,12 +83,52 @@ def _prompt_contract_excerpt(content: str) -> str:
 
 
 def _clip(label: str, content: str, budget: int) -> str:
+    if budget <= 0:
+        return ""
     if len(content) <= budget:
         return f"<{label}>\n{content}\n</{label}>"
     head = max(budget // 2, 1)
     tail = max(budget - head, 1)
     clipped = f"{content[:head]}\n...[compressed {len(content) - budget} chars omitted]...\n{content[-tail:]}"
     return f"<{label}>\n{clipped}\n</{label}>"
+
+
+def _render_sources_within_budget(
+    sources: list[tuple[str, str, str]],
+    budget: int,
+) -> str:
+    """Clip and join sources so the combined payload stays within ``budget`` chars."""
+    active = [(path, label, content.strip()) for path, label, content in sources if content.strip()]
+    if not active or budget <= 0:
+        return ""
+    count = len(active)
+    separator = "\n\n"
+    separator_overhead = len(separator) * max(count - 1, 0)
+
+    def _build(per_source: int) -> str:
+        parts = [
+            _clip(label.replace("-", "_"), content, max(per_source, 1))
+            for _, label, content in active
+            if max(per_source, 1) > 0
+        ]
+        return separator.join(part for part in parts if part)
+
+    per_source = max((budget - separator_overhead) // count, 1)
+    rendered = _build(per_source)
+    while len(rendered) > budget and per_source > 1:
+        per_source = max(per_source // 2, 1)
+        rendered = _build(per_source)
+    if len(rendered) > budget:
+        rendered = rendered[:budget]
+    return rendered
+
+
+def compressed_context_is_active(context: CompressedSyncContext | Mapping[str, Any] | None) -> bool:
+    """Return True when a sync compressed-context package should replace full expansions."""
+    if context is None:
+        return False
+    data = asdict(context) if isinstance(context, CompressedSyncContext) else dict(context)
+    return bool(data.get("used"))
 
 
 def build_compressed_sync_context(
@@ -141,13 +181,7 @@ def build_compressed_sync_context(
     if repair_directive and repair_directive.strip():
         sources.append(("repair_directive", "repair_directive", _redact(repair_directive.strip())))
 
-    per_source_budget = max(effective_budget // max(len(sources), 1), 500)
-    rendered_parts = [
-        _clip(label.replace("-", "_"), content.strip(), per_source_budget)
-        for _, label, content in sources
-        if content.strip()
-    ]
-    content = "\n\n".join(rendered_parts).strip()
+    content = _render_sources_within_budget(sources, effective_budget)
     return CompressedSyncContext(
         enabled=True,
         used=bool(content),
