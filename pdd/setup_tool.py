@@ -1273,10 +1273,10 @@ def _build_quick_start_lines(oauth_only_setup: bool) -> List[str]:
             "     pdd test     <issue-url>",
             "     pdd checkup  <issue-url>",
             "",
-            "2) Direct prompt commands (local route):",
+            "2) Direct/local llm_invoke commands:",
             "   With a Codex (ChatGPT) subscription login these work WITHOUT an API",
             "   key on the LOCAL route (PDD routes them through the chatgpt/ model",
-            "   family; set PDD_MODEL_DEFAULT=chatgpt/gpt-5.3-codex). If PDD Cloud is",
+            "   family; set PDD_MODEL_DEFAULT=chatgpt/gpt-5.5). If PDD Cloud is",
             "   configured, also pass --local so the subscription path is used. Other",
             "   providers call litellm directly and need ANTHROPIC_API_KEY /",
             "   OPENAI_API_KEY / GEMINI_API_KEY.",
@@ -1284,7 +1284,9 @@ def _build_quick_start_lines(oauth_only_setup: bool) -> List[str]:
             "     pdd test     <prompt>",
             "     pdd fix      <prompt>",
             "     pdd sync     <prompt-file>",
-            "   To enable these, re-run `pdd setup` and add an API key",
+            "     pdd sync     <issue-url>",
+            "   To enable this route, run `codex login` for the subscription path",
+            "   or re-run `pdd setup` and add an API key",
             "   (or use the post-setup options menu's \"Add a provider\").",
         ]
     return [

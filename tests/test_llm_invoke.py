@@ -61,6 +61,16 @@ class CodeFixLikeModel(BaseModel):
     fixed_program: str
     fixed_code: str
 
+
+@pytest.fixture(autouse=True)
+def _isolate_codex_subscription_detection(monkeypatch):
+    """Keep llm_invoke tests independent of a developer's real codex login."""
+    monkeypatch.setattr(
+        "pdd.codex_subscription.has_codex_subscription_auth",
+        lambda: False,
+    )
+
+
 # Fixture to mock the internal _load_model_data function returning a DataFrame
 @pytest.fixture
 def mock_load_models():

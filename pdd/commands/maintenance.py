@@ -199,7 +199,7 @@ def _write_sync_evidence_manifest(
     "model",
     default=None,
     help="Override the base model for this sync run (sets PDD_MODEL_DEFAULT "
-         "for the invocation, e.g. --model chatgpt/gpt-5.3-codex). Applies to "
+         "for the invocation, e.g. --model chatgpt/gpt-5.5). Applies to "
          "the local llm_invoke route; for a chatgpt/* subscription model on a "
          "cloud-enabled install, also pass --local. Takes precedence over the "
          "PDD_MODEL_DEFAULT env var for this run only.",
@@ -238,24 +238,29 @@ def sync(
     multi-module sync, or omitted for project-wide Tier 1 architecture sync.
     """
     # Honor an explicit per-run model override (CLI > env, issue #1269).
-    # Set PDD_MODEL_DEFAULT: subprocess/agentic sync paths inherit the env and
-    # read it at their own import, and the in-process llm_invoke path resolves
-    # the base model from this env var at CALL time. NOTE: this steers the LOCAL
-    # llm_invoke route only — the cloud route serializes no model override or
-    # Codex auth, so a chatgpt/* subscription model on a cloud-enabled install
-    # also needs --local (PDD_FORCE_LOCAL=1). See the --model help / README.
+    # PDD_MODEL_DEFAULT steers model resolution at call time; FIRST keeps the
+    # requested model ahead of strength/ELO interpolation for this invocation.
     if model:
         # Scope the override to THIS invocation: restore the prior value when
-        # the command's Click context closes, so a long-lived in-process caller
-        # (CliRunner, embedding) does not leak the model into later runs (#1269).
+        # the command's Click context closes, so long-lived in-process callers
+        # do not leak either setting into later runs (#1269/#1318).
         _prev_model_default = os.environ.get("PDD_MODEL_DEFAULT")
+        _prev_model_default_first = os.environ.get("PDD_MODEL_DEFAULT_FIRST")
         os.environ["PDD_MODEL_DEFAULT"] = model
+        os.environ["PDD_MODEL_DEFAULT_FIRST"] = "1"
 
-        def _restore_model_default(_prev=_prev_model_default):
+        def _restore_model_default(
+            _prev=_prev_model_default,
+            _prev_first=_prev_model_default_first,
+        ):
             if _prev is None:
                 os.environ.pop("PDD_MODEL_DEFAULT", None)
             else:
                 os.environ["PDD_MODEL_DEFAULT"] = _prev
+            if _prev_first is None:
+                os.environ.pop("PDD_MODEL_DEFAULT_FIRST", None)
+            else:
+                os.environ["PDD_MODEL_DEFAULT_FIRST"] = _prev_first
 
         ctx.call_on_close(_restore_model_default)
     # Handle deprecated --log flag

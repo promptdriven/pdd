@@ -14,9 +14,9 @@ Test plan
 2. detect_and_bootstrap_cli — Selection table & input parsing
    2.1 Table shows all three CLIs with install/key status
    2.2 Selecting "1" picks Claude CLI
-   2.3 Comma-separated input "1,3" selects multiple CLIs
-   2.4 Spaces in input "1, 3" are tolerated
-   2.5 Duplicate input "1,1,3" is deduplicated
+   2.3 Comma-separated input "1,4" selects multiple CLIs
+   2.4 Spaces in input "1, 4" are tolerated
+   2.5 Duplicate input "1,1,4" is deduplicated
    2.6 Empty input defaults to best available (installed+key)
    2.7 Empty input defaults to installed-only when no keys set
    2.8 Invalid input falls back to default
@@ -145,9 +145,14 @@ def _run_bootstrap_capture(
     cli_paths = cli_paths or {}
     env_keys = env_keys or {}
 
-    # Clean environment
+    # Clean environment. Vertex env vars are read directly by
+    # _has_google_vertex_auth (NOT via the mocked _has_provider_oauth), so clear
+    # them too — otherwise a CI/cloud box with Vertex creds reports gemini/agy as
+    # credentialed and these "no credential" tests fail (issue #1318 cloud-test).
     for var in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                "GEMINI_API_KEY", "SHELL"):
+                "GEMINI_API_KEY", "SHELL",
+                "GOOGLE_GENAI_USE_VERTEXAI", "VERTEXAI_PROJECT", "VERTEX_PROJECT",
+                "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT"):
         monkeypatch.delenv(var, raising=False)
     for k, v in env_keys.items():
         monkeypatch.setenv(k, v)
@@ -310,7 +315,7 @@ class TestBootstrapSelectionTable:
 
     def test_table_shows_all_three_clis(self, monkeypatch, tmp_path):
         output, _ = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
+            monkeypatch, tmp_path, ["q"],
             cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
         )
         assert "Claude CLI" in output
@@ -319,7 +324,7 @@ class TestBootstrapSelectionTable:
 
     def test_table_shows_install_and_key_status(self, monkeypatch, tmp_path):
         output, _ = _run_bootstrap_capture(
-            monkeypatch, tmp_path, ["1"],
+            monkeypatch, tmp_path, ["q"],
             cli_paths=CLAUDE_ONLY, env_keys=CLAUDE_KEY,
         )
         # Claude is installed with key
@@ -501,7 +506,7 @@ class TestBootstrapApiKeyFlow:
         bootstrap MUST skip the API-key prompt entirely. Otherwise OAuth
         users get pushed into the stale-key workflow this PR fixes.
 
-        Uses input ["1"] only (no API key) — would fail with
+        Uses one selection input only (no API key) — would fail with
         StopIteration if the prompt fired.
         """
         output, results = _run_bootstrap_capture(
@@ -516,14 +521,14 @@ class TestBootstrapApiKeyFlow:
         assert results[0].api_key_configured is False  # API key still not set
         # The status line should report OAuth, not "not set" red ✗.
         assert "OAuth/subscription/config credential configured" in output
-        # The credential prompt must NOT fire (user only provided 1 input).
+        # The credential prompt must NOT fire (user only provided one input).
         assert "Enter your" not in output
 
     def test_key_not_set_user_provides(self, monkeypatch, tmp_path):
         """User provides key when prompted."""
         _, results = _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["1", "sk-new-key"],  # select, provide key
+            ["1", "sk-new-key"],  # select Claude, provide key
             cli_paths=CLAUDE_ONLY,
         )
         assert results[0].api_key_configured is True
@@ -556,7 +561,7 @@ class TestBootstrapApiKeyFlow:
         """User presses Enter to skip key."""
         _, results = _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["1", ""],  # select, skip key
+            ["1", ""],  # select Claude, skip key
             cli_paths=CLAUDE_ONLY,
         )
         assert results[0].api_key_configured is False
@@ -565,7 +570,7 @@ class TestBootstrapApiKeyFlow:
         """Skipping Anthropic key mentions subscription auth."""
         output, _ = _run_bootstrap_capture(
             monkeypatch, tmp_path,
-            ["1", ""],  # select, skip key
+            ["1", ""],  # select Claude, skip key
             cli_paths=CLAUDE_ONLY,
         )
         assert "subscription" in output.lower()
@@ -574,10 +579,19 @@ class TestBootstrapApiKeyFlow:
         """Skipping non-Anthropic key mentions limited functionality."""
         output, _ = _run_bootstrap_capture(
             monkeypatch, tmp_path,
+            ["4", ""],  # select gemini, skip key
+            cli_paths={"gemini": "/usr/bin/gemini"},
+        )
+        assert "limited functionality" in output.lower()
+
+    def test_codex_skip_shows_subscription_hint(self, monkeypatch, tmp_path):
+        """Skipping OpenAI API key points users at codex login."""
+        output, _ = _run_bootstrap_capture(
+            monkeypatch, tmp_path,
             ["2", ""],  # select codex, skip key
             cli_paths={"codex": "/usr/bin/codex"},
         )
-        assert "limited functionality" in output.lower()
+        assert "codex login" in output.lower()
 
     def test_google_checks_gemini_key(self, monkeypatch, tmp_path):
         """Google provider recognizes GEMINI_API_KEY (position 4 = gemini)."""

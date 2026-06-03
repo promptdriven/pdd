@@ -1303,6 +1303,10 @@ def _mandatory_rows_missing_from(
 # API twins; empty api_key marks device-flow (codex login) auth, like the
 # github_copilot/ rows. Keep in sync with pdd/data/llm_model.csv.
 _CHATGPT_SUBSCRIPTION_ROWS: List[Dict[str, str]] = [
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.5", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "1450", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
     {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.4", "input": "0.0",
      "output": "0.0", "coding_arena_elo": "1437", "base_url": "", "api_key": "",
      "max_reasoning_tokens": "0", "structured_output": "True",

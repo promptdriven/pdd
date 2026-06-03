@@ -247,8 +247,8 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini/Antigravity, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription/config credentials such as Claude Max/Pro, Google Gemini/Antigravity login, Vertex AI env auth, Codex ChatGPT login, or OpenCode provider auth/config.
-  2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription/config credential, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
+  1.  Detects agentic CLI tools (Claude, Gemini/Antigravity, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription/config credentials such as Claude Max/Pro, Google Gemini/Antigravity login, Vertex AI env auth, Codex ChatGPT login, or OpenCode provider auth/config. A Codex/ChatGPT subscription login (`codex login`, stored at `$CODEX_HOME/auth.json`; or, for headless/CI, a `CODEX_API_KEY` env var holding the ChatGPT OAuth access token — **not** an OpenAI `sk-` API key) is recognized as a valid no-API-key credential for explicit `chatgpt/*` direct/local `llm_invoke` calls, so that selected path can run without requiring `ANTHROPIC_API_KEY` (Issue #1318).
+  2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription/config credential (including a Codex/ChatGPT subscription login), setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys. For direct/local `llm_invoke` commands, an explicit `chatgpt/*` model can use the Codex subscription route, so no Anthropic API key is needed for that selected path.
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers based on your available API keys
   4. If you have credentials for **more than one** provider, asks which provider(s) `pdd --local` should use, then removes the unselected providers' PDD-managed rows from `~/.pdd/llm_model.csv` (rows you hand-edited or added yourself are preserved — see below)
   5. Optionally creates a `.pddrc` project config
@@ -332,13 +332,15 @@ The authentication token is securely stored locally and automatically refreshed 
 
 ### Local Mode Requirements
 
-When running in local mode with the `--local` flag, you'll need to set up API keys for the language models:
+When running in local mode with the `--local` flag, PDD needs a usable model credential. For direct/local `llm_invoke` commands such as sync generation and prompt-file commands, you can select a Codex/ChatGPT **subscription** model explicitly with `--model chatgpt/gpt-5.5` or `PDD_MODEL_DEFAULT=chatgpt/gpt-5.5`: if you have run `codex login` (or set `CODEX_API_KEY`), that selected route uses your subscription and does **not** need `ANTHROPIC_API_KEY`. Agentic commands keep the provider order documented under `PDD_AGENTIC_PROVIDER`. See [Using a ChatGPT/Codex subscription](#using-a-chatgptcodex-subscription-for-direct-local-llm-calls) below.
+
+To use an API-keyed provider instead, set up API keys for the language models. To use Anthropic for direct `llm_invoke`, set `PDD_MODEL_DEFAULT` to a `claude-*` model along with `ANTHROPIC_API_KEY`, or let normal `--strength` selection choose among configured providers:
 
 ```bash
 # For OpenAI
 export OPENAI_API_KEY=your_api_key_here
 
-# For Anthropic
+# For Anthropic (opt-in; also set PDD_MODEL_DEFAULT to a claude-* model)
 export ANTHROPIC_API_KEY=your_api_key_here
 
 # For other supported providers (LiteLLM supports multiple LLM providers)
@@ -639,7 +641,7 @@ graph TB
 - **Core loop**: `pdd sync` runs the full auto-deps → generate → example → crash → verify → test → fix → update cycle for each module
 - **Health check**: `pdd checkup <url>` identifies what needs attention next; `pdd checkup --pr ...` reviews an existing PR on its own merits (add `--issue ...` to also verify it resolves a specific issue)
 - **Defect path**: `test <url>` or `bug <url>` surfaces failing tests → `fix <url>` resolves them
-- **Feature path**: `change <url>` implements the feature → `sync <url>` re-runs sync across affected modules. Auth caveat: `sync <url>` still runs a LiteLLM-backed generate phase, so OAuth-only CLI setup is not enough; configure an API key first.
+- **Feature path**: `change <url>` implements the feature → `sync <url>` re-runs sync across affected modules. Auth caveat: `sync <url>` still runs a LiteLLM-backed generate phase (the direct/local `llm_invoke` route), so it needs a direct credential rather than only an agentic-CLI OAuth login — explicitly selecting a Codex/ChatGPT subscription model (`codex login` plus `--model chatgpt/gpt-5.5`) is one no-API-key path (Issue #1318); an API key or a PDD Cloud login also works.
 
 ### Getting Started
 - **[`connect`](#18-connect)**: **[RECOMMENDED]** Launch web interface for visual PDD interaction
@@ -650,7 +652,7 @@ graph TB
 - **[`bug`](#14-bug)**: Analyze bugs and create failing tests from GitHub issues
 - **[`checkup`](#17-checkup)**: Run automated project health checks from GitHub issues, or review/verify existing PRs (optionally against a source issue)
 - **[`fix`](#6-fix)**: Fix failing tests (supports issue-driven and manual modes)
-- **[`sync`](#1-sync)**: Multi-module parallel sync from a GitHub issue (when passed a URL instead of basename). This mode still requires API-key-backed LiteLLM for its generate phase; stored CLI OAuth alone is not sufficient.
+- **[`sync`](#1-sync)**: Multi-module parallel sync from a GitHub issue (when passed a URL instead of basename). Its inner generate phase uses `llm_invoke`, so it can run with a Codex subscription route, an API-key-backed model, or cloud-provided model auth.
 - **[`test`](#4-test)**: Generate UI tests from GitHub issues (18-step workflow in agentic mode)
 
 ### Core Commands (Prompt-Based)
@@ -889,7 +891,7 @@ Here are the main commands provided by PDD:
 
 ### 1. sync
 
-**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync, but the generate phase still calls LiteLLM and requires an API key; stored Claude/Gemini/Antigravity/Codex OAuth or OpenCode provider auth alone is not sufficient for this mode.
+**[PRIMARY COMMAND]** Automatically execute the complete PDD workflow loop. With a basename, it syncs one module. With no argument, it runs Tier 1 project-wide sync by scanning `architecture.json` for modules whose prompt fingerprints changed or whose code outputs are missing, then runs those modules in dependency order. With a GitHub issue URL, it runs multi-module issue sync; the inner generate phase still calls `llm_invoke`, so it needs either a direct/local Codex subscription route, an API key-backed model, or cloud-provided model auth.
 
 ```bash
 # Project-wide architecture sync (no argument)
@@ -898,7 +900,7 @@ pdd [GLOBAL OPTIONS] sync [OPTIONS]
 # Single-module sync
 pdd [GLOBAL OPTIONS] sync [OPTIONS] BASENAME
 
-# Multi-module sync from a GitHub issue (requires API-key-backed LiteLLM)
+# Multi-module sync from a GitHub issue (uses llm_invoke for generation)
 pdd [GLOBAL OPTIONS] sync [OPTIONS] GITHUB_ISSUE_URL
 ```
 
@@ -923,7 +925,7 @@ Arguments:
 
 Options:
 - `--max-attempts INT`: Maximum number of fix attempts in any iterative loop (default is 3)
-- `--model NAME`: Override the base model for this sync run (sets PDD_MODEL_DEFAULT for the invocation, e.g. `chatgpt/gpt-5.3-codex`). Restored after the run. Affects the local llm_invoke route; for a `chatgpt/*` subscription model on a cloud-enabled install, also pass `--local`.
+- `--model NAME`: Override the base model for this sync run (sets `PDD_MODEL_DEFAULT` and pins it first for the invocation, e.g. `chatgpt/gpt-5.5`). Restored after the run. Affects the local llm_invoke route; for a `chatgpt/*` subscription model on a cloud-enabled install, also pass `--local`.
 - `--budget FLOAT`: Maximum total cost allowed for the entire sync process (default is $20.0)
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
@@ -1020,8 +1022,8 @@ pdd sync --one-session factorial_calculator
 
 # Agentic sync (one-session is the default)
 pdd sync https://github.com/myorg/myrepo/issues/100
-pdd sync calculator --model chatgpt/gpt-5.3-codex  # force a model on the local route; for chatgpt/* on a cloud-enabled install add --local
-pdd sync calculator --local --model chatgpt/gpt-5.3-codex  # local route: required for a chatgpt/* subscription model when PDD Cloud is configured
+pdd sync calculator --model chatgpt/gpt-5.5  # force a model on the local route; for chatgpt/* on a cloud-enabled install add --local
+pdd sync calculator --local --model chatgpt/gpt-5.5  # local route: required for a chatgpt/* subscription model when PDD Cloud is configured
 
 # Disable one-session for agentic sync
 pdd sync --no-one-session https://github.com/myorg/myrepo/issues/100
@@ -2205,7 +2207,7 @@ pdd [GLOBAL OPTIONS] fix --manual --loop --no-agentic-fallback [OTHER OPTIONS] P
 **Prerequisites:**
 For the agentic fallback to function, you need to have at least one of the supported agent CLIs installed with valid credentials. Each CLI has its own credential store and falls back to environment-variable API keys if you don't have a stored login. The agents are tried in the following order of preference:
 
-1.  **Anthropic Claude:**
+1.  **Anthropic Claude (default agentic preference):**
     *   Requires the `claude` CLI to be installed and in your `PATH`.
     *   Authenticates with your stored Claude Max/Pro OAuth login if you've run `claude auth login` (recommended), otherwise with `ANTHROPIC_API_KEY` from your environment.
     *   Issue #813: under `CI=1` (which pdd always sets) the `claude` CLI normally prefers `ANTHROPIC_API_KEY` over OAuth — pdd auto-detects this and drops a stale env key when an OAuth login is present so your subscription is used. Set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing instead.
@@ -3386,7 +3388,7 @@ PDD uses several environment variables to customize its behavior:
 - **`OPENCODE_MODEL`**: Override the model used by OpenCode CLI in agentic workflows. Use OpenCode's `provider/model` format (for example, `anthropic/claude-sonnet-4-5` or `openrouter/openai/gpt-5.3-codex`). Strongly recommended so non-interactive runs do not depend on OpenCode default model resolution.
 - **`OPENCODE_AGENT`**: Optional OpenCode agent name passed as `--agent` for agentic workflows using `PDD_AGENTIC_PROVIDER=opencode`.
 - **`OPENCODE_VARIANT`**: Optional OpenCode model variant passed as `--variant` for providers that support variants.
-- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `anthropic`, `google`, `openai`, `opencode`, and `antigravity` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
+- **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `openai`, `google`, `anthropic`, `opencode`, and `antigravity` (default order: `anthropic,google,openai,opencode`; for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
 - **`PDD_CLAUDE_CODE_MODE`**: Set to `interactive` to make the Anthropic agentic provider use interactive Claude Code through a temporary MCP reply tool instead of `claude -p`. This is an opt-in workaround for environments where `claude -p` uses a separate Agent SDK credit pool; when unset, PDD keeps the existing `claude -p - --output-format json` behavior.
 - **`PDD_GOOGLE_CLI`**: Selects the Google-provider binary. Values: `agy` (Antigravity CLI), `gemini` (legacy Gemini CLI as rollback), or `auto` (default — prefer `agy` when installed and credentialed, but use legacy `gemini` when both binaries are installed and the only Google auth signal is `~/.gemini/oauth_creds.json`). Used by both availability detection and command construction so they cannot disagree.
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
@@ -3885,16 +3887,19 @@ Remember to stay mindful of security considerations, especially when working wit
 
 Keep prompts as source; regenerate with PDD.
 
-### Using a ChatGPT/Codex subscription as a fallback
+### Using a ChatGPT/Codex subscription for direct local LLM calls
 
-If you have a ChatGPT subscription, PDD can use it for LLM calls when no API key is available (for example when `ANTHROPIC_API_KEY` is unset or rate-limited). Authenticate once with the Codex CLI:
+For direct/local `llm_invoke` calls, PDD can use a Codex/ChatGPT **subscription** when you explicitly select a `chatgpt/*` model (Issue #1318). If you have a ChatGPT subscription, authenticate once with the Codex CLI:
 
 ```bash
+npm install -g @openai/codex   # if not already installed
 codex login
 ```
 
-PDD reads the resulting `~/.codex/auth.json` and routes fallback calls through the `chatgpt/*` model family on your subscription (flat-rate, no per-token API billing). This is for your own personal subscription only — do not share or pool a single subscription across users. **This is a LOCAL execution path.** The subscription token is a local file, so it is only used on the local llm_invoke route. If you have PDD Cloud configured (`PDD_JWT_TOKEN`, or `FIREBASE_API_KEY` + `GITHUB_CLIENT_ID`), cloud is the default route and does NOT carry the subscription — pass `--local` (or set `PDD_FORCE_LOCAL=1`) to force the local subscription path. Users without cloud credentials already run locally and need no flag.
+PDD reads the resulting Codex `auth.json` when you select a subscription model such as `chatgpt/gpt-5.5` with `--model` or `PDD_MODEL_DEFAULT`. This route uses your subscription (flat-rate, no per-token API billing) and does not require `ANTHROPIC_API_KEY` for that selected model. PDD honors `CODEX_HOME` (default `~/.codex`) when locating `auth.json`. For headless/CI environments that cannot run `codex login`, PDD also accepts a `CODEX_API_KEY` environment variable holding the **ChatGPT subscription OAuth access token** (the `tokens.access_token` from a `codex login` `auth.json`) — this is **not** an OpenAI platform API key (`sk-...`); it must be the ChatGPT login's OAuth `access_token`. Because the ChatGPT subscription backend can reject calls from datacenter/CI IP ranges, `codex login` on the local machine is the primary supported path. This is for your own personal subscription only — do not share or pool a single subscription across users. **This is a LOCAL execution path.** The subscription token is a local file, so it is only used on the local `llm_invoke` route. If you have PDD Cloud configured (`PDD_JWT_TOKEN`, or `FIREBASE_API_KEY` + `GITHUB_CLIENT_ID`), cloud is the default route and does NOT carry the subscription — pass `--local` (or set `PDD_FORCE_LOCAL=1`) to force the local subscription path. Users without cloud credentials already run locally and need no flag. Agentic CLI provider order is separate and remains controlled by `PDD_AGENTIC_PROVIDER`.
 
-**Available subscription models** (selectable via `PDD_MODEL_DEFAULT` or `pdd setup`): `chatgpt/gpt-5.4`, `chatgpt/gpt-5.3-codex`, `chatgpt/gpt-5.2`, `chatgpt/gpt-5.3-codex-spark`. `--strength` picks a higher- or lower-ranked model within the family, just like the Anthropic models. Codex is opt-in; the shipped default engine is unchanged. (Exact models depend on what your ChatGPT plan serves.)
+**Available subscription models** (selectable via `--model`, `PDD_MODEL_DEFAULT`, or `pdd setup`): `chatgpt/gpt-5.5`, `chatgpt/gpt-5.4`, `chatgpt/gpt-5.3-codex`, `chatgpt/gpt-5.2`, `chatgpt/gpt-5.3-codex-spark`. Passing `--model chatgpt/gpt-5.5` pins that model first for the invocation by setting `PDD_MODEL_DEFAULT_FIRST=1`. Because `chatgpt/*` rows are interactive-only, automatic candidate selection skips them unless `PDD_ALLOW_INTERACTIVE=1` or the model is explicitly selected. Exact models depend on what your ChatGPT plan serves.
+
+Unset defaults, bare OpenAI IDs such as `gpt-5.5`, and API-keyed IDs such as `openai/gpt-5.5` keep the normal public PDD catalog behavior. `--strength` continues to choose cheaper or stronger configured models across the available CSV rows, and Anthropic remains a normal provider when `ANTHROPIC_API_KEY` is configured.
 
 > **If `--model chatgpt/...` seems ignored after upgrading:** PDD prefers a user/project model catalog (`~/.pdd/llm_model.csv`, then `.pdd/llm_model.csv`) over the packaged one. An older such file won't contain the `OpenAI ChatGPT` rows, so the family is invisible and selection silently falls through to other models. PDD logs a clear error in this case. To recover, either add the `OpenAI ChatGPT,chatgpt/*` rows to your override CSV, or delete the override file to fall back to the packaged catalog.

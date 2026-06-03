@@ -252,7 +252,7 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
     """chatgpt/* must never be GENERATED from litellm.model_cost (chatgpt stays in
     _SKIP_PROVIDER_ROOTS) — but the hand-managed subscription family IS preserved
     via _merge_chatgpt_subscription_rows (issue #1269). So: no chatgpt row sourced
-    from model_cost, yet the 4 curated chatgpt/ rows are present."""
+    from model_cost, yet the 5 curated chatgpt/ rows are present."""
     fake_cost = {
         "chatgpt/gpt-5.2": {
             "mode": "responses",
@@ -284,6 +284,7 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
     # ...but the curated subscription family IS preserved (provider "OpenAI ChatGPT")
     chatgpt_rows = {r["model"] for r in rows if r["model"].startswith("chatgpt/")}
     assert chatgpt_rows == {
+        "chatgpt/gpt-5.5",
         "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
         "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
     }
@@ -413,12 +414,13 @@ def test_build_rows_includes_vertex_gemini_flash_ci_default(monkeypatch):
 
 def test_committed_csv_has_curated_chatgpt_subscription_rows():
     """The committed CSV carries the hand-managed ChatGPT subscription family
-    (issue #1269): 4 chatgpt/ rows under provider "OpenAI ChatGPT", empty api_key
+    (issue #1269): 5 chatgpt/ rows under provider "OpenAI ChatGPT", empty api_key
     (device-flow / codex login). They must NOT be the OPENAI_API_KEY-billed rows."""
     csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     text = csv_path.read_text(encoding="utf-8")
 
     for model in (
+        "chatgpt/gpt-5.5",
         "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
         "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
     ):
