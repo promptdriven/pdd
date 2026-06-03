@@ -1,0 +1,42 @@
+<pdd-reason>Defines the PolicyBackend ABC, PolicyFinding dataclass, and get_backend() registry for target-neutral capability policy analysis.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "get_backend", "signature": "(target: str) -> PolicyBackend | dict", "returns": "PolicyBackend | dict"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>capability_ir_python.prompt</pdd-dependency>
+
+% Write `pdd/policy_backends/__init__.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+This module defines the `PolicyBackend` abstract base class, the `PolicyFinding` dataclass, and a `get_backend()` registry function. It is the public interface for the policy_backends package. Code-generation backends (e.g., PythonAstPolicyBackend) are registered here and selected by target language string.
+
+% Requirements
+1. Define `PolicyFinding` as a `@dataclass` with fields:
+   - `severity: str` — one of `"error"`, `"warning"`, `"info"`
+   - `effect: dict` — the matched effect item: `{"action": ..., "resource": ...}`
+   - `rule: str` — the contract rule ID (e.g., `"R3"`)
+   - `message: str` — human-readable description of the violation
+   - `location: dict` — `{"file": ..., "line": ..., "symbol": ...}` (values may be None when unknown)
+2. Define `PolicyBackend` as an abstract base class (`abc.ABC`) with:
+   - Class attribute `target: str` — the language/platform string this backend handles (e.g., `"python"`)
+   - Abstract method `analyze(self, artifact_path: str, contract_ir: ContractEffectIR) -> list[PolicyFinding]`
+3. Import `ContractEffectIR` from `..capability_ir` (the sibling module generated from `capability_ir_python.prompt`).
+4. Implement `get_backend(target: str) -> PolicyBackend | dict`:
+   - Return `PythonAstPolicyBackend()` when `target == "python"`.
+   - For any unrecognized target, return a plain dict: `{"target": target, "status": "unsupported", "message": f"No policy backend registered for target: {target}"}`. MUST NOT raise an exception.
+   - To avoid circular imports, concrete backend classes (e.g., `PythonAstPolicyBackend`) MUST be imported lazily inside `get_backend()` using local imports, NOT at module level.
+5. Export `__all__` containing `PolicyFinding`, `PolicyBackend`, `get_backend`.
+6. The registry MUST be extensible — use a dict mapping target strings to import paths or callables. Adding a new backend requires only adding an entry to the registry dict, not modifying `get_backend`. Because concrete backends import from this module, the registry values MUST NOT be backend class objects resolved at import time (which would cause circular imports). Instead, resolve them lazily inside `get_backend()`.
+
+% Deliverables
+- Code: `pdd/policy_backends/__init__.py`
