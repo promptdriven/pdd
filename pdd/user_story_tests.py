@@ -842,10 +842,21 @@ def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals,too-
 
 
 _STORY_META_PROMPT_NAME = "generate_user_story_LLM"
-# An LLM-authored story must contain at least these sections to be accepted;
-# otherwise the caller falls back to the deterministic template so the file
-# stays structurally valid for `pdd detect --stories` / `run_user_story_tests`.
-_REQUIRED_STORY_SECTIONS = ("## Story", "## Acceptance Criteria")
+# An LLM-authored story must contain the full canonical section set (issue
+# #1356) to be accepted; otherwise the caller falls back to the deterministic
+# prompt-derived template so the written file always carries every reviewable
+# section and stays valid for `pdd detect --stories` / `run_user_story_tests`.
+_REQUIRED_STORY_SECTIONS = (
+    "## Covers",
+    "## Story",
+    "## Context",
+    "## Acceptance Criteria",
+    "## Oracle",
+    "## Non-Oracle",
+    "## Negative Cases",
+    "## Non-Goals",
+    "## Notes",
+)
 _PLACEHOLDER_TOKEN_RE = re.compile(
     r"<\s*(?:persona|capability|benefit|detail|state|action|behavior|"
     r"forbidden outcome[^>\n]*|what this story[^>\n]*|[A-Za-z][A-Za-z0-9_ -]{0,60})\s*>",

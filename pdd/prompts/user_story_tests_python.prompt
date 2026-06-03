@@ -32,11 +32,15 @@ the guide may say `## Forbidden Outcomes` — same intent).
   (persona / capability / benefit, Context, Acceptance Criteria, Negative Cases,
   ...). The narrative is derived from the prompt content, not a fixed template.
 - **Required-section validation + deterministic fallback.** Accept the LLM output
-  only when it contains at least `## Story` and `## Acceptance Criteria` (strip a
-  wrapping ``` ``` ``` fence first) and does not contain unresolved placeholders
+  only when it contains the FULL canonical section set required by issue #1356 —
+  `## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
+  `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, and `## Notes` — (strip a
+  wrapping ``` ``` ``` fence first) and it does not contain unresolved placeholders
   such as `<persona>`, `<capability>`, `<benefit>`, `<detail>`, `<state>`, or
-  `<action>`. When the LLM is unavailable (no provider key, offline, error) OR
-  the output is empty, missing a required section, or placeholder-filled,
+  `<action>`. A response carrying only `## Story` and `## Acceptance Criteria` is
+  rejected so an incomplete LLM story is never written. When the LLM is unavailable
+  (no provider key, offline, error) OR the output is empty, missing any required
+  canonical section, or placeholder-filled,
   `_llm_generate_story_markdown()` returns `(None, cost, model)` and
   `generate_user_story()` falls back to `_render_story_markdown_from_prompts()`
   so `pdd test <*.prompt>` still produces a valid story in CI/tests without a key.
@@ -92,8 +96,10 @@ the guide may say `## Forbidden Outcomes` — same intent).
 3. **Story generation (#820, #1356)**
    - `generate_user_story` writes the body via `_llm_generate_story_markdown` (LLM,
      issue #1356) and falls back to the deterministic template when the LLM is
-     unavailable, returns markdown missing a required section (`## Story`,
-     `## Acceptance Criteria`), or leaves template placeholders in the output.
+     unavailable, returns markdown missing any required canonical section
+     (`## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
+     `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Notes`), or leaves
+     template placeholders in the output.
    - `_llm_generate_story_markdown` loads the `generate_user_story_LLM` meta-prompt
      (`load_prompt_template`), escapes it via `preprocess(double_curly_brackets=True,
      exclude_keys=["STORY_TITLE", "PROMPT_FILES"])`, calls `llm_invoke` with the

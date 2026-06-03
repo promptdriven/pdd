@@ -1,6 +1,6 @@
 # pylint: disable=missing-module-docstring,missing-function-docstring
 # pylint: disable=use-implicit-booleaness-not-comparison,unused-variable
-# pylint: disable=too-many-locals,line-too-long
+# pylint: disable=too-many-locals,line-too-long,too-many-lines
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -763,6 +763,58 @@ def test_generate_user_story_falls_back_when_llm_output_malformed(tmp_path):
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "As a prompt reviewer," in story_text  # fell back to prompt-derived template
     assert "I can do things." not in story_text
+
+
+def test_generate_user_story_rejects_llm_story_missing_canonical_sections(tmp_path):
+    """Issue #1356: an LLM story carrying only `## Story` and
+    `## Acceptance Criteria` is incomplete and must be rejected. Generation
+    falls back to the deterministic prompt-derived template, and the written
+    story contains every canonical section (Covers/Context/Oracle/etc.)."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    # Only '## Story' + '## Acceptance Criteria' — every other canonical
+    # section (Covers, Context, Oracle, Non-Oracle, Negative Cases, Non-Goals,
+    # Notes) is missing, so this must not be written as-is.
+    incomplete = (
+        "# User Story: Upload\n\n"
+        "## Story\n\n"
+        "As a user, I can upload a file, so that I get a report.\n\n"
+        "## Acceptance Criteria\n\n"
+        "1. Given a file, when uploaded, then a report appears.\n"
+    )
+    bad_llm = {"result": incomplete, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+    ):
+        success, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    mock_detect.assert_not_called()
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    # The incomplete LLM body was rejected in favor of the prompt-derived template.
+    assert "As a prompt reviewer," in story_text
+    assert "As a user, I can upload a file," not in story_text
+    assert "Handle file uploads" in story_text
+    # The written story carries the full canonical section set.
+    for section in (
+        "## Covers",
+        "## Story",
+        "## Context",
+        "## Acceptance Criteria",
+        "## Oracle",
+        "## Non-Oracle",
+        "## Negative Cases",
+        "## Non-Goals",
+        "## Notes",
+    ):
+        assert section in story_text, f"missing canonical section: {section}"
 
 
 def test_generate_user_story_falls_back_when_llm_output_contains_placeholders(tmp_path):
