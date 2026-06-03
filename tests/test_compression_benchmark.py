@@ -728,3 +728,65 @@ class TestIntegrationRealFixture:
             mock_slicer.verify_contract = MagicMock()
             results = run_benchmark(self.REAL_FIXTURES)
         assert all(r.input_tokens > 0 for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Additional edge cases
+# ---------------------------------------------------------------------------
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+class TestAdditionalEdgeCases:
+    def test_run_benchmark_empty_fixtures_dir(self, tmp_path):
+        """Empty fixtures dir yields empty results list."""
+        results = run_benchmark(tmp_path, strategies=["full_tests"])
+        assert results == []
+
+    def test_run_benchmark_multiple_fixtures(self, tmp_path):
+        """Multiple fixture subdirs produce results for each."""
+        _make_fixture_dir(tmp_path, name="fixA")
+        _make_fixture_dir(tmp_path, name="fixB")
+        with patch("pdd.compression_benchmark.count_tokens", return_value=5), \
+             patch("pdd.compression_benchmark.ContentSelector") as mock_cs, \
+             patch("pdd.compression_benchmark.ApiContractSlicer") as mock_slicer:
+            mock_cs.select.return_value = "def foo(): pass\n"
+            inst = MagicMock()
+            inst.slice.return_value = ("def foo(): pass\n", MagicMock())
+            mock_slicer.return_value = inst
+            mock_slicer.verify_contract = MagicMock()
+            results = run_benchmark(tmp_path, strategies=["full_tests"])
+        ids = {r.fixture_id for r in results}
+        assert ids == {"fixA", "fixB"}
+
+    def test_check_compression_benchmark_accumulates_multiple_failures(self):
+        """A single result violating R1 and R2 produces multiple failures."""
+        results = [_make_result(passed=False, missing_contracts=["x"], churn_score=0.99)]
+        baselines = {"fix1": {"full_tests": {"passed": True, "min_churn_score": 0.0}}}
+        gate = check_compression_benchmark(results, baselines)
+        codes = [f.code for f in gate.failures]
+        assert "CONTRACT_SYMBOL_LOSS" in codes
+        assert "PASS_RATE_REGRESSION" in codes
+
+    def test_check_compression_benchmark_failure_message_contains_context(self):
+        """Failure messages should include fixture_id and strategy for traceability."""
+        results = [_make_result(strategy="ast_tests", fixture_id="myfix",
+                                passed=False, missing_contracts=["sym"])]
+        baselines = {"myfix": {"ast_tests": {"passed": True, "min_churn_score": 0.0}}}
+        gate = check_compression_benchmark(results, baselines)
+        assert any("myfix" in f.message and "ast_tests" in f.message for f in gate.failures)
+
+    def test_print_benchmark_report_json_is_valid_list(self, tmp_path):
+        """JSON output is a list even with multiple results."""
+        results = [_make_result(fixture_id="a"), _make_result(fixture_id="b", strategy="ast_tests")]
+        out = tmp_path / "r.json"
+        print_benchmark_report(results, output_path=out)
+        data = json.loads(out.read_text())
+        assert isinstance(data, list)
+        assert len(data) == 2
