@@ -770,7 +770,7 @@ def process_include_tags(
                                 CompressionFallbackError,
                                 record_compression_applied,
                             )
-                            from pdd.content_selector import ContentSelector
+                            from pdd.content_selector import ContentSelector, SelectorError
 
                             original_content = content
                             selector = ContentSelector()
@@ -789,6 +789,29 @@ def process_include_tags(
                                     record_compression_applied(full_path, mode)
                         except CompressionFallbackError:
                             raise
+                        except SelectorError as e:
+                            fallback_query = attrs.get('query')
+                            if fallback_query:
+                                try:
+                                    from pdd.include_query_extractor import IncludeQueryExtractor
+                                    extracted = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
+                                    if snapshot_recorder is not None:
+                                        snapshot_recorder.record_include(
+                                            source_path=full_path,
+                                            content=extracted,
+                                            query=fallback_query,
+                                            output=extracted,
+                                        )
+                                    return extracted
+                                except Exception as inner_e:
+                                    if snapshot_recorder is not None:
+                                        snapshot_recorder.record_include(
+                                            source_path=full_path,
+                                            content=f"[query_include failed: {inner_e}]",
+                                            query=fallback_query,
+                                            output=f"[query_include failed: {inner_e}]",
+                                        )
+                            _warn_selector_fallback(file_path, mode, e, selectors=selectors_str)
                         except ImportError as e:
                             fallback_query = attrs.get('query')
                             if fallback_query:

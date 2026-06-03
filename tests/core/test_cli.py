@@ -311,6 +311,13 @@ def test_cli_context_compression_flags(mock_construct, mock_main, mock_auto_upda
     assert os.environ.get("PDD_COMPRESS_TEST_CONTEXT") == "1"
     assert os.environ.get("PDD_CONTEXT_COMPRESSION") == "all"
     assert os.environ.get("PDD_COMPRESSION_FALLBACK") == "error"
+    for key in (
+        "PDD_COMPRESS_EXAMPLES",
+        "PDD_COMPRESS_TEST_CONTEXT",
+        "PDD_CONTEXT_COMPRESSION",
+        "PDD_COMPRESSION_FALLBACK",
+    ):
+        os.environ.pop(key, None)
 
 
 def test_generate_rejects_subcommand_local_context_compression(runner):
