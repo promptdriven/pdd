@@ -277,6 +277,33 @@ def test_preprocess_include_many_compress_strips_python_docstrings(
     assert "return 1" in expanded
 
 
+def test_preprocess_compress_falls_back_to_raw_on_invalid_python(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """Compression failure must include raw file content, not an error marker (#876)."""
+    bad = tmp_path / "bad.py"
+    bad.write_text("def broken(:\n    pass\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    single = preprocess(
+        "<include>bad.py</include>",
+        recursive=False,
+        double_curly_brackets=False,
+        compress=True,
+    )
+    many = preprocess(
+        "<include-many>bad.py</include-many>",
+        recursive=False,
+        double_curly_brackets=False,
+        compress=True,
+    )
+
+    assert "def broken" in single
+    assert "[Error processing include: bad.py]" not in single
+    assert "def broken" in many
+    assert "[Error processing include: bad.py]" not in many
+
+
 def test_preprocess_nested_include_inherits_compress(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

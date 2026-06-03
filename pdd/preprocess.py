@@ -358,6 +358,36 @@ def get_file_path(file_name: str) -> str:
         return os.path.join("./", file_name)
     return str(resolved)
 
+
+def _compressed_include_with_fallback_or_raw(
+    raw_content: str,
+    file_path: str,
+    *,
+    selectors: Optional[List[str]] = None,
+) -> str:
+    """Apply compressed include transform; return raw content when compression fails."""
+    try:
+        from pdd.content_selector import apply_compressed_include_with_fallback
+
+        return apply_compressed_include_with_fallback(
+            raw_content,
+            file_path=file_path,
+            selectors=selectors,
+        )
+    except Exception as exc:
+        import warnings
+
+        warnings.warn(
+            f"Compression failed for {file_path}: {exc}. Including full file content.",
+            stacklevel=2,
+        )
+        console.print(
+            f"[yellow]Warning: compression failed for {file_path}: {exc}. "
+            f"Including full file content.[/yellow]"
+        )
+        return raw_content
+
+
 def _process_nested_includes(
     content: str,
     _seen: set,
@@ -704,12 +734,9 @@ def process_include_tags(
                         try:
                             raw_include_content = content
                             if mode == "compressed":
-                                from pdd.content_selector import (
-                                    apply_compressed_include_with_fallback,
-                                )
-                                content = apply_compressed_include_with_fallback(
+                                content = _compressed_include_with_fallback_or_raw(
                                     raw_include_content,
-                                    file_path=full_path,
+                                    full_path,
                                     selectors=selectors,
                                 )
                             else:
@@ -1147,13 +1174,15 @@ def process_include_many_tags(
                 full_path = get_file_path(p)
                 console.print(f"Including (many): [cyan]{full_path}[/cyan]")
                 with open(full_path, 'r', encoding='utf-8') as fh:
-                    content = fh.read()
-                    if compress:
-                        from pdd.content_selector import apply_compressed_include_with_fallback
-                        content = apply_compressed_include_with_fallback(
-                            content,
-                            file_path=full_path,
+                    raw_content = fh.read()
+                    content = (
+                        _compressed_include_with_fallback_or_raw(
+                            raw_content,
+                            full_path,
                         )
+                        if compress
+                        else raw_content
+                    )
                     contents.append(content)
                 if snapshot_recorder is not None:
                     snapshot_recorder.record_include(source_path=full_path, content=content)
