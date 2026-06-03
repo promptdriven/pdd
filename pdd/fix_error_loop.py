@@ -385,7 +385,7 @@ def fix_error_loop(
             else:
                 code_content = content
         _record_agentic_fallback(
-            True,
+            success,
             "agentic fix fallback succeeded" if success else "agentic fix fallback failed",
         )
         return success, unit_test_content, code_content, total_attempts, total_cost, model_name

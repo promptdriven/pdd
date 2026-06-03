@@ -1300,7 +1300,7 @@ def fix_verification_errors_loop(
                 {
                     "phase": "verify",
                     "attempted": True,
-                    "used": True,
+                    "used": agent_success,
                     "detail": (
                         "agentic verify fallback succeeded"
                         if agent_success
