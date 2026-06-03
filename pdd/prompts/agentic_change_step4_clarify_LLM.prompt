@@ -73,11 +73,9 @@ You are working on step 4 of 13 in an agentic change workflow. Previous steps co
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+After completing your analysis, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
+Your final response must include exactly one `<step_report>...</step_report>` block. The report should follow this format:
 
 **If requirements are CLEAR ENOUGH:**
 ```markdown
