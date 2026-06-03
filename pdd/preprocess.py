@@ -753,7 +753,8 @@ def process_include_tags(
                     if selectors_str or lines_str or mode != 'full':
                         selectors = []
                         if selectors_str:
-                            selectors.extend([s.strip() for s in selectors_str.split(',')])
+                            from pdd._selector_parse import parse_selectors_string
+                            selectors.extend(parse_selectors_string(selectors_str))
                         if lines_str:
                             selectors.append(f"lines:{lines_str}")
                         
