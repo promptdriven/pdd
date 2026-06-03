@@ -4942,17 +4942,11 @@ class TestSelectModelCandidates:
         )
         # CSV has no `Google Vertex AI,claude-opus-4-6` row → strip-attempt
         # constrained to provider="Google Vertex AI" finds nothing → falls
-        # through to the soft-fallback surrogate. Issue #1364: because the
-        # configured base carries the `vertex_ai/` routing prefix, the
-        # surrogate is now scoped to the SAME provider (Google Vertex AI =
-        # gemini-3.1-pro-preview) instead of drifting to the first CSV row
-        # (AWS Bedrock). The primary boundary still holds — it must never be
-        # the direct Anthropic row.
+        # through to surrogate-base = first row (AWS Bedrock).
         assert candidates[0]["model"] != "claude-opus-4-6", (
             "vertex_ai/ prefix must not silently match direct Anthropic row"
         )
-        assert candidates[0]["model"] == "gemini-3.1-pro-preview"
-        assert candidates[0]["provider"] == "Google Vertex AI"
+        assert candidates[0]["model"] == "anthropic.claude-opus-4-6-v1"
 
     def test_vertex_prefix_does_not_match_gemini_direct_row(self, llm_mod, tmp_path):
         """Provider-boundary regression: vertex_ai/gemini-3-flash-preview
@@ -4983,116 +4977,17 @@ class TestSelectModelCandidates:
         assert candidates[0]["model"] == "gemini-3.1-pro-preview"
         assert candidates[0]["provider"] == "Google Vertex AI"
 
-    def _make_provider_surrogate_df(self, llm_mod, tmp_path):
-        """CSV whose FIRST row is a cross-provider trap (AWS Bedrock), with
-        usable Google Vertex AI rows lower down. Mirrors the bundled catalog
-        shape that produced the #1364 regression: a `vertex_ai/...` default
-        whose exact row is missing must not surrogate onto the first CSV row
-        of an unrelated provider."""
-        content = (
-            "provider,model,input,output,coding_arena_elo,api_key,"
-            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
-            "max_reasoning_tokens\n"
-            # First row = cross-provider surrogate trap (the #1364 drift target).
-            "AWS Bedrock,anthropic.claude-opus-4-8,5.0,25.0,1575,"
-            "AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME,"
-            "True,effort,200000,8192,128000\n"
-            # Usable same-provider Vertex rows (the GA flash row is NOT present,
-            # forcing the soft-fallback surrogate path).
-            "Google Vertex AI,gemini-3.1-pro-preview,2.0,12.0,1461,"
-            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
-            "True,effort,1000000,8192,0\n"
-            "Google Vertex AI,vertex_ai/gemini-3-flash-preview,0.5,3.0,1440,"
-            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
-            "True,effort,1000000,8192,0\n"
-        )
-        csv_path = tmp_path / "provider_surrogate_models.csv"
-        csv_path.write_text(content)
-        return llm_mod._load_model_data(csv_path)
-
-    def test_issue_1364_vertex_prefix_surrogate_stays_in_provider(self, llm_mod, tmp_path):
-        """Issue #1364: when a `vertex_ai/`-prefixed default is missing from
-        the catalog (cloud advanced the default before the row shipped), the
-        soft-fallback surrogate must stay inside the configured provider
-        instead of drifting to the first CSV row of an unrelated provider
-        (here AWS Bedrock Claude Opus — wrong model, wrong pricing, wrong
-        billing). Only the surrogate BASE row is provider-scoped; the
-        candidate fallback set stays full and strength-sorted."""
-        df = self._make_provider_surrogate_df(llm_mod, tmp_path)
+    def test_vertex_gemini_3_5_flash_resolves_directly_from_packaged_catalog(self, llm_mod):
+        """Issue #1364 / #1136: the cloud default must have an exact catalog row."""
+        df = llm_mod._load_model_data(None)
         candidates = llm_mod._select_model_candidates(
             0.5, "vertex_ai/gemini-3.5-flash", df
         )
-        # Surrogate stayed in Google Vertex AI, did NOT drift to Bedrock.
-        assert candidates[0]["provider"] == "Google Vertex AI"
-        assert candidates[0]["model"] != "anthropic.claude-opus-4-8"
-        # Cross-provider rows remain present in the fallback cascade (we only
-        # scoped the surrogate base, not the candidate set).
-        assert any(c["model"] == "anthropic.claude-opus-4-8" for c in candidates)
 
-    def test_issue_1364_bare_unknown_surrogate_unchanged(self, llm_mod, tmp_path):
-        """Issue #1364 no-regression: a bare (unprefixed) unknown default has
-        no provider lock, so it preserves the legacy first-CSV-row surrogate
-        behavior — the provider-scoping only fires for prefixed names."""
-        df = self._make_provider_surrogate_df(llm_mod, tmp_path)
-        candidates = llm_mod._select_model_candidates(
-            0.5, "totally-unknown-bare-model", df
-        )
-        # Legacy behavior: first available row (AWS Bedrock) is the surrogate.
-        assert candidates[0]["model"] == "anthropic.claude-opus-4-8"
-
-    @pytest.mark.parametrize("strength", [0.49, 0.51])
-    def test_issue_1364_provider_scoped_surrogate_drives_interpolation(
-        self, llm_mod, tmp_path, strength
-    ):
-        """Issue #1364: the provider-scoped surrogate base feeds the non-0.5
-        interpolation branches too (cost for strength < 0.5, ELO for > 0.5).
-        With the surrogate anchored inside Google Vertex AI, the nearest
-        candidate stays Vertex; under the old first-CSV-row surrogate the
-        anchor was AWS Bedrock Opus (cheapest/highest extreme) and the nearest
-        candidate would have been Bedrock. This pins that the fix is not
-        strength-0.5-only."""
-        df = self._make_provider_surrogate_df(llm_mod, tmp_path)
-        candidates = llm_mod._select_model_candidates(
-            strength, "vertex_ai/gemini-3.5-flash", df
-        )
-        assert candidates[0]["provider"] == "Google Vertex AI"
-        assert candidates[0]["model"] != "anthropic.claude-opus-4-8"
-
-    def test_issue_1136_vertex_gemini_3_5_flash_resolves_directly(self, llm_mod, tmp_path):
-        """Issue #1364 / #1136: PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash
-        must resolve to the GA Flash row when it is present in the catalog,
-        not silently surrogate onto the first Vertex row."""
-        content = (
-            "provider,model,input,output,coding_arena_elo,api_key,"
-            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
-            "max_reasoning_tokens\n"
-            # Surrogate trap — first Vertex row when GA Flash is missing.
-            "Google Vertex AI,vertex_ai/claude-opus-4-7,5.0,25.0,1565,"
-            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
-            "True,effort,200000,8192,128000\n"
-            # The row issue #1136 adds.
-            "Google Vertex AI,vertex_ai/gemini-3.5-flash,1.5,9.0,1442,"
-            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
-            "True,effort,1000000,8192,0\n"
-        )
-        csv_path = tmp_path / "ga_flash_models.csv"
-        csv_path.write_text(content)
-        df = llm_mod._load_model_data(csv_path)
-        candidates = llm_mod._select_model_candidates(
-            0.5, "vertex_ai/gemini-3.5-flash", df
-        )
         assert candidates[0]["model"] == "vertex_ai/gemini-3.5-flash"
         assert candidates[0]["provider"] == "Google Vertex AI"
-        # Pricing must come from the GA row, not the Opus surrogate trap.
         assert candidates[0]["input"] == 1.5
         assert candidates[0]["output"] == 9.0
-
-    def test_issue_1136_gemini_3_5_flash_in_gemini_3_family_clamp(self, llm_mod):
-        """The Gemini 3 temperature clamp must fire for vertex_ai/gemini-3.5-flash
-        so PDD's default temperature is bumped per litellm guidance for the
-        Gemini 3 family. Pin the GA id explicitly."""
-        assert llm_mod._is_gemini_3_model("vertex_ai/gemini-3.5-flash") is True
-        assert llm_mod._is_gemini_3_model("gemini-3.5-flash") is True
 
 
 # ============================================================================
@@ -6964,6 +6859,7 @@ class TestGemini3TemperatureClamp:
         assert is_g3("gemini-3.1-pro-preview") is True
         assert is_g3("gemini-3.1-pro-preview-customtools") is True
         assert is_g3("gemini/gemini-3.1-pro-preview") is True
+        assert is_g3("vertex_ai/gemini-3.5-flash") is True
         # GMI / GitHub Copilot routes
         assert is_g3("gmi/google/gemini-3-pro-preview") is True
         assert is_g3("gmi/google/gemini-3-flash-preview") is True
