@@ -403,19 +403,32 @@ class _DocstringStripper(ast.NodeTransformer):
             return body[1:]
         return body
 
+    @staticmethod
+    def _ensure_executable_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        """Docstring-only bodies must become valid Python (``pass``)."""
+        if not body:
+            return [ast.Pass()]
+        return body
+
     def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
         node = self.generic_visit(node)
-        node.body = self._strip_leading_docstring(node.body)
+        node.body = self._ensure_executable_body(
+            self._strip_leading_docstring(node.body)
+        )
         return node
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
         node = self.generic_visit(node)
-        node.body = self._strip_leading_docstring(node.body)
+        node.body = self._ensure_executable_body(
+            self._strip_leading_docstring(node.body)
+        )
         return node
 
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
         node = self.generic_visit(node)
-        node.body = self._strip_leading_docstring(node.body)
+        node.body = self._ensure_executable_body(
+            self._strip_leading_docstring(node.body)
+        )
         return node
 
     def visit_Module(self, node: ast.Module) -> ast.Module:
@@ -442,9 +455,7 @@ def _full_compressed(content: str, *, file_path: str | None) -> str:
     ast.fix_missing_locations(tree)
     compressed = ast.unparse(tree)
     compressed = _strip_standalone_comment_lines(compressed)
-    # Test modules keep structure; compression only removes docstrings/comments.
-    if _is_test_file_path(file_path):
-        return compressed
+    ast.parse(compressed)
     return compressed
 
 
@@ -487,13 +498,25 @@ def discover_sibling_patch_targets(file_path: str | Path) -> set[str]:
             continue
         for match in _PATCH_TARGET_RE.finditer(text):
             target = match.group(1)
-            if "." in target:
-                mod, attr = target.split(".", 1)
-                if mod == module_name:
-                    targets.add(attr.split(".")[0])
-            elif target == module_name:
-                continue
+            symbol = _patch_symbol_for_module(target, module_name)
+            if symbol:
+                targets.add(symbol)
     return targets
+
+
+def _patch_symbol_for_module(target: str, module_stem: str) -> Optional[str]:
+    """Return the patched symbol when *target* refers to module *module_stem*."""
+    if target == module_stem:
+        return None
+    parts = target.split(".")
+    if not parts:
+        return None
+    if parts[0] == module_stem and len(parts) > 1:
+        return parts[1].split(".")[0]
+    for idx in range(len(parts) - 1):
+        if parts[idx] == module_stem:
+            return parts[idx + 1].split(".")[0]
+    return None
 
 
 def _extract_named_definitions(content: str, names: set[str]) -> list[str]:

@@ -385,6 +385,7 @@ def generate(
                 model=model,
                 cost_usd=cost,
                 temperature=ctx_obj.get("temperature", 0.0),
+                compress=compress,
                 **grounding_kwargs_from_ctx(ctx_obj),
                 context_snapshot=ctx_obj.get("context_snapshot"),
             )

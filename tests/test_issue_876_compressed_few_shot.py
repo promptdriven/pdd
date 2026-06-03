@@ -8,6 +8,7 @@ fallback when over token budget. Run:
 """
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import textwrap
@@ -21,7 +22,10 @@ from pdd.content_selector import (
     augment_interface_with_patch_targets,
     discover_sibling_patch_targets,
 )
-from pdd.evidence_manifest import write_evidence_manifest
+from pdd.evidence_manifest import (
+    _preprocessed_expanded_sha256,
+    write_evidence_manifest,
+)
 from pdd.preprocess import preprocess
 
 
@@ -325,3 +329,140 @@ def test_preprocess_nested_include_inherits_compress(
     assert '"""Inner module."""' not in expanded
     assert "def inner_fn():" in expanded
     assert "return 1" in expanded
+
+
+def test_compressed_docstring_only_function_is_valid_python() -> None:
+    """Docstring-only defs must compress to valid Python (#876 review)."""
+    source = textwrap.dedent(
+        '''
+        def planned_feature():
+            """Documented contract only."""
+        '''
+    )
+    out = ContentSelector.select(source, [], file_path="mod.py", mode="compressed")
+    ast.parse(out)
+    assert "def planned_feature():" in out
+    assert "pass" in out
+
+
+def test_compressed_docstring_only_async_is_valid_python() -> None:
+    """Async docstring-only defs must compress to valid Python."""
+    source = textwrap.dedent(
+        '''
+        async def planned_async():
+            """Async contract only."""
+        '''
+    )
+    out = ContentSelector.select(source, [], file_path="mod.py", mode="compressed")
+    ast.parse(out)
+    assert "async def planned_async():" in out
+    assert "pass" in out
+
+
+def test_compressed_docstring_only_class_is_valid_python() -> None:
+    """Docstring-only classes must compress to valid Python."""
+    source = textwrap.dedent(
+        '''
+        class Planned:
+            """Class contract only."""
+        '''
+    )
+    out = ContentSelector.select(source, [], file_path="mod.py", mode="compressed")
+    ast.parse(out)
+    assert "class Planned:" in out
+    assert "pass" in out
+
+
+def test_evidence_manifest_global_compress_plain_include(tmp_path: Path) -> None:
+    """--compress must record compressed metadata for plain Python includes."""
+    example = tmp_path / "context" / "fewshot.py"
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    example.parent.mkdir(parents=True)
+    prompt.parent.mkdir()
+    example.write_text(
+        '"""Few-shot example."""\n\n'
+        "def mold():\n"
+        "    return True\n",
+        encoding="utf-8",
+    )
+    prompt.write_text(
+        "<include>context/fewshot.py</include>\n",
+        encoding="utf-8",
+    )
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+        compress=True,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    include = manifest["context"]["includes"][0]
+    assert include.get("compressed_sha256")
+    assert include.get("estimated_tokens")
+    prompt_text = prompt.read_text(encoding="utf-8")
+    assert manifest["prompt"]["expanded_sha256"] == _preprocessed_expanded_sha256(
+        prompt_text,
+        tmp_path,
+        compress=True,
+    )
+    full_expanded_hash = _preprocessed_expanded_sha256(
+        prompt_text,
+        tmp_path,
+        compress=False,
+    )
+    assert manifest["prompt"]["expanded_sha256"] != full_expanded_hash
+
+
+def test_evidence_manifest_self_closing_compressed_include(tmp_path: Path) -> None:
+    """Self-closing includes with mode=compressed must record compressed metadata."""
+    example = tmp_path / "context" / "fewshot.py"
+    prompt = tmp_path / "prompts" / "demo_python.prompt"
+    example.parent.mkdir(parents=True)
+    prompt.parent.mkdir()
+    example.write_text("def mold():\n    return True\n", encoding="utf-8")
+    prompt.write_text(
+        '<include path="context/fewshot.py" mode="compressed" />\n',
+        encoding="utf-8",
+    )
+    manifest = json.loads(
+        write_evidence_manifest(
+            command="pdd generate",
+            prompt_file=prompt,
+            project_root=tmp_path,
+        ).read_text(encoding="utf-8")
+    )
+    include = manifest["context"]["includes"][0]
+    assert include.get("compressed_sha256")
+    assert include.get("source_sha256") == include["sha256"]
+
+
+def test_package_qualified_patch_target_restored_on_interface_fallback(
+    tmp_path: Path,
+) -> None:
+    """patch('pkg.worker.fetch_data') must restore bodies after interface fallback."""
+    module = tmp_path / "pdd" / "worker.py"
+    test_file = tmp_path / "tests" / "test_worker.py"
+    module.parent.mkdir(parents=True)
+    test_file.parent.mkdir(parents=True)
+    filler = "".join(
+        f"def fn_{i}(x: int) -> int:\n    return x + {i}\n" for i in range(3500)
+    )
+    module.write_text(
+        "def fetch_data():\n    return 42\n\n" + filler,
+        encoding="utf-8",
+    )
+    test_file.write_text(
+        "@patch('pdd.worker.fetch_data', return_value=1)\n"
+        "def test_fetch():\n    pass\n",
+        encoding="utf-8",
+    )
+    assert discover_sibling_patch_targets(module) == {"fetch_data"}
+    raw = module.read_text(encoding="utf-8")
+    iface = ContentSelector.select(raw, [], file_path=str(module), mode="interface")
+    assert "return 42" not in iface
+    restored = augment_interface_with_patch_targets(
+        iface,
+        raw,
+        discover_sibling_patch_targets(module),
+    )
+    assert "return 42" in restored

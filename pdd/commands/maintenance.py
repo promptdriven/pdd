@@ -38,6 +38,7 @@ def _write_sync_evidence_manifest(
     context_snapshot: Optional[Mapping[str, Any]] = None,
     grounding: Optional[Mapping[str, Any]] = None,
     reviewed: bool = False,
+    compress: bool = False,
 ) -> None:
     """Write or refresh the dev-unit evidence manifest for a sync attempt."""
     project_root = Path.cwd()
@@ -54,6 +55,7 @@ def _write_sync_evidence_manifest(
         model=model_name,
         cost_usd=total_cost,
         temperature=temperature,
+        compress=compress,
         validation=validation_from_sync(
             result,
             skip_tests=skip_tests,
@@ -398,6 +400,7 @@ def sync(
                 temperature=ctx.obj.get("temperature", 0.0),
                 quiet=ctx.obj.get("quiet", False),
                 context_snapshot=(ctx.obj or {}).get("context_snapshot"),
+                compress=compress,
                 **grounding_kwargs_from_ctx(ctx.obj),
             )
         return str(result), total_cost, model_name
