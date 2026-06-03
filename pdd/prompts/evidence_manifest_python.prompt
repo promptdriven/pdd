@@ -5,21 +5,9 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "write_evidence_manifest", "signature": "(*, command: str, grounding: Optional[Dict[str, Any]] = None, ...) -> Path", "returns": "Path"},
+      {"name": "write_evidence_manifest", "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False, policy_findings: Optional[Mapping[str, Any]] = None) -> Path", "returns": "Path"},
       {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> dict", "returns": "dict"},
       {"name": "resolve_generate_output_paths", "signature": "(prompt_file, *, output=None, ...) -> list[str]", "returns": "list[str]"}
-    ]
-  }
-}
-</pdd-interface>
-
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "write_evidence_manifest", "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None) -> Path", "returns": "Path"},
-      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False)", "returns": "Mapping[str, str]"}
     ]
   }
 }
@@ -50,6 +38,7 @@
   - `reviewed`: bool — `True` only when the invoking command observed a `--review-examples` decision for this run.
 - Preserve the existing top-level `grounding_examples` array for backward compatibility; populate it from `grounding.selected_examples` when present.
 - Bump the manifest `schema_version` metadata from `1` to `2` to reflect the additive `generation.grounding` object; update `pdd/schemas/evidence_manifest.schema.json` so the new object is documented and required at schema v2, while still tolerating the legacy `grounding_examples` field. Update `docs/evidence_manifest.md` so the "Contents" section advertises schema v2 and documents `generation.grounding` alongside the existing fields.
+- Accept an optional `policy_findings` kwarg of type `Optional[Mapping[str, Any]]`. When provided and non-`None`, serialize it as a `policy_check` top-level key in the manifest. The value MUST contain a `target` field (string) and MUST follow the normalized schema: `{"target": "python", "contract": {"capabilities_present": bool, "effect_count": int}, "findings": [...]}` for supported targets, or `{"target": "typescript", "status": "unsupported", "message": "..."}` for unsupported ones. Omit the `policy_check` key entirely when `policy_findings` is `None` (backward-compatible — existing manifests without policy checks are unaffected). The `policy_findings` kwarg is accepted by `write_evidence_manifest` and passed through as-is to the manifest JSON under `policy_check`.
 
 % Deliverables
 - Code: `pdd/evidence_manifest.py`
