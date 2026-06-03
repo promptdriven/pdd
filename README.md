@@ -249,7 +249,7 @@ pdd setup
 The setup wizard runs these steps:
   1.  Detects agentic CLI tools (Claude, Gemini/Antigravity, Codex, OpenCode) and offers installation and credential configuration if needed. Credentials can be environment-variable API keys, stored OAuth/subscription/config credentials such as Claude Max/Pro, Google Gemini/Antigravity login, Vertex AI env auth, Codex ChatGPT login, or OpenCode provider auth/config.
   2. Scans for API keys across `.env`, `~/.pdd/api-env.*`, and the shell environment. If no API key is found but a selected CLI already has a stored OAuth/subscription/config credential, setup skips the API-key prompt for the agentic workflow and explains which direct prompt/LiteLLM commands still need API keys.
-  3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1300) across all LiteLLM-supported providers based on your available API keys
+  3. Configures models from a reference CSV `data/llm_model.csv` of top ranked models across all LiteLLM-supported providers based on your available API keys
   4. If you have credentials for **more than one** provider, asks which provider(s) `pdd --local` should use, then removes the unselected providers' PDD-managed rows from `~/.pdd/llm_model.csv` (rows you hand-edited or added yourself are preserved — see below)
   5. Optionally creates a `.pddrc` project config
   6. Tests a model from your selected provider with a real LLM call
@@ -819,13 +819,13 @@ This is particularly useful in:
 
 PDD uses a large language model to generate and manipulate code. The `--strength` and `--temperature` options allow you to control the model's output:
 
-- Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance models with better capabilities (selected by ELO rating), while lower values (closer to 0.0) select more cost-effective models.
+- Strength: Determines how powerful/expensive a model should be used. Higher values (closer to 1.0) result in high performance models with better capabilities (selected by `model_rank_score`, where DeepSWE is primary and Arena/static ELO is fallback), while lower values (closer to 0.0) select more cost-effective models.
 - Temperature: Controls the randomness of the output. Higher values increase diversity but may lead to less coherent results, while lower values produce more focused and deterministic outputs.
 - Time: (Optional, controlled by `--time FLOAT`) For models supporting reasoning, this scales the allocated reasoning resources (e.g., tokens or effort level) between minimum (0.0) and maximum (1.0), with a default of 0.25.
 
 When running in local mode, PDD uses LiteLLM to select and interact with language models based on a configuration file that includes:
 - Input and output costs per million tokens
-- ELO ratings for coding ability
+- Primary `model_rank_score` values for selection and raw Arena/static `coding_arena_elo` metadata
 - Required API key environment variables
 - Structured output capability flags
 - Reasoning capabilities (budget-based, effort-based, or adaptive)
