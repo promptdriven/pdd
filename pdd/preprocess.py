@@ -1179,9 +1179,13 @@ def process_include_many_tags(
         return replace_many(match)
     return re.sub(pattern, replace_many_with_spans, text, flags=re.DOTALL)
 
-def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
+def double_curly(
+    text: str,
+    exclude_keys: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None,
+) -> str:
     if exclude_keys is None:
-        exclude_keys = []
+        exclude_keys = exclude if exclude is not None else []
     
     if not _is_quiet_mode():
         console.print("Doubling curly brackets...")

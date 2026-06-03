@@ -68,7 +68,7 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
         # actually resolves it as ``docs/source.md`` — and the scope
         # guard's allowlist would diverge from the real include graph.
         single_matches = re.findall(
-            r'<include(?:\s+([^>]*?))?(?<!/)>(.*?)</include>', content
+            r'<include(?:\s+([^>]*?))?(?<!/)>(.*?)</include>', content, re.DOTALL
         )
         for attrs, body in single_matches:
             path_value: Optional[str] = None
@@ -97,7 +97,7 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
                     includes.add(stripped)
 
         many_matches = re.findall(
-            r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', content
+            r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', content, re.DOTALL
         )
         for m in many_matches:
             # Mirror pdd.preprocess.process_include_many_tags: split on

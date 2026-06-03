@@ -80,7 +80,7 @@ def test_preprocess_main_no_xml(basic_click_context):
             "fake prompt content",
             False,  # recursive
             False,  # double
-            exclude=[],
+            exclude_keys=[],
             _seen={str(Path("input.prompt").resolve())},
             snapshot_recorder=None,
         )
@@ -201,7 +201,7 @@ def test_preprocess_main_recursive_and_double(basic_click_context):
             "some prompt for recursive test",
             True,   # recursive
             True,   # double
-            exclude=["do_not_double_this"],
+            exclude_keys=["do_not_double_this"],
             _seen={str(Path("recursive.prompt").resolve())},
             snapshot_recorder=None,
         )
