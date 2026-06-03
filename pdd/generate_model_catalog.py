@@ -145,6 +145,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     "gemini-3.1-pro-preview": 1461,
     "gemini-3-pro": 1444,              # [CODE] #9
     "gemini-3-pro-preview": 1444,
+    "gemini-3.5-flash": 1442,          # GA release; pdd_cloud catalog (#1364)
     "gemini-3-flash": 1440,            # [CODE] #12
     "gemini-3-flash-preview": 1440,
     "gemini-2.5-pro": 1206,            # [CODE] huge Text→Code drop
@@ -1176,6 +1177,22 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "model": "vertex_ai/gemini-3-flash-preview",
         "input": 0.5,
         "output": 3.0,
+        "base_url": "",
+        "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+        "max_reasoning_tokens": 0,
+        "structured_output": True,
+        "reasoning_type": "effort",
+        "location": "global",
+    },
+    # GA Vertex Gemini Flash — pdd_cloud's inner sync LLM_INVOKE_DEFAULT_MODEL
+    # (issue #1364). Seeded as mandatory so regeneration preserves it even when
+    # litellm.model_cost doesn't carry the id yet; the interactive_only column
+    # is filled by the writer. Pricing 1.5/9.0 matches Google's Vertex rate.
+    {
+        "provider": "Google Vertex AI",
+        "model": "vertex_ai/gemini-3.5-flash",
+        "input": 1.5,
+        "output": 9.0,
         "base_url": "",
         "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
         "max_reasoning_tokens": 0,
