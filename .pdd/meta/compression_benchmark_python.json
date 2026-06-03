@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.256.dev8",
+  "timestamp": "2026-06-03T20:26:10.418811+00:00",
+  "command": "sync",
+  "prompt_hash": "eec83699c6704cf87d651b3510b55c1be707d2c55a32d1121766adbccbc00342",
+  "code_hash": "52f1eb5f89628695c78e7e7dd349825a83591b66db694407a0a0bb792314e13b",
+  "example_hash": "5bcad32aac63dff68d97a3bc544c4bab5e154092ac99f9ab3bc84af162974949",
+  "test_hash": "0bf938dec083e2c1b23e366eae07d10b5edc77b3dee21f62c7f80fa2b3c8c243",
+  "test_files": {
+    "test_compression_benchmark.py": "0bf938dec083e2c1b23e366eae07d10b5edc77b3dee21f62c7f80fa2b3c8c243"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/api_contract_slicer.py": "0170b39f8ac42c0ff86ea426c1f98449158a5f3321474422a252397283c77f3e",
+    "pdd/content_selector.py": "84ba424bf82e3f8093776a6e620713c53dafa13dcc3059e27fb828da0fc85f81",
+    "pdd/gate_main.py": "8281d282d9ad62dc01c92c4f520ea0be70e5fba50281d18fd4111445ebfd613a",
+    "pdd/server/token_counter.py": "f784679da58bbabb9eb9b17c86f13e1ec5d98f2f2bd09407b4e1b044f83ca8a1"
+  }
+}
