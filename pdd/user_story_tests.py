@@ -326,7 +326,7 @@ def _select_story_prompt_links(
     return _dedupe_prompt_paths(prompt_files), "all_prompts"
 
 
-def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
+def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements,too-many-branches
     *,
     story_file: str,
     prompts_dir: Optional[str] = None,
@@ -436,7 +436,8 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
     if detection_error:
         return (
             True,
-            "Story prompt metadata already up to date by deterministic fallback after detection failed.",
+            "Story prompt metadata already up to date by deterministic "
+            "fallback after detection failed.",
             cost,
             model,
             linked_refs,
@@ -702,7 +703,7 @@ def _seed_negative_cases_from_rules(
     return deduped
 
 
-def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
+def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals,too-many-branches,too-many-statements
     *,
     title: str,
     prompt_paths: List[Path],
@@ -753,7 +754,8 @@ def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
         for index, (ref, rule_id, summary, rule_text) in enumerate(seeded_rules, start=1):
             clean_rule = _clean_rule_block(rule_text, summary)
             acceptance_lines.append(
-                f"{index}. Given `{ref}` is the prompt under review, when {rule_id} is exercised, "
+                f"{index}. Given `{ref}` is the prompt under review, "
+                f"when {rule_id} is exercised, "
                 f"then {summary.lower()} is satisfied: {clean_rule}."
             )
     else:
@@ -763,7 +765,8 @@ def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
             signals = _prompt_signal_lines(path, limit=4) or [_prompt_summary_line(path)]
             for signal in signals[:3]:
                 acceptance_lines.append(
-                    f"{index}. Given `{ref}` is used for generation, when the generated behavior is reviewed, "
+                    f"{index}. Given `{ref}` is used for generation, "
+                    "when the generated behavior is reviewed, "
                     f"then it implements: {signal.rstrip('.')}."
                 )
                 index += 1
@@ -827,11 +830,14 @@ def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
         "## Negative Cases\n\n"
         f"{neg_block}\n\n"
         "## Non-Goals\n\n"
-        "- Private helper names, file organization, and internal refactors are out of scope unless the prompt explicitly requires them.\n"
+        "- Private helper names, file organization, and internal refactors are "
+        "out of scope unless the prompt explicitly requires them.\n"
         "- New product behavior outside the linked prompt files is out of scope.\n\n"
         "## Notes\n\n"
-        "- Generated deterministically from prompt content; edit this story when human review identifies missing acceptance criteria.\n"
-        "- `pdd detect --stories` should report no required prompt changes for this story before it is used as a prompt regression test.\n"
+        "- Generated deterministically from prompt content; edit this story when "
+        "human review identifies missing acceptance criteria.\n"
+        "- `pdd detect --stories` should report no required prompt changes for "
+        "this story before it is used as a prompt regression test.\n"
     )
 
 
@@ -840,6 +846,11 @@ _STORY_META_PROMPT_NAME = "generate_user_story_LLM"
 # otherwise the caller falls back to the deterministic template so the file
 # stays structurally valid for `pdd detect --stories` / `run_user_story_tests`.
 _REQUIRED_STORY_SECTIONS = ("## Story", "## Acceptance Criteria")
+_PLACEHOLDER_TOKEN_RE = re.compile(
+    r"<\s*(?:persona|capability|benefit|detail|state|action|behavior|"
+    r"forbidden outcome[^>\n]*|what this story[^>\n]*|[A-Za-z][A-Za-z0-9_ -]{0,60})\s*>",
+    re.IGNORECASE,
+)
 _CODE_FENCE_RE = re.compile(
     r"^\s*```[A-Za-z0-9_-]*\s*\n(?P<body>.*?)\n```\s*$",
     re.DOTALL,
@@ -854,7 +865,12 @@ def _strip_markdown_code_fence(text: str) -> str:
     return text.strip()
 
 
-def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
+def _contains_placeholder_tokens(markdown: str) -> bool:
+    """Return True when model output still contains template placeholders."""
+    return bool(_PLACEHOLDER_TOKEN_RE.search(markdown))
+
+
+def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements,broad-exception-caught,import-outside-toplevel
     *,
     title: str,
     prompt_paths: List[Path],
@@ -936,13 +952,16 @@ def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many
     if missing:
         logger.debug("LLM story missing required sections %s; using template.", missing)
         return None, cost, model
+    if _contains_placeholder_tokens(markdown):
+        logger.debug("LLM story contains placeholder tokens; using template.")
+        return None, cost, model
 
     if not markdown.endswith("\n"):
         markdown += "\n"
     return markdown, cost, model
 
 
-def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
+def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
     *,
     prompt_files: List[str],
     output: Optional[str] = None,
@@ -1015,104 +1034,27 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(story_markdown, encoding="utf-8")
 
-    linked_refs_from_input = [
+    linked_refs = [
         _prompt_reference_for_metadata(path.resolve(), prompts_root)
         for path in resolved_paths
     ]
-    linked_refs = linked_refs_from_input
-    total_cost = story_cost
-    model_name = story_model
-
-    # Generation-time auto-detection: run detect_change on the story and
-    # cache detected prompt links into metadata for deterministic reruns.
-    detected_pool = discover_prompt_files(prompts_dir, include_llm=include_llm_prompts)
-    merged_pool: List[Path] = []
-    seen_pool = set()
-    for prompt_path in resolved_paths + detected_pool:
-        key = str(prompt_path.resolve()).lower()
-        if key in seen_pool:
-            continue
-        merged_pool.append(prompt_path)
-        seen_pool.add(key)
-
-    (
-        detect_success,
-        detect_message,
-        detect_cost,
-        detect_model,
-        detected_links,
-    ) = cache_story_prompt_links(
-        story_file=str(output_path),
-        prompts_dir=prompts_dir,
-        prompt_files=merged_pool,
-        strength=strength,
-        temperature=temperature,
-        time=time,
-        verbose=verbose,
-        include_llm_prompts=include_llm_prompts,
-        force_relink=True,
+    latest_story = _read_story(output_path)
+    _upsert_story_prompt_metadata(
+        output_path,
+        latest_story,
+        [path.resolve() for path in resolved_paths],
+        prompts_root,
     )
-    total_cost += detect_cost
-    model_name = detect_model or model_name
-
-    if detect_success and detected_links:
-        message_lower = detect_message.lower()
-        if "deterministic fallback" in message_lower:
-            linked_refs = linked_refs_from_input
-            latest_story = _read_story(output_path)
-            _upsert_story_prompt_metadata(
-                output_path,
-                latest_story,
-                [path.resolve() for path in resolved_paths],
-                prompts_root,
-            )
-            status_message = (
-                f"Generated story file: {output_path}. "
-                "Story prompt metadata linked from prompt inputs by deterministic fallback."
-            )
-        elif "full prompt set" not in message_lower and "story content" not in message_lower:
-            linked_refs = detected_links
-            status_message = (
-                f"Generated story file: {output_path}. "
-                "Story prompt metadata auto-detected from story content."
-            )
-        else:
-            # Detection fell back to full-project or story-text refs.
-            # Rewrite metadata to the explicit input prompts so the file
-            # stays scoped to what the user asked for.
-            linked_refs = linked_refs_from_input
-            latest_story = _read_story(output_path)
-            _upsert_story_prompt_metadata(
-                output_path,
-                latest_story,
-                [path.resolve() for path in resolved_paths],
-                prompts_root,
-            )
-            status_message = (
-                f"Generated story file: {output_path}. "
-                "Story prompt metadata linked from prompt inputs."
-            )
-    else:
-        # Detection produced no touched prompts or could not update metadata.
-        # Write metadata scoped to the explicit input prompts.
-        linked_refs = linked_refs_from_input
-        latest_story = _read_story(output_path)
-        _upsert_story_prompt_metadata(
-            output_path,
-            latest_story,
-            [path.resolve() for path in resolved_paths],
-            prompts_root,
-        )
-        status_message = (
-            f"Generated story file: {output_path}. "
-            "Story prompt metadata linked from prompt inputs."
-        )
+    status_message = (
+        f"Generated story file: {output_path}. "
+        "Story prompt metadata linked from prompt inputs."
+    )
 
     return (
         True,
         status_message,
-        total_cost,
-        model_name,
+        story_cost,
+        story_model,
         str(output_path),
         linked_refs,
     )

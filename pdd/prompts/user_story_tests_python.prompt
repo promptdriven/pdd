@@ -33,8 +33,10 @@ the guide may say `## Forbidden Outcomes` — same intent).
   ...). The narrative is derived from the prompt content, not a fixed template.
 - **Required-section validation + deterministic fallback.** Accept the LLM output
   only when it contains at least `## Story` and `## Acceptance Criteria` (strip a
-  wrapping ``` ``` ``` fence first). When the LLM is unavailable (no provider key,
-  offline, error) OR the output is empty/missing a required section,
+  wrapping ``` ``` ``` fence first) and does not contain unresolved placeholders
+  such as `<persona>`, `<capability>`, `<benefit>`, `<detail>`, `<state>`, or
+  `<action>`. When the LLM is unavailable (no provider key, offline, error) OR
+  the output is empty, missing a required section, or placeholder-filled,
   `_llm_generate_story_markdown()` returns `(None, cost, model)` and
   `generate_user_story()` falls back to `_render_story_markdown_from_prompts()`
   so `pdd test <*.prompt>` still produces a valid story in CI/tests without a key.
@@ -48,9 +50,11 @@ the guide may say `## Forbidden Outcomes` — same intent).
   Cases` bullets from MUST/SHALL/MAY NOT rule text when present. This path stays
   fully deterministic (no LLM) so it is safe offline and in tests.
 - **Metadata is independent of generation.** Regardless of which path produced the
-  body, the `<!-- pdd-story-prompts: ... -->` metadata is stitched deterministically
-  afterward by `cache_story_prompt_links` / `_upsert_story_prompt_metadata`, so
-  story<->prompt linking and `pdd detect --stories` are unaffected by the LLM output.
+  body, `generate_user_story()` stitches `<!-- pdd-story-prompts: ... -->`
+  metadata directly from the exact prompt files the user passed. It must not call
+  `detect_change` or `cache_story_prompt_links`; validation and metadata relinking
+  remain the job of `pdd detect --stories`, `run_user_story_tests`, and
+  `cache_story_prompt_links`.
 - Story-generation `llm_invoke` cost/model accumulate into the returned cost/model.
 
 **Backward compatibility**
@@ -88,20 +92,21 @@ the guide may say `## Forbidden Outcomes` — same intent).
 3. **Story generation (#820, #1356)**
    - `generate_user_story` writes the body via `_llm_generate_story_markdown` (LLM,
      issue #1356) and falls back to the deterministic template when the LLM is
-     unavailable or returns markdown missing a required section (`## Story`,
-     `## Acceptance Criteria`).
+     unavailable, returns markdown missing a required section (`## Story`,
+     `## Acceptance Criteria`), or leaves template placeholders in the output.
    - `_llm_generate_story_markdown` loads the `generate_user_story_LLM` meta-prompt
      (`load_prompt_template`), escapes it via `preprocess(double_curly_brackets=True,
      exclude_keys=["STORY_TITLE", "PROMPT_FILES"])`, calls `llm_invoke` with the
      prompt file text, strips a wrapping code fence, validates required sections,
-     and returns `(markdown_or_None, cost, model)`. All imports are lazy to avoid an
-     `llm_invoke` import cycle.
+     rejects placeholder-filled output, and returns `(markdown_or_None, cost, model)`.
+     All imports are lazy to avoid an `llm_invoke` import cycle.
    - `_seed_covers_from_prompts`, `_rule_covers_summary`, `_cross_module_covers_ref`,
      `_seed_negative_cases_from_rules`, prompt-signal extraction helpers, and
      `_render_story_markdown_from_prompts` implement the deterministic contract-aware
      FALLBACK template. Use `Rule` and `parse_prompt_contracts` from `contract_ir`.
-   - After writing the story file, run `cache_story_prompt_links` / `detect_change` as today;
-     metadata stitching is independent of which generation path produced the body.
+   - After writing the story file, directly upsert metadata for the exact prompt
+     files passed by the user. Do not call `detect_change` or
+     `cache_story_prompt_links` from `generate_user_story`.
 
 4. **Story fix flow**
    - `run_user_story_fix` must:

@@ -1,3 +1,7 @@
+# pylint: disable=missing-module-docstring,missing-function-docstring
+# pylint: disable=use-implicit-booleaness-not-comparison,unused-variable
+# pylint: disable=too-many-locals,line-too-long
+
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -458,13 +462,11 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
     prompt_two.write_text("Send notifications.", encoding="utf-8")
 
-    changes = [{"prompt_name": "notify_python.prompt", "change_instructions": "Refine scope"}]
     # Force the deterministic fallback (LLM unavailable) so this exercises the
     # template path it asserts on.
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
     ):
-        mock_detect.return_value = (changes, 0.2, "gpt-test")
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
             stories_dir=str(tmp_path / "user_stories"),
@@ -473,15 +475,17 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
 
     assert success is True
     assert "Generated story file:" in message
-    assert "auto-detected" in message
-    assert cost == 0.2
-    assert model == "gpt-test"
-    assert linked_prompts == ["notify_python.prompt"]
+    assert "linked from prompt inputs" in message
+    assert cost == 0.0
+    assert model == ""
+    assert linked_prompts == ["upload_python.prompt", "notify_python.prompt"]
+    mock_detect.assert_not_called()
     output_path = Path(story_file)
     assert output_path.exists()
     story_text = output_path.read_text(encoding="utf-8")
     assert story_text.startswith("<!-- pdd-story-prompts:")
-    assert "<!-- pdd-story-prompts: notify_python.prompt -->" in story_text
+    assert "upload_python.prompt" in story_text
+    assert "notify_python.prompt" in story_text
     assert "## Covers" in story_text
     assert "## Story" in story_text
     assert "## Context" in story_text
@@ -510,7 +514,6 @@ def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
     ):
-        mock_detect.return_value = ([], 0.15, "gpt-test")
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
             stories_dir=str(tmp_path / "user_stories"),
@@ -519,9 +522,10 @@ def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_
 
     assert success is True
     assert "linked from prompt inputs" in message
-    assert cost == 0.15
-    assert model == "gpt-test"
+    assert cost == 0.0
+    assert model == ""
     assert linked_prompts == ["upload_python.prompt", "notify_python.prompt"]
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "<!-- pdd-story-prompts:" in story_text
     assert "upload_python.prompt" in story_text
@@ -549,6 +553,7 @@ def test_generate_user_story_uses_deterministic_links_when_detection_raises(tmp_
     assert cost == 0.0
     assert model == ""
     assert linked_prompts == ["offline_python.prompt"]
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "<!-- pdd-story-prompts: offline_python.prompt -->" in story_text
     assert "Generate an offline-safe report" in story_text
@@ -573,7 +578,6 @@ def test_generate_user_story_derives_unit_test_ready_details_from_prompt(tmp_pat
     with patch(
         "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
     ), patch("pdd.user_story_tests.detect_change") as mock_detect:
-        mock_detect.return_value = ([], 0.0, "local")
         success, _, _, _, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt)],
             stories_dir=str(tmp_path / "user_stories"),
@@ -582,6 +586,7 @@ def test_generate_user_story_derives_unit_test_ready_details_from_prompt(tmp_pat
 
     assert success is True
     assert linked_prompts == ["csv_report_python.prompt"]
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "As a prompt reviewer" in story_text
     assert "Build a CSV report workflow" in story_text
@@ -606,7 +611,6 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
     ):
-        mock_detect.return_value = ([], 0.1, "gpt-test")
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
             stories_dir=str(tmp_path / "user_stories"),
@@ -614,6 +618,7 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
         )
 
     assert success is True
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "- R1: Positive amount" in story_text
     assert "- R2: Remaining balance" in story_text
@@ -639,7 +644,6 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
     ):
-        mock_detect.return_value = ([], 0.1, "gpt-test")
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
             stories_dir=str(tmp_path / "user_stories"),
@@ -647,6 +651,7 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
         )
 
     assert success is True
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "- prompts/contract_rules_python.prompt#R1: Positive amount" in story_text
     assert "- prompts/contract_rules_python.prompt#R2: Remaining balance" in story_text
@@ -683,7 +688,6 @@ def test_generate_user_story_uses_llm_output(tmp_path):
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.llm_invoke.llm_invoke", return_value=fake_llm
     ) as mock_llm:
-        mock_detect.return_value = ([], 0.1, "detect-model")
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
             stories_dir=str(tmp_path / "user_stories"),
@@ -700,8 +704,11 @@ def test_generate_user_story_uses_llm_output(tmp_path):
     # Metadata stitched deterministically even though the LLM did not emit it.
     assert story_text.startswith("<!-- pdd-story-prompts:")
     assert "upload_python.prompt" in story_text
-    # Cost includes both the story-generation call and the linking call.
-    assert cost == pytest.approx(0.15)
+    assert "linked from prompt inputs" in message
+    assert cost == pytest.approx(0.05)
+    assert model == "story-model"
+    assert linked_prompts == ["upload_python.prompt"]
+    mock_detect.assert_not_called()
 
 
 def test_generate_user_story_falls_back_when_llm_errors(tmp_path):
@@ -715,7 +722,6 @@ def test_generate_user_story_falls_back_when_llm_errors(tmp_path):
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.llm_invoke.llm_invoke", side_effect=RuntimeError("no provider key")
     ):
-        mock_detect.return_value = ([], 0.1, "detect-model")
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
             stories_dir=str(tmp_path / "user_stories"),
@@ -723,6 +729,7 @@ def test_generate_user_story_falls_back_when_llm_errors(tmp_path):
         )
 
     assert success is True
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     # Deterministic fallback is still prompt-derived, not a placeholder.
     assert "As a prompt reviewer," in story_text
@@ -745,7 +752,6 @@ def test_generate_user_story_falls_back_when_llm_output_malformed(tmp_path):
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.llm_invoke.llm_invoke", return_value=bad_llm
     ):
-        mock_detect.return_value = ([], 0.1, "detect-model")
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
             stories_dir=str(tmp_path / "user_stories"),
@@ -753,9 +759,46 @@ def test_generate_user_story_falls_back_when_llm_output_malformed(tmp_path):
         )
 
     assert success is True
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "As a prompt reviewer," in story_text  # fell back to prompt-derived template
     assert "I can do things." not in story_text
+
+
+def test_generate_user_story_falls_back_when_llm_output_contains_placeholders(tmp_path):
+    """LLM output containing template placeholders is rejected."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    placeholder_story = (
+        "# User Story: Placeholder\n\n"
+        "## Story\n\n"
+        "As a <persona>, I can <capability>, so that <benefit>.\n\n"
+        "## Acceptance Criteria\n\n"
+        "1. Given <state>, when <action>, then <detail>.\n"
+    )
+    bad_llm = {"result": placeholder_story, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+    ):
+        success, _, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert cost == pytest.approx(0.05)
+    assert model == "story-model"
+    assert linked_prompts == ["upload_python.prompt"]
+    mock_detect.assert_not_called()
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "As a prompt reviewer," in story_text
+    assert "<persona>" not in story_text
+    assert "<capability>" not in story_text
+    assert "<benefit>" not in story_text
 
 
 def test_legacy_minimal_story_passes_validation(tmp_path):
