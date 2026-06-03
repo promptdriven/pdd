@@ -414,6 +414,24 @@ def test_change_agentic_forwards_no_github_state(runner, mock_run_agentic_change
     assert mock_run_agentic_change.call_args.kwargs['use_github_state'] is False
 
 
+def test_change_agentic_no_github_state_sets_env_during_run(runner, mock_run_agentic_change):
+    """--no-github-state also suppresses visible GitHub step comments."""
+    seen = []
+
+    def fake_run(*args, **kwargs):
+        seen.append(os.environ.get("PDD_NO_GITHUB_STATE"))
+        return True, "Done", 0.1, "m", []
+
+    mock_run_agentic_change.side_effect = fake_run
+
+    with patch.dict(os.environ, {}, clear=True):
+        result = runner.invoke(change, ['https://github.com/x/y/issues/1', '--no-github-state'])
+
+        assert result.exit_code == 0
+        assert seen == ["1"]
+        assert "PDD_NO_GITHUB_STATE" not in os.environ
+
+
 def test_change_agentic_default_use_github_state_true(runner, mock_run_agentic_change):
     mock_run_agentic_change.return_value = (True, "Done", 0.1, "m", [])
     result = runner.invoke(change, ['https://github.com/x/y/issues/1'])

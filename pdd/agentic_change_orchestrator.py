@@ -871,8 +871,9 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     """Check output for hard stop conditions.
 
     Clarification steps (4, 7) require the explicit STOP_CONDITION: tag.
-    Other steps use case-insensitive substring matching as a fallback.
-    A universal STOP_CONDITION: tag is recognized on any step.
+    Other stop-capable steps use case-insensitive substring matching as a
+    fallback. Step 8 is prompt-change analysis only and must continue to Step 9
+    because code/docs direct edits may still be pending.
     """
     if not output:
         return None
@@ -893,8 +894,8 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
         if stop_match and "architectural" in stop_match.group(1).lower():
             return "Architectural decision needed"
         return None
-    if step_num == 8 and re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*no changes required", output_lower, re.MULTILINE):
-        return "No changes needed"
+    if step_num == 8:
+        return None
     if step_num == 9:
         if "fail:" in output_lower:
             return "Implementation failed"
@@ -1308,8 +1309,14 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         test_dir = ctx_defaults.get("test_output_path", defaults["test_dir"])
         example_dir = ctx_defaults.get("example_output_path", defaults["example_dir"])
 
-        # Derive ext from language
-        ext = get_extension(language) if language else defaults["ext"]
+        # Derive ext from language; keep parsed .pddrc paths even if extension
+        # lookup cannot resolve local package data in a test or constrained env.
+        try:
+            ext = get_extension(language) if language else defaults["ext"]
+        except Exception:
+            ext = defaults["ext"]
+        if not ext:
+            ext = defaults["ext"]
         if ext.startswith("."):
             ext = ext[1:]  # Remove leading dot if present
 
@@ -1988,7 +1995,18 @@ def run_agentic_change_orchestrator(
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
+        # Step 6 can legitimately find no prompt-backed dev units while still
+        # identifying unmanaged direct edit candidates. Parse those before hard
+        # stop detection so direct-edit-only runs can continue to Step 8/9.
+        if step_num == 6:
+            direct_edit_candidates = _parse_direct_edit_candidates(step_output)
+            context["direct_edit_candidates"] = direct_edit_candidates
+            if direct_edit_candidates and not quiet:
+                console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
+
         stop_reason = _check_hard_stop(step_num, step_output)
+        if step_num == 6 and stop_reason and context.get("direct_edit_candidates"):
+            stop_reason = None
         if stop_reason:
             post_step_comment(
                 repo_owner=repo_owner, repo_name=repo_name,
@@ -2009,13 +2027,6 @@ def run_agentic_change_orchestrator(
             state["step_comments"] = sorted(step_comments_set)
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
-
-        # Step 6: Extract direct edit candidates (files without prompts that need scoped edits)
-        if step_num == 6:
-            direct_edit_candidates = _parse_direct_edit_candidates(step_output)
-            context["direct_edit_candidates"] = direct_edit_candidates
-            if direct_edit_candidates and not quiet:
-                console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
 
         if step_num == 9:
             extracted_files = _parse_changed_files(step_output)
