@@ -631,3 +631,96 @@ def test_azure_opus_48_is_deferred_even_when_litellm_knows_it(monkeypatch):
     )
     # The direct-Anthropic 4.8 row must still be present (deferral is scoped).
     assert any(r.get("model") == "claude-opus-4-8" for r in rows)
+
+
+def test_build_rows_includes_vertex_gemini_3_5_flash_ga_default(monkeypatch):
+    """Issue #1364 / #1136: the GA Vertex Gemini Flash row (the cloud
+    LLM_INVOKE_DEFAULT_MODEL) must be seeded via _MANDATORY_MODEL_ROWS even
+    when litellm.model_cost doesn't carry it yet. Pricing, provider, and
+    location pin the values reviewers depend on so a regen never drops it."""
+    fake_litellm = type("L", (), {"model_cost": {
+        "vertex_ai/zai-org/glm-4.7-maas": {
+            "mode": "chat",
+            "input_cost_per_token": 0.6e-6,
+            "output_cost_per_token": 2.2e-6,
+            "litellm_provider": "vertex_ai",
+            "supports_function_calling": True,
+        },
+    }})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {})
+
+    rows = gmc.build_rows()
+
+    row = next(r for r in rows if r["model"] == "vertex_ai/gemini-3.5-flash")
+    assert row["provider"] == "Google Vertex AI"
+    assert row["api_key"] == "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION"
+    assert row["location"] == "global"
+    assert row["input"] == 1.5
+    assert row["output"] == 9.0
+    assert row["reasoning_type"] == "effort"
+    assert row["structured_output"] is True
+    # ELO must resolve from STATIC_ELO_FALLBACK (the mandatory seed path runs
+    # with an empty arena index here) so regeneration never emits a blank/wrong
+    # score, which would mis-sort the row and break catalog byte-stability.
+    assert row["coding_arena_elo"] == 1442
+    # The writer classifies every row for the interactive_only column; a
+    # Vertex model is a server credential flow, never interactive.
+    assert row["interactive_only"] is False
+
+
+def test_committed_csv_includes_vertex_gemini_3_5_flash_ga_default():
+    """Issue #1364 / #1136: the committed catalog must ship the GA Vertex
+    Gemini Flash row so PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash resolves
+    directly instead of surrogating onto an unrelated first-row provider.
+
+    Pin the EXACT 12-column row (format + ELO 1442 + interactive_only=False)
+    and its ELO-sorted position (between the 1456 customtools row and the 1440
+    glm row) so a regeneration that emitted a malformed/mis-sorted row would
+    fail here, not silently dirty the committed catalog."""
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
+    lines = csv_path.read_text(encoding="utf-8").splitlines()
+
+    exact_row = (
+        "Google Vertex AI,vertex_ai/gemini-3.5-flash,1.5,9.0,1442,,"
+        "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+        "0,True,effort,global,False"
+    )
+    assert exact_row in lines, "GA Vertex Gemini Flash row missing or malformed"
+
+    # ELO-descending order within the Google Vertex AI block: 1442 sits between
+    # the 1456 customtools row and the 1440 glm row.
+    idx = lines.index(exact_row)
+    assert lines[idx - 1].startswith(
+        "Google Vertex AI,gemini-3.1-pro-preview-customtools,"
+    )
+    assert lines[idx + 1].startswith(
+        "Google Vertex AI,vertex_ai/zai-org/glm-4.7-maas,"
+    )
+
+
+def test_prod_cloud_default_models_present_in_catalog():
+    """Issue #1364 cross-repo drift guard (pdd side).
+
+    pdd_cloud's inner sync `llm_invoke` is driven by LLM_INVOKE_DEFAULT_MODEL.
+    When that default advances to a new id, the *exact* row must already ship
+    in pdd's bundled catalog — otherwise resolution misses and the run
+    silently surrogates onto a different provider (the #1364 regression:
+    vertex_ai/gemini-3.5-flash drifted to AWS Bedrock Claude Opus).
+
+    This is a STATIC pin of the currently-deployed cloud default(s); it cannot
+    read pdd_cloud's constant, so the live cross-repo check belongs in
+    pdd_cloud. Keeping this list current here makes catalog drift fail CI on
+    the pdd side before it reaches production sync."""
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
+    text = csv_path.read_text(encoding="utf-8")
+
+    # Each known production cloud default must have an exact model row.
+    prod_default_models = [
+        "vertex_ai/gemini-3.5-flash",
+    ]
+    missing = [m for m in prod_default_models if f",{m}," not in text]
+    assert not missing, (
+        f"cloud default model(s) missing from bundled llm_model.csv: {missing}. "
+        "Add the exact row (see issue #1364) before the cloud default advances."
+    )
