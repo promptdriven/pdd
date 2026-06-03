@@ -766,7 +766,13 @@ def process_include_tags(
                             selectors.append(f"lines:{lines_str}")
                         
                         try:
+                            from pdd.compression_reporting import (
+                                CompressionFallbackError,
+                                record_compression_applied,
+                            )
                             from pdd.content_selector import ContentSelector
+
+                            original_content = content
                             selector = ContentSelector()
                             content = selector.select(
                                 content=content,
@@ -774,6 +780,14 @@ def process_include_tags(
                                 file_path=full_path,
                                 mode=mode,
                             )
+                            if (
+                                mode != "full"
+                                and content != original_content
+                                and not selectors
+                            ):
+                                record_compression_applied(full_path, mode)
+                        except CompressionFallbackError:
+                            raise
                         except ImportError as e:
                             fallback_query = attrs.get('query')
                             if fallback_query:
@@ -800,8 +814,6 @@ def process_include_tags(
                         except Exception as e:
                             fallback_strategy = os.environ.get("PDD_COMPRESSION_FALLBACK", "full").lower()
                             if fallback_strategy == "error":
-                                from pdd.compression_reporting import CompressionFallbackError
-
                                 raise CompressionFallbackError(str(e)) from e
                             fallback_query = attrs.get('query')
                             if fallback_query:

@@ -203,10 +203,15 @@ def test_preprocess_compression_fallback_error_raises(
 def test_compression_summary_reports_active_modes_and_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from pdd.compression_reporting import record_compression_applied
+
     monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "examples")
     clear_compression_fallback_events()
+    record_compression_applied("examples/widget_example.py", "interface")
     record_compression_fallback("fallback event")
-    assert any("context-compression=examples" in ln for ln in format_compression_summary_lines())
+    lines = format_compression_summary_lines()
+    assert any("context-compression=examples" in ln for ln in lines)
+    assert any("Context compressed: examples/widget_example.py" in ln for ln in lines)
 
 
 def test_pytest_output_skipped_by_compression_from_deselected(
@@ -257,6 +262,61 @@ def test_test_interface_mode_without_failing_tests_returns_full_content(
     assert any(
         "PDD_FAILING_TESTS unset" in event
         for event in format_compression_summary_lines()
+    )
+
+
+def test_preprocess_slice_failure_raises_compression_fallback_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preprocess include path must propagate compression fallback errors."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_QUIET", "1")
+    monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "test")
+    monkeypatch.setenv("PDD_COMPRESSION_FALLBACK", "error")
+    monkeypatch.setenv("PDD_FAILING_TESTS", "tests/test_sample.py::test_missing")
+    clear_compression_fallback_events()
+
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_sample.py").write_text(
+        "def test_foo():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CompressionFallbackError, match="pytest slice failed"):
+        preprocess(
+            "<include>tests/test_sample.py</include>",
+            recursive=False,
+            double_curly_brackets=False,
+            tests_dir="tests",
+        )
+
+
+def test_preprocess_examples_compression_lists_target_in_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_QUIET", "1")
+    monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "examples")
+    clear_compression_fallback_events()
+
+    examples_dir = tmp_path / "examples"
+    examples_dir.mkdir()
+    (examples_dir / "widget_example.py").write_text(
+        "def run_widget():\n    return 42\n",
+        encoding="utf-8",
+    )
+
+    preprocess(
+        f"<include>examples/widget_example.py</include>",
+        recursive=False,
+        double_curly_brackets=False,
+        examples_dir="examples",
+    )
+    assert any(
+        "Context compressed:" in line and "widget_example.py" in line
+        for line in format_compression_summary_lines()
     )
 
 
@@ -390,3 +450,59 @@ def test_fix_error_loop_compresses_unit_test_before_fix_call(
     assert "def test_fails" in sent
     assert "def test_passes" not in sent
     assert sent != unit_test_content
+
+
+def test_fix_error_loop_compression_fallback_error_aborts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """fix --loop must stop cleanly when test slicing fails under error policy."""
+    from unittest.mock import patch
+
+    from pdd.fix_error_loop import fix_error_loop
+
+    code = tmp_path / "widget.py"
+    test = tmp_path / "test_widget.py"
+    prompt = tmp_path / "widget_python.prompt"
+    error_log = tmp_path / "error.log"
+
+    test.write_text("def test_foo():\n    assert False\n", encoding="utf-8")
+    code.write_text("def add(a, b):\n    return a - b\n", encoding="utf-8")
+    prompt.write_text("Fix the code.", encoding="utf-8")
+
+    pytest_output = f"FAILED {test.name}::test_missing - AssertionError\n"
+    fix_called = {"count": 0}
+
+    def _fake_fix(*args, **kwargs):  # type: ignore[no-untyped-def]
+        fix_called["count"] += 1
+        return False, True, "", "", "analysis", 0.0, "mock"
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_COMPRESSION_FALLBACK", "error")
+    clear_compression_fallback_events()
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file", return_value=(1, 0, 0, pytest_output)), patch(
+        "pdd.fix_error_loop.fix_errors_from_unit_tests", side_effect=_fake_fix
+    ):
+        success, *_rest = fix_error_loop(
+            unit_test_file=str(test),
+            code_file=str(code),
+            prompt_file=str(prompt),
+            prompt="Fix",
+            verification_program="",
+            strength=0.5,
+            temperature=0.0,
+            max_attempts=1,
+            budget=5.0,
+            error_log_file=str(error_log),
+            agentic_fallback=False,
+            compress_test_context=True,
+        )
+
+    assert success is False
+    assert fix_called["count"] == 0
+    assert "pytest slice failed" in error_log.read_text(encoding="utf-8")
+    assert any(
+        "Compression fallback triggered" in line
+        for line in format_compression_summary_lines()
+    )

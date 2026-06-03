@@ -6,6 +6,7 @@ import os
 from typing import Any
 
 _FALLBACK_EVENTS: list[str] = []
+_COMPRESSED_INCLUDES: list[str] = []
 
 
 class CompressionFallbackError(Exception):
@@ -13,8 +14,16 @@ class CompressionFallbackError(Exception):
 
 
 def clear_compression_fallback_events() -> None:
-    """Reset per-invocation fallback events (call at CLI entry)."""
+    """Reset per-invocation compression reporting (call at CLI entry)."""
     _FALLBACK_EVENTS.clear()
+    _COMPRESSED_INCLUDES.clear()
+
+
+def record_compression_applied(file_path: str, mode: str) -> None:
+    """Record a successfully compressed include target for the execution summary."""
+    entry = f"{file_path} (mode={mode})"
+    if entry not in _COMPRESSED_INCLUDES:
+        _COMPRESSED_INCLUDES.append(entry)
 
 
 def record_compression_fallback(message: str) -> None:
@@ -57,6 +66,9 @@ def format_compression_summary_lines() -> list[str]:
         lines.append(
             f"  Context compression: off; fallback policy: {settings['compression_fallback']}"
         )
+
+    for entry in _COMPRESSED_INCLUDES:
+        lines.append(f"  Context compressed: {entry}")
 
     for event in _FALLBACK_EVENTS:
         lines.append(f"  Compression fallback triggered: {event}")

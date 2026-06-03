@@ -25,6 +25,7 @@ from .failure_classification import (
     format_signature_hint,
 )
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from .compression_reporting import CompressionFallbackError, record_compression_applied
 from .config_resolution import apply_compression_env
 from .content_selector import slice_test_interface_context
 from .fix_focus import FocusedInputs, is_large, prepare_focused_inputs, reconstruct_code
@@ -484,7 +485,26 @@ def fix_error_loop(
             and _test_context_compression_active()
             and failing_tests
         ):
-            compressed_test = slice_test_interface_context(unit_test_content, unit_test_file)
+            try:
+                compressed_test = slice_test_interface_context(unit_test_content, unit_test_file)
+            except CompressionFallbackError as exc:
+                console.print(
+                    f"[bold red]Test context compression failed:[/bold red] {escape_brackets(str(exc))}"
+                )
+                with open(error_log_file, "a", encoding="utf-8") as log_file:
+                    log_file.write(
+                        format_log_for_output(attempt, output_log, str(exc), "")
+                    )
+                return (
+                    False,
+                    unit_test_content,
+                    code_content,
+                    total_attempts,
+                    total_cost,
+                    model_name,
+                )
+            if compressed_test and compressed_test != unit_test_content:
+                record_compression_applied(unit_test_file, "test_interface")
             if compressed_test:
                 target_test = compressed_test
         # Track whether *this* attempt's fix came from the cloud path (vs a

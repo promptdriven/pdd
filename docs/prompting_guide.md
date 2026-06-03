@@ -122,11 +122,13 @@ To manage large context windows and reduce costs, PDD supports automated context
 
 ### How It Works
 
-Users can enable compression via CLI flags or `.pddrc` configuration:
+Users can enable compression via **global** CLI flags (before the subcommand), `.pddrc` defaults, or command-local flags on `pdd sync` / `pdd fix`:
 
 - **`--compress-examples`**: Automatically applies `mode="interface"` to all example files in the `<include>` graph. This extracts signatures and docstrings, replacing function bodies with `...`.
 - **`--compress-test-context`**: Uses AST-based slicing to include only failing tests and their necessary fixtures from the test context during `pdd fix` or `pdd test`.
-- **`--context-compression {off,test,examples,contracts,all}`**: A global setting to enable multiple compression modes at once.
+- **`--context-compression {off,test,examples,contracts,all}`**: Enables one or more compression modes for the invocation.
+
+Place global flags before the subcommand, for example `pdd --context-compression test generate prompts/foo_python.prompt`. The `generate` and `preprocess` commands do **not** accept `--context-compression` after the subcommand; `sync` and `fix` may pass the same flags after their subcommand as well.
 
 ### The "Mold Walls" Concept
 
@@ -138,7 +140,7 @@ If compression fails (e.g., due to AST parsing errors in a dependency), the syst
 
 ### Reporting
 
-PDD reports when compression is applied in the execution summary, indicating which files were compressed and whether any fallbacks were triggered.
+PDD reports active compression modes in the execution summary, lists successfully compressed include targets (path and mode), and records any fallback events (including the file path when slicing or selection fails).
 
 ---
 
