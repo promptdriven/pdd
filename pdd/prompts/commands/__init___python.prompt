@@ -11,6 +11,7 @@
 }
 </pdd-interface>
 <pdd-dependency>commands/replay_python.prompt</pdd-dependency>
+<pdd-dependency>commands/context_audit_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the command registration module `pdd/commands/__init__.py`.
 
@@ -32,6 +33,7 @@
     - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
     - `preprocess` (from `.misc`)
     - `replay` (from `.replay`)
+    - `context_audit` (from `.context_audit`)
     - `extracts` (from `.extracts`)
     - `report_core` (from `.report`)
     - `install_completion_cmd` (as `name="install_completion"`), `verify` (from `.utility`)
