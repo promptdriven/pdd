@@ -2,7 +2,6 @@ import csv
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from z3 import Solver, Int, Real, unsat
 
 from pdd.server import token_counter
 from pdd.server.token_counter import (
@@ -29,6 +28,8 @@ def mock_pricing_csv(tmp_path):
         "claude-3-opus,15.00,75.00",
         "claude-sonnet-4-20250514,3.00,15.00",
         "gemini-1.5-pro,3.50,10.50",
+        "local-free,0,0",
+        "legacy-input-only,2.50,",
     ]
     p = tmp_path / "llm_model.csv"
     p.write_text("\n".join(csv_content))
@@ -214,6 +215,15 @@ def test_estimate_cost_exact_match(mock_pricing_csv):
     assert estimate.cost_per_million == 30.00
 
 
+def test_estimate_cost_accepts_string_pricing_csv_path(mock_pricing_csv):
+    """Legacy callers may pass pricing_csv as a string path."""
+    token_counter._load_model_pricing.cache_clear()
+    estimate = estimate_cost(1000, "gpt-4", str(mock_pricing_csv))
+
+    assert estimate is not None
+    assert estimate.input_cost == pytest.approx(0.03)
+
+
 def test_estimate_cost_partial_match(mock_pricing_csv):
     """Cost estimation with a partial model name match."""
     token_counter._load_model_pricing.cache_clear()
@@ -222,6 +232,16 @@ def test_estimate_cost_partial_match(mock_pricing_csv):
     assert estimate is not None
     assert estimate.input_cost == pytest.approx(15.00)
     assert estimate.cost_per_million == 15.00
+
+
+def test_estimate_cost_allows_input_only_legacy_pricing(mock_pricing_csv):
+    """Input-only estimates remain usable when an older CSV lacks output rates."""
+    token_counter._load_model_pricing.cache_clear()
+    estimate = estimate_cost(1_000_000, "legacy-input-only", mock_pricing_csv)
+
+    assert estimate is not None
+    assert estimate.input_cost == pytest.approx(2.50)
+    assert estimate.output_cost_per_million is None
 
 
 def test_estimate_cost_unknown_model_returns_none(mock_pricing_csv):
@@ -249,6 +269,26 @@ def test_estimate_completion_cost_uses_input_and_output_rates(mock_pricing_csv):
     assert estimate.output_tokens == 500_000
     assert estimate.input_cost_per_million == 30.00
     assert estimate.output_cost_per_million == 60.00
+
+
+def test_estimate_completion_cost_zero_rates_are_known_prices(mock_pricing_csv):
+    """Explicit zero input/output rates are valid known prices, not unknown."""
+    token_counter._load_model_pricing.cache_clear()
+    estimate = estimate_completion_cost(1000, 2000, "local-free", mock_pricing_csv)
+
+    assert estimate is not None
+    assert estimate.input_cost == pytest.approx(0.0)
+    assert estimate.output_cost == pytest.approx(0.0)
+    assert estimate.total_cost == pytest.approx(0.0)
+
+
+def test_estimate_completion_cost_requires_output_rate(mock_pricing_csv):
+    """Completion estimates are unknown when only input pricing is available."""
+    token_counter._load_model_pricing.cache_clear()
+    assert (
+        estimate_completion_cost(1000, 1000, "legacy-input-only", mock_pricing_csv)
+        is None
+    )
 
 
 def test_estimate_completion_cost_unknown_model_returns_none(mock_pricing_csv):
@@ -358,11 +398,12 @@ def test_z3_cost_calculation_properties():
     - Cost is non-negative for non-negative tokens and positive price.
     - Cost scales linearly with token count.
     """
-    s = Solver()
+    z3 = pytest.importorskip("z3")
+    s = z3.Solver()
 
-    tokens = Int("tokens")
-    price_per_million = Real("price_per_million")
-    cost = Real("cost")
+    tokens = z3.Int("tokens")
+    price_per_million = z3.Real("price_per_million")
+    cost = z3.Real("cost")
 
     # cost = (tokens / 1_000_000) * price_per_million
     calc_cost = (ToReal(tokens) / 1_000_000.0) * price_per_million
@@ -372,7 +413,7 @@ def test_z3_cost_calculation_properties():
 
     # Negate the property: cost < 0 must be unsatisfiable
     s.add(cost < 0)
-    assert s.check() == unsat, "Found a case where cost is negative despite positive inputs"
+    assert s.check() == z3.unsat, "Found a case where cost is negative despite positive inputs"
 
 
 def test_z3_context_usage_percentage():
@@ -382,11 +423,12 @@ def test_z3_context_usage_percentage():
     - tokens > limit   →  usage > 100%
     - tokens == 0      →  usage == 0%
     """
-    s = Solver()
+    z3 = pytest.importorskip("z3")
+    s = z3.Solver()
 
-    tokens = Int("tokens")
-    limit = Int("limit")
-    usage = Real("usage")
+    tokens = z3.Int("tokens")
+    limit = z3.Int("limit")
+    usage = z3.Real("usage")
 
     # usage = (tokens / limit) * 100
     calc_usage = (ToReal(tokens) / ToReal(limit)) * 100.0
@@ -398,21 +440,21 @@ def test_z3_context_usage_percentage():
     s.push()
     s.add(tokens == limit)
     s.add(usage != 100.0)
-    assert s.check() == unsat, "Usage should be 100% when tokens equal the limit"
+    assert s.check() == z3.unsat, "Usage should be 100% when tokens equal the limit"
     s.pop()
 
     # Case 2: tokens > limit → usage > 100
     s.push()
     s.add(tokens > limit)
     s.add(usage <= 100.0)
-    assert s.check() == unsat, "Usage should be > 100% when tokens exceed the limit"
+    assert s.check() == z3.unsat, "Usage should be > 100% when tokens exceed the limit"
     s.pop()
 
     # Case 3: tokens == 0 → usage == 0
     s.push()
     s.add(tokens == 0)
     s.add(usage != 0.0)
-    assert s.check() == unsat, "Usage should be 0% when token count is zero"
+    assert s.check() == z3.unsat, "Usage should be 0% when token count is zero"
     s.pop()
 
 

@@ -14,7 +14,7 @@ import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Callable, Optional, Dict, NamedTuple
+from typing import Any, Callable, Optional, Dict, NamedTuple, Union
 
 import litellm
 import tiktoken
@@ -281,7 +281,18 @@ class ModelPricing(NamedTuple):
     """Per-million-token input and output pricing for a model."""
 
     input_cost_per_million: float
-    output_cost_per_million: float
+    output_cost_per_million: Optional[float]
+
+
+PricingCsvPath = Union[str, Path]
+
+
+def _existing_pricing_path(pricing_csv: Optional[PricingCsvPath]) -> Optional[Path]:
+    """Normalize a pricing CSV path and return it only when it exists."""
+    if pricing_csv is None:
+        return None
+    path = Path(pricing_csv)
+    return path if path.exists() else None
 
 
 @lru_cache(maxsize=1)
@@ -296,12 +307,17 @@ def _load_model_pricing(csv_path: str) -> Dict[str, ModelPricing]:
                 model = row.get("model", "")
                 input_cost = row.get("input")
                 output_cost = row.get("output")
-                if not model or input_cost in (None, "") or output_cost in (None, ""):
+                if not model or input_cost in (None, ""):
                     continue
                 try:
+                    parsed_output = (
+                        float(output_cost)
+                        if output_cost not in (None, "")
+                        else None
+                    )
                     pricing[model] = ModelPricing(
                         float(input_cost),
-                        float(output_cost),
+                        parsed_output,
                     )
                 except (TypeError, ValueError):
                     continue
@@ -331,7 +347,7 @@ def _find_model_pricing(
 def estimate_cost(
     token_count: int,
     model: str,
-    pricing_csv: Optional[Path] = None,
+    pricing_csv: Optional[PricingCsvPath] = None,
 ) -> Optional[CostEstimate]:
     """
     Estimate the input cost for a given token count.
@@ -344,10 +360,11 @@ def estimate_cost(
     Returns:
         CostEstimate or None if pricing not found.
     """
-    if pricing_csv is None or not pricing_csv.exists():
+    pricing_path = _existing_pricing_path(pricing_csv)
+    if pricing_path is None:
         return None
 
-    pricing = _load_model_pricing(str(pricing_csv))
+    pricing = _load_model_pricing(str(pricing_path))
 
     if not pricing:
         return None
@@ -377,7 +394,7 @@ def estimate_completion_cost(
     input_tokens: int,
     predicted_output_tokens: int,
     model: str,
-    pricing_csv: Optional[Path] = None,
+    pricing_csv: Optional[PricingCsvPath] = None,
 ) -> Optional[CostEstimate]:
     """
     Estimate combined input and predicted output cost for a completion.
@@ -385,10 +402,11 @@ def estimate_completion_cost(
     Returns None when pricing is unavailable or the model has no valid pricing
     row. Unknown models must not borrow another model's price.
     """
-    if pricing_csv is None or not pricing_csv.exists():
+    pricing_path = _existing_pricing_path(pricing_csv)
+    if pricing_path is None:
         return None
 
-    pricing = _load_model_pricing(str(pricing_csv))
+    pricing = _load_model_pricing(str(pricing_path))
     if not pricing:
         return None
 
@@ -396,6 +414,8 @@ def estimate_completion_cost(
     if match is None:
         return None
     matched_model, rates = match
+    if rates.output_cost_per_million is None:
+        return None
 
     input_cost = (input_tokens / 1_000_000) * rates.input_cost_per_million
     output_cost = (
