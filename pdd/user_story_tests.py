@@ -19,6 +19,15 @@ from .get_extension import get_extension
 DEFAULT_STORIES_DIR = "user_stories"
 DEFAULT_PROMPTS_DIR = "prompts"
 DEFAULT_SRC_DIR = "src"
+_LANGUAGE_EXTENSION_FALLBACKS = {
+    "python": ".py",
+    "javascript": ".js",
+    "typescript": ".ts",
+    "java": ".java",
+    "go": ".go",
+    "ruby": ".rb",
+    "rust": ".rs",
+}
 STORY_PREFIX = "story__"
 STORY_SUFFIX = ".md"
 STORY_PROMPTS_METADATA_KEY = "pdd-story-prompts"
@@ -252,8 +261,8 @@ def _prompt_to_code_path(prompt_path: Path, prompts_dir: Path) -> Optional[Path]
     basename_part, language = stem.rsplit("_", 1)
     try:
         extension = get_extension(language)
-    except ValueError:
-        return None
+    except (FileNotFoundError, ValueError):
+        extension = _LANGUAGE_EXTENSION_FALLBACKS.get(language.lower(), "")
     extension = extension.lstrip(".")
 
     code_dir = _resolve_src_dir(prompts_dir)

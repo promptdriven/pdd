@@ -140,6 +140,7 @@ def test_mocks(tmp_path):
     """Mocks for the test orchestrator with quiet=False."""
     mock_console = MagicMock()
     with patch("pdd.agentic_test_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_test_orchestrator.drain_step_steers", return_value=[]), \
          patch("pdd.agentic_test_orchestrator.load_workflow_state") as mock_load, \
          patch("pdd.agentic_test_orchestrator.save_workflow_state") as mock_save, \
          patch("pdd.agentic_test_orchestrator.clear_workflow_state") as mock_clear, \
@@ -158,7 +159,7 @@ def test_mocks(tmp_path):
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False):
+                        use_playwright=False, steers=None, **kwargs):
             if label == "step4":
                 return (True, "TEST_TYPE: api\nTEST_FRAMEWORK: pytest", 0.1, "anthropic")
             if label == "step12":

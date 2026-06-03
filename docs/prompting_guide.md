@@ -825,48 +825,31 @@ The PDD preprocessor supports additional XML‑style tags to keep prompts clean,
   - Behavior: executes during non‑recursive preprocessing; on failure, inserts a bracketed error note.
   - Example: `<web>https://docs.litellm.ai/docs/completion/json_mode</web>`
 
-> ⚠️ **Warning: Non-Deterministic Tags**
+> **Warning: Non-Deterministic Tags**
 >
 > `<shell>`, `<web>`, and `<include ... query="...">` introduce **non-determinism**:
 > - `<shell>` output varies by environment (different machines, different results)
 > - `<web>` content changes over time (same URL, different content)
 > - `<include ... query="...">` relies on LLM interpretation (may vary by model or seed)
 >
-> **Impact:** Same prompt file → different generations on different machines/times
->
-> **Prefer instead:** Capture output to a static file, then `<include>` that file. This ensures reproducible regeneration.
+> **Impact:** Same prompt file -> different generations on different machines/times.
 
 Use these tags sparingly. When you must use them, prefer stable commands with bounded output (e.g., `head -n 20` in `<shell>`).
 
 ### Determinism for Contract-Critical Context
 
-For contract-critical facts, prefer stable includes over dynamic context.
+For durable or contract-critical dynamic context, use PDD's snapshot workflow instead of relying on live expansion every time:
 
-Good:
-
-```xml
-<include>docs/refund_policy_snapshot.md</include>
+```bash
+pdd preprocess prompts/refund_python.prompt --snapshot
+pdd generate prompts/refund_python.prompt --snapshot-context
+pdd sync refund --snapshot-context
+pdd replay .pdd/evidence/runs/<run_id>.json
 ```
 
-Risky:
+Snapshots capture the fully expanded prompt plus artifacts for nondeterministic context such as `<shell>`, `<web>`, and `<include ... query="...">`. The canonical run artifact is `.pdd/evidence/runs/<run_id>.json`; replayable context files live in `.pdd/evidence/runs/<run_id>/`. Replay reconstructs the same expanded prompt/context and checks its hash. It does not guarantee bit-for-bit identical generated code, because the LLM call itself may still be nondeterministic.
 
-```xml
-<web>https://provider.example.com/refund-policy</web>
-```
-
-Good:
-
-```xml
-<include mode="interface">src/payments/provider.py</include>
-```
-
-Risky:
-
-```xml
-<include query="refund provider behavior">src/payments/provider.py</include>
-```
-
-Use dynamic tags for exploration, but snapshot the result before relying on it for durable contract behavior.
+Snapshot shell and web output may contain sensitive data. Snapshot writers must redact known token, key, authorization header, URL credential, and secret-assignment patterns before hashing or storage, and must not persist raw environment dumps or unredacted bearer/API tokens. Keep commands bounded and avoid secret-bearing output even with redaction enabled.
 
 **`context_urls` in Architecture Entries:**
 
@@ -1109,8 +1092,14 @@ Use `select=` to include only specific parts of a file instead of the whole thin
 | `section:Heading` | Markdown | `section:Installation` |
 | `pattern:/regex/` | Any | `pattern:/^import/` |
 | `path:key.nested` | JSON/YAML | `path:config.database.host` |
+| `pytest:test_name` | Python (pytest) (Python only) | `pytest:test_auth,test_login` |
+| `contract:symbol` | Python only | `contract:run_worker,_get_job_secrets` |
 
 Selectors are composable: `select="lines:1-5,def:main,def:helper"`. If a selector fails to match, PDD falls back to the full file with a warning.
+
+**`pytest:` selector** (Python only): Specifically designed for testing context. It uses AST slicing to extract only the requested tests and their transitive closure of dependencies (fixtures, helper functions, decorators, and imports). It automatically resolves fixtures from the same file or `conftest.py` files.
+
+**`contract:` selector** (Python only): Preserves a seed symbol and its transitive local dependencies (helpers, constants, classes, required imports) for compressed generation. Use when generated code must keep patch targets and private helpers referenced from tests. Seeds can be listed explicitly (`contract:run_worker`) or derived in code via `ApiContractSlicer.seeds_from_test(test_source, module_qualname)` before slicing. Output is verified so missing symbols fail fast instead of silently drifting.
 
 **Interface mode** (`mode="interface"`, Python only) extracts signatures, docstrings, and type hints with bodies replaced by `...`. Useful when you only need the contract, not the implementation:
 

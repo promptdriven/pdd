@@ -3,6 +3,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from unittest.mock import patch, MagicMock, ANY, call
 from pathlib import Path
 
@@ -20,6 +21,8 @@ from pdd.agentic_common import (
     _build_claude_interactive_command,
     _claude_code_interactive_enabled,
     _claude_interactive_needs_trust_confirmation,
+    _classify_permanent_error,
+    _detect_claude_interactive_auth_failure,
     _estimate_claude_interactive_session_cost,
     _extract_json_from_output,
     _find_cli_binary,
@@ -739,10 +742,583 @@ def test_run_claude_interactive_with_mcp_uses_session_usage_cost(tmp_path):
     cmd = mock_runner.call_args.args[0]
     assert "--session-id" in cmd
     assert cmd[cmd.index("--session-id") + 1] == "11111111-2222-4333-8444-555555555555"
+    # Issue #1365: the same session id is threaded into the PTY runner so it can
+    # inspect that exact transcript for a post-launch auth failure.
+    assert mock_runner.call_args.kwargs["session_id"] == "11111111-2222-4333-8444-555555555555"
     mock_session_cost.assert_called_once_with(
         "11111111-2222-4333-8444-555555555555",
         {"HOME": str(tmp_path)},
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1365: interactive Claude post-launch auth fast-fail
+# ---------------------------------------------------------------------------
+
+
+def _write_session_transcript(home: Path, session_id: str, rows: list) -> Path:
+    """Write a Claude Code session JSONL where the detector will discover it."""
+    session_path = home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl"
+    session_path.parent.mkdir(parents=True, exist_ok=True)
+    session_path.write_text(
+        "\n".join(json.dumps(row) for row in rows),
+        encoding="utf-8",
+    )
+    return session_path
+
+
+def _synthetic_auth_row(text: str) -> dict:
+    """A synthetic-error assistant row exactly as Claude Code writes one.
+
+    Captured from a real revoked/missing-auth interactive session (Issue #1365):
+    top-level ``isApiErrorMessage`` plus a ``<synthetic>`` model and zero usage.
+    """
+    return {
+        "type": "assistant",
+        "requestId": "req-synth",
+        "isApiErrorMessage": True,
+        "message": {
+            "model": "<synthetic>",
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "content": [{"type": "text", "text": text}],
+        },
+    }
+
+
+def _healthy_assistant_row(text: str) -> dict:
+    return {
+        "type": "assistant",
+        "requestId": "req-real",
+        "message": {
+            "model": "claude-opus-4-8",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+            "content": [{"type": "text", "text": text}],
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Please run /login · API Error: 401 Invalid bearer token",  # revoked token
+        "Not logged in · Please run /login",                        # logged out
+    ],
+)
+def test_detect_interactive_auth_failure_positive(tmp_path, text):
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+    _write_session_transcript(home, session_id, [_synthetic_auth_row(text)])
+
+    message = _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)})
+
+    assert message is not None
+    # The returned message must itself classify as a permanent oauth/login error
+    # so the existing fallback/rotation logic treats it as permanent and rotates.
+    assert _classify_permanent_error(message) == "oauth/login"
+    assert _is_permanent_error(message)
+    assert "/login" in message
+
+
+def test_detect_interactive_auth_failure_synthetic_via_model_field(tmp_path):
+    """Fires when only ``message.model == '<synthetic>'`` is present (schema drift)."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000001"
+    row = _synthetic_auth_row("Not logged in · Please run /login")
+    del row["isApiErrorMessage"]  # rely on the <synthetic> model marker alone
+    _write_session_transcript(home, session_id, [row])
+
+    assert _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)}) is not None
+
+
+def test_detect_interactive_auth_failure_negative_healthy(tmp_path):
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000002"
+    _write_session_transcript(
+        home,
+        session_id,
+        [
+            {"type": "user", "message": {"role": "user", "content": "hi"}},
+            _healthy_assistant_row("All done — I fixed the bug."),
+        ],
+    )
+
+    assert _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)}) is None
+
+
+def test_detect_interactive_auth_failure_ignores_ordinary_login_prose(tmp_path):
+    """Issue #1340 false-positive class: the words 'not logged in' / 'please run
+    /login' appear byte-identically in legitimate model output. A normal (non
+    synthetic) assistant row carrying that prose must NOT trip the detector."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000003"
+    _write_session_transcript(
+        home,
+        session_id,
+        [
+            _healthy_assistant_row(
+                "If the user is not logged in, redirect them to /login "
+                "(please run /login is the CLI equivalent)."
+            )
+        ],
+    )
+
+    assert _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)}) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited",
+        "API Error: The socket connection was closed unexpectedly.",
+        "Request timed out",
+        "You've hit your session limit · resets 7pm (America/Los_Angeles)",
+    ],
+)
+def test_detect_interactive_auth_failure_ignores_transient_synthetic(tmp_path, text):
+    """Synthetic rows that are not auth failures (transient / usage cap) are left
+    alone so an in-flight, recoverable turn is never killed (Issue #1365)."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000004"
+    _write_session_transcript(home, session_id, [_synthetic_auth_row(text)])
+
+    assert _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)}) is None
+
+
+def test_detect_interactive_auth_failure_no_transcript(tmp_path):
+    home = tmp_path / "home"
+    assert (
+        _detect_claude_interactive_auth_failure("missing-session", {"HOME": str(home)})
+        is None
+    )
+
+
+def test_detect_interactive_auth_failure_recovered_after_early_auth_blip(tmp_path):
+    """Terminal-row rule (Issue #1365): an early synthetic auth row followed by a
+    real healthy turn means the session recovered — must NOT fast-fail."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000007"
+    _write_session_transcript(
+        home,
+        session_id,
+        [
+            _synthetic_auth_row("Not logged in · Please run /login"),
+            _healthy_assistant_row("Recovered — here is the result."),
+        ],
+    )
+    assert _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)}) is None
+
+
+def test_detect_interactive_auth_failure_superseded_by_later_transient(tmp_path):
+    """An early synthetic auth row followed by a later non-auth synthetic error
+    (transient) is not a terminal auth failure — must NOT fast-fail (Issue #1365)."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000008"
+    _write_session_transcript(
+        home,
+        session_id,
+        [
+            _synthetic_auth_row("Please run /login · API Error: 401 Invalid bearer token"),
+            _synthetic_auth_row("Request timed out"),
+        ],
+    )
+    assert _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)}) is None
+
+
+def test_detect_interactive_auth_failure_terminal_after_healthy(tmp_path):
+    """A synthetic auth row that is the LATEST turn (after an earlier healthy one)
+    is a terminal auth failure and is fast-failed (Issue #1365)."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000009"
+    _write_session_transcript(
+        home,
+        session_id,
+        [
+            _healthy_assistant_row("First turn worked."),
+            _synthetic_auth_row("Not logged in · Please run /login"),
+        ],
+    )
+    message = _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)})
+    assert message is not None
+    assert _classify_permanent_error(message) == "oauth/login"
+
+
+def test_interactive_pty_runner_session_id_healthy_resolves_via_reply(tmp_path):
+    """With session_id set, a healthy session (real transcript turn) that writes
+    the reply resolves via the reply file and is never auth-fast-failed."""
+    home = tmp_path / "home"
+    session_id = "ffffffff-1111-4222-8333-777777777777"
+    transcript = home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl"
+    reply_path = tmp_path / "reply.json"
+    job_id = "job-healthy"
+    script_path = tmp_path / "fake_claude.py"
+    script_path.write_text(
+        "import json, pathlib, sys, time\n"
+        "transcript = pathlib.Path(sys.argv[1]); reply = pathlib.Path(sys.argv[2]); job_id = sys.argv[3]\n"
+        "transcript.parent.mkdir(parents=True, exist_ok=True)\n"
+        "row = {'type': 'assistant', 'requestId': 'r1', 'message': {'model': 'claude-opus-4-8',\n"
+        "       'usage': {'input_tokens': 10, 'output_tokens': 5},\n"
+        "       'content': [{'type': 'text', 'text': 'working'}]}}\n"
+        "transcript.write_text(json.dumps(row), encoding='utf-8')\n"
+        "time.sleep(0.3)\n"
+        "reply.write_text(json.dumps({'job_id': job_id, 'success': True, 'text': 'OK'}), encoding='utf-8')\n"
+        "time.sleep(2)\n",
+        encoding="utf-8",
+    )
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path), str(transcript), str(reply_path), job_id],
+        cwd=tmp_path,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        timeout=30,
+        reply_path=reply_path,
+        job_id=job_id,
+        session_id=session_id,
+    )
+    assert success is True
+    assert text == "OK"
+
+
+def test_interactive_pty_runner_fast_fails_on_later_auth_after_healthy(tmp_path):
+    """The runner keeps watching after an early healthy turn: a LATER terminal
+    auth failure in the same session is fast-failed, not left to time out
+    (Issue #1365). This is the case the auth-confirmed short-circuit missed."""
+    home = tmp_path / "home"
+    session_id = "ffffffff-1111-4222-8333-888888888888"
+    transcript = home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl"
+    reply_path = tmp_path / "reply.json"
+    script_path = tmp_path / "fake_claude.py"
+    # Write a healthy turn first, then APPEND a synthetic auth row later, then
+    # hang without ever writing the reply file.
+    script_path.write_text(
+        "import json, pathlib, sys, time\n"
+        "transcript = pathlib.Path(sys.argv[1])\n"
+        "transcript.parent.mkdir(parents=True, exist_ok=True)\n"
+        "healthy = {'type': 'assistant', 'requestId': 'r1', 'message': {\n"
+        "    'model': 'claude-opus-4-8', 'usage': {'input_tokens': 10, 'output_tokens': 5},\n"
+        "    'content': [{'type': 'text', 'text': 'first turn worked'}]}}\n"
+        "auth = {'type': 'assistant', 'isApiErrorMessage': True, 'message': {\n"
+        "    'model': '<synthetic>', 'usage': {'input_tokens': 0, 'output_tokens': 0},\n"
+        "    'content': [{'type': 'text', 'text': 'Not logged in \\u00b7 Please run /login'}]}}\n"
+        "transcript.write_text(json.dumps(healthy) + '\\n', encoding='utf-8')\n"
+        "time.sleep(0.5)\n"
+        "with open(transcript, 'a', encoding='utf-8') as f:\n"
+        "    f.write(json.dumps(auth) + '\\n')\n"
+        "time.sleep(300)\n",
+        encoding="utf-8",
+    )
+
+    start = time.time()
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path), str(transcript)],
+        cwd=tmp_path,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        timeout=30,
+        reply_path=reply_path,
+        job_id="job-late-auth",
+        session_id=session_id,
+    )
+    elapsed = time.time() - start
+
+    assert success is False
+    assert elapsed < 20  # fast-failed; did not burn the 30s timeout
+    assert _classify_permanent_error(text) == "oauth/login"
+
+
+def test_interactive_pty_runner_defers_while_transcript_growing(tmp_path):
+    """Quiescence gate (Issue #1365): while the transcript keeps growing after a
+    committed auth row (a later/partial row may supersede it), the runner must
+    NOT fast-fail. A session that ultimately recovers and replies wins."""
+    home = tmp_path / "home"
+    session_id = "ffffffff-1111-4222-8333-999999999999"
+    transcript = home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl"
+    reply_path = tmp_path / "reply.json"
+    job_id = "job-grow"
+    script_path = tmp_path / "fake_claude.py"
+    script_path.write_text(
+        "import json, pathlib, sys, time\n"
+        "transcript = pathlib.Path(sys.argv[1]); reply = pathlib.Path(sys.argv[2]); job_id = sys.argv[3]\n"
+        "transcript.parent.mkdir(parents=True, exist_ok=True)\n"
+        "auth = {'type': 'assistant', 'isApiErrorMessage': True, 'message': {\n"
+        "    'model': '<synthetic>', 'usage': {'input_tokens': 0, 'output_tokens': 0},\n"
+        "    'content': [{'type': 'text', 'text': 'Not logged in \\u00b7 Please run /login'}]}}\n"
+        "healthy = {'type': 'assistant', 'requestId': 'r1', 'message': {\n"
+        "    'model': 'claude-opus-4-8', 'usage': {'input_tokens': 10, 'output_tokens': 5},\n"
+        "    'content': [{'type': 'text', 'text': 'recovered'}]}}\n"
+        "transcript.write_text(json.dumps(auth) + '\\n', encoding='utf-8')\n"
+        "# Keep the transcript growing across several poll intervals so the\n"
+        "# quiescence gate keeps deferring instead of fast-failing.\n"
+        "for i in range(12):\n"
+        "    with open(transcript, 'a', encoding='utf-8') as f:\n"
+        "        f.write(json.dumps({'type': 'system', 'subtype': 'progress', 'i': i}) + '\\n')\n"
+        "    time.sleep(0.3)\n"
+        "# Recover: a real assistant turn supersedes the auth error, then reply.\n"
+        "with open(transcript, 'a', encoding='utf-8') as f:\n"
+        "    f.write(json.dumps(healthy) + '\\n')\n"
+        "reply.write_text(json.dumps({'job_id': job_id, 'success': True, 'text': 'OK'}), encoding='utf-8')\n"
+        "time.sleep(5)\n",
+        encoding="utf-8",
+    )
+
+    start = time.time()
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path), str(transcript), str(reply_path), job_id],
+        cwd=tmp_path,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        timeout=30,
+        reply_path=reply_path,
+        job_id=job_id,
+        session_id=session_id,
+    )
+    elapsed = time.time() - start
+
+    # The growing-then-recovering session resolves via its reply, never the
+    # auth fast-fail, and well under the timeout.
+    assert success is True
+    assert text == "OK"
+    assert elapsed < 20
+
+
+def test_interactive_pty_runner_fast_fails_on_revoked_auth(tmp_path):
+    """Integration: a hung interactive session whose transcript shows a revoked-auth
+    synthetic row is killed and fast-failed well under the step timeout (Issue #1365)."""
+    home = tmp_path / "home"
+    session_id = "ffffffff-1111-4222-8333-444444444444"
+    transcript = home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl"
+    reply_path = tmp_path / "reply.json"
+    job_id = "job-auth"
+    # Fake "claude": write a revoked-auth transcript, then sit forever like the TUI.
+    script_path = tmp_path / "fake_claude.py"
+    script_path.write_text(
+        "import json, pathlib, sys, time\n"
+        "transcript = pathlib.Path(sys.argv[1])\n"
+        "transcript.parent.mkdir(parents=True, exist_ok=True)\n"
+        "row = {'type': 'assistant', 'isApiErrorMessage': True,\n"
+        "       'message': {'model': '<synthetic>',\n"
+        "                   'usage': {'input_tokens': 0, 'output_tokens': 0},\n"
+        "                   'content': [{'type': 'text',\n"
+        "                       'text': 'Please run /login \\u00b7 API Error: 401 Invalid bearer token'}]}}\n"
+        "print('starting interactive session'); sys.stdout.flush()\n"
+        "time.sleep(0.2)\n"
+        "transcript.write_text(json.dumps(row), encoding='utf-8')\n"
+        "time.sleep(300)\n",
+        encoding="utf-8",
+    )
+
+    start = time.time()
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path), str(transcript)],
+        cwd=tmp_path,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        timeout=30,
+        reply_path=reply_path,
+        job_id=job_id,
+        session_id=session_id,
+    )
+    elapsed = time.time() - start
+
+    assert success is False
+    assert elapsed < 20  # fast-failed; did not burn the 30s timeout
+    assert cost == 0.0
+    assert model is None
+    assert _classify_permanent_error(text) == "oauth/login"
+
+
+def test_interactive_pty_runner_no_auth_check_without_session_id(tmp_path):
+    """Backward-compat: without a session_id the runner does no transcript auth
+    check and still resolves via the reply file as before."""
+    reply_path = tmp_path / "reply.json"
+    job_id = "job-compat"
+    script_path = tmp_path / "fake_claude.py"
+    script_path.write_text(
+        "import json, pathlib, sys, time\n"
+        "reply = pathlib.Path(sys.argv[1]); job_id = sys.argv[2]\n"
+        "time.sleep(0.1)\n"
+        "reply.write_text(json.dumps({'job_id': job_id, 'success': True, 'text': 'OK'}), encoding='utf-8')\n"
+        "time.sleep(2)\n",
+        encoding="utf-8",
+    )
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path), str(reply_path), job_id],
+        cwd=tmp_path,
+        env=os.environ.copy(),
+        timeout=5,
+        reply_path=reply_path,
+        job_id=job_id,
+    )
+    assert success is True
+    assert text == "OK"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "API Error: 401 Invalid API key",
+        "API Error: 403 Permission denied for this model",
+    ],
+)
+def test_detect_interactive_auth_failure_generic_auth_not_relabeled_oauth(tmp_path, text):
+    """A non-login 'auth' synthetic row (bad API key, 403) must fast-fail but NOT
+    be mislabeled as oauth/login — that would wrongly tell the caller to run
+    /login / rotate OAuth. It classifies as the generic 'auth' class instead."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000005"
+    _write_session_transcript(home, session_id, [_synthetic_auth_row(text)])
+
+    message = _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)})
+
+    assert message is not None
+    assert _is_permanent_error(message)
+    assert _classify_permanent_error(message) == "auth"
+    assert "/login" not in message
+
+
+def test_detect_interactive_auth_failure_nested_isapierror_flag(tmp_path):
+    """Fires when isApiErrorMessage lives under ``message`` (schema-drift defense)."""
+    home = tmp_path / "home"
+    session_id = "aaaaaaaa-bbbb-4ccc-8ddd-000000000006"
+    row = {
+        "type": "assistant",
+        "requestId": "req-nested",
+        "message": {
+            "isApiErrorMessage": True,
+            "model": "claude-opus-4-8",  # not <synthetic>; rely on nested flag
+            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "content": [{"type": "text", "text": "Not logged in · Please run /login"}],
+        },
+    }
+    _write_session_transcript(home, session_id, [row])
+
+    message = _detect_claude_interactive_auth_failure(session_id, {"HOME": str(home)})
+    assert message is not None
+    assert _classify_permanent_error(message) == "oauth/login"
+
+
+def test_interactive_pty_runner_fast_fails_on_auth_written_after_grace(tmp_path):
+    """The throttled re-check (not just the first post-grace check) catches a
+    synthetic auth row written after the grace window (Issue #1365)."""
+    home = tmp_path / "home"
+    session_id = "ffffffff-1111-4222-8333-555555555555"
+    transcript = home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl"
+    reply_path = tmp_path / "reply.json"
+    script_path = tmp_path / "fake_claude.py"
+    # Write the revoked-auth row AFTER the 2.0s grace so only a re-check finds it.
+    script_path.write_text(
+        "import json, pathlib, sys, time\n"
+        "transcript = pathlib.Path(sys.argv[1])\n"
+        "transcript.parent.mkdir(parents=True, exist_ok=True)\n"
+        "time.sleep(3.0)\n"
+        "row = {'type': 'assistant', 'isApiErrorMessage': True,\n"
+        "       'message': {'model': '<synthetic>',\n"
+        "                   'usage': {'input_tokens': 0, 'output_tokens': 0},\n"
+        "                   'content': [{'type': 'text',\n"
+        "                       'text': 'Not logged in \\u00b7 Please run /login'}]}}\n"
+        "transcript.write_text(json.dumps(row), encoding='utf-8')\n"
+        "time.sleep(300)\n",
+        encoding="utf-8",
+    )
+
+    start = time.time()
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path), str(transcript)],
+        cwd=tmp_path,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        timeout=30,
+        reply_path=reply_path,
+        job_id="job-late",
+        session_id=session_id,
+    )
+    elapsed = time.time() - start
+
+    assert success is False
+    assert 3.0 <= elapsed < 20  # caught by a re-check, not the 30s timeout
+    assert _classify_permanent_error(text) == "oauth/login"
+
+
+def test_interactive_pty_runner_fast_fails_when_revoked_session_exits(tmp_path):
+    """A revoked session that EXITS (rather than hangs) after writing the
+    synthetic auth row is still classified as an auth failure (Issue #1365)."""
+    home = tmp_path / "home"
+    session_id = "ffffffff-1111-4222-8333-666666666666"
+    transcript = home / ".claude" / "projects" / "demo" / f"{session_id}.jsonl"
+    reply_path = tmp_path / "reply.json"
+    script_path = tmp_path / "fake_claude.py"
+    # Write the synthetic auth row then exit immediately (no reply file).
+    script_path.write_text(
+        "import json, pathlib, sys\n"
+        "transcript = pathlib.Path(sys.argv[1])\n"
+        "transcript.parent.mkdir(parents=True, exist_ok=True)\n"
+        "row = {'type': 'assistant', 'isApiErrorMessage': True,\n"
+        "       'message': {'model': '<synthetic>',\n"
+        "                   'usage': {'input_tokens': 0, 'output_tokens': 0},\n"
+        "                   'content': [{'type': 'text',\n"
+        "                       'text': 'Please run /login \\u00b7 API Error: 401 Invalid bearer token'}]}}\n"
+        "transcript.write_text(json.dumps(row), encoding='utf-8')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+
+    success, text, cost, model = _run_interactive_pty_until_reply(
+        [sys.executable, str(script_path), str(transcript)],
+        cwd=tmp_path,
+        env={"HOME": str(home), "PATH": os.environ.get("PATH", "")},
+        timeout=30,
+        reply_path=reply_path,
+        job_id="job-exit",
+        session_id=session_id,
+    )
+
+    assert success is False
+    assert cost == 0.0
+    assert _classify_permanent_error(text) == "oauth/login"
+
+
+def test_estimate_session_cost_ignores_synthetic_rows(tmp_path):
+    """Synthetic error turns must not leak ``<synthetic>`` as the model name or
+    add billable cost (Issue #1365)."""
+    home = tmp_path / "home"
+    session_id = "11111111-2222-4333-8444-aaaaaaaaaaaa"
+    _write_session_transcript(
+        home,
+        session_id,
+        [
+            _synthetic_auth_row("Please run /login · API Error: 401 Invalid bearer token"),
+        ],
+    )
+
+    cost, model = _estimate_claude_interactive_session_cost(session_id, {"HOME": str(home)})
+    assert cost == 0.0
+    assert model is None
+
+
+def test_estimate_session_cost_real_model_with_trailing_synthetic(tmp_path):
+    """A real billable turn followed by a synthetic error turn reports the real
+    model and counts only the real usage (Issue #1365)."""
+    home = tmp_path / "home"
+    session_id = "11111111-2222-4333-8444-bbbbbbbbbbbb"
+    real_usage = {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    _write_session_transcript(
+        home,
+        session_id,
+        [
+            {
+                "type": "assistant",
+                "requestId": "req-real",
+                "message": {"model": "claude-opus-4-8", "usage": real_usage},
+            },
+            _synthetic_auth_row("Not logged in · Please run /login"),
+        ],
+    )
+
+    cost, model = _estimate_claude_interactive_session_cost(session_id, {"HOME": str(home)})
+    expected = _calculate_anthropic_cost(
+        {"usage": real_usage, "modelUsage": {"claude-opus-4-8": {}}}
+    )
+    assert model == "claude-opus-4-8"
+    assert cost == pytest.approx(expected)
 
 
 def test_google_provider_delivers_prompt_via_positional_arg(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
@@ -3314,6 +3890,67 @@ def test_steer_injection_into_prompt(mock_cwd, mock_env, mock_load_model_data, m
     assert "- @bob (456): Use library X" in prompt_input
 
 
+def test_steer_injection_strips_pdd_human_comments(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    """Human-only <pdd> blocks in steer bodies must not reach the LLM prompt."""
+    from pdd.agentic_common import SteerEntry
+
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+
+    steers = [
+        SteerEntry(
+            comment_id="123",
+            author="alice",
+            body="Try approach A <pdd>internal note for humans</pdd> please",
+        ),
+    ]
+
+    mock_output = {
+        "result": "Done.",
+        "total_cost_usd": 0.01,
+        "is_error": False,
+    }
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(mock_output)
+    mock_subprocess.return_value.stderr = ""
+
+    success, _, _, _ = run_agentic_task("Fix the bug", mock_cwd, steers=steers)
+    assert success
+
+    prompt_input = mock_subprocess.call_args.kwargs.get("input", "")
+    assert "internal note for humans" not in prompt_input
+    assert "<pdd>" not in prompt_input
+    assert "Try approach A" in prompt_input
+    assert "please" in prompt_input
+
+
+def test_drain_issue_steers_strips_pdd_tags(mock_cwd):
+    """PDD_STEER_JSON bodies have human-only <pdd> blocks removed at drain time."""
+    from pdd.agentic_common import drain_issue_steers
+
+    steer_data = [
+        {
+            "comment_id": "101",
+            "author": "charlie",
+            "body": "Ship it <pdd>do not tell the model this</pdd> now",
+        }
+    ]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+
+    try:
+        state = {}
+        steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert "do not tell the model this" not in steers[0].body
+        assert "<pdd>" not in steers[0].body
+        assert "Ship it" in steers[0].body
+        assert "now" in steers[0].body
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
 def test_no_steer_injection_when_absent(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
     """Test that prompt is unchanged when steers list is absent."""
     mock_shutil_which.return_value = "/bin/claude"
@@ -3369,6 +4006,183 @@ def test_drain_issue_steers_env_idempotent(mock_cwd):
         assert len(first) == 1
         assert len(second) == 0
         assert state["last_steered_comment_id"] == "101"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_drain_step_steers_noop_without_issue(mock_cwd):
+    """Orchestrator helper is a no-op when issue_number is missing."""
+    from pdd.agentic_common import drain_step_steers
+
+    state: dict = {}
+    assert drain_step_steers("owner", "repo", 0, state, cwd=mock_cwd) == []
+    assert state == {}
+
+
+def test_drain_step_steers_noop_without_repo(mock_cwd):
+    from pdd.agentic_common import drain_step_steers
+
+    state: dict = {}
+    assert drain_step_steers("", "repo", 55, state, cwd=mock_cwd) == []
+    assert drain_step_steers("owner", "", 55, state, cwd=mock_cwd) == []
+
+
+def test_drain_step_steers_delegates_to_issue_drain(mock_cwd):
+    from pdd.agentic_common import drain_step_steers
+
+    steer_data = [{"comment_id": "201", "author": "dana", "body": "Ship it"}]
+    os.environ["PDD_STEER_JSON"] = json.dumps(steer_data)
+    try:
+        state: dict = {}
+        steers = drain_step_steers("owner", "repo", 55, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert steers[0].author == "dana"
+        assert state["last_steered_comment_id"] == "201"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_drain_issue_steers_env_sets_last_steer_at(mock_cwd):
+    from pdd.agentic_common import drain_issue_steers
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "42", "author": "user", "body": "note"}]
+    )
+    try:
+        state: dict = {}
+        steers = drain_issue_steers("owner", "repo", 1, state, cwd=mock_cwd)
+        assert len(steers) == 1
+        assert state.get("last_steer_at")
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_issue_update_should_not_clear_when_pending_steers(mock_cwd):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "99", "author": "alice", "body": "please adjust"}]
+    )
+    try:
+        state = {
+            "step_outputs": {},
+            "last_steered_comment_id": "1",
+            "issue_updated_at": "2026-01-01T00:00:00Z",
+        }
+        assert issue_update_should_clear_workflow_state(
+            state,
+            "2026-01-01T00:00:00Z",
+            "2026-01-02T00:00:00Z",
+            "owner",
+            "repo",
+            55,
+            cwd=mock_cwd,
+        ) is False
+        assert state["last_steered_comment_id"] == "99"
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_issue_update_should_clear_when_no_pending_steers(mock_cwd):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    state = {"step_outputs": {}, "issue_updated_at": "2026-01-01T00:00:00Z"}
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+    ) is True
+
+
+def test_issue_update_should_not_clear_during_clarification_pause(mock_cwd):
+    from pdd.agentic_common import issue_update_should_clear_workflow_state
+
+    state = {
+        "step_outputs": {
+            "4": "STOP_CONDITION: needs clarification from author\n",
+        },
+        "issue_updated_at": "2026-01-01T00:00:00Z",
+    }
+    assert issue_update_should_clear_workflow_state(
+        state,
+        "2026-01-01T00:00:00Z",
+        "2026-01-02T00:00:00Z",
+        "owner",
+        "repo",
+        55,
+        cwd=mock_cwd,
+        clarification_step_numbers={4, 7},
+    ) is False
+
+
+def test_workflow_awaiting_clarification_needs_more_info_without_stop_tag():
+    from pdd.agentic_common import workflow_awaiting_clarification
+
+    state = {
+        "step_outputs": {
+            "3": "**Status:** Needs More Info\nPlease provide repro steps.",
+        },
+    }
+    assert workflow_awaiting_clarification(state, {3}) is True
+    assert workflow_awaiting_clarification(state, {4}) is False
+
+
+def test_apply_clarification_steers_on_resume_merges_content(mock_cwd):
+    from pdd.agentic_common import apply_clarification_steers_on_resume
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "7", "author": "bob", "body": "Use pytest markers"}]
+    )
+    try:
+        state = {
+            "step_outputs": {"3": "STOP_CONDITION: needs more info from author\n"},
+        }
+        merged = apply_clarification_steers_on_resume(
+            "Original issue body",
+            state,
+            "owner",
+            "repo",
+            1,
+            {3},
+            cwd=mock_cwd,
+            quiet=True,
+        )
+        assert "Use pytest markers" in merged
+        assert "Original issue body" in merged
+    finally:
+        os.environ.pop("PDD_STEER_JSON", None)
+
+
+def test_apply_clarification_steers_bug_step3_needs_more_info(mock_cwd):
+    """Bug orchestrator stores Needs More Info without a STOP_CONDITION tag."""
+    from pdd.agentic_common import apply_clarification_steers_on_resume
+
+    os.environ["PDD_STEER_JSON"] = json.dumps(
+        [{"comment_id": "8", "author": "alice", "body": "Here is the stack trace"}]
+    )
+    try:
+        state = {
+            "step_outputs": {
+                "3": "**Status:** Needs More Info\nMissing repro command.",
+            },
+            "last_steered_comment_id": "1",
+        }
+        merged = apply_clarification_steers_on_resume(
+            "Bug report body",
+            state,
+            "owner",
+            "repo",
+            42,
+            {3},
+            cwd=mock_cwd,
+            quiet=True,
+        )
+        assert "stack trace" in merged
+        assert "Bug report body" in merged
     finally:
         os.environ.pop("PDD_STEER_JSON", None)
 
@@ -3526,6 +4340,175 @@ def test_seed_issue_steer_cursor_sets_baseline(
     assert len(steers) == 1
     assert steers[0].comment_id == "2003"
     assert steers[0].body == "Steer me"
+
+
+def test_seed_issue_steer_cursor_empty_issue_persists_seed_on_resume(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Seeding an empty issue must survive save/resume and drain first later comment."""
+    from pdd.agentic_common import (
+        STEER_STATE_KEYS,
+        drain_issue_steers,
+        ensure_issue_steer_cursor_seeded,
+    )
+
+    mock_shutil_which.return_value = "/bin/gh"
+    first_payload = []
+    later_payload = [
+        {
+            "id": 3001,
+            "user": {"login": "human", "type": "User"},
+            "body": "First mid-run steer",
+            "created_at": "2026-06-02T10:00:00Z",
+        }
+    ]
+    call_count = {"n": 0}
+
+    def _side_effect(*_args, **_kwargs):
+        call_count["n"] += 1
+        payload = first_payload if call_count["n"] == 1 else later_payload
+        result = MagicMock(returncode=0, stderr="")
+        result.stdout = json.dumps(payload)
+        return result
+
+    mock_subprocess_run.side_effect = _side_effect
+
+    initial_state = {}
+    assert ensure_issue_steer_cursor_seeded(
+        "owner", "repo", 55, initial_state, cwd=mock_cwd
+    )
+    assert initial_state.get("steer_cursor_seeded") is True
+    assert "last_steered_comment_id" not in initial_state
+
+    # Simulate save/resume copy path used by orchestrators.
+    resumed_state = {
+        key: initial_state[key] for key in STEER_STATE_KEYS if key in initial_state
+    }
+    assert resumed_state == {"steer_cursor_seeded": True}
+    assert not ensure_issue_steer_cursor_seeded(
+        "owner", "repo", 55, resumed_state, cwd=mock_cwd
+    )
+
+    steers = drain_issue_steers("owner", "repo", 55, resumed_state, cwd=mock_cwd)
+    assert [s.comment_id for s in steers] == ["3001"]
+    assert resumed_state["last_steered_comment_id"] == "3001"
+
+
+def test_seed_issue_steer_cursor_does_not_mark_seeded_on_fetch_failure(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Failed baseline fetch must not set steer_cursor_seeded."""
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="network/auth failure"
+    )
+
+    state = {}
+    assert not seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+    assert "steer_cursor_seeded" not in state
+    assert "last_steered_comment_id" not in state
+
+
+def test_seed_issue_steer_cursor_warns_on_fetch_failure(
+    mock_cwd, mock_subprocess_run, mock_shutil_which, caplog
+):
+    """Failed baseline fetch must warn that steering is disabled until next seed."""
+    import logging
+
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="network/auth failure"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert not seed_issue_steer_cursor(
+            "owner", "repo", 55, {}, cwd=mock_cwd, quiet=False
+        )
+
+    assert any(
+        "skipped steer cursor seed" in record.message
+        and "until a successful seed" in record.message
+        for record in caplog.records
+    )
+
+
+def test_seed_issue_steer_cursor_fetch_failure_quiet_suppresses_console(
+    mock_cwd, mock_subprocess_run, mock_shutil_which, capsys, caplog
+):
+    """quiet=True still logs to the steer logger but does not print to console."""
+    import logging
+
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="auth failure"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        seed_issue_steer_cursor("owner", "repo", 55, {}, cwd=mock_cwd, quiet=True)
+
+    assert any("skipped steer cursor seed" in r.message for r in caplog.records)
+    captured = capsys.readouterr()
+    assert "skipped steer cursor seed" not in captured.out
+
+
+def test_seed_issue_steer_cursor_missing_gh_does_not_mark_seeded(
+    mock_cwd, mock_shutil_which, caplog
+):
+    """Missing gh must not set steer_cursor_seeded or enable historical drains."""
+    import logging
+
+    from pdd.agentic_common import seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = None
+    state = {}
+
+    with caplog.at_level(logging.WARNING):
+        assert not seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+
+    assert "steer_cursor_seeded" not in state
+    assert "last_steered_comment_id" not in state
+    assert any("gh CLI not found" in record.message for record in caplog.records)
+
+
+def test_failed_seed_then_drain_skips_historical_comments(
+    mock_cwd, mock_subprocess_run, mock_shutil_which
+):
+    """Failed baseline seed must not let a later drain treat history as steers."""
+    from pdd.agentic_common import drain_issue_steers, seed_issue_steer_cursor
+
+    mock_shutil_which.return_value = "/bin/gh"
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=1, stdout="", stderr="auth failure"
+    )
+
+    state = {}
+    assert not seed_issue_steer_cursor("owner", "repo", 55, state, cwd=mock_cwd)
+    assert mock_subprocess_run.call_count == 1
+
+    historical = [
+        {
+            "id": 500,
+            "user": {"login": "human", "type": "User"},
+            "body": "Pre-run discussion",
+            "created_at": "2026-05-01T10:00:00Z",
+        }
+    ]
+    mock_subprocess_run.return_value = MagicMock(
+        returncode=0,
+        stdout=json.dumps(historical),
+        stderr="",
+    )
+
+    steers = drain_issue_steers("owner", "repo", 55, state, cwd=mock_cwd)
+    assert steers == []
+    assert "steer_cursor_seeded" not in state
+    assert mock_subprocess_run.call_count == 1
 
 
 # ---------------------------------------------------------------------------
@@ -3945,6 +4928,26 @@ def test_post_step_comment_posts_to_github(tmp_path):
         assert "289" in cmd
         assert "--repo" in cmd
         assert "owner/repo" in cmd
+
+
+def test_post_step_comment_skips_github_when_disabled(tmp_path):
+    """PDD_NO_GITHUB_STATE suppresses visible step comments too."""
+    with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}), \
+         patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=3,
+            total_steps=13,
+            description="Research",
+            output="All good",
+            cwd=tmp_path,
+        )
+
+        assert result is True
+        mock_run.assert_not_called()
 
 
 def test_post_step_comment_no_gh_cli(tmp_path):
@@ -8226,6 +9229,26 @@ class TestPostStepCommentOnce:
             )
             assert result is False
             assert posted == set()
+
+    def test_skips_github_and_marks_posted_when_disabled(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = set()
+        with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}), \
+             patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=5,
+                body="body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is True
+            assert posted == {5}
+            mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

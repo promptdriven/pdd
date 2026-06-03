@@ -165,6 +165,14 @@ export function buildCommandArgs(
       args.prompt_file = prompt.prompt;
       break;
 
+    case CommandType.REPLAY:
+      // pdd replay RUN_ARTIFACT [--output] [--verify-only] [--json]
+      if (options['run-artifact']) {
+        args.run_artifact = options['run-artifact'];
+        delete options['run-artifact'];
+      }
+      break;
+
     case CommandType.CRASH:
       // pdd crash PROMPT_FILE CODE_FILE PROGRAM_FILE ERROR_FILE [options]
       args.prompt_file = prompt.prompt;
@@ -225,13 +233,21 @@ export function buildCommandArgs(
 export function buildDisplayCommand(
   command: CommandType,
   prompt: PromptInfo,
-  options: Record<string, any>
+  options: Record<string, any>,
+  args: Record<string, any> = {}
 ): string {
   const config = COMMANDS[command];
-  const displayArg = command === CommandType.SYNC ? prompt.sync_basename : prompt.prompt;
+  let displayArg = command === CommandType.SYNC ? prompt.sync_basename : prompt.prompt;
+  if (command === CommandType.REPLAY) {
+    displayArg = args.run_artifact || options['run-artifact'] || options.run_artifact || '';
+  }
 
-  const optionsStr = Object.keys(options).length > 0
-    ? ' ' + Object.entries(options).map(([k, v]) => {
+  const displayOptions = command === CommandType.REPLAY
+    ? Object.fromEntries(Object.entries(options).filter(([k]) => k !== 'run-artifact' && k !== 'run_artifact'))
+    : options;
+
+  const optionsStr = Object.keys(displayOptions).length > 0
+    ? ' ' + Object.entries(displayOptions).map(([k, v]) => {
         if (typeof v === 'boolean') return v ? `--${k.replace(/_/g, '-')}` : '';
         return `--${k.replace(/_/g, '-')} ${v}`;
       }).filter(Boolean).join(' ')
@@ -256,7 +272,7 @@ export function buildCommandRequest(
 } {
   const { options, codeFile, testFile } = cleanOptions(rawOptions, prompt);
   const args = buildCommandArgs(command, prompt, codeFile, testFile, options);
-  const displayCommand = buildDisplayCommand(command, prompt, options);
+  const displayCommand = buildDisplayCommand(command, prompt, options, args);
   const config = COMMANDS[command];
 
   return {
