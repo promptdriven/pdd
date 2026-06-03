@@ -35,6 +35,9 @@ _FORBIDDEN_CLAUSE_RE = re.compile(
     r"\b(?:must|shall|may)\s+not\s+([^.\n]+)",
     re.IGNORECASE,
 )
+_PROMPT_TAG_LINE_RE = re.compile(r"^\s*</?[\w.-]+(?:\s+[^>]*)?>\s*$")
+_MARKDOWN_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
+_BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 logger = logging.getLogger(__name__)
 
 
@@ -365,14 +368,22 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
                 sorted(set(resolved_refs)),
             )
 
-    changes_list, cost, model = detect_change(
-        [str(p) for p in prompt_files],
-        story_content,
-        strength,
-        temperature,
-        time,
-        verbose=verbose,
-    )
+    detection_error = ""
+    try:
+        changes_list, cost, model = detect_change(
+            [str(p) for p in prompt_files],
+            story_content,
+            strength,
+            temperature,
+            time,
+            verbose=verbose,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Story prompt detection failed; using deterministic links: %s", exc)
+        changes_list = None
+        cost = 0.0
+        model = ""
+        detection_error = str(exc)
 
     linked_prompt_paths, link_source = _select_story_prompt_links(
         story_content=story_content,
@@ -394,6 +405,14 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
         }
     )
     if updated:
+        if detection_error:
+            return (
+                True,
+                "Story prompt metadata linked by deterministic fallback after detection failed.",
+                cost,
+                model,
+                linked_refs,
+            )
         if link_source == "detect_change":
             return True, "Story prompt metadata linked.", cost, model, linked_refs
         if link_source == "story_content":
@@ -405,6 +424,14 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
                 linked_refs,
             )
         return True, "Story prompt metadata linked to full prompt set.", cost, model, linked_refs
+    if detection_error:
+        return (
+            True,
+            "Story prompt metadata already up to date by deterministic fallback after detection failed.",
+            cost,
+            model,
+            linked_refs,
+        )
     if link_source == "detect_change":
         return True, "Story prompt metadata already up to date.", cost, model, linked_refs
     if link_source == "story_content":
@@ -480,17 +507,117 @@ def _prompt_summary_line(prompt_path: Path) -> str:
     except OSError:
         return "Prompt included in story scope."
     for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line:
+        stripped = raw_line.strip()
+        if not stripped:
             continue
-        if line.startswith("%"):
+        if stripped.startswith("%"):
             continue
-        if line.startswith("#") and not line.startswith("##"):
+        if _PROMPT_TAG_LINE_RE.match(stripped):
+            continue
+        line = _clean_prompt_line(stripped)
+        if not _is_story_candidate_line(line):
             continue
         if len(line) > 140:
             return f"{line[:137].rstrip()}..."
         return line
     return "Prompt included in story scope."
+
+
+def _clean_prompt_line(line: str) -> str:
+    """Normalize one prompt line for story prose."""
+    cleaned = _MARKDOWN_HEADING_RE.sub("", line.strip())
+    cleaned = _BULLET_PREFIX_RE.sub("", cleaned)
+    cleaned = re.sub(r"`([^`]+)`", r"\1", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _is_story_candidate_line(line: str) -> bool:
+    """Return whether a prompt line carries useful behavioral signal."""
+    if not line:
+        return False
+    if line.startswith("%") or line.startswith("<!--"):
+        return False
+    if _PROMPT_TAG_LINE_RE.match(line):
+        return False
+    if line.startswith(("{", "}", "[", "]")):
+        return False
+    lowered = line.lower()
+    if lowered in {"inputs", "outputs", "dependencies", "deliverables"}:
+        return False
+    return bool(re.search(r"[A-Za-z]{3,}", line))
+
+
+def _prompt_signal_lines(prompt_path: Path, *, limit: int = 6) -> List[str]:
+    """Extract prompt-derived behavior lines for deterministic story generation."""
+    try:
+        content = prompt_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+
+    signals: List[str] = []
+    seen: set[str] = set()
+    for raw_line in content.splitlines():
+        line = _clean_prompt_line(raw_line)
+        if not _is_story_candidate_line(line):
+            continue
+        if len(line) > 180:
+            line = f"{line[:177].rstrip()}..."
+        key = line.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        signals.append(line)
+        if len(signals) >= limit:
+            break
+    return signals
+
+
+def _story_behavior_from_prompts(prompt_paths: List[Path]) -> str:
+    """Build concrete capability prose from prompt contents."""
+    behaviors: List[str] = []
+    for path in prompt_paths:
+        signals = _prompt_signal_lines(path, limit=2)
+        if signals:
+            behaviors.append(signals[0].rstrip("."))
+        else:
+            behaviors.append(f"review the {_prompt_topic_name(path)} behavior")
+    if not behaviors:
+        return "review the generated behavior"
+    if len(behaviors) == 1:
+        return behaviors[0][0].lower() + behaviors[0][1:]
+    return "; and ".join(behavior[0].lower() + behavior[1:] for behavior in behaviors)
+
+
+def _story_value_from_prompts(prompt_paths: List[Path]) -> str:
+    """Build benefit prose that stays tied to the prompt scope."""
+    topics = [_prompt_topic_name(path) for path in prompt_paths]
+    if len(topics) == 1:
+        topic = _slugify_story_name(topics[0]).replace("_", " ")
+        return f"the {topic} prompt has reviewable behavior before code generation"
+    return "the linked prompts have reviewable cross-module behavior before code generation"
+
+
+def _story_behavior_from_rule_summaries(rules: List[Tuple[str, str, str, str]]) -> str:
+    """Build capability prose from parsed contract rules."""
+    summaries = [summary.lower() for _, _, summary, _ in rules[:3] if summary]
+    if not summaries:
+        return "satisfy the linked prompt contract rules"
+    if len(summaries) == 1:
+        return f"satisfy {summaries[0]}"
+    if len(summaries) == 2:
+        return f"satisfy {summaries[0]} and {summaries[1]}"
+    return f"satisfy {', '.join(summaries[:-1])}, and {summaries[-1]}"
+
+
+def _clean_rule_block(rule_text: str, summary: str) -> str:
+    """Normalize a parsed contract rule block for acceptance criteria and oracles."""
+    lines = [_clean_prompt_line(line) for line in rule_text.splitlines()]
+    lines = [line for line in lines if line]
+    if lines and re.match(r"^R-?\d+\s*[-:]", lines[0], re.IGNORECASE):
+        lines = lines[1:]
+    cleaned = " ".join(lines).strip()
+    return (cleaned or summary).rstrip(".")
 
 
 def _summary_text_from_rule_line(text: str) -> str:
@@ -589,20 +716,74 @@ def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
             else:
                 covers_lines.append(f"- {rule_id}: {summary}")
     else:
-        covers_lines.append(
-            "- R1: Add contract rule IDs here after contracts are authored."
-        )
+        for path in prompt_paths:
+            ref = _prompt_reference_for_metadata(path, prompts_root)
+            summary = _prompt_summary_line(path).rstrip(".")
+            if len(prompt_paths) > 1:
+                covers_lines.append(f"- `{ref}`: {summary}.")
+            else:
+                covers_lines.append(f"- Prompt behavior: {summary}.")
     covers_block = "\n".join(covers_lines)
 
     negatives = _seed_negative_cases_from_rules(seeded_rules)
     if negatives:
         neg_block = "\n".join(f"- {neg}" for neg in negatives)
     else:
-        neg_block = "- List forbidden outcomes this story protects against."
+        neg_lines: List[str] = []
+        for path in prompt_paths:
+            for signal in _prompt_signal_lines(path, limit=8):
+                if re.search(r"\b(?:must|shall|may)\s+not\b", signal, re.IGNORECASE):
+                    neg_lines.append(signal.rstrip(".") + ".")
+        neg_block = "\n".join(f"- {line}" for line in neg_lines) or (
+            "- No prompt-specific forbidden outcomes were detected; preserve all "
+            "explicit MUST NOT constraints when they are added."
+        )
+
+    acceptance_lines: List[str] = []
+    if seeded_rules:
+        for index, (ref, rule_id, summary, rule_text) in enumerate(seeded_rules, start=1):
+            clean_rule = _clean_rule_block(rule_text, summary)
+            acceptance_lines.append(
+                f"{index}. Given `{ref}` is the prompt under review, when {rule_id} is exercised, "
+                f"then {summary.lower()} is satisfied: {clean_rule}."
+            )
+    else:
+        index = 1
+        for path in prompt_paths:
+            ref = _prompt_reference_for_metadata(path, prompts_root)
+            signals = _prompt_signal_lines(path, limit=4) or [_prompt_summary_line(path)]
+            for signal in signals[:3]:
+                acceptance_lines.append(
+                    f"{index}. Given `{ref}` is used for generation, when the generated behavior is reviewed, "
+                    f"then it implements: {signal.rstrip('.')}."
+                )
+                index += 1
+    acceptance_block = "\n".join(acceptance_lines)
+
+    oracle_lines: List[str] = []
+    if seeded_rules:
+        for ref, rule_id, summary, rule_text in seeded_rules:
+            clean_rule = _clean_rule_block(rule_text, summary)
+            oracle_lines.append(f"- `{ref}` {rule_id}: {clean_rule}.")
+    else:
+        for path in prompt_paths:
+            ref = _prompt_reference_for_metadata(path, prompts_root)
+            for signal in (_prompt_signal_lines(path, limit=3) or [_prompt_summary_line(path)])[:3]:
+                oracle_lines.append(f"- `{ref}` requires: {signal.rstrip('.')}.")
+    oracle_block = "\n".join(oracle_lines)
+
+    story_behavior = (
+        _story_behavior_from_rule_summaries(seeded_rules)
+        if seeded_rules
+        else _story_behavior_from_prompts(prompt_paths)
+    )
+    story_value = _story_value_from_prompts(prompt_paths)
 
     context_lines = [
-        "Describe relevant state, assumptions, fixtures, users, records, "
-        "external services, or dependencies.",
+        "Use the linked prompt files as the source of truth for behavior, fixtures, dependencies, "
+        "external calls, records, and user-visible outcomes.",
+        "Each acceptance criterion below is derived from concrete prompt text so reviewers can "
+        "treat this story as a prompt regression test.",
         "",
         "This story covers the following prompt files:",
     ]
@@ -619,23 +800,15 @@ def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
         "## Covers\n\n"
         f"{covers_block}\n\n"
         "## Story\n\n"
-        "As a <persona>,\n"
-        "I want the scoped prompt capabilities to compose correctly,\n"
-        "so that the full workflow works end-to-end.\n\n"
+        "As a prompt reviewer,\n"
+        f"I want to verify that generated code can {story_behavior},\n"
+        f"so that {story_value}.\n\n"
         "## Context\n\n"
         f"{context_block}\n\n"
         "## Acceptance Criteria\n\n"
-        "1. Given behavior required by all listed prompts, when used together, "
-        "then all components function correctly.\n"
-        "2. Given `pdd detect --stories` is run, when analyzed, then it reports "
-        "no required prompt changes.\n\n"
+        f"{acceptance_block}\n\n"
         "## Oracle\n\n"
-        "These details matter for pass/fail:\n"
-        "- error type\n"
-        "- state transition\n"
-        "- absence/presence of external call\n"
-        "- emitted event\n"
-        "- returned value shape\n\n"
+        f"{oracle_block}\n\n"
         "## Non-Oracle\n\n"
         "These details should not matter:\n"
         "- private helper names\n"
@@ -645,9 +818,11 @@ def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
         "## Negative Cases\n\n"
         f"{neg_block}\n\n"
         "## Non-Goals\n\n"
-        "What this story explicitly does not cover.\n\n"
+        "- Private helper names, file organization, and internal refactors are out of scope unless the prompt explicitly requires them.\n"
+        "- New product behavior outside the linked prompt files is out of scope.\n\n"
         "## Notes\n\n"
-        "Links, edge cases, fixtures, rationale, or implementation hints.\n"
+        "- Generated deterministically from prompt content; edit this story when human review identifies missing acceptance criteria.\n"
+        "- `pdd detect --stories` should report no required prompt changes for this story before it is used as a prompt regression test.\n"
     )
 
 
@@ -873,7 +1048,20 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
 
     if detect_success and detected_links:
         message_lower = detect_message.lower()
-        if "full prompt set" not in message_lower and "story content" not in message_lower:
+        if "deterministic fallback" in message_lower:
+            linked_refs = linked_refs_from_input
+            latest_story = _read_story(output_path)
+            _upsert_story_prompt_metadata(
+                output_path,
+                latest_story,
+                [path.resolve() for path in resolved_paths],
+                prompts_root,
+            )
+            status_message = (
+                f"Generated story file: {output_path}. "
+                "Story prompt metadata linked from prompt inputs by deterministic fallback."
+            )
+        elif "full prompt set" not in message_lower and "story content" not in message_lower:
             linked_refs = detected_links
             status_message = (
                 f"Generated story file: {output_path}. "

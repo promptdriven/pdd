@@ -490,7 +490,13 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     assert "## Non-Oracle" in story_text
     assert "## Negative Cases" in story_text
     assert "## Prompt Scope" not in story_text
-    assert "- R1: Add contract rule IDs here after contracts are authored." in story_text
+    assert "<persona>" not in story_text
+    assert "<behavior>" not in story_text
+    assert "scoped prompt capabilities" not in story_text
+    assert "- `upload_python.prompt`: Handle file uploads." in story_text
+    assert "- `notify_python.prompt`: Send notifications." in story_text
+    assert "then it implements: Handle file uploads." in story_text
+    assert "then it implements: Send notifications." in story_text
 
 
 def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_path):
@@ -522,6 +528,71 @@ def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_
     assert "notify_python.prompt" in story_text
 
 
+def test_generate_user_story_uses_deterministic_links_when_detection_raises(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt = prompts_dir / "offline_python.prompt"
+    prompt.write_text("Generate an offline-safe report.", encoding="utf-8")
+
+    with patch(
+        "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
+    ), patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.side_effect = RuntimeError("provider unavailable")
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert "linked from prompt inputs" in message
+    assert cost == 0.0
+    assert model == ""
+    assert linked_prompts == ["offline_python.prompt"]
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "<!-- pdd-story-prompts: offline_python.prompt -->" in story_text
+    assert "Generate an offline-safe report" in story_text
+
+
+def test_generate_user_story_derives_unit_test_ready_details_from_prompt(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt = prompts_dir / "csv_report_python.prompt"
+    prompt.write_text(
+        "\n".join(
+            [
+                "Build a CSV report workflow.",
+                "- Accept only .csv uploads with a header row.",
+                "- Return row_count and column_names in the summary.",
+                "- MUST NOT log raw uploaded cell values.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with patch(
+        "pdd.user_story_tests._llm_generate_story_markdown", return_value=(None, 0.0, "")
+    ), patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.return_value = ([], 0.0, "local")
+        success, _, _, _, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt)],
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert linked_prompts == ["csv_report_python.prompt"]
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "As a prompt reviewer" in story_text
+    assert "Build a CSV report workflow" in story_text
+    assert "Accept only .csv uploads with a header row" in story_text
+    assert "Return row_count and column_names in the summary" in story_text
+    assert "MUST NOT log raw uploaded cell values" in story_text
+    assert "`csv_report_python.prompt` requires: Accept only .csv uploads with a header row." in story_text
+    assert "<persona>" not in story_text
+    assert "List forbidden outcomes" not in story_text
+
+
 def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
@@ -547,6 +618,9 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
     assert "- R1: Positive amount" in story_text
     assert "- R2: Remaining balance" in story_text
     assert "- R3: No provider call before validation" in story_text
+    assert "when R1 is exercised" in story_text
+    assert "For every refund request, the system MUST reject the request" in story_text
+    assert "`contract_rules_python.prompt` R3:" in story_text
     assert "Call the payment provider for requests rejected by R1 or R2." in story_text
 
 
@@ -650,8 +724,10 @@ def test_generate_user_story_falls_back_when_llm_errors(tmp_path):
 
     assert success is True
     story_text = Path(story_file).read_text(encoding="utf-8")
-    # Deterministic template placeholder is present.
-    assert "As a <persona>," in story_text
+    # Deterministic fallback is still prompt-derived, not a placeholder.
+    assert "As a prompt reviewer," in story_text
+    assert "Handle file uploads" in story_text
+    assert "As a <persona>," not in story_text
     assert story_text.startswith("<!-- pdd-story-prompts:")
 
 
@@ -678,7 +754,7 @@ def test_generate_user_story_falls_back_when_llm_output_malformed(tmp_path):
 
     assert success is True
     story_text = Path(story_file).read_text(encoding="utf-8")
-    assert "As a <persona>," in story_text  # fell back to template
+    assert "As a prompt reviewer," in story_text  # fell back to prompt-derived template
     assert "I can do things." not in story_text
 
 

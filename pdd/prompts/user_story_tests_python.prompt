@@ -42,9 +42,10 @@ the guide may say `## Forbidden Outcomes` — same intent).
   `## Covers` from `<contract_rules>` via `parse_prompt_contracts()` in
   `pdd/contract_ir.py` (Path-based API; do not duplicate parsing).
   Single-prompt: `- R{n}: <summary>`. Multi-prompt: `prompts/<file>.prompt#R{n}: <summary>`.
-  When no contract rules exist, emit one placeholder Covers bullet for authors.
-  Seed `## Negative Cases` bullets from MUST/SHALL/MAY NOT rule text when present.
-  Emit starter Oracle and Non-Oracle bullets (issue #820 examples). This path stays
+  When no contract rules exist, derive Covers, Story, Acceptance Criteria, Oracle,
+  and Negative Cases from concrete prompt lines; do not emit placeholder text such
+  as `<persona>`, `<behavior>`, or "Add contract rule IDs here". Seed `## Negative
+  Cases` bullets from MUST/SHALL/MAY NOT rule text when present. This path stays
   fully deterministic (no LLM) so it is safe offline and in tests.
 - **Metadata is independent of generation.** Regardless of which path produced the
   body, the `<!-- pdd-story-prompts: ... -->` metadata is stitched deterministically
@@ -96,9 +97,9 @@ the guide may say `## Forbidden Outcomes` — same intent).
      and returns `(markdown_or_None, cost, model)`. All imports are lazy to avoid an
      `llm_invoke` import cycle.
    - `_seed_covers_from_prompts`, `_rule_covers_summary`, `_cross_module_covers_ref`,
-     `_seed_negative_cases_from_rules`, and `_render_story_markdown_from_prompts` implement
-     the deterministic contract-aware FALLBACK template. Use `Rule` and
-     `parse_prompt_contracts` from `contract_ir`.
+     `_seed_negative_cases_from_rules`, prompt-signal extraction helpers, and
+     `_render_story_markdown_from_prompts` implement the deterministic contract-aware
+     FALLBACK template. Use `Rule` and `parse_prompt_contracts` from `contract_ir`.
    - After writing the story file, run `cache_story_prompt_links` / `detect_change` as today;
      metadata stitching is independent of which generation path produced the body.
 

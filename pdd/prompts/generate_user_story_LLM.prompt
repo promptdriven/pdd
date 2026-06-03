@@ -16,10 +16,11 @@
     - Derive everything from the ACTUAL content of the prompt files above. Do not invent capabilities the prompts do not describe, and do not restate low-level implementation details (function names, class structure, internal helpers).
     - Write from the perspective of the real end user or caller of the behavior (e.g. "a developer", "a data analyst", "an administrator", "a CLI user") — pick the persona the prompts actually serve.
     - The `## Story` sentence MUST follow the canonical shape: "As a <persona>, I can <capability>, so that <benefit>." Make the capability and benefit specific to these prompts.
+    - Do not output literal placeholder tokens such as `<persona>`, `<capability>`, `<benefit>`, `<detail>`, `<state>`, or `<action>`.
     - `## Acceptance Criteria` MUST be concrete, checkable Given/When/Then statements about observable behavior — the kind of thing a test or a reviewer could verify. Prefer 2–5 criteria.
     - `## Oracle` lists the details that decide pass/fail (error type, state transition, presence/absence of an external call, emitted event, returned value shape). `## Non-Oracle` lists details that must NOT matter (private helper names, internal structure, exact wording of non-user-facing messages, irrelevant ordering).
     - `## Negative Cases` lists forbidden outcomes the story protects against (derive from any MUST NOT / SHALL NOT / MAY NOT rules, or from obviously-wrong behavior).
-    - `## Covers` should list the named contract rules the story exercises when the prompts define them (e.g. `- R1: <summary>`); if the prompts define no contract rules, emit exactly one placeholder bullet: `- R1: Add contract rule IDs here after contracts are authored.`
+    - `## Covers` should list the named contract rules the story exercises when the prompts define them (e.g. `- R1: <summary>`). If the prompts define no contract rules, list the concrete prompt behavior being covered instead of emitting a placeholder.
     - When more than one prompt file is provided, the story should describe how they compose into one end-to-end user-facing workflow, and `## Context` should list each scoped prompt file.
 </guidance>
 
@@ -33,6 +34,7 @@
 
     ## Covers
     - R<n>: <short summary of the contract rule this story exercises>
+    - <prompt ref>: <concrete behavior covered when no contract rule IDs exist>
 
     ## Story
     As a <persona>, I can <capability>, so that <benefit>.
