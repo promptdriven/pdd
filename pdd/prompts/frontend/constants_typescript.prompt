@@ -6,7 +6,7 @@
   "module": {
     "functions": [
       {"name": "getCommandByBackendName", "signature": "(backendName: string)", "returns": "CommandConfig | undefined"},
-      {"name": "getPromptTemplate", "signature": "(name: string, language: string, description?: string)", "returns": "string"}
+      {"name": "getPromptTemplate", "signature": "function getPromptTemplate(name: string, language: string, description?: string): string", "returns": "string"}
     ]
   }
 }

@@ -158,6 +158,86 @@ def orchestration_fixture(tmp_path):
 
 # --- Test Cases ---
 
+def test_sync_estimate_mode_prompt_contract_keeps_no_side_effect_guarantees():
+    """The sync prompt must keep estimate mode side-effect free."""
+    prompt_text = Path("pdd/prompts/sync_orchestration_python.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    required_fragments = [
+        "estimate_breakdown",
+        "Record this row as `exact`",
+        "Label every downstream sync, generation, example, test, verify, crash, fix, or update projection as `approximate`",
+        "Print an approximate total and a context usage summary",
+        "MUST NOT acquire or write sync locks",
+        "create generated code/example/test files",
+        "write `--output-cost` CSV rows",
+        "call an LLM provider",
+        "Contract gap handling",
+    ]
+
+    for fragment in required_fragments:
+        assert fragment in prompt_text
+
+
+@pytest.mark.xfail(
+    reason=(
+        "Blocked until the prerequisite shared --estimate CLI state and "
+        "llm_invoke collector/sentinel API exist in this checkout."
+    ),
+    strict=True,
+)
+def test_sync_estimate_request_gap_short_circuits_before_side_effects(
+    orchestration_fixture,
+    tmp_path,
+):
+    """Runtime contract: an active estimate request with no shared API must stop before writes or provider calls."""
+    cost_csv = tmp_path / "run.csv"
+    orchestration_fixture["sync_determine_operation"].side_effect = [
+        SyncDecision(operation="generate", reason="needs generated code"),
+    ]
+
+    with click.Context(click.Command("pdd")) as ctx:
+        ctx.obj = {
+            "estimate": True,
+            "estimate_collector": Mock(name="estimate_collector"),
+            "output_cost": str(cost_csv),
+        }
+        result = sync_orchestration(
+            basename="calculator",
+            language="python",
+            output_cost=str(cost_csv),
+            quiet=True,
+        )
+
+    for dependency_mock in (
+        orchestration_fixture["auto_deps_main"],
+        orchestration_fixture["code_generator_main"],
+        orchestration_fixture["context_generator_main"],
+        orchestration_fixture["crash_main"],
+        orchestration_fixture["fix_verification_main"],
+        orchestration_fixture["cmd_test_main"],
+        orchestration_fixture["fix_main"],
+        orchestration_fixture["update_main"],
+    ):
+        dependency_mock.assert_not_called()
+
+    orchestration_fixture["SyncLock"].assert_not_called()
+    orchestration_fixture["save_run_report"].assert_not_called()
+    orchestration_fixture["_save_fingerprint_atomic"].assert_not_called()
+    assert not cost_csv.exists()
+    assert not orchestration_fixture["get_pdd_file_paths"].return_value["code"].exists()
+    assert not orchestration_fixture["get_pdd_file_paths"].return_value["example"].exists()
+    assert not orchestration_fixture["get_pdd_file_paths"].return_value["test"].exists()
+
+    result_text = " ".join(
+        str(result.get(key, "")) for key in ("summary", "error", "errors")
+    ).lower()
+    assert result["success"] is False
+    assert "estimate" in result_text
+    assert "prerequisite" in result_text
+
+
 def test_happy_path_full_sync(orchestration_fixture):
     """
     Tests a complete, successful sync workflow from start to finish.

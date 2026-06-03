@@ -465,51 +465,6 @@
     }
   },
   {
-    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
-    "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
-    "dependencies": [],
-    "priority": 18,
-    "filename": "resurface_check_Python.prompt",
-    "filepath": "extensions/recruiting/resurface_check.py",
-    "tags": [
-      "backend",
-      "api",
-      "scheduling",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://cloud.google.com/scheduler/docs/creating",
-        "purpose": "Cloud Scheduler daily job configuration"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/query-data/queries",
-        "purpose": "Firestore compound queries for contribution threshold scanning"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests",
-        "purpose": "GitHub API for merged PR count verification"
-      },
-      {
-        "url": "https://cloud.google.com/functions/docs/writing/write-http-functions",
-        "purpose": "Cloud Functions HTTP entry point for scheduler triggers"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_resurface_check",
-            "auth": "cloud-scheduler",
-            "responseSchema": "{ scanned: int, resurfaced: int, churned: int, reasons: dict }"
-          }
-        ]
-      }
-    }
-  },
-  {
     "reason": "Enhances test plan with contract/schema validation and accessibility test cases.",
     "description": "Step 5b of the 18-step agentic test workflow. Enhances the test plan with OpenAPI contract validation and axe-core accessibility test cases.",
     "dependencies": [],
@@ -2054,9 +2009,17 @@
     }
   },
   {
-    "reason": "Iteratively fixes code crashes until execution succeeds.",
+    "reason": "Runs crash-fix verification loops with estimate-mode short-circuiting and agentic fallback.",
     "description": "Runs crash-fix cycles with retry limits. Executes example code to verify fixes.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_crash_python.prompt",
+      "agentic_langtest_python.prompt",
+      "get_language_python.prompt",
+      "fix_code_module_errors_python.prompt",
+      "llm_invoke_python.prompt",
+      "core/cli_python.prompt",
+      "core/cloud_python.prompt"
+    ],
     "priority": 58,
     "filename": "fix_code_loop_python.prompt",
     "filepath": "pdd/fix_code_loop.py",
@@ -2071,91 +2034,28 @@
         "functions": [
           {
             "name": "cloud_crash_fix",
-            "signature": "(program: str, prompt: str, code: str, errors: str, strength: float, temperature: float, time: float, verbose: bool, program_path: str = '', code_path: str = '', language: str = 'python') -> Tuple[bool, bool, str, str, str, float, Optional[str]]",
-            "returns": "Tuple[bool, bool, str, str, str, float, Optional[str]]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(program, prompt, code, errors, strength, temperature, time, verbose, program_path='', code_path='', language='python') -> Tuple[bool, bool, str, str, str, float, Optional[str]]",
+            "returns": "Tuple[bool, bool, str, str, str, float, Optional[str]]"
           },
           {
             "name": "run_process_with_output",
-            "signature": "(cmd_args, timeout = 300)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(cmd_args, timeout=300) -> Tuple[int, str, str]",
+            "returns": "Tuple[int, str, str]"
+          },
+          {
+            "name": "_normalize_agentic_result",
+            "signature": "(result) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
+          },
+          {
+            "name": "_safe_run_agentic_crash",
+            "signature": "(*, prompt_file, code_file, program_file, crash_log_file, cwd=None) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
             "name": "fix_code_loop",
-            "signature": "(code_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str, verbose: bool = False, time: float = DEFAULT_TIME, prompt_file: str = '', agentic_fallback: bool = True, use_cloud: bool = False) -> Tuple[bool, str, str, int, float, Optional[str]]",
-            "returns": "Tuple[bool, str, str, int, float, Optional[str]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__init__",
-            "signature": "(self, returncode, stdout, stderr)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "stream_pipe",
-            "signature": "(pipe, sink, capture_list)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "dummy_fix_code_module_errors",
-            "signature": "(program, prompt, code, errors, strength, temperature, verbose)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "run_agentic_crash",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_language",
-            "signature": "(ext)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "default_verify_cmd_for",
-            "signature": "(lang, verification_program)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "rprint",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "fix_code_module_errors",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(code_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file, verbose=False, time=DEFAULT_TIME, prompt_file='', agentic_fallback=True, use_cloud=False, prior_cost=0.0) -> Tuple[bool, str, str, int, float, Optional[str]]",
+            "returns": "Tuple[bool, str, str, int, float, Optional[str]]"
           }
         ]
       }
@@ -2450,7 +2350,9 @@
     "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations. Supports two-phase focused repair for large dev units via fix_focus, and failure-aware early exit for syntax/import and timeout/flaky failures.",
     "dependencies": [
       "failure_classification_python.prompt",
-      "fix_focus_python.prompt"
+      "fix_focus_python.prompt",
+      "llm_invoke_python.prompt",
+      "core/cli_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2864,11 +2766,14 @@
     }
   },
   {
-    "reason": "Coordinates sync workflow steps and state management.",
+    "reason": "Coordinates sync workflow execution, state tracking, estimates, and side-effect-safe dry runs.",
     "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
     "dependencies": [
       "code_generator_main_python.prompt",
-      "agentic_sync_runner_python.prompt"
+      "agentic_sync_runner_python.prompt",
+      "sync_determine_operation_python.prompt",
+      "llm_invoke_python.prompt",
+      "core/cli_python.prompt"
     ],
     "priority": 70,
     "filename": "sync_orchestration_python.prompt",
@@ -3128,30 +3033,6 @@
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step4 reproduce operations.",
-    "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 75,
-    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15280,
-      "y": 660
-    }
-  },
-  {
     "reason": "Analyzes bug root cause and classifies scope as LOCALIZED/SIBLING_PATTERN/CROSS_CUTTING with mandatory sibling search.",
     "description": "Defines the prompt structure for agentic bug step6 root cause. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
@@ -3247,31 +3128,6 @@
     "position": {
       "x": 15600,
       "y": 660
-    }
-  },
-  {
-    "reason": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
-    "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
-    "dependencies": [],
-    "priority": 80,
-    "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "command",
-      "command": {
-        "name": "agentic_bug_step10",
-        "description": "Generate draft PR with failing tests and link to GitHub issue"
-      }
-    },
-    "position": {
-      "x": 15000,
-      "y": 220
     }
   },
   {
@@ -3608,30 +3464,6 @@
     },
     "position": {
       "x": 3000,
-      "y": 0
-    }
-  },
-  {
-    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
-    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 95,
-    "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
-    "tags": [
-      "config",
-      "extraction",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 1800,
       "y": 0
     }
   },
@@ -4219,27 +4051,6 @@
     }
   },
   {
-    "reason": "Configuration data for pdd theme.",
-    "description": "Defines pdd theme settings and data. Used by runtime modules.",
-    "dependencies": [],
-    "priority": 119,
-    "filename": "pdd_theme_json.prompt",
-    "filepath": "pdd_theme.json",
-    "tags": [
-      "config"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 4800,
-      "y": 1100
-    }
-  },
-  {
     "reason": "Module that post-process the string output of a LLM so that the code can be run.",
     "description": "Implements functionality to post-process the string output of a LLM so that the code can be run. Integrates with PDD workflow.",
     "dependencies": [],
@@ -4410,33 +4221,12 @@
     }
   },
   {
-    "reason": "Implements regression analysis functionality.",
-    "description": "Provides regression analysis capabilities for PDD operations.",
-    "dependencies": [],
-    "priority": 124,
-    "filename": "regression_analysis_log.prompt",
-    "filepath": "regression_analysis.log",
-    "tags": [
-      "config"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 5960,
-      "y": 0
-    }
-  },
-  {
     "reason": "Implements regression functionality.",
     "description": "Provides regression capabilities for PDD operations.",
     "dependencies": [],
     "priority": 125,
     "filename": "regression_bash.prompt",
-    "filepath": "regression.sh",
+    "filepath": "tests/regression.sh",
     "tags": [
       "cli",
       "shell"
@@ -4502,7 +4292,7 @@
     "dependencies": [],
     "priority": 127,
     "filename": "run_generated_python.prompt",
-    "filepath": "pdd/run_generated.py",
+    "filepath": "utils/run_generated.py",
     "tags": [
       "generation",
       "module",
@@ -5204,7 +4994,7 @@
     "dependencies": [],
     "priority": 143,
     "filename": "prompt_tester_python.prompt",
-    "filepath": "pdd/prompt_tester.py",
+    "filepath": "tests/prompt_tester.py",
     "tags": [
       "module",
       "python",
@@ -5852,55 +5642,6 @@
     "position": {
       "x": 20400,
       "y": 800
-    }
-  },
-  {
-    "reason": "Classifies whether a bug root cause is in code implementation or prompt specification.",
-    "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
-    "dependencies": [],
-    "priority": 166,
-    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15560,
-      "y": 440
-    }
-  },
-  {
-    "reason": "Generates E2E tests that verify the bug at a system level.",
-    "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
-    "dependencies": [],
-    "priority": 167,
-    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template",
-      "testing"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15880,
-      "y": 440
     }
   },
   {
@@ -7496,13 +7237,15 @@
     }
   },
   {
-    "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
+    "reason": "Runs dependency-aware multi-module sync subprocesses with progress tracking and estimate-mode safety.",
     "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects three repairable generation failures from per-module sync subprocesses \u2014 architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), and test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012) \u2014 and retries each up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry forwards the parent's resolved .pddrc context, --strength, and --temperature on the retry command so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block \u2014 '=== architecture conformance failure ===', '=== public surface regression ===', or '=== test churn threshold exceeded ===' (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) \u2014 plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
       "agentic_test_orchestrator_python.prompt",
-      "sync_order_python.prompt"
+      "sync_order_python.prompt",
+      "llm_invoke_python.prompt",
+      "core/cli_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -7518,51 +7261,38 @@
         "functions": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, initial_cost: float = 0.0)",
-            "returns": "AsyncSyncRunner",
-            "sideEffects": [
-              "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child/per-retry remaining-budget caps; computes strongly connected components of the basename-induced dep graph so cyclic dependency sets are scheduled with soft intra-SCC edges and serialized cycle execution"
-            ]
+            "signature": "(basenames, dep_graph, sync_options, github_info, quiet=False, verbose=False, issue_url=None, module_cwds=None, module_targets=None, initial_cost=0.0) -> AsyncSyncRunner",
+            "returns": "AsyncSyncRunner"
           },
           {
             "name": "AsyncSyncRunner.run",
             "signature": "() -> Tuple[bool, str, float]",
-            "returns": "Tuple[bool, str, float]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[bool, str, float]"
           },
           {
             "name": "build_dep_graph_from_architecture",
             "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult",
-            "returns": "DepGraphFromArchitectureResult",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "DepGraphFromArchitectureResult"
           },
           {
             "name": "build_dep_graph_from_architecture_data",
             "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult",
-            "returns": "DepGraphFromArchitectureResult",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "DepGraphFromArchitectureResult"
+          },
+          {
+            "name": "build_conformance_hard_failure_from_error",
+            "signature": "(exc: ArchitectureConformanceError, basename: str) -> str",
+            "returns": "str"
           },
           {
             "name": "build_public_surface_hard_failure_from_error",
             "signature": "(exc: PublicSurfaceRegressionError, basename: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           },
           {
             "name": "build_test_churn_hard_failure_from_error",
             "signature": "(exc: TestChurnError, basename: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           }
         ]
       }
@@ -8507,7 +8237,7 @@
           },
           {
             "name": "getPromptTemplate",
-            "signature": "(name: string, language: string, description?: string)",
+            "signature": "function getPromptTemplate(name: string, language: string, description?: string): string",
             "returns": "string"
           }
         ]
@@ -9294,7 +9024,7 @@
         "functions": [
           {
             "name": "Job",
-            "signature": "(id, command, args, options, status, result, error, cost, ...)",
+            "signature": "(id: str, command: str, args: Dict[str, Any], options: Dict[str, Any], status: JobStatus, result: Optional[Any], error: Optional[str], cost: float, created_at: datetime, started_at: Optional[datetime], completed_at: Optional[datetime], live_stdout: str, live_stderr: str) -> Job",
             "returns": "Job"
           },
           {
@@ -9913,7 +9643,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(*, command: str, grounding: Optional[Dict[str, Any]] = None, ...) -> Path",
+            "signature": "def write_evidence_manifest(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False) -> Path",
             "returns": "Path"
           },
           {
@@ -9923,7 +9653,7 @@
           },
           {
             "name": "resolve_generate_output_paths",
-            "signature": "(prompt_file, *, output=None, ...) -> list[str]",
+            "signature": "def resolve_generate_output_paths(prompt_file: str | Path, *, output: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]",
             "returns": "list[str]"
           }
         ]

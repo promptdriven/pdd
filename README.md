@@ -841,6 +841,8 @@ pdd --output-cost PATH_TO_CSV_FILE [COMMAND] [OPTIONS] [ARGS]...
 
 The `PATH_TO_CSV_FILE` should be the desired location and filename for the CSV output.
 
+Cost CSV rows are written only for real command executions. Planned estimate-mode flows use the same pricing context for on-screen estimates, but do not append CSV rows because no billable LLM call has occurred.
+
 ### Cost Calculation and Presentation
 
 PDD calculates costs based on the AI model usage for each operation. Costs are presented in USD (United States Dollars) and are calculated using the following factors:
@@ -928,6 +930,8 @@ Options:
 - `--durable-branch TEXT`: Durable mode only. Override the durable checkpoint branch name. Default is `sync/issue-<N>` derived from the GitHub issue. Refused if it resolves to `main`, `master`, or the repository default branch.
 - `--no-resume`: Durable mode only. Ignore existing `PDD-Sync-Checkpoint-V1` commit trailers on the durable branch and re-run every selected module. By default, durable sync reads checkpoint trailers (`PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>`) and skips modules already checkpointed for the same issue, which is what makes a cloud rerun safely resume completed work after a partial failure.
 - `--durable-max-parallel INT`: Durable mode only. Cap how many module worktrees run concurrently. Defaults to the standard runner concurrency. A total budget still forces sequential execution.
+
+Estimate-mode note: the sync prompt contract for the prerequisite-backed `--estimate` implementation requires an exact first-step estimate from built messages when available, then labelled approximate downstream estimates for generation, example, crash, test, verify, fix, update, and issue-sync child modules whose prompts depend on generated artifacts. The total must be labelled approximate when any heuristic row contributes, and estimate mode must preserve no-provider-call and no-file-write semantics.
 
 **Durable Issue Sync** (`--durable`):
 

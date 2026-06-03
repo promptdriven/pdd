@@ -232,6 +232,8 @@ A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contra
 
 The fundamental unit is often considered the prompt and its generated code, example, and test file – all kept in sync. If a prompt is too complex to generate correctly in one shot (even with fixing), it should be split (`split`) into smaller, manageable units.
 
+For multi-step flows, planning-only estimate modes can preview likely cost and context usage before generation begins. The first built LLM request can be estimated from concrete messages, while downstream steps that depend on generated artifacts should be labelled approximate and must not call providers or write generated files during estimation.
+
 ## Future Directions
 
 PDD continues to evolve, with initiatives like:
@@ -241,4 +243,4 @@ PDD continues to evolve, with initiatives like:
 
 ## Conclusion
 
-Prompt-Driven Development offers a compelling alternative to traditional coding paradigms and purely interactive AI patching approaches, directly addressing the high cost and complexity of software maintenance. By establishing prompts as the primary artifact, emphasizing regeneration over patching, and leveraging LLMs within a structured, batch-oriented workflow for code generation and synchronization, PDD promotes long-term efficiency, consistency, better collaboration, and adaptability. While requiring a shift in mindset and skills, and acknowledging that interactive tools have their place for specific tasks, the potential benefits of PDD – particularly for complex, evolving systems – position it as a significant evolution in software engineering practices, enabling developers to work faster, more strategically, and at a higher level of abstraction. 
+Prompt-Driven Development offers a compelling alternative to traditional coding paradigms and purely interactive AI patching approaches, directly addressing the high cost and complexity of software maintenance. By establishing prompts as the primary artifact, emphasizing regeneration over patching, and leveraging LLMs within a structured, batch-oriented workflow for code generation and synchronization, PDD promotes long-term efficiency, consistency, better collaboration, and adaptability. While requiring a shift in mindset and skills, and acknowledging that interactive tools have their place for specific tasks, the potential benefits of PDD – particularly for complex, evolving systems – position it as a significant evolution in software engineering practices, enabling developers to work faster, more strategically, and at a higher level of abstraction.

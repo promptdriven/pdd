@@ -1,7 +1,10 @@
-<pdd-reason>Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.</pdd-reason>
+<pdd-reason>Coordinates sync workflow execution, state tracking, estimates, and side-effect-safe dry runs.</pdd-reason>
 
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>core/cli_python.prompt</pdd-dependency>
 
 # sync_orchestration_python.prompt
 
@@ -83,6 +86,11 @@ Returns a dictionary containing:
 - `error`: Semicolon-joined error string or None
 - `model_name`: Name of the last model used
 - `log_entries`: List of log entries (only when `dry_run=True`)
+- Estimate-mode fields when the shared estimate context is active:
+    - `estimate_breakdown`: List of per-step estimate rows, each labelled `exact` or `approximate`
+    - `estimate_total_cost`: Projected total cost, labelled approximate when any heuristic row is present
+    - `estimate_context_usage`: Context-window usage summary from the shared estimate collector when available
+    - `approximate`: bool indicating whether any downstream heuristic estimate contributed to the total
 
 ## Dependencies
 
@@ -93,6 +101,15 @@ Returns a dictionary containing:
     <sync_determine_operation_example>
         <include>context/sync_determine_operation_example.py</include>
     </sync_determine_operation_example>
+    <sync_operation_cost_interface>
+        <include select="def:estimate_operation_cost">pdd/sync_determine_operation.py</include>
+    </sync_operation_cost_interface>
+    <llm_estimate_interface>
+        <include optional mode="interface" select="def:llm_invoke">pdd/llm_invoke.py</include>
+    </llm_estimate_interface>
+    <cli_estimate_interface>
+        <include optional mode="interface" select="def:cli">pdd/core/cli.py</include>
+    </cli_estimate_interface>
     <auto_deps_main_example>
         <include>context/auto_deps_main_example.py</include>
     </auto_deps_main_example>
@@ -161,6 +178,7 @@ from .sync_determine_operation import (
     calculate_sha256,
     calculate_current_hashes,
     _safe_basename,
+    estimate_operation_cost,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -216,6 +234,18 @@ Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `erro
 ### Dry-Run Mode
 
 When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language.lower()}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
+
+### Estimate Mode
+
+When the shared estimate state exposed by `pdd/core/cli.py` and `pdd/llm_invoke.py` is active, `sync_orchestration()` must collect and print a per-step estimate breakdown instead of executing the normal workflow.
+
+- Consume the existing per-run estimate collector and the `llm_invoke` estimate short-circuit/sentinel from the prerequisite estimate-mode implementation. Do not introduce a second estimate flag, environment variable, CSV writer, provider stub, or independent collector.
+- Contract gap handling: if estimate mode is requested but the included `pdd/core/cli.py` and `pdd/llm_invoke.py` interfaces do not expose a concrete shared estimate-mode API, report that prerequisite gap explicitly and return before acquiring locks, writing files, appending cost logs, calling providers, or entering the normal sync workflow. Keep normal sync behavior unchanged only when estimate mode is not requested.
+- Estimate the first known LLM step from the actual constructed messages by entering the shared `llm_invoke` estimate path whenever that step can be safely built without generated downstream artifacts. Record this row as `exact`.
+- Label every downstream sync, generation, example, test, verify, crash, fix, or update projection as `approximate` when its prompt would depend on generated code, verification output, test output, or other artifacts not produced in estimate mode. Each approximate row must include the assumption used, such as `estimate_operation_cost(operation, language)` ratios or a one-round generate/example/test/fix assumption.
+- Print an approximate total and a context usage summary from the shared collector. If tokens, cost, model, or context window data is unavailable for a heuristic row, mark the row as heuristic or unavailable rather than fabricating exact usage.
+- Preserve normal return keys (`success`, `summary`, `total_cost`, `model_name`, `errors`) while adding estimate-oriented fields described in the Return Value section. `total_cost` may mirror the projected total for compatibility, but user-visible text must make the total approximate when any heuristic row is present.
+- Estimate mode must be side-effect free: MUST NOT acquire or write sync locks, append operation logs, write lifecycle log events, save fingerprints, save or clear run reports, create generated code/example/test files, write `--output-cost` CSV rows, auto-submit examples, run subprocess verification/tests, invoke TUI steering, call cloud/agentic subprocesses, or call an LLM provider.
 
 ### Interactive Steering
 
