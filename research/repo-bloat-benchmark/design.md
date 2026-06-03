@@ -34,7 +34,13 @@ This document is the design deliverable for the pilot. It specifies, in order:
 
 ### Falsification stance (pre-registered)
 
-The "effective context window" claim is **supported** if, as repo size grows, the agentic arm shows a statistically meaningful increase in localization cost (tokens, files read, irrelevant-read ratio) **and/or** a decrease in `hidden_pass_rate`. It is **weakened** if localization cost and hidden-pass-rate are flat across `S`. An inconclusive result (high variance, no clear trend) is reported as such. We commit to these interpretations *before* running models, per the issue's non-goals ("Do not tune prompts or tasks after seeing model outputs").
+This is a **pilot**: its job is to estimate effect sizes and variance and to give a **descriptive/directional** read, not to declare statistical significance from `N = 5` (review #5; see [§6.5](#65-replication-trials), [§7.2](#72-trend--slope-fits)). We therefore pre-commit to **practical thresholds** rather than p-values. The "effective context window" claim is, directionally:
+
+- **supported** if, as repo size grows, the agentic arm shows a monotone increase in localization cost (input tokens, files read, irrelevant-read ratio) crossing the pre-registered practical thresholds in [§7.5](#75-conclusion-required-pre-committed-interpretation) **and/or** a `hidden_pass_rate` drop beyond its threshold;
+- **weakened** if cost and `hidden_pass_rate` are effectively flat across `S` (within the same thresholds);
+- **inconclusive** if replicate dispersion is large relative to the trend.
+
+These thresholds and interpretations are fixed *before* running models, per the issue's non-goals ("Do not tune prompts or tasks after seeing model outputs"). A formally powered, significance-tested confirmatory study is scoped as follow-up, sized from this pilot's measured variance.
 
 ---
 
@@ -103,7 +109,7 @@ These constraints come directly from issue #1209's "Hold constant", "Distractor 
 1. **Scenario fixtures.** A frozen base repository per scenario, pinned to a base commit, with a target task brief, target implementation file(s), visible tests, and an out-of-tree hidden verifier. ([§4](#4-scenario-format))
 2. **Distractor pool + manifest builder.** A pool of donor files and a deterministic algorithm that selects/renames them into a per-(scenario, size) manifest, committed before runs. ([§5](#5-distractor-generation-strategy))
 3. **Variant builder.** Given `(base repo, manifest)`, materializes a working repo by copying distractor files to their destination paths. Pure function of inputs → byte-identical output; verified by re-hashing the resulting tree.
-4. **Run harness.** For each `(scenario, size, seed)`:
+4. **Run harness.** For each `(scenario, size, trial)`:
    - creates an isolated sandbox (fresh temp dir + `git init` at base commit),
    - launches the agent arm with the fixed task brief and the materialized repo,
    - records the instrumentation trace,
@@ -114,7 +120,7 @@ These constraints come directly from issue #1209's "Hold constant", "Distractor 
 ### 3.3 Determinism and isolation guarantees
 
 - **No network for materialization.** Variant building is offline and reproducible.
-- **One sandbox per run.** No state leaks between sizes or seeds. Each run starts from the base commit; the agent's edits are confined to the sandbox.
+- **One sandbox per run.** No state leaks between sizes or trials. Each run starts from the base commit in a fresh container with a clean Codex environment ([§8.1.1](#811-run-environment-freeze-review-3)); the agent's edits are confined to the sandbox.
 - **Hidden verifier never enters the sandbox** the agent sees. It is mounted/executed from a sibling location the agent's working tree does not include.
 - **Manifest never enters the sandbox.** The distractor manifest, `scenario.json`, `target_files`, and the donor pool are harness infrastructure under `research/repo-bloat-benchmark/`. The variant builder copies **only** the base repo + the materialized distractor *files* (at interleaved realistic paths) into the OverlayFS `merged` mount. The agent therefore cannot read the answer key — the FS tap confirms it can only `open()` paths that were actually mounted.
 - **No on-disk distractor marker.** Distractors are placed inside real package/layer directories with realistic names; there is no `_distractors/` root or label anywhere the agent can see. The mapping of which paths are distractors lives solely in the out-of-tree manifest and is applied only during post-hoc analysis ([§6.2](#62-how-we-capture-it-defense-in-depth)).
@@ -318,15 +324,18 @@ For every run, segmented at the **first edit** boundary (the issue's key cut poi
 
 **Localization cost (before first edit):**
 
-- `files_read_before_first_edit`
-- `search_or_tool_calls_before_first_edit`
-- `tokens_read_before_first_edit` (derived from FUSE byte-extent read logs → bytes → token estimate; measured via the FS tap, not the agent's self-report)
+- `files_read_before_first_edit` (distinct file paths opened before the first edit; FS tap)
+- `search_or_tool_calls_before_first_edit` (transcript tap)
+- `bytes_read_before_first_edit` (FS tap — a read-**volume** proxy, *not* a token count; see note below)
+- `input_tokens_before_first_edit` (transcript tap — the actual model token cost of localization; sum of provider-reported input tokens for requests issued before the first edit)
 
 **Cumulative cost (whole run):**
 
-- `input_tokens_per_run` (cumulative input tokens)
-- `max_request_input_tokens` (largest single request)
+- `input_tokens_per_run` (cumulative provider-reported input tokens)
+- `max_request_input_tokens` (largest single request, provider-reported)
 - `wall_clock_seconds`
+
+> **Read volume ≠ tokens (review #1).** `bytes_read_*` comes from the FUSE filesystem tap and measures bytes the *process* read off disk. That is **not** the number of tokens the model saw: it includes repeated reads, tool/`rg`/metadata/runtime scans, cache effects, and bytes that are never surfaced to the model at all. We therefore keep two distinct families: **read-volume** metrics (`bytes_read_*`, `files_read_*`) come only from the FS tap and are reported as volume — never converted to tokens; **token** metrics (`input_tokens_*`) come *only* from the provider's `usage` accounting via the transcript tap. The two are reported side by side, never conflated.
 
 **Targeting quality:**
 
@@ -346,10 +355,10 @@ The agent arm may report some of this; we do **not** trust self-report alone. Th
 
 1. **Filesystem tap (ground truth for reads + edits) — LOCKED: Linux container + OverlayFS + FUSE passthrough.** The agent runs inside a **Linux container** (Docker/Podman/Colima) so the kernel features below work regardless of the macOS dev host. Two stacked layers:
    - **OverlayFS for write isolation / edit ground truth.** `lowerdir` = the frozen materialized repo (base + distractors, read-only), `upperdir` = empty scratch, `merged` = what the agent sees and edits. Every file the agent writes lands in `upperdir`, so post-run the `upperdir` **is** the edit set (no diff heuristics) and the base stays provably pristine. This feeds `wrong_file_edit_rate` and `forbidden_file_edits`.
-   - **FUSE passthrough for read ground truth.** A passthrough FUSE daemon mounts the repo and logs every `open`/`read` with `{path, offset, length, pid, ts}`, forwarding to the backing files. **Byte-extent granularity is locked** (over coarser fanotify open-events) specifically so `tokens_read_before_first_edit` is *measured*, not estimated. This underpins `irrelevant_file_read_ratio`, `forbidden_file_reads`, and the read-token series regardless of what the agent claims.
+   - **FUSE passthrough for read ground truth.** A passthrough FUSE daemon mounts the repo and logs every `open`/`read` with `{path, offset, length, pid, ts}`, forwarding to the backing files. **Byte-extent granularity is locked** (over coarser fanotify open-events) so we capture read *volume* and exact path extents, not just which files were opened. This underpins `files_read_*`, `bytes_read_*`, `irrelevant_file_read_ratio`, and `forbidden_file_reads`, regardless of what the agent claims. **Filesystem bytes are deliberately not turned into a token metric** — see the read-volume-≠-tokens note in [§6.1](#61-what-we-capture); model token counts come exclusively from the transcript tap below.
 
    The container needs `/dev/fuse` + `CAP_SYS_ADMIN`. FUSE adds per-read latency, which inflates `wall_clock_seconds` (a secondary metric) but **not** the read/token *counts* that are the primary signal — flagged in the methodology note ([§7.4](#74-methodology-note)). This kernel/FS-boundary tap is chosen over an in-process shim precisely because Codex may shell out to tools (`ripgrep`, `grep`, subprocesses) whose reads a wrapper shim would miss.
-2. **Tool-call / transcript tap.** The agent runner emits a structured event log of tool invocations (search, read, edit, shell) and per-request token accounting from the provider response (input tokens, output tokens). This yields `*_before_first_edit` counts and the token series. The `pdd context-audit` token accounting (#789) and existing `pdd.server.token_counter` utilities are reused for any prompt-space token attribution.
+2. **Tool-call / transcript tap.** The agent runner emits a structured event log of tool invocations (search, read, edit, shell) and per-request token accounting from the provider response `usage` (input tokens, output tokens, with request timestamps). **All `input_tokens_*` metrics come exclusively from this provider accounting**, split at the first-edit boundary by request timestamp — never derived from filesystem bytes. The tool-call counts yield `search_or_tool_calls_before_first_edit`. (If Codex's emitted transcript does not expose per-request `usage`, that is a blocker resolved in [§8.1](#81-agentic_code_patch-pilot-required) before runs — token metrics must have a real source.) The `pdd context-audit` token accounting (#789, pending) and `pdd.server.token_counter` utilities are reused only for the deferred prompt-space arm.
 3. **Git diff tap (ground truth for edits).** Post-run `git diff` against the base commit classifies every changed path as target / in-scope / wrong-file / forbidden, giving `wrong_file_edit_rate` and `forbidden_file_edits` independent of the transcript.
 
 The **first-edit boundary** is determined by the first write event that lands in the OverlayFS `upperdir` (tap 1), and is used to split tap-2 events into before/after. The git-diff tap (3) is retained as a redundant cross-check on the OverlayFS `upperdir`, not the primary edit source.
@@ -368,20 +377,26 @@ One JSONL line per run, plus pointers to raw trace artifacts:
 
 ```json
 {
-  "run_id": "off-by-one-pagination.20x.seed0.2026-06-03T00:00:00Z",
+  "run_id": "off-by-one-pagination.20x.trial0.2026-06-03T00:00:00Z",
   "schema_version": 1,
   "scenario_id": "off-by-one-pagination",
   "size": "20x",
   "arm": "agentic_code_patch",
-  "seed": 0,
-  "model": "<frozen Codex model id + reasoning effort>",
+  "trial_index": 0,
+  "codex_seed": null,
+  "codex_cli_version": "<pinned>",
+  "model": "<frozen Codex model id>",
+  "reasoning_effort": "<frozen>",
+  "env_fingerprint_sha256": "…hash of the frozen run-environment manifest (§8.1)…",
+  "calibration_passed": true,
   "timeout_seconds": 1800,
   "manifest_sha256": "…",
   "base_repo_sha256": "…",
 
   "files_read_before_first_edit": 0,
   "search_or_tool_calls_before_first_edit": 0,
-  "tokens_read_before_first_edit": 0,
+  "bytes_read_before_first_edit": 0,
+  "input_tokens_before_first_edit": 0,
   "input_tokens_per_run": 0,
   "max_request_input_tokens": 0,
   "wall_clock_seconds": 0.0,
@@ -419,9 +434,27 @@ Every non-pass run is labeled with exactly one primary `failure_class` (issue re
 - `forbidden_access` — read/edited the hidden tree or distractor-prohibited path.
 - `other` — with a free-text note; should be rare.
 
-### 6.5 Replication and seeds
+### 6.5 Replication (trials)
 
-Each `(scenario, size)` is run over **`N = 5` seeds (LOCKED)** to separate trend from noise — 3 scenarios × 4 sizes × 5 = **60 runs** for the pilot arm. Revisited only if a variance check shows CIs too wide to read a trend. Model nondeterminism is the main variance source; seeds vary the agent's sampling, not the inputs. All seeds for a cell share identical materialized repos.
+Each `(scenario, size)` is run over **`N = 5` replicates** (`trial_index` 0–4) — 3 scenarios × 4 sizes × 5 = **60 runs** for the pilot arm. All replicates of a cell share the identical materialized repo; only the agent's run-to-run nondeterminism varies.
+
+**Seed vs. replicate (review #2).** Calling these "seeds" would imply a pinned, reproducible RNG. Codex CLI does **not** currently expose a documented, supported seed that makes a run bit-reproducible, so we do **not** claim reproducibility of individual trials. They are **replicates** that sample Codex's natural run-to-run variance (sampling temperature, tool-ordering, etc.), recorded as `trial_index`. The run schema keeps an optional `codex_seed` field: *if* a supported seed mechanism is confirmed ([§8.1](#81-agentic_code_patch-pilot-required)), we pin it, populate `codex_seed`, and only then describe trials as reproducible seeds. Until then, variance language throughout is about **dispersion across replicates**, not seed-controlled reproducibility.
+
+**Sample-size honesty (review #5).** `N = 5` is a **pilot** sample chosen to surface effect sizes and variance, not to power a significance test. It is almost certainly underpowered for formal inference on a binary outcome like `hidden_pass`. The pilot is therefore **descriptive/directional** (see [§1](#falsification-stance-pre-registered), [§7.2](#72-trend--slope-fits), [§7.5](#75-conclusion-required-pre-committed-interpretation)); a power/effect-size calculation that sets `N` for a confirmatory follow-up is an explicit deliverable of the pilot, not a claim made from it.
+
+### 6.6 Instrumentation calibration gate (review #4)
+
+The locked FUSE/OverlayFS/transcript stack can fail silently — a missed read event, a write that bypasses `upperdir`, a misattributed first-edit boundary — and a silently-broken trace would poison every downstream metric without ever erroring. So **before any model run** (and re-run whenever the container image, FUSE/overlay config, or harness changes), the harness executes a **synthetic calibration scenario** in the *same* container, with no model involved:
+
+1. A fixture script performs a **known set of reads** of known files through several access paths — `cat`, `sed -n`, `rg`, and a Python `open().read()` — including one distractor path and one target path, with known byte extents.
+2. It performs **one known edit** (a fixed line change) to a known file.
+3. The harness then **asserts the instrumentation agrees with ground truth**:
+   - the FUSE log contains exactly the expected read paths and byte extents (and the distractor/target classification resolves correctly against a calibration manifest),
+   - the OverlayFS `upperdir` contains exactly the one expected changed file,
+   - the transcript/event tap recorded the synthetic tool calls,
+   - the **first-edit boundary** lands at the known edit, correctly splitting before/after.
+
+The run record carries `calibration_passed: true`; **a failed or skipped calibration aborts the cell** (no model tokens are spent against an uninstrumented sandbox). This converts "we believe the traces are valid" into a checked precondition, and is added to the freeze checklist ([§9](#9-pilot-execution-checklist-maps-to-acceptance-criteria)).
 
 ---
 
@@ -431,7 +464,7 @@ The report turns run records into per-size tables, trend fits, and an explicit v
 
 ### 7.1 Per-size summary table (per scenario and pooled)
 
-| Metric (mean ± 95% CI over seeds) | 1x | 5x | 20x | 50x |
+| Metric (point estimate ± interval over 5 replicates) | 1x | 5x | 20x | 50x |
 |-----------------------------------|----|----|-----|-----|
 | `hidden_pass_rate`                |    |    |     |     |
 | `files_read_before_first_edit`    |    |    |     |     |
@@ -445,9 +478,11 @@ The report turns run records into per-size tables, trend fits, and an explicit v
 
 `input_tokens_per_hidden_success` = total input tokens spent in a cell ÷ number of hidden passes in that cell (undefined/flagged when a cell has zero hidden passes — itself a notable result).
 
+**Interval method (review #5).** With 5 replicates per cell, intervals are **descriptive**, not inferential. For rate metrics (`hidden_pass_rate`, `wrong_file_edit_rate`) report **Wilson score intervals** (appropriate for small binomial counts) and the raw `k/5`; for count/continuous metrics report the median and min–max (or bootstrap interval), not a normal-theory CI that 5 points cannot justify. Intervals communicate dispersion; they are not significance tests.
+
 ### 7.2 Trend / slope fits
 
-Report ordinary-least-squares slopes against *additional repo LOC* (the issue's suggested form), with `R²` and CI:
+Report slopes against *additional repo LOC* (the issue's suggested form) **as descriptive effect-size estimates**, with `R²` and a bootstrap interval — explicitly *not* as significance claims:
 
 ```
 input_tokens          ≈ α + β · additional_repo_loc
@@ -456,7 +491,7 @@ irrelevant_read_ratio  by S         (table + line)
 hidden_pass_rate       by S         (table + line)
 ```
 
-A positive, significant `β` for cost metrics and/or a negative trend in `hidden_pass_rate` is the supporting signal; flat lines are the weakening signal.
+The directional read is: a positive `β` for cost metrics whose magnitude crosses the pre-registered practical threshold ([§7.5](#75-conclusion-required-pre-committed-interpretation)), and/or a `hidden_pass_rate` decline past its threshold, is the **supporting** signal; slopes within the threshold band are the **weakening** signal; trends swamped by replicate dispersion are **inconclusive**. We report effect sizes and let the thresholds — not a p-value on N=5 — drive the verdict.
 
 ### 7.3 Plots
 
@@ -475,18 +510,29 @@ A short prose section recording, per the acceptance criteria:
 - how distractor-label isolation was enforced — that the manifest never entered the sandbox, that materialized distractors carried no on-disk marker, and that distractor/target classification was applied post-hoc against the out-of-tree manifest,
 - exactly what each hidden verifier checks beyond the visible tests,
 - manifest hashes used (proving freeze-before-runs),
-- seed count and variance handling,
+- the frozen Codex run-environment fingerprint ([§8.1.1](#811-run-environment-freeze-review-3)) and the calibration-gate result ([§6.6](#66-instrumentation-calibration-gate-review-4)),
+- replicate count, whether trials were seed-pinned or sampled, and how dispersion was reported,
+- the pre-registered practical thresholds ([§7.5](#75-conclusion-required-pre-committed-interpretation)) and confirmation they were fixed before runs,
 - any infeasible `(scenario, size)` cells and why.
 
 ### 7.5 Conclusion (required, pre-committed interpretation)
 
-The report must state, in plain language, whether the result:
+**Pre-registered practical thresholds (review #5).** Fixed before any run; the verdict is read against these, not against a significance test on `N = 5`. (Magnitudes below are the design's *initial* registered values; if a variance pilot or domain rationale changes them, that change is itself committed before runs.)
 
-- **supports** the effective-context-window claim (localization cost rises and/or hidden-pass-rate falls with bloat),
-- **weakens** it (metrics flat across `S`), or
-- **is inconclusive** (variance too high / mixed signals),
+| Direction | Registered practical threshold (1x → 50x) |
+|-----------|-------------------------------------------|
+| Localization-cost rise | ≥ **2×** in `input_tokens_per_run` **or** in `files_read_before_first_edit`, monotone non-decreasing across `S` |
+| Targeting degradation | `irrelevant_file_read_ratio` rises by ≥ **0.20** absolute |
+| Hidden-success drop | `hidden_pass_rate` falls by ≥ **20 percentage points** |
+| "Flat" (weakening evidence) | all of the above stay within half their threshold across every step |
 
-and call out the most informative single finding — explicitly noting the case the issue flags: token usage may rise only modestly while hidden success collapses because the agent reads the wrong files or never inspects the right one.
+The report must then state, in plain language, whether the result:
+
+- **supports** the effective-context-window claim — at least one cost/targeting threshold crossed **and/or** the hidden-success drop met, with the trend monotone in `S`;
+- **weakens** it — metrics stay within the "flat" band across `S`;
+- **is inconclusive** — replicate dispersion is large relative to the effect, or signals are mixed (some thresholds crossed, others not) such that no directional call is warranted at `N = 5`.
+
+It must call out the most informative single finding — explicitly noting the case the issue flags: token usage may rise only modestly while hidden success collapses because the agent reads the wrong files or never inspects the right one. Because the pilot is descriptive, the conclusion is framed as directional evidence that motivates (and sizes) a powered confirmatory study, not as a significance verdict.
 
 ### 7.6 Follow-up issues
 
@@ -498,7 +544,27 @@ The report closes by filing follow-up issues for any product gaps surfaced (e.g.
 
 ### 8.1 `agentic_code_patch` (pilot, required)
 
-**LOCKED: Codex CLI (GPT), run inside the Linux container ([§6.2](#62-how-we-capture-it-defense-in-depth)).** Codex receives `task.md` and the materialized repo via the OverlayFS `merged` mount, may search/read before editing, and edits implementation code. All [§6](#6-instrumentation-plan) instrumentation applies. The exact Codex model id and reasoning-effort setting are frozen in the run config before runs and held constant across all sizes and seeds (see [§10](#10-locked-decisions) for the two Codex specifics still to confirm).
+**LOCKED: Codex CLI (GPT), run inside the Linux container ([§6.2](#62-how-we-capture-it-defense-in-depth)).** Codex receives `task.md` and the materialized repo via the OverlayFS `merged` mount, may search/read before editing, and edits implementation code. All [§6](#6-instrumentation-plan) instrumentation applies.
+
+#### 8.1.1 Run-environment freeze (review #3)
+
+Filesystem isolation alone is not enough: the *agent* environment is a second source of uncontrolled variance and hidden inputs (e.g. a stray web search or a cached session could let the agent "localize" without reading the repo). Every run must execute against a **frozen, isolated, fingerprinted** Codex environment. The harness asserts each item below before the run and records the combination as `env_fingerprint_sha256` in the run record; a mismatch aborts the run.
+
+| Control | Requirement |
+|---------|-------------|
+| **Codex CLI version** | Pinned to one exact build (recorded as `codex_cli_version`); no auto-update. |
+| **Model + reasoning effort** | Exact model id and reasoning-effort setting frozen and identical across all cells. |
+| **User config** | `--ignore-user-config` (or equivalent) so no machine-local `config.toml` leaks settings. |
+| **`CODEX_HOME`** | A fresh, empty, per-run `CODEX_HOME`; never the developer's. |
+| **Session persistence** | Ephemeral — no resumed/rollover sessions, no history carried between runs (`--ephemeral` / fresh state per run). |
+| **Web search / network** | Explicitly set and logged. Default: **network egress disabled** in the container except the model API endpoint; web-search tool off unless a variant deliberately studies it. |
+| **MCP servers / plugins / hooks** | None enabled unless part of the arm definition; the set is enumerated and frozen. |
+| **Shell environment** | Sanitized allowlist of env vars; secrets limited to the model API key; no inherited dev shell. |
+| **Caches** | Prompt/response/tool caches cleared or disabled so a warm cache cannot shortcut localization. |
+
+Anything genuinely variable that cannot be eliminated (e.g. provider-side nondeterminism) is documented in the methodology note ([§7.4](#74-methodology-note)) rather than left implicit.
+
+**Still to confirm before runs** (does not block scenario authoring): the exact pinned Codex CLI version + model id + reasoning effort; whether Codex exposes a supported seed ([§6.5](#65-replication-trials)); and whether its transcript exposes per-request `usage` for the token metrics ([§6.2](#62-how-we-capture-it-defense-in-depth)).
 
 ### 8.2 `pdd_prompt_space` (deferred comparison)
 
@@ -510,10 +576,15 @@ A PDD-style prompt/test/spec context rendered from a fixed manifest. The key pro
 
 - [ ] 3 frozen bug-fix scenarios defined (`scenario.json` + `task.md` + base repo + hidden verifier).
 - [ ] Per-scenario size variants at 1x/5x/20x/50x, or a documented infeasibility reason.
-- [ ] Deterministic distractor manifests committed (+ `manifests.lock`) before any model run.
+- [ ] Deterministic distractor manifests committed (+ `manifests.lock`) before any model run; distractors interleaved with no on-disk marker.
 - [ ] Hidden verifiers physically separate from visible tests; harness asserts they never enter the agent sandbox.
+- [ ] Distractor manifest never mounted into the sandbox; distractor/target classification applied post-hoc.
+- [ ] Codex run-environment frozen + fingerprinted (CLI version, model+effort, clean `CODEX_HOME`, no user config, ephemeral session, web/MCP/hook/network/cache settings explicit) — [§8.1.1](#811-run-environment-freeze-review-3).
+- [ ] Instrumentation calibration gate passes in-container before model runs — [§6.6](#66-instrumentation-calibration-gate-review-4).
+- [ ] Read-volume (`bytes_read_*`, FS tap) and token (`input_tokens_*`, provider `usage`) metrics kept separate; tokens never derived from bytes.
+- [ ] Pre-registered practical thresholds fixed before runs; pilot framed as descriptive/directional.
 - [ ] Agentic arm records file reads, tool calls, edits, token usage, wall time, hidden pass/fail.
-- [ ] Report includes per-size tables + slope fits + a conclusion on bloat → localization cost / hidden success.
+- [ ] Report includes per-size tables + descriptive slope/effect-size fits + a conclusion on bloat → localization cost / hidden success.
 - [ ] Failures classified (esp. wrong-file, overflow, timeout, hidden-contract miss).
 - [ ] Report states explicitly: supports / weakens / inconclusive for the effective-context-window claim.
 
@@ -523,10 +594,10 @@ Frozen before any model run (pre-registration). A change to any of these is a ne
 
 | # | Decision | Locked choice | Where it lands |
 |---|----------|---------------|----------------|
-| 1 | Pilot arm agent/CLI + model | **Codex CLI (GPT)**, held constant across all sizes/seeds | [§8.1](#81-agentic_code_patch-pilot-required) |
+| 1 | Pilot arm agent/CLI + model | **Codex CLI (GPT)**, frozen environment held constant across all sizes/trials | [§8.1](#81-agentic_code_patch-pilot-required), [§8.1.1](#811-run-environment-freeze-review-3) |
 | 2 | Filesystem tap | **Linux container + OverlayFS (edits) + FUSE passthrough, byte-extent reads** | [§6.2](#62-how-we-capture-it-defense-in-depth) |
-| 3 | Base repo source | **Hand-authored minimal repos** (controlled, deterministic, easy hidden-test isolation) | [§4](#4-scenario-format), [§5.3](#53-sourcing-donor-files) |
-| 4 | Seeds per `(scenario, size)` | **`N = 5`** → 60 runs for the pilot arm | [§6.5](#65-replication-and-seeds) |
+| 3 | Base repo source | **Hand-authored minimal repos** (controlled, deterministic, easy hidden-test isolation) | [§4](#4-scenario-format), [§5.3](#53-sourcing-and-placing-distractor-files) |
+| 4 | Replicates per `(scenario, size)` | **`N = 5`** (trials; seed-pinned only if Codex supports it) → 60 runs for the pilot arm | [§6.5](#65-replication-trials) |
 | 5 | Per-run timeout | **1800 s (30 min)** — generous enough that 50x is not penalized on wall-clock alone | run config / [§6.3](#63-run-record-schema) |
 
 ### Still to confirm (Codex specifics — do not block scenario authoring)
@@ -536,7 +607,7 @@ Frozen before any model run (pre-registration). A change to any of these is a ne
 
 ### Consequence of choice #3 (hand-authored repos) — realism guardrail
 
-Hand-authored repos trade organic realism for control, so the issue's non-goal — "no synthetic filler an agent would trivially ignore" — becomes an explicit authoring obligation, enforced by the distractor constraints in [§5.3](#53-sourcing-donor-files): distractors must share the target's vocabulary, imports, and architectural layer, and must compile/import cleanly. A pre-run **plausibility review** (a human spot-check that near-tier distractors are not obviously irrelevant) is added to the freeze checklist.
+Hand-authored repos trade organic realism for control, so the issue's non-goal — "no synthetic filler an agent would trivially ignore" — becomes an explicit authoring obligation, enforced by the distractor constraints in [§5.3](#53-sourcing-and-placing-distractor-files): distractors must share the target's vocabulary, imports, and architectural layer, and must compile/import cleanly. A pre-run **plausibility review** (a human spot-check that near-tier distractors are not obviously irrelevant) is added to the freeze checklist.
 
 ---
 
@@ -553,6 +624,6 @@ Hand-authored repos trade organic realism for control, so the issue's non-goal �
 ## References
 
 - Issue [#1209](https://github.com/promptdriven/pdd/issues/1209) — research question, metrics, acceptance criteria, non-goals (source of truth for this design).
-- Issue [#789](https://github.com/promptdriven/pdd/issues/789) / `docs/context_audit.md` — context budget audit; token attribution reused for the prompt-space arm.
+- Issue [#789](https://github.com/promptdriven/pdd/issues/789) — context budget audit (still **open**; the `pdd context-audit` command and its `docs/context_audit.md` are proposed in PR #1387 and **not yet merged to `main`**). Its token attribution is reused only by the deferred prompt-space arm, and only once that work lands; this pilot does not depend on it.
 - `docs/pdd_vs_agentic_cli_definitive_proof_plan.md` — broader pre-registration/falsification methodology this pilot follows.
 - `docs/whitepaper_with_benchmarks/` — existing benchmark report layout precedent.
