@@ -9,6 +9,16 @@ from typing import Optional
 
 from .contract_ir import Capability, PromptContractIR, extract_capabilities, parse_prompt_contracts
 
+# Internal effect categories used for conservative mapping (not user-facing syntax).
+_EFFECT_FILESYSTEM_WRITE = "filesystem_write"
+_EFFECT_FILESYSTEM_READ = "filesystem_read"
+_EFFECT_NETWORK = "network"
+_EFFECT_SHELL = "shell"
+_EFFECT_ENV_READ = "env_read"
+_EFFECT_EMAIL = "email"
+_EFFECT_SENSITIVE_LOGGING = "sensitive_logging"
+_EFFECT_DOMAIN = "domain_records"
+
 # Substrings matched against lowercased capability bullet text (v1 heuristic).
 _NETWORK_KEYWORDS = (
     "network",
@@ -102,20 +112,261 @@ _WRITE_OPEN_MODES = frozenset({"w", "a", "x", "+"})
 
 
 @dataclass
+class PolicyWarning:
+    """Authoring-time diagnostic for an unclear capability bullet."""
+
+    message: str
+    capability: str
+    suggestions: list[str] = field(default_factory=list)
+    severity: str = "warning"
+    source: str = "capability_parser"
+    kind: str = "unmapped_capability"
+    line: int = 0
+
+
+@dataclass
 class PolicyIssue:
     category: str
     message: str
     line: int
     col: int
     severity: str = "error"
+    kind: str = ""
+    source: str = "enforcement"
+    effect: str = ""
+    suggestions: list[str] = field(default_factory=list)
 
 
 @dataclass
 class PolicyResult:
     target_path: Path
     issues: list[PolicyIssue] = field(default_factory=list)
+    capability_warnings: list[PolicyWarning] = field(default_factory=list)
     passed: bool = True
     capabilities: list[Capability] = field(default_factory=list)
+
+
+@dataclass
+class _CapabilityAllowances:
+    allowed_network: bool = False
+    allowed_shell: bool = False
+    allowed_file: bool = False
+    allowed_env: bool = False
+    allowed_email: bool = False
+    warnings: list[PolicyWarning] = field(default_factory=list)
+
+
+_CAPABILITY_SUGGESTIONS: dict[str, list[str]] = {
+    _EFFECT_FILESYSTEM_WRITE: [
+        "MAY write audit files to disk.",
+        "MAY write generated output files to disk.",
+    ],
+    _EFFECT_FILESYSTEM_READ: [
+        "MAY read required local input files.",
+        "MAY read configuration files from disk.",
+    ],
+    _EFFECT_NETWORK: [
+        "MAY call the Stripe refund API.",
+        "MAY call required external APIs.",
+    ],
+    _EFFECT_ENV_READ: [
+        "MAY read required environment variables.",
+    ],
+    _EFFECT_EMAIL: [
+        "MAY send transactional email notifications.",
+    ],
+    _EFFECT_SENSITIVE_LOGGING: [
+        "MAY log non-sensitive audit events.",
+    ],
+    "unmapped_capability": [
+        "MAY write audit files to disk.",
+        "MAY write audit records to the database.",
+        "MAY log non-sensitive audit events.",
+    ],
+}
+
+
+def suggest_capability_phrases(effect: str) -> list[str]:
+    """Return example capability bullets for a supported effect category."""
+    return list(_CAPABILITY_SUGGESTIONS.get(effect, _CAPABILITY_SUGGESTIONS["unmapped_capability"]))
+
+
+def _missing_capability_message(effect: str) -> tuple[str, list[str]]:
+    """Plain-language denial when code performs an effect with no recognized allowance."""
+    suggestions = suggest_capability_phrases(effect)
+    if effect == _EFFECT_FILESYSTEM_WRITE:
+        return (
+            "Generated code writes to the filesystem, but no capability allowing file "
+            "writes was recognized.",
+            suggestions,
+        )
+    if effect == _EFFECT_NETWORK:
+        return (
+            "Generated code makes an external network or API call, but no capability "
+            "allowing external calls was recognized.",
+            suggestions,
+        )
+    if effect == _EFFECT_ENV_READ:
+        return (
+            "Generated code reads environment variables, but no capability allowing "
+            "environment access was recognized.",
+            suggestions,
+        )
+    if effect == _EFFECT_SHELL:
+        return (
+            "Generated code runs a shell command, but no capability allowing shell "
+            "execution was recognized.",
+            suggestions,
+        )
+    if effect == _EFFECT_EMAIL:
+        return (
+            "Generated code uses email functionality, but no capability allowing "
+            "email was recognized.",
+            suggestions,
+        )
+    if effect == _EFFECT_SENSITIVE_LOGGING:
+        return (
+            "Generated code may log sensitive values, but the capability contract "
+            "does not allow logging secrets. If logging is intended, use a clearer "
+            "capability such as \"MAY log non-sensitive audit events\"; do not allow "
+            "secret logging unless explicitly intended.",
+            suggestions,
+        )
+    return (
+        f"Generated code performs a {effect.replace('_', ' ')} side effect, but no "
+        "matching capability was recognized.",
+        suggestions,
+    )
+
+
+def _unmapped_capability_warning(cap: Capability) -> PolicyWarning:
+    text = cap.text.strip()
+    suggestions = suggest_capability_phrases("unmapped_capability")
+    message = (
+        f'Capability bullet could not be mapped to a supported effect category: "{text}".'
+    )
+    if "persist" in text.lower():
+        message += (
+            ' "Persist" could mean writing to disk, writing to a database, logging, '
+            "or sending to another service."
+        )
+    message += " Try a clearer phrase such as " + " or ".join(f'"{s}"' for s in suggestions[:2]) + "."
+    return PolicyWarning(
+        message=message,
+        capability=text,
+        suggestions=suggestions,
+        line=cap.line,
+    )
+
+
+def _bullet_effect_categories(text: str, *, is_must_not: bool) -> frozenset[str]:
+    """Map one capability bullet to internal effect categories (conservative)."""
+    lower = text.lower()
+    categories: set[str] = set()
+
+    if any(kw in lower for kw in _NETWORK_KEYWORDS):
+        categories.add(_EFFECT_NETWORK)
+    if any(kw in lower for kw in _SHELL_KEYWORDS):
+        categories.add(_EFFECT_SHELL)
+    if any(kw in lower for kw in _ENV_KEYWORDS):
+        categories.add(_EFFECT_ENV_READ)
+    if any(kw in lower for kw in _EMAIL_KEYWORDS):
+        categories.add(_EFFECT_EMAIL)
+
+    if any(kw in lower for kw in _FILESYSTEM_CAPABILITY_KEYWORDS) or any(
+        phrase in lower for phrase in _FILESYSTEM_WRITE_PHRASES
+    ):
+        categories.add(_EFFECT_FILESYSTEM_WRITE)
+    elif "write" in lower and any(
+        fs in lower for fs in ("file", "files", "disk", "filesystem", "storage")
+    ):
+        categories.add(_EFFECT_FILESYSTEM_WRITE)
+    if "read" in lower and any(
+        fs in lower for fs in ("file", "files", "disk", "filesystem", "path")
+    ):
+        categories.add(_EFFECT_FILESYSTEM_READ)
+
+    if is_must_not and any(
+        word in lower for word in ("secret", "token", "password", "cvv", "pan", "bearer")
+    ):
+        if "log" in lower or "print" in lower or "leak" in lower:
+            categories.add(_EFFECT_SENSITIVE_LOGGING)
+
+    if any(word in lower for word in ("payment", "refund", "record", "customer", "profile")):
+        categories.add(_EFFECT_DOMAIN)
+
+    return frozenset(categories)
+
+
+def _bullet_is_ambiguous(text: str, categories: frozenset[str], *, is_must_not: bool) -> bool:
+    """Return True when a bullet's intent is too vague for conservative enforcement."""
+    if is_must_not:
+        return False
+    lower = text.lower()
+    if not categories:
+        return True
+
+    qualifiers = (
+        "file",
+        "files",
+        "disk",
+        "filesystem",
+        "database",
+        "db",
+        "api",
+        "http",
+        "endpoint",
+        "env",
+        "environment",
+        "email",
+        "log",
+    )
+    for verb in ("persist", "store", "stash", "save", "cache"):
+        if verb in lower and not any(q in lower for q in qualifiers):
+            return True
+
+    if categories == {_EFFECT_DOMAIN} and any(
+        verb in lower for verb in ("persist", "store", "stash", "save")
+    ):
+        return True
+
+    return False
+
+
+def analyze_capability_allowances(capabilities: list[Capability]) -> _CapabilityAllowances:
+    """Derive conservative allowances and authoring warnings from capability bullets."""
+    allowances = _CapabilityAllowances()
+    for cap in capabilities:
+        categories = _bullet_effect_categories(cap.text, is_must_not=cap.is_must_not)
+        if _bullet_is_ambiguous(cap.text, categories, is_must_not=cap.is_must_not):
+            allowances.warnings.append(_unmapped_capability_warning(cap))
+            continue
+
+        if cap.is_must_not:
+            if _EFFECT_NETWORK in categories:
+                allowances.allowed_network = False
+            if _EFFECT_SHELL in categories:
+                allowances.allowed_shell = False
+            if _EFFECT_FILESYSTEM_WRITE in categories:
+                allowances.allowed_file = False
+            if _EFFECT_ENV_READ in categories:
+                allowances.allowed_env = False
+            if _EFFECT_EMAIL in categories:
+                allowances.allowed_email = False
+            continue
+
+        if _EFFECT_NETWORK in categories:
+            allowances.allowed_network = True
+        if _EFFECT_SHELL in categories:
+            allowances.allowed_shell = True
+        if _EFFECT_FILESYSTEM_WRITE in categories:
+            allowances.allowed_file = True
+        if _EFFECT_ENV_READ in categories:
+            allowances.allowed_env = True
+        if _EFFECT_EMAIL in categories:
+            allowances.allowed_email = True
+
+    return allowances
 
 
 def _capability_allows(capabilities: list[Capability], keywords: tuple[str, ...]) -> bool:
@@ -161,6 +412,7 @@ class PolicyVisitor(ast.NodeVisitor):
         self,
         capabilities: list[Capability],
         *,
+        allowances: Optional[_CapabilityAllowances] = None,
         strict: bool = False,
         source_lines: Optional[list[str]] = None,
         prompt_ir: Optional[PromptContractIR] = None,
@@ -175,11 +427,12 @@ class PolicyVisitor(ast.NodeVisitor):
         self.has_capabilities = len(capabilities) > 0
         self.should_check = self.strict or self.has_capabilities
 
-        self.allowed_network = _capability_allows(capabilities, _NETWORK_KEYWORDS)
-        self.allowed_shell = _capability_allows(capabilities, _SHELL_KEYWORDS)
-        self.allowed_file = _capability_allows_filesystem(capabilities)
-        self.allowed_env = _capability_allows(capabilities, _ENV_KEYWORDS)
-        self.allowed_email = _capability_allows(capabilities, _EMAIL_KEYWORDS)
+        resolved = allowances or analyze_capability_allowances(capabilities)
+        self.allowed_network = resolved.allowed_network
+        self.allowed_shell = resolved.allowed_shell
+        self.allowed_file = resolved.allowed_file
+        self.allowed_env = resolved.allowed_env
+        self.allowed_email = resolved.allowed_email
 
     def _is_waived(self, node: ast.AST, category: str, message: str) -> bool:
         if hasattr(node, "lineno") and node.lineno <= len(self.source_lines):
@@ -196,12 +449,40 @@ class PolicyVisitor(ast.NodeVisitor):
                     return True
         return False
 
-    def _add_issue(self, node: ast.AST, category: str, message: str) -> None:
+    def _add_issue(
+        self,
+        node: ast.AST,
+        category: str,
+        message: str,
+        *,
+        effect: str = "",
+        suggestions: Optional[list[str]] = None,
+    ) -> None:
         if not self.should_check or self._is_waived(node, category, message):
             return
         lineno = getattr(node, "lineno", 0) or 0
         col = getattr(node, "col_offset", 0) or 0
-        self.issues.append(PolicyIssue(category, message, lineno, col))
+        self.issues.append(
+            PolicyIssue(
+                category=category,
+                message=message,
+                line=lineno,
+                col=col,
+                kind="missing_capability" if effect else "",
+                effect=effect,
+                suggestions=list(suggestions or []),
+            )
+        )
+
+    def _add_missing_capability(self, node: ast.AST, category: str, effect: str) -> None:
+        message, suggestions = _missing_capability_message(effect)
+        self._add_issue(
+            node,
+            category,
+            message,
+            effect=effect,
+            suggestions=suggestions,
+        )
 
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
@@ -225,11 +506,11 @@ class PolicyVisitor(ast.NodeVisitor):
     def _check_import(self, module: str, node: ast.AST) -> None:
         base_module = module.split(".")[0]
         if base_module in NETWORK_LIBS and not self.allowed_network:
-            self._add_issue(node, "network", f"Unauthorized network library import: {module}")
+            self._add_missing_capability(node, "network", _EFFECT_NETWORK)
         if base_module in {"smtplib", "email"} and not self.allowed_email:
-            self._add_issue(node, "email", f"Unauthorized email library import: {module}")
+            self._add_missing_capability(node, "email", _EFFECT_EMAIL)
         if base_module in SHELL_LIBS and not self.allowed_shell and base_module != "os":
-            self._add_issue(node, "shell", f"Unauthorized shell library import: {module}")
+            self._add_missing_capability(node, "shell", _EFFECT_SHELL)
 
     def _open_looks_like_write(self, node: ast.Call) -> bool:
         mode: Optional[str] = None
@@ -283,7 +564,7 @@ class PolicyVisitor(ast.NodeVisitor):
         label: str,
     ) -> None:
         if not self.allowed_file:
-            self._add_issue(node, "file", f"Unauthorized file operation: {label}")
+            self._add_missing_capability(node, "file", _EFFECT_FILESYSTEM_WRITE)
 
     def _call_module_root(self, module_name: str) -> str:
         """Resolve a call's module prefix through import aliases (e.g. ``o`` -> ``os``)."""
@@ -317,8 +598,7 @@ class PolicyVisitor(ast.NodeVisitor):
             resolved_module == "subprocess"
         ) or (func_name == "system" and not resolved_module):
             if not self.allowed_shell:
-                label = f"{module_name}.{func_name}" if module_name else func_name
-                self._add_issue(node, "shell", f"Unauthorized shell execution: {label}")
+                self._add_missing_capability(node, "shell", _EFFECT_SHELL)
 
         if (resolved_module == "os" and func_name in FILE_WRITE_METHODS) or (
             resolved_module == "shutil" and func_name in FILE_WRITE_METHODS
@@ -369,8 +649,7 @@ class PolicyVisitor(ast.NodeVisitor):
             and self._call_module_root(self.imported_names.get(func_name, "")) == "os"
         ):
             if not self.allowed_env:
-                label = f"{module_name}.{func_name}" if module_name else func_name
-                self._add_issue(node, "env", f"Unauthorized environment access: {label}")
+                self._add_missing_capability(node, "env", _EFFECT_ENV_READ)
 
         if func_name in {"debug", "info", "warning", "error", "critical", "log", "print"}:
             self._check_sensitive_args(list(node.args), node)
@@ -397,26 +676,18 @@ class PolicyVisitor(ast.NodeVisitor):
     def visit_Attribute(self, node: ast.Attribute) -> None:
         env_label = self._env_access_label(node)
         if env_label and not self.allowed_env:
-            self._add_issue(node, "env", f"Unauthorized environment access: {env_label}")
+            self._add_missing_capability(node, "env", _EFFECT_ENV_READ)
         self.generic_visit(node)
 
     def visit_Subscript(self, node: ast.Subscript) -> None:
         if isinstance(node.value, ast.Name):
             bound = self.imported_names.get(node.value.id, "")
             if bound in {"os.environ", "os.environb"} and not self.allowed_env:
-                self._add_issue(
-                    node,
-                    "env",
-                    f"Unauthorized environment access: {bound}[...]",
-                )
+                self._add_missing_capability(node, "env", _EFFECT_ENV_READ)
         elif isinstance(node.value, ast.Attribute):
             env_label = self._env_access_label(node.value)
             if env_label and not self.allowed_env:
-                self._add_issue(
-                    node,
-                    "env",
-                    f"Unauthorized environment access: {env_label}[...]",
-                )
+                self._add_missing_capability(node, "env", _EFFECT_ENV_READ)
         self.generic_visit(node)
 
     def visit_BinOp(self, node: ast.BinOp) -> None:
@@ -433,16 +704,12 @@ class PolicyVisitor(ast.NodeVisitor):
     def _check_sensitive_args(self, args: list[ast.AST], node: ast.AST) -> None:
         for arg in args:
             if isinstance(arg, ast.Name) and self._name_is_sensitive(arg.id):
-                self._add_issue(node, "leakage", f"Potential sensitive data leakage: {arg.id}")
+                self._add_missing_capability(node, "leakage", _EFFECT_SENSITIVE_LOGGING)
             elif isinstance(arg, ast.Attribute) and self._name_is_sensitive(arg.attr):
-                self._add_issue(node, "leakage", f"Potential sensitive data leakage: {arg.attr}")
+                self._add_missing_capability(node, "leakage", _EFFECT_SENSITIVE_LOGGING)
             elif isinstance(arg, ast.Constant) and isinstance(arg.value, str):
                 if self._name_is_sensitive(arg.value) and ("=" in arg.value or ":" in arg.value):
-                    self._add_issue(
-                        node,
-                        "leakage",
-                        f"Potential sensitive data in string: {arg.value[:20]}...",
-                    )
+                    self._add_missing_capability(node, "leakage", _EFFECT_SENSITIVE_LOGGING)
             elif isinstance(arg, ast.JoinedStr):
                 for value in arg.values:
                     if isinstance(value, ast.FormattedValue):
@@ -474,15 +741,25 @@ def run_policy_check(
         if "capabilities" in prompt_ir.sections:
             capabilities = extract_capabilities(prompt_ir.sections["capabilities"])
 
+    allowances = (
+        analyze_capability_allowances(capabilities) if capabilities else _CapabilityAllowances()
+    )
     visitor = PolicyVisitor(
         capabilities,
+        allowances=allowances,
         strict=strict,
         source_lines=source_lines,
         prompt_ir=prompt_ir,
     )
     visitor.visit(tree)
     passed = len(visitor.issues) == 0
-    return PolicyResult(target_path, visitor.issues, passed=passed, capabilities=capabilities)
+    return PolicyResult(
+        target_path,
+        visitor.issues,
+        capability_warnings=allowances.warnings,
+        passed=passed,
+        capabilities=capabilities,
+    )
 
 
 def prompt_has_capabilities(prompt_path: Path) -> bool:

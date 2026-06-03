@@ -4,41 +4,62 @@
 
 The same command is also available as `pdd checkup policy check` for checkup workflows. This is **not** the same as `pdd checkup gate`, which evaluates evidence-manifest YAML rules under `.pdd/`.
 
-## Capabilities and Side Effects
+## Capabilities as structured natural language
 
-In PDD, you can define what a module is allowed (or forbidden) to do using the `<capabilities>` section in your prompt:
+`<capabilities>` is structured natural language. You do not need to memorize internal category names or a keyword taxonomy. Write capabilities as clear English statements of what the generated artifact may or must not do.
+
+The checker is deterministic: it maps each bullet conservatively to supported effect categories (network, filesystem, environment, and so on). If a statement is unclear, PDD emits a **warning** with suggested clearer wording. Ambiguous bullets do **not** silently grant risky permissions.
+
+### Quick examples
 
 ```xml
 <capabilities>
 - MAY read payment records.
 - MAY write refund records.
-- MAY call the payment provider refund endpoint.
+- MAY write audit files to disk.
+- MAY call the Stripe refund API.
 - MUST NOT send emails.
-- MUST NOT modify customer profile records.
-- MUST NOT read unrelated environment variables.
-- MUST NOT log provider secrets, bearer tokens, or card PAN.
+- MUST NOT log secrets.
 </capabilities>
 ```
 
-The policy checker parses these rules and enforces them against the generated Python code.
+### Clear vs unclear wording
 
-### Keyword vocabulary (v1)
+**Good (specific):**
 
-Capabilities are matched with simple substring checks on each bullet (case-insensitive). Use words from these families so the checker understands intent:
+- `MAY write audit files to disk.`
+- `MAY call the Stripe refund API.`
+- `MAY read required environment variables.`
+- `MUST NOT send emails.`
+- `MUST NOT log secrets.`
 
-| Category | Example words in the bullet |
-|----------|-----------------------------|
-| Network / HTTP | `network`, `api`, `http`, `endpoint`, `provider`, `request`, `url` |
-| Shell | `shell`, `command`, `subprocess`, `exec` |
-| Filesystem | `file`, `files`, `filesystem`, `disk`, `storage`, `write file`, `on disk` |
-| Environment | `env`, `environment`, `configuration` |
-| Email | `email`, `mail`, `smtp` |
+**Unclear:**
 
-Domain verbs such as “MAY write refund records” authorize business logic only — they do **not** permit `open(..., "w")`, `Path.write_text`, or other filesystem mutations unless the bullet also names files/disk/filesystem explicitly.
+- `MAY persist audit records.`
 
-`MUST NOT` bullets that mention a family block that category; `MAY` / `SHOULD` bullets that mention a family allow it.
+**Why unclear:** “persist” could mean writing to disk, writing to a database, logging, or sending to another service. Prefer a more specific phrase such as `MAY write audit files to disk` or `MAY write audit records to the database`.
 
-## Supported Checks
+Domain verbs such as “MAY write refund records” describe business data operations. They do **not** permit `open(..., "w")`, `Path.write_text`, or other filesystem mutations unless the bullet also names files, disk, or filesystem explicitly.
+
+### When wording is unclear
+
+Example warning:
+
+```text
+Capability bullet could not be mapped to a supported effect category: "MAY persist audit records."
+Try a clearer phrase such as "MAY write audit files to disk."
+```
+
+Example denial when code exceeds recognized allowances:
+
+```text
+Generated code writes to the filesystem, but no capability allowing file writes was recognized.
+Add a capability such as: "MAY write audit files to disk."
+```
+
+Warnings appear in human-readable CLI output and in JSON (`capability_warnings` and unified `findings`).
+
+## Supported checks
 
 The initial version focuses on high-risk side effects in Python:
 
@@ -47,7 +68,21 @@ The initial version focuses on high-risk side effects in Python:
 - **Shell execution:** `os.system`, `subprocess.*`, etc.
 - **Environment reads:** `os.getenv`, `os.environ`, unless allowed.
 - **Sensitive data leaks:** Logging/printing names or string literals suggesting `token`, `secret`, `password`, `cvv`, `pan`, etc. (word-boundary match).
-- **File writes:** `open(..., "w")`, `Path(...).write_text` / `write_bytes`, `Path(...).open(..., "w")`, `os.remove`, etc. Domain bullets such as “MAY write refund records” do **not** authorize filesystem writes. Read-only `open()` is not flagged.
+- **File writes:** `open(..., "w")`, `Path(...).write_text` / `write_bytes`, `Path(...).open(..., "w")`, `os.remove`, etc. Read-only `open()` is not flagged.
+
+### Implementation coverage (reference, not required syntax)
+
+The checker uses conservative substring mapping. These word families help the implementation recognize intent; they are **not** a language you must memorize:
+
+| Effect family | Example words in a bullet |
+|---------------|---------------------------|
+| Network / HTTP | `network`, `api`, `http`, `endpoint`, `provider`, `request`, `url` |
+| Shell | `shell`, `command`, `subprocess`, `exec` |
+| Filesystem | `file`, `files`, `filesystem`, `disk`, `storage`, `write file`, `on disk` |
+| Environment | `env`, `environment`, `configuration` |
+| Email | `email`, `mail`, `smtp` |
+
+`MUST NOT` bullets that mention a family block that category; `MAY` / `SHOULD` bullets that map clearly to a family allow it.
 
 ### Deferred in v1
 
@@ -55,7 +90,7 @@ The initial version focuses on high-risk side effects in Python:
 - Import/call allowlists against arbitrary “out-of-scope” modules (use `<pdd-dependency>` + review instead)
 - Parsing structured `ALLOW …` waiver lines (prompt-level waivers only match when category and message both appear in the waiver text)
 
-## Command Usage
+## Command usage
 
 ```bash
 # Top-level command (issue #828)
@@ -64,7 +99,7 @@ pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.pr
 # Checkup namespace alias
 pdd checkup policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt
 
-# JSON for CI (capabilities + issues)
+# JSON for CI (capabilities, issues, capability_warnings, findings)
 pdd policy check src/refund_payment.py --prompt prompts/refund_payment_python.prompt --json
 
 # Strict: flag side effects even when <capabilities> is missing
@@ -80,26 +115,14 @@ Directory targets skip common vendor folders (`.git`, `venv`, `node_modules`, `_
 
 | Code | Meaning |
 |------|---------|
-| `0` | All targets passed |
-| `1` | Violations found (default mode) |
-| `2` | Violations in `--strict` mode, or a file could not be parsed |
+| 0 | All targets passed |
+| 1 | Policy violations (default mode) |
+| 2 | Violations in `--strict` mode, or system/parse errors |
 
-## Handling False Positives (Waivers)
+Capability **authoring warnings** do not change the exit code by themselves; enforcement **errors** do.
 
-### Inline waivers
+## Waivers
 
-```python
-import os
-# pdd-policy-ignore: non-secret config path
-config_path = os.getenv("APP_CONFIG_PATH")
-```
+Add `# pdd-policy-ignore` on the line above (or the same line as) a flagged statement to suppress a specific finding when review accepts the risk.
 
-### Prompt-level waivers (experimental)
-
-`<waivers>` entries suppress a finding only when **both** the issue category and message substring appear in the waiver block. Prefer inline waivers until structured waiver IDs land.
-
-## Integration
-
-- **`pdd checkup --pr --review-loop`:** When a changed `.py` file has a prompt with `<capabilities>`, a `policy:<path>` gate runs `pdd policy check`.
-- **`pdd checkup drift`:** Runs policy check when the prompt defines `<capabilities>` (not when only evidence gate YAML exists).
-- **Evidence:** `--evidence` sets `validation.policy` to `passed` or `failed`. Sync may populate the same field via `validation_from_sync`.
+Prompt-level `<pdd-policy-waiver>` blocks can match findings when both category and message text appear in the waiver (see prompt contract docs).

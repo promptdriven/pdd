@@ -188,7 +188,9 @@ def test_pathlib_write_text_requires_filesystem_capability(tmp_path: Path) -> No
     )
     result = run_policy_check(target, prompt)
     assert not result.passed
-    assert any(i.category == "file" and "write_text" in i.message for i in result.issues)
+    assert any(
+        i.category == "file" and "filesystem" in i.message.lower() for i in result.issues
+    )
 
 
 def test_pathlib_write_bytes_and_open_write_mode(tmp_path: Path) -> None:
@@ -315,3 +317,130 @@ def test_policy_check_cli_json_output() -> None:
     assert payload[0]["passed"] is False
     assert payload[0]["capabilities"]
     assert payload[0]["issues"]
+
+
+def test_unmapped_capability_warning(tmp_path: Path) -> None:
+    """Ambiguous bullets emit authoring warnings with suggested clearer wording."""
+    prompt = tmp_path / "ambiguous.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY persist audit records.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "noop.py"
+    target.write_text("def noop() -> None:\n    pass\n", encoding="utf-8")
+    result = run_policy_check(target, prompt)
+    assert len(result.capability_warnings) == 1
+    warning = result.capability_warnings[0]
+    assert warning.kind == "unmapped_capability"
+    assert "persist audit records" in warning.capability.lower()
+    assert "could not be mapped" in warning.message.lower()
+    assert any("disk" in s.lower() for s in warning.suggestions)
+
+
+def test_missing_filesystem_capability_guidance(tmp_path: Path) -> None:
+    """Denied file writes explain missing recognized filesystem capability."""
+    prompt = tmp_path / "no_disk.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY read payment records.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "write_audit.py"
+    target.write_text(
+        'def audit() -> None:\n'
+        '    with open("audit.log", "w", encoding="utf-8") as handle:\n'
+        '        handle.write("ok")\n',
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    file_issue = next(i for i in result.issues if i.category == "file")
+    assert "filesystem" in file_issue.message.lower()
+    assert "file writes" in file_issue.message.lower()
+    assert file_issue.kind == "missing_capability"
+    assert any("disk" in s.lower() for s in file_issue.suggestions)
+
+
+def test_ambiguous_capability_does_not_silently_allow_file_write(tmp_path: Path) -> None:
+    """Unclear bullets warn and do not authorize filesystem writes by themselves."""
+    prompt = tmp_path / "persist.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY persist audit records.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "write_audit.py"
+    target.write_text(
+        'def audit() -> None:\n'
+        '    with open("audit.log", "w", encoding="utf-8") as handle:\n'
+        '        handle.write("ok")\n',
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert len(result.capability_warnings) == 1
+    assert not result.passed
+    file_issue = next(i for i in result.issues if i.category == "file")
+    assert file_issue.suggestions
+
+
+def test_clear_natural_language_filesystem_capability_allows_write(tmp_path: Path) -> None:
+    """Explicit disk wording allows filesystem writes without authoring warnings."""
+    prompt = tmp_path / "disk.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY write audit files to disk.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "write_audit.py"
+    target.write_text(
+        'def audit() -> None:\n'
+        '    with open("audit.log", "w", encoding="utf-8") as handle:\n'
+        '        handle.write("ok")\n',
+        encoding="utf-8",
+    )
+    result = run_policy_check(target, prompt)
+    assert result.capability_warnings == []
+    assert result.passed
+
+
+def test_json_includes_capability_authoring_warnings(tmp_path: Path) -> None:
+    """CLI JSON surfaces unmapped capability bullets for CI."""
+    prompt = tmp_path / "ambiguous.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY persist audit records.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "noop.py"
+    target.write_text("def noop() -> None:\n    pass\n", encoding="utf-8")
+    result = CliRunner().invoke(
+        cli.cli,
+        ["policy", "check", str(target), "--prompt", str(prompt), "--json"],
+        env=_CLI_ENV,
+    )
+    assert result.exit_code == 0, result.output
+    payload = _cli_json_payload(result.output)[0]
+    assert payload["capability_warnings"]
+    warning = payload["capability_warnings"][0]
+    assert warning["kind"] == "unmapped_capability"
+    assert warning["severity"] == "warning"
+    assert any(
+        entry.get("kind") == "unmapped_capability"
+        for entry in payload.get("findings", [])
+    )
+
+
+def test_human_output_includes_capability_authoring_warnings(tmp_path: Path) -> None:
+    """Human-readable CLI output includes warnings and suggested phrasing."""
+    prompt = tmp_path / "ambiguous.prompt"
+    prompt.write_text(
+        "<capabilities>\n- MAY persist audit records.\n</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "noop.py"
+    target.write_text("def noop() -> None:\n    pass\n", encoding="utf-8")
+    result = CliRunner().invoke(
+        cli.cli,
+        ["policy", "check", str(target), "--prompt", str(prompt)],
+        env=_CLI_ENV,
+    )
+    assert result.exit_code == 0, result.output
+    assert "Capability authoring warnings" in result.output
+    assert "persist audit records" in result.output
+    assert "Try:" in result.output

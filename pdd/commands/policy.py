@@ -99,35 +99,71 @@ def check(
         raise click.ClickException(f"No Python files found under {target}")
 
     if as_json:
-        output = [
-            {
-                "target": str(r.target_path),
-                "passed": r.passed,
-                "capabilities": [
-                    {
-                        "modal": cap.modal,
-                        "text": cap.text,
-                        "line": cap.line,
-                        "is_must_not": cap.is_must_not,
-                    }
-                    for cap in r.capabilities
-                ],
-                "issues": [
-                    {
-                        "category": issue.category,
-                        "message": issue.message,
-                        "line": issue.line,
-                        "col": issue.col,
-                        "severity": issue.severity,
-                    }
-                    for issue in r.issues
-                ],
-            }
-            for r in results
-        ]
+        output = []
+        for r in results:
+            capability_warnings = [
+                {
+                    "severity": warning.severity,
+                    "source": warning.source,
+                    "kind": warning.kind,
+                    "message": warning.message,
+                    "capability": warning.capability,
+                    "suggestions": warning.suggestions,
+                    "line": warning.line,
+                }
+                for warning in r.capability_warnings
+            ]
+            issues = [
+                {
+                    "category": issue.category,
+                    "message": issue.message,
+                    "line": issue.line,
+                    "col": issue.col,
+                    "severity": issue.severity,
+                    **(
+                        {
+                            "kind": issue.kind,
+                            "source": issue.source,
+                            "effect": issue.effect,
+                            "suggestions": issue.suggestions,
+                        }
+                        if issue.kind
+                        else {}
+                    ),
+                }
+                for issue in r.issues
+            ]
+            findings = [
+                *capability_warnings,
+                *issues,
+            ]
+            output.append(
+                {
+                    "target": str(r.target_path),
+                    "passed": r.passed,
+                    "capabilities": [
+                        {
+                            "modal": cap.modal,
+                            "text": cap.text,
+                            "line": cap.line,
+                            "is_must_not": cap.is_must_not,
+                        }
+                        for cap in r.capabilities
+                    ],
+                    "capability_warnings": capability_warnings,
+                    "issues": issues,
+                    "findings": findings,
+                }
+            )
         click.echo(json.dumps(output, indent=2))
     else:
         for result in results:
+            if result.capability_warnings:
+                click.secho("Capability authoring warnings:", fg="yellow")
+                for warning in result.capability_warnings:
+                    click.echo(f"  - {warning.message}")
+                    if warning.suggestions:
+                        click.echo(f"    Try: {warning.suggestions[0]}")
             if result.passed:
                 click.secho(f"PASS: {result.target_path}", fg="green")
             else:
@@ -139,6 +175,8 @@ def check(
                 click.secho(f"FAIL: {result.target_path}", fg=color)
                 for issue in result.issues:
                     click.echo(f"  [{issue.category}] {issue.message} (line {issue.line})")
+                    if issue.suggestions:
+                        click.echo(f"    Add a capability such as: {issue.suggestions[0]}")
 
     if evidence:
         policy_status = "passed" if not any_violations else "failed"
