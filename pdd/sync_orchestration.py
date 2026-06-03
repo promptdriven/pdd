@@ -2179,23 +2179,12 @@ def sync_orchestration(
         }
 
     def _agentic_fallback_log_metadata() -> Dict[str, Any]:
-        fallback_attempted = any(event.get("attempted") for event in agentic_fallback_events)
-        fallback_used = any(event.get("used") for event in agentic_fallback_events)
-        return {
-            "attempted": fallback_attempted,
-            "used": fallback_used,
-            "phases": list(agentic_fallback_events),
-            "agentic_sync_mode": bool(agentic_mode),
-            "reason": (
-                "agentic fallback invoked during fix/verify"
-                if fallback_used
-                else (
-                    "agentic sync mode enabled"
-                    if agentic_mode
-                    else "local sync path"
-                )
-            ),
-        }
+        from .operation_log import aggregate_agentic_fallback_metadata
+
+        return aggregate_agentic_fallback_metadata(
+            phase_events=agentic_fallback_events,
+            agentic_sync_mode=agentic_mode,
+        )
 
     def sync_worker_logic():
         """

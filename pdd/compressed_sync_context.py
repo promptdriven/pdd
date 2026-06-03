@@ -12,6 +12,8 @@ from xml.sax.saxutils import escape
 
 
 DEFAULT_BUDGET = 12000
+# Reserve space for XML wrapper + compact metadata in render_for_prompt().
+_RENDER_WRAPPER_RESERVE = 320
 _SECRET_PATTERNS = [
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
     re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;]+"),
@@ -181,7 +183,8 @@ def build_compressed_sync_context(
     if repair_directive and repair_directive.strip():
         sources.append(("repair_directive", "repair_directive", _redact(repair_directive.strip())))
 
-    content = _render_sources_within_budget(sources, effective_budget)
+    content_budget = max(effective_budget - _RENDER_WRAPPER_RESERVE, 1)
+    content = _render_sources_within_budget(sources, content_budget)
     return CompressedSyncContext(
         enabled=True,
         used=bool(content),
@@ -206,6 +209,32 @@ def metadata(context: CompressedSyncContext | Mapping[str, Any]) -> dict[str, An
     return data
 
 
+def _compact_render_metadata(data: Mapping[str, Any]) -> str:
+    """Manifest-safe metadata for the rendered XML block (no raw content)."""
+    return escape(
+        json.dumps(
+            {
+                "phase": data.get("phase"),
+                "compressed_sha256": data.get("compressed_sha256"),
+                "source_count": data.get("source_count"),
+                "char_count": data.get("char_count"),
+                "budget": data.get("budget"),
+            },
+            sort_keys=True,
+            default=str,
+        )
+    )
+
+
+def _render_prompt_block(phase: str, meta_text: str, body: str) -> str:
+    return (
+        f'<compressed_sync_context phase="{phase}">\n'
+        f"<metadata>{meta_text}</metadata>\n"
+        f"<content>\n{body}\n</content>\n"
+        "</compressed_sync_context>\n"
+    )
+
+
 def render_for_prompt(context: CompressedSyncContext | Mapping[str, Any] | None) -> str:
     """Render a compressed context package as a safe XML prompt supplement."""
     if context is None:
@@ -213,13 +242,19 @@ def render_for_prompt(context: CompressedSyncContext | Mapping[str, Any] | None)
     data = asdict(context) if isinstance(context, CompressedSyncContext) else dict(context)
     if not data.get("used") or not data.get("content"):
         return ""
-    meta = metadata(data)
+    effective_budget = int(data.get("budget") or DEFAULT_BUDGET)
     phase = escape(str(data.get("phase", "")))
-    meta_text = escape(json.dumps(meta, sort_keys=True, default=str))
-    content = escape(str(data.get("content", "")))
-    return (
-        f'<compressed_sync_context phase="{phase}">\n'
-        f"<metadata>{meta_text}</metadata>\n"
-        f"<content>\n{content}\n</content>\n"
-        "</compressed_sync_context>\n"
-    )
+    meta_text = _compact_render_metadata(data)
+    raw_content = str(data.get("content", ""))
+
+    low, high = 0, len(raw_content)
+    best = ""
+    while low <= high:
+        mid = (low + high) // 2
+        rendered = _render_prompt_block(phase, meta_text, escape(raw_content[:mid]))
+        if len(rendered) <= effective_budget:
+            best = rendered
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best

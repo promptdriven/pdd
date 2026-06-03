@@ -1469,3 +1469,40 @@ def test_operation_log_sanitizes_compression_and_fallback_metadata(temp_pdd_env)
     assert entries[0]["compression"] == {"compressed_sha256": "abc"}
     assert entries[0]["agentic_fallback"] == {"attempted": True, "used": False}
     assert entries[1]["compression"] == {"phase": "fix"}
+
+
+def test_aggregate_agentic_fallback_metadata_merges_language_results() -> None:
+    from pdd.operation_log import aggregate_agentic_fallback_metadata
+
+    aggregated = aggregate_agentic_fallback_metadata(
+        language_results=[
+            {
+                "agentic_fallback": {
+                    "phases": [
+                        {"phase": "fix", "attempted": True, "used": True},
+                    ],
+                },
+            },
+            {"agentic_fallback": {"phases": []}},
+        ],
+        agentic_sync_mode=False,
+    )
+
+    assert aggregated["attempted"] is True
+    assert aggregated["used"] is True
+    assert len(aggregated["phases"]) == 1
+    assert aggregated["agentic_sync_mode"] is False
+    assert "agentic fallback invoked" in aggregated["reason"]
+
+
+def test_aggregate_agentic_fallback_metadata_does_not_equate_sync_mode_with_used() -> None:
+    from pdd.operation_log import aggregate_agentic_fallback_metadata
+
+    aggregated = aggregate_agentic_fallback_metadata(
+        language_results=[{"agentic_fallback": {"phases": []}}],
+        agentic_sync_mode=True,
+    )
+
+    assert aggregated["used"] is False
+    assert aggregated["agentic_sync_mode"] is True
+    assert "agentic sync mode enabled" in aggregated["reason"]

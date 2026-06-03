@@ -94,6 +94,30 @@ def test_compressed_sync_context_respects_global_budget_with_many_sources(
 
     assert package.char_count <= DEFAULT_BUDGET
     assert package.source_count == 42
+    rendered = render_for_prompt(package)
+    assert len(rendered) <= DEFAULT_BUDGET
+
+
+def test_render_for_prompt_respects_total_budget_with_many_sources(tmp_path: Path) -> None:
+    """LLM-facing rendered XML must stay within the configured budget."""
+    prompt = tmp_path / "prompt.prompt"
+    prompt.write_text("<contract_rules>R1</contract_rules>\n", encoding="utf-8")
+    test_paths = []
+    for idx in range(40):
+        test_file = tmp_path / f"test_{idx}.py"
+        test_file.write_text(f"def test_{idx}(): assert {idx} == {idx}\n", encoding="utf-8")
+        test_paths.append(test_file)
+
+    package = build_compressed_sync_context(
+        "generate",
+        prompt,
+        test_paths=test_paths,
+        budget=DEFAULT_BUDGET,
+    )
+    rendered = render_for_prompt(package)
+
+    assert rendered
+    assert len(rendered) <= DEFAULT_BUDGET
 
 
 def test_compressed_context_is_active_requires_used_flag() -> None:

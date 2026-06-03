@@ -1361,11 +1361,11 @@ def sync_main(
         "mode": "compressed-sync-context",
         "languages": language_compression,
     }
-    aggregated_results["agentic_fallback"] = {
-        "attempted": bool(agentic_mode),
-        "used": bool(agentic_mode),
-        "phases": [],
-        "reason": "agentic sync mode requested" if agentic_mode else "local sync path",
-    }
+    from .operation_log import aggregate_agentic_fallback_metadata
+
+    aggregated_results["agentic_fallback"] = aggregate_agentic_fallback_metadata(
+        language_results=aggregated_results["results_by_language"].values(),
+        agentic_sync_mode=agentic_mode,
+    )
 
     return aggregated_results, total_cost, primary_model

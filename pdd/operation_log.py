@@ -9,7 +9,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from rich.console import Console
 
@@ -48,6 +48,49 @@ def _safe_metadata(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
+
+
+def aggregate_agentic_fallback_metadata(
+    *,
+    phase_events: Sequence[Mapping[str, Any]] | None = None,
+    language_results: Sequence[Mapping[str, Any]] | None = None,
+    agentic_sync_mode: bool = False,
+) -> dict[str, Any]:
+    """Merge per-phase fallback telemetry from sync runs."""
+    phases: list[dict[str, Any]] = []
+    if phase_events:
+        for item in phase_events:
+            if isinstance(item, Mapping):
+                phases.append(dict(item))
+    if language_results:
+        for result in language_results:
+            if not isinstance(result, Mapping):
+                continue
+            fallback = result.get("agentic_fallback")
+            if not isinstance(fallback, Mapping):
+                continue
+            nested = fallback.get("phases")
+            if isinstance(nested, list):
+                for item in nested:
+                    if isinstance(item, Mapping):
+                        phases.append(dict(item))
+    fallback_attempted = any(item.get("attempted") for item in phases)
+    fallback_used = any(item.get("used") for item in phases)
+    return {
+        "attempted": fallback_attempted,
+        "used": fallback_used,
+        "phases": phases,
+        "agentic_sync_mode": bool(agentic_sync_mode),
+        "reason": (
+            "agentic fallback invoked during fix/verify"
+            if fallback_used
+            else (
+                "agentic sync mode enabled"
+                if agentic_sync_mode
+                else "local sync path"
+            )
+        ),
+    }
 
 
 def _attach_safe_metadata(

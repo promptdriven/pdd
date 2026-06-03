@@ -26,7 +26,7 @@ from .code_generator_main import (
     _prompt_allows_test_churn,
     _verify_test_churn,
 )
-from .compressed_sync_context import render_for_prompt
+from .compressed_sync_context import compressed_context_is_active, render_for_prompt
 
 console = Console()
 
@@ -333,9 +333,9 @@ def cmd_test_main(
     if rendered_compressed_context:
         prompt_content = f"{prompt_content}\n\n{rendered_compressed_context}"
 
-    # Handle existing tests concatenation
+    # Handle existing tests concatenation (skip when compressed context is active).
     concatenated_tests = None
-    if existing_tests:
+    if existing_tests and not compressed_context_is_active(compressed_context):
         test_contents = []
         for et_path in existing_tests:
             try:
