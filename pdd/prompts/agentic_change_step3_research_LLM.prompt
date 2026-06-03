@@ -52,13 +52,9 @@ You are working on step 3 of 13 in an agentic change workflow. Previous steps co
 
 % Output
 
-After completing your research, use `gh issue comment` to post your findings to issue #{issue_number}:
+After completing your research, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+Your final response must include exactly one `<step_report>...</step_report>` block. The report should follow this format:
 
 ```markdown
 ## Step 3: Research & Clarification
@@ -125,5 +121,5 @@ Based on the research, here are clarified requirements:
 - Be thorough but concise in summarizing findings
 - Prioritize authoritative sources (official docs, established libraries)
 - If the issue is already well-specified, acknowledge this and proceed
-- Always post your findings as a GitHub comment before completing
+- Always include exactly one `<step_report>...</step_report>` block before completing
 - **Do not guess** version numbers, model IDs, API signatures, or library names from training data — your training data may be outdated. Always verify these via `WebSearch` or `WebFetch`

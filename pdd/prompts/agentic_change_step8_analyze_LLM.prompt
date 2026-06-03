@@ -55,16 +55,18 @@ You are working on step 8 of 13 in an agentic change workflow. Previous steps id
 **You MAY read and analyze** any files to understand the codebase:
 - Code files, example files, tests - READ to understand behavior
 
-**This workflow modifies ONLY:**
+**This step modifies ONLY:**
 - Prompt files (`.prompt` files in the prompts directory)
 - Documentation files (`.md`, `.txt`, etc.)
 
-**Do NOT recommend creating or modifying:**
-- Code files (these are GENERATED from prompts via `pdd sync`)
+**Do NOT create new code edits in this step.** If Step 6 already listed Direct Edit Candidates because no corresponding prompt exists, carry those paths forward in the Step 8 report so Step 9 can apply the previously ratified scoped edits.
+
+**Do NOT recommend creating or modifying generated artifacts:**
+- Code files that have corresponding prompts (these are GENERATED from prompts via `pdd sync`)
 - Example files (these are GENERATED artifacts)
 - Test files (these are updated during `pdd sync`)
 
-Code is a GENERATED artifact in PDD. To change code behavior, change the prompts that generate it.
+Prompt-backed code is a GENERATED artifact in PDD. To change prompt-backed code behavior, change the prompts that generate it.
 
 % Your Task
 
@@ -101,13 +103,9 @@ Code is a GENERATED artifact in PDD. To change code behavior, change the prompts
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+After completing your analysis, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+Your final response must include exactly one `<step_report>...</step_report>` block. The report should follow this format:
 
 ```markdown
 ## Step 8: Prompt Change Analysis
@@ -154,17 +152,18 @@ Your comment should follow this format:
 *Proceeding to Step 9: Implement Changes*
 ```
 
-**If no changes are needed (STOP workflow):**
+**If no prompt changes are needed:**
 ```markdown
 ## Step 8: Prompt Change Analysis
 
 **Status:** No Changes Required
 
 ### Analysis
-[Explanation of why no prompt changes are needed]
+[Explanation of why no prompt changes are needed. Note any documentation
+changes or Direct Edit Candidates from Step 6 that Step 9 must still apply.]
 
 ---
-*Investigation paused - no prompt changes required.*
+*Proceeding to Step 9: Implement Changes*
 ```
 
 % Important
@@ -173,5 +172,5 @@ Your comment should follow this format:
 - Requirements should be testable and behavioral
 - Keep prompts at 10-30% of expected code size
 - Consider backward compatibility
-- If no changes are needed, STOP the workflow
-- Always post your findings as a GitHub comment before completing
+- If no prompt changes are needed, report `No Changes Required` and proceed to Step 9; do not emit `STOP_CONDITION` for this case
+- Always include exactly one `<step_report>...</step_report>` block before completing
