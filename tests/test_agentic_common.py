@@ -9714,3 +9714,223 @@ def test_extract_step_report_alias_exported():
     from pdd.agentic_common import extract_step_report
     assert extract_step_report("<step_report>body</step_report>") == "body"
     assert extract_step_report("no tags") is None
+
+# ---------------------------------------------------------------------------
+# Additional coverage: helpers not exhaustively exercised above.
+# ---------------------------------------------------------------------------
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+import json
+from pdd.agentic_common import (
+    _get_provider_model,
+    _codex_auth_failure_message,
+    _extract_codex_jsonl_error,
+    detect_control_token,
+    substitute_template_variables,
+    validate_cached_state,
+    merge_steer_state,
+    workflow_awaiting_clarification,
+    merge_steers_into_issue_content,
+    SteerEntry,
+    _translate_to_opencode_model,
+    _parse_opencode_jsonl,
+    _opencode_csv_cost,
+    _is_codex_stdin_notice,
+    _classify_permanent_error,
+    set_agentic_progress,
+    get_and_clear_agentic_interrupt_context,
+    append_agentic_progress_steer_note,
+    peek_agentic_progress_steer_metadata,
+    clear_agentic_progress,
+)
+
+
+def test_get_provider_model_returns_env_value(monkeypatch):
+    monkeypatch.setenv("CLAUDE_MODEL", "  claude-opus-4-7  ")
+    assert _get_provider_model("anthropic") == "claude-opus-4-7"
+
+
+def test_get_provider_model_returns_none_when_unset(monkeypatch):
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    assert _get_provider_model("google") is None
+
+
+def test_get_provider_model_unknown_provider_returns_none():
+    assert _get_provider_model("nonexistent_provider") is None
+
+
+def test_codex_auth_failure_message_chatgpt_backend_match():
+    msg = _codex_auth_failure_message(
+        "wss://chatgpt.com/backend-api/codex/responses 401 Unauthorized"
+    )
+    assert msg is not None
+    assert "codex login" in msg
+
+
+def test_codex_auth_failure_message_requires_auth_signal():
+    """Auth-related phrase without 401/unauthorized/sign-in indicator returns None."""
+    # Has "codex/responses" but no 401/unauthorized/sign in token
+    assert _codex_auth_failure_message("codex/responses normal trace") is None
+
+
+def test_extract_codex_jsonl_error_returns_terminal_event():
+    stdout = "\n".join([
+        json.dumps({"type": "error", "message": "intermediate retry"}),
+        json.dumps({"type": "turn.failed", "error": {"message": "fatal model denied"}}),
+    ])
+    assert "fatal model denied" in _extract_codex_jsonl_error(stdout)
+
+
+def test_extract_codex_jsonl_error_empty_input():
+    assert _extract_codex_jsonl_error("") == ""
+
+
+def test_extract_codex_jsonl_error_ignores_non_error_events():
+    stdout = json.dumps({"type": "session.start", "message": "hello"})
+    assert _extract_codex_jsonl_error(stdout) == ""
+
+
+def test_detect_control_token_continue_cycle_semantic():
+    result = detect_control_token("Summary: more work needed before we ship.", "CONTINUE_CYCLE")
+    assert result is not None
+    assert result.tier == "semantic"
+
+
+def test_detect_control_token_max_cycles_reached_semantic():
+    result = detect_control_token("Update: maximum cycles reached, halting.", "MAX_CYCLES_REACHED")
+    assert result is not None
+    assert result.tier == "semantic"
+
+
+def test_detect_control_token_not_a_bug_semantic():
+    result = detect_control_token("Conclusion: this is working as intended.", "NOT_A_BUG")
+    assert result is not None
+    assert result.tier == "semantic"
+
+
+def test_detect_control_token_stop_condition_semantic():
+    result = detect_control_token("We need clarification from the author.", "STOP_CONDITION")
+    assert result is not None
+    assert result.tier == "semantic"
+
+
+def test_substitute_template_variables_multiple_occurrences():
+    result = substitute_template_variables("{x} and {x} and {y}", {"x": "A", "y": "B"})
+    assert result == "A and A and B"
+
+
+def test_substitute_template_variables_non_string_values_coerced():
+    result = substitute_template_variables("count={n}", {"n": 42})
+    assert result == "count=42"
+
+
+def test_substitute_template_variables_strict_passes_when_all_resolved():
+    result = substitute_template_variables("{a}{b}", {"a": "1", "b": "2"}, strict_unresolved=True)
+    assert result == "12"
+
+
+def test_validate_cached_state_skips_non_numeric_keys():
+    """Non-numeric step keys (e.g. '1b') should not break sorting."""
+    outputs = {"1": "done", "1b": "info", "2": "FAILED: x", "3": "done"}
+    assert validate_cached_state(3, outputs, quiet=True) == 1
+
+
+def test_validate_cached_state_with_float_step():
+    outputs = {"1": "done", "1.5": "done", "2": "FAILED: e"}
+    result = validate_cached_state(2, outputs, quiet=True)
+    assert result == 1.5
+
+
+def test_merge_steer_state_copies_known_fields_only():
+    src = {
+        "last_steered_comment_id": "100",
+        "last_steer_at": "ts",
+        "steer_generation": 3,
+        "steer_cursor_seeded": True,
+        "unrelated": "ignored",
+    }
+    dst = {}
+    merge_steer_state(src, dst)
+    assert dst["last_steered_comment_id"] == "100"
+    assert dst["steer_generation"] == 3
+    assert dst["steer_cursor_seeded"] is True
+    assert "unrelated" not in dst
+
+
+def test_workflow_awaiting_clarification_false_when_no_stop():
+    state = {"step_outputs": {"3": "All good."}}
+    assert workflow_awaiting_clarification(state, {3}) is False
+
+
+def test_merge_steers_into_issue_content_no_steers_unchanged():
+    assert merge_steers_into_issue_content("body", []) == "body"
+
+
+def test_merge_steers_into_issue_content_appends_block():
+    out = merge_steers_into_issue_content("body", [SteerEntry("1", "alice", "fix it")])
+    assert "Mid-run user comments" in out
+    assert "@alice (1): fix it" in out
+
+
+def test_translate_to_opencode_model_passthrough_for_unknown_bare():
+    # No prefix match — returns unchanged
+    assert _translate_to_opencode_model("unknown-model-id") == "unknown-model-id"
+
+
+def test_parse_opencode_jsonl_multiple_models_joined():
+    lines = [
+        json.dumps({"type": "text", "model": "model-b", "part": {"text": "a"}}),
+        json.dumps({"type": "text", "model": "model-a", "part": {"text": "b"}}),
+    ]
+    result = _parse_opencode_jsonl("\n".join(lines))
+    assert result["model"] == "model-a+model-b"
+
+
+def test_parse_opencode_jsonl_error_dict_message():
+    line = json.dumps({"type": "error", "error": {"message": "nested err"}})
+    assert "nested err" in _parse_opencode_jsonl(line)["error"]
+
+
+def test_opencode_csv_cost_zero_when_no_tokens():
+    assert _opencode_csv_cost("anthropic/claude-sonnet-4-6", {}) == 0.0
+
+
+def test_opencode_csv_cost_none_model_returns_zero():
+    assert _opencode_csv_cost(None, {"input": 100}) == 0.0
+
+
+def test_is_codex_stdin_notice_detection():
+    assert _is_codex_stdin_notice("Reading additional input from stdin...") is True
+    assert _is_codex_stdin_notice("Some other text") is False
+
+
+def test_classify_permanent_error_returns_none_for_transient():
+    assert _classify_permanent_error("connection timeout") is None
+    assert _classify_permanent_error("") is None
+
+
+def test_set_agentic_progress_default_completed_steps():
+    set_agentic_progress("wf", 1, 5, "name")
+    ctx = get_and_clear_agentic_interrupt_context()
+    assert ctx["completed_steps"] == []
+
+
+def test_append_agentic_progress_steer_note_initializes_context():
+    clear_agentic_progress()
+    append_agentic_progress_steer_note(3, "@alice, @bob")
+    meta = peek_agentic_progress_steer_metadata()
+    assert meta["pending_steers"] == 3
+    assert "@alice" in meta["steer_preview"]
+    clear_agentic_progress()
+
+
+def test_peek_agentic_progress_steer_metadata_empty_when_no_context():
+    clear_agentic_progress()
+    assert peek_agentic_progress_steer_metadata() == {}
