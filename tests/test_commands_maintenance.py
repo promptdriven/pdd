@@ -761,18 +761,23 @@ def test_sync_model_flag_sets_pdd_model_default(mock_sync_main, mock_auto_update
     selection resolver (which reads it at call time) routes to X — the public-CLI
     way to force, e.g., the chatgpt/ subscription family (issue #1269)."""
     monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    monkeypatch.delenv("PDD_MODEL_DEFAULT_FIRST", raising=False)
     seen = {}
 
     def _capture(*args, **kwargs):
         seen["model_default"] = os.environ.get("PDD_MODEL_DEFAULT")
-        return ("success", 0.0, "chatgpt/gpt-5.3-codex")
+        seen["model_default_first"] = os.environ.get("PDD_MODEL_DEFAULT_FIRST")
+        return ("success", 0.0, "chatgpt/gpt-5.5")
 
     mock_sync_main.side_effect = _capture
     result = runner.invoke(
-        cli.cli, ["sync", "test_module", "--model", "chatgpt/gpt-5.3-codex"]
+        cli.cli, ["sync", "test_module", "--model", "chatgpt/gpt-5.5"]
     )
     assert result.exit_code == 0, result.output
-    assert seen.get("model_default") == "chatgpt/gpt-5.3-codex"
+    assert seen.get("model_default") == "chatgpt/gpt-5.5"
+    assert seen.get("model_default_first") == "1"
+    assert os.environ.get("PDD_MODEL_DEFAULT") is None
+    assert os.environ.get("PDD_MODEL_DEFAULT_FIRST") is None
 
 
 @patch('pdd.core.cli.auto_update')
@@ -780,16 +785,19 @@ def test_sync_model_flag_sets_pdd_model_default(mock_sync_main, mock_auto_update
 def test_sync_without_model_flag_leaves_default_unset(mock_sync_main, mock_auto_update, runner, monkeypatch):
     """Without --model, sync must not invent a PDD_MODEL_DEFAULT."""
     monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    monkeypatch.delenv("PDD_MODEL_DEFAULT_FIRST", raising=False)
     seen = {}
 
     def _capture(*args, **kwargs):
         seen["model_default"] = os.environ.get("PDD_MODEL_DEFAULT")
+        seen["model_default_first"] = os.environ.get("PDD_MODEL_DEFAULT_FIRST")
         return ("success", 0.0, "x")
 
     mock_sync_main.side_effect = _capture
     result = runner.invoke(cli.cli, ["sync", "test_module"])
     assert result.exit_code == 0, result.output
     assert seen.get("model_default") is None
+    assert seen.get("model_default_first") is None
 
 
 def test_llm_invoke_resolves_model_from_env_at_call_time(monkeypatch):
@@ -815,12 +823,12 @@ def test_llm_invoke_resolves_model_from_env_at_call_time(monkeypatch):
 
     monkeypatch.setattr(li, "_select_model_candidates", _spy)
     # change the env AFTER import (as `pdd sync --model` does) and call:
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.3-codex")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
     try:
         li.llm_invoke(prompt="hi {x}", input_json={"x": "y"}, strength=0.5, verbose=False)
     except Exception:
         pass  # selector is stubbed; downstream may error — we only assert the base.
 
-    assert captured.get("base") == "chatgpt/gpt-5.3-codex", (
+    assert captured.get("base") == "chatgpt/gpt-5.5", (
         "llm_invoke used a stale base model; --model would not take effect in-process"
     )

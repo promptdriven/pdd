@@ -27,6 +27,12 @@ def set_pdd_path(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_codex_subscription_auth(monkeypatch):
+    """These retry-cost tests mock model data and should not see local Codex auth."""
+    monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def reset_callback_data():
     """Reset _llm_mod._LAST_CALLBACK_DATA before each test."""
     _llm_mod._LAST_CALLBACK_DATA["cost"] = 0.0

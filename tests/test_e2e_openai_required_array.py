@@ -29,6 +29,12 @@ def set_pdd_path(monkeypatch):
     monkeypatch.setenv("PDD_PATH", str(pdd_package_dir))
 
 
+@pytest.fixture(autouse=True)
+def isolate_codex_subscription_auth(monkeypatch):
+    """These OpenAI schema tests mock model data and should not see local Codex auth."""
+    monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: False)
+
+
 class TestOpenAIRequiredArraySchema:
     """
     Tests for OpenAI strict mode requirement: ALL properties must be in 'required'.

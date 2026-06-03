@@ -185,10 +185,16 @@ def mock_env():
             "pdd.agentic_common._has_legacy_gemini_oauth_credentials",
             return_value=False,
         ),
+        patch("pdd.agentic_common._has_codex_auth_file", return_value=False),
         patch("pdd.agentic_common._opencode_auth_file_has_credentials", return_value=False),
         patch("pdd.agentic_common._iter_opencode_config_texts", return_value=[]),
     ):
         yield os.environ
+
+
+def _prefer_anthropic_then_google(env):
+    env["PDD_AGENTIC_PROVIDER"] = "anthropic,google"
+
 
 @pytest.fixture
 def mock_cwd(tmp_path):
@@ -1477,6 +1483,7 @@ def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_
     # GOOGLE_API_KEY works with both agy and legacy gemini; safe to use here
     # regardless of which Google binary auto-mode selects.
     mock_env["GOOGLE_API_KEY"] = "key"
+    _prefer_anthropic_then_google(mock_env)
     
     # Setup subprocess responses
     # First call (Anthropic) fails
@@ -1858,6 +1865,7 @@ def test_zero_cost_minimal_output_detected_as_failure(mock_cwd, mock_env, mock_l
     os.environ["ANTHROPIC_API_KEY"] = "key"
     os.environ["GEMINI_API_KEY"] = "key"
     os.environ["PDD_GOOGLE_CLI"] = "gemini"
+    _prefer_anthropic_then_google(mock_env)
 
     # First provider (Anthropic): Returns "success" with $0.00 cost and minimal output
     # This is a false positive - no work was actually done
@@ -2293,6 +2301,7 @@ def test_run_agentic_task_false_positive(mock_shutil_which, mock_subprocess_run,
     mock_shutil_which.side_effect = lambda name: "/bin/cmd" if name in ("claude", "gemini") else None
     mock_env["GEMINI_API_KEY"] = "key"
     mock_env["PDD_GOOGLE_CLI"] = "gemini"
+    _prefer_anthropic_then_google(mock_env)
     
     # 1. Anthropic: Success but suspicious (0 cost, short output)
     suspicious_response = MagicMock()
@@ -2457,6 +2466,7 @@ def test_run_agentic_task_moves_to_next_after_max_retries(mock_shutil_which, moc
     """
     mock_shutil_which.return_value = "/bin/cmd"
     mock_env["GEMINI_API_KEY"] = "key"  # Enable Google as fallback
+    _prefer_anthropic_then_google(mock_env)
 
     fail_response = MagicMock()
     fail_response.returncode = 1
@@ -2490,6 +2500,7 @@ def test_run_agentic_task_no_retries_by_default(mock_shutil_which, mock_subproce
     """
     mock_shutil_which.return_value = "/bin/cmd"
     mock_env["GEMINI_API_KEY"] = "key"
+    _prefer_anthropic_then_google(mock_env)
 
     fail_response = MagicMock()
     fail_response.returncode = 1
@@ -2536,6 +2547,7 @@ def test_empty_output_with_nonzero_cost_detected_as_false_positive(mock_shutil_w
     """
     mock_shutil_which.return_value = "/bin/cmd"
     mock_env["GEMINI_API_KEY"] = "key"
+    _prefer_anthropic_then_google(mock_env)
 
     # First provider (Anthropic): Returns "success" with non-zero cost but EMPTY output
     # This simulates the issue #249 scenario where Claude ran tools but produced no text
@@ -2579,6 +2591,7 @@ def test_whitespace_only_output_detected_as_false_positive(mock_shutil_which, mo
     """
     mock_shutil_which.return_value = "/bin/cmd"
     mock_env["GEMINI_API_KEY"] = "key"
+    _prefer_anthropic_then_google(mock_env)
 
     # Anthropic returns whitespace-only output
     anthropic_whitespace = MagicMock()
@@ -5013,7 +5026,7 @@ def test_post_pr_comment_no_gh_cli(tmp_path):
 def test_get_agent_provider_preference_default(mock_env):
     """Default preference when PDD_AGENTIC_PROVIDER is not set."""
     mock_env.pop("PDD_AGENTIC_PROVIDER", None)
-    # OpenCode (Issue #798) is the new fourth default-preference provider.
+    # OpenCode (Issue #798) is the fourth default-preference provider.
     assert get_agent_provider_preference() == ["anthropic", "google", "openai", "opencode"]
 
 
@@ -6990,6 +7003,7 @@ def test_false_positive_falls_through_in_multi_provider_config(mock_cwd, mock_en
     os.environ["ANTHROPIC_API_KEY"] = "ak"
     os.environ["GOOGLE_API_KEY"] = "gk"
     os.environ["OPENAI_API_KEY"] = "ok"
+    _prefer_anthropic_then_google(mock_env)
 
     empty_anthropic = json.dumps({
         "type": "result",
@@ -8017,6 +8031,7 @@ class TestIssue1376IncidentReplay:
             return {"claude": "/bin/claude", "gemini": "/bin/gemini"}.get(cmd)
         mock_shutil_which.side_effect = which_side_effect
         os.environ["GEMINI_API_KEY"] = "key-for-availability-check"
+        _prefer_anthropic_then_google(mock_env)
 
         # Sequence: 1st subprocess call (anthropic) fails with the exact
         # 400 the incident reported; 2nd call (google fallback) succeeds
@@ -8108,6 +8123,7 @@ class TestIssue1376IncidentReplay:
             return {"claude": "/bin/claude", "gemini": "/bin/gemini"}.get(cmd)
         mock_shutil_which.side_effect = which_side_effect
         os.environ["GEMINI_API_KEY"] = "key"
+        _prefer_anthropic_then_google(mock_env)
         # Deliberately NO GEMINI_MODEL env var → model must come from JSON
 
         anthropic_fail = MagicMock(returncode=1, stdout="", stderr="500 server error")
@@ -8218,6 +8234,7 @@ class TestIssue1376IncidentReplay:
         mock_shutil_which.side_effect = which_side_effect
         os.environ["GEMINI_API_KEY"] = "key"
         os.environ["GEMINI_MODEL"] = "gemini-3-flash-preview"
+        _prefer_anthropic_then_google(mock_env)
 
         anthropic_fail = MagicMock(returncode=1, stdout="", stderr="500 server error")
         google_ok = MagicMock(
@@ -8541,6 +8558,7 @@ class TestIssue814BillingErrorsPermanent:
         """User workflow: exhausted Anthropic credits should not burn retries."""
         mock_shutil_which.return_value = "/bin/cmd"
         mock_env["GEMINI_API_KEY"] = "key"
+        _prefer_anthropic_then_google(mock_env)
 
         anthropic_failure = MagicMock()
         anthropic_failure.returncode = 1
@@ -8585,6 +8603,7 @@ class TestIssue814BillingErrorsPermanent:
         snippet of the error, instead of the workflow silently advancing."""
         mock_shutil_which.return_value = "/bin/cmd"
         mock_env["GEMINI_API_KEY"] = "key"
+        _prefer_anthropic_then_google(mock_env)
 
         anthropic_failure = MagicMock()
         anthropic_failure.returncode = 1
@@ -8653,6 +8672,7 @@ class TestIssue814BillingErrorsPermanent:
         fallback still succeeds."""
         mock_shutil_which.return_value = "/bin/cmd"
         mock_env["GEMINI_API_KEY"] = "key"
+        _prefer_anthropic_then_google(mock_env)
 
         anthropic_failure = MagicMock()
         anthropic_failure.returncode = 1
@@ -8727,6 +8747,7 @@ class TestIssue814BillingErrorsPermanent:
         """
         mock_shutil_which.return_value = "/bin/cmd"
         mock_env["GEMINI_API_KEY"] = "key"
+        _prefer_anthropic_then_google(mock_env)
 
         # Body carries: (1) a permanent-error classification trigger
         # ("credit balance is too low"); (2) a fake credential the diagnostic
@@ -8807,6 +8828,7 @@ class TestIssue814BillingErrorsPermanent:
         """
         mock_shutil_which.return_value = "/bin/cmd"
         mock_env["GEMINI_API_KEY"] = "key"
+        _prefer_anthropic_then_google(mock_env)
 
         # Exact body shape captured in issue #814 (513-byte response).
         # Claude Code exits 0 with this JSON in stdout when the API itself

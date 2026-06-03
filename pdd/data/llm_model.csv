@@ -51,6 +51,7 @@ Github Copilot,github_copilot/gpt-5.1,0.0,0.0,1339,,,0,True,none,,True
 Github Copilot,github_copilot/claude-haiku-4.5,0.0,0.0,1316,,,0,True,none,,True
 Github Copilot,github_copilot/gpt-5-mini,0.0,0.0,1310,,,0,True,none,,True
 Github Copilot,github_copilot/gpt-4o,0.0,0.0,1300,,,0,True,none,,True
+OpenAI ChatGPT,chatgpt/gpt-5.5,0.0,0.0,1450,,,0,True,none,,True
 OpenAI ChatGPT,chatgpt/gpt-5.4,0.0,0.0,1437,,,0,True,none,,True
 OpenAI ChatGPT,chatgpt/gpt-5.3-codex,0.0,0.0,1407,,,0,True,none,,True
 OpenAI ChatGPT,chatgpt/gpt-5.2,0.0,0.0,1404,,,0,True,none,,True

@@ -208,6 +208,13 @@ if _AnthropicConfigOpus47 is not None:
                             if k not in merged:
                                 merged[k] = v
                         result["thinking"] = merged
+                reasoning_effort = (
+                    non_default_params.get("reasoning_effort")
+                    if isinstance(non_default_params, dict)
+                    else None
+                )
+                if reasoning_effort and "output_config" not in result:
+                    result["output_config"] = {"effort": reasoning_effort}
                 return result
             _patched_map_openai_params._pdd_opus_4_7_thinking_patched = True
             _AnthropicConfigOpus47.map_openai_params = _patched_map_openai_params
@@ -2516,6 +2523,215 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
+def _truthy_env(name: str) -> bool:
+    """Return True for common truthy env-var spellings."""
+    return str(os.environ.get(name, "")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _provider_challenge_text_fragments(content: Any, depth: int = 0) -> List[str]:
+    """Return string fragments worth scanning for provider-side HTML challenges."""
+    if depth > 5 or content is None:
+        return []
+    if isinstance(content, str):
+        return [content]
+    if isinstance(content, BaseModel):
+        try:
+            return _provider_challenge_text_fragments(content.model_dump(), depth + 1)
+        except Exception:
+            return []
+    if isinstance(content, dict):
+        fragments: List[str] = []
+        for value in content.values():
+            fragments.extend(_provider_challenge_text_fragments(value, depth + 1))
+        return fragments
+    if isinstance(content, (list, tuple, set)):
+        fragments = []
+        for item in content:
+            fragments.extend(_provider_challenge_text_fragments(item, depth + 1))
+        return fragments
+    fragments = []
+    for attr_name in ("text", "content", "extracted_code", "output_text"):
+        try:
+            value = getattr(content, attr_name)
+        except Exception:
+            continue
+        if value is content:
+            continue
+        fragments.extend(_provider_challenge_text_fragments(value, depth + 1))
+    return fragments
+
+
+def _is_provider_challenge_response(content: Any) -> bool:
+    """Detect provider-side HTML challenges that should trigger model fallback."""
+    for fragment in _provider_challenge_text_fragments(content):
+        lowered = fragment.lower()
+        if (
+            "challenge-error-text" in lowered
+            or "enable javascript and cookies to continue" in lowered
+            or "cf_chl_opt" in lowered
+        ):
+            return True
+    return False
+
+
+def _raise_if_provider_challenge_response(
+    content: Any,
+    model_name: Any,
+    item_index: int,
+) -> None:
+    """Raise fallback-triggering error for provider-side HTML challenges.
+
+    Scoped to ChatGPT/Codex subscription responses: only that backend
+    (chatgpt.com via Cloudflare) ever serves these challenge pages. For any other
+    provider, output that merely contains strings like ``cf_chl_opt`` or
+    ``challenge-error-text`` is legitimate model content (e.g. generated
+    Cloudflare-handling code, web-scraping logic, or docs), so scanning it would
+    be a false positive that wrongly triggers fallback/failure (issue #1318 review).
+    """
+    if not str(model_name or "").lower().startswith("chatgpt/"):
+        return
+    if not _is_provider_challenge_response(content):
+        return
+    logger.warning(
+        "[PROVIDER CHALLENGE] %s returned an HTML challenge. Trying next model.",
+        model_name,
+    )
+    raise SchemaValidationError(
+        "Provider returned an HTML challenge instead of model output",
+        raw_response=content,
+        item_index=item_index,
+    )
+
+
+def _raise_if_provider_challenge_error(
+    error: BaseException,
+    model_name: Any,
+    item_index: int,
+) -> None:
+    """Raise fallback-triggering error when provider challenge HTML is in an exception."""
+    _raise_if_provider_challenge_response(str(error), model_name, item_index)
+
+
+def _is_provider_challenge_validation_error(error: BaseException) -> bool:
+    """Return True when a fallback-triggering validation error is a provider challenge."""
+    return isinstance(error, SchemaValidationError) and _is_provider_challenge_response(
+        getattr(error, "raw_response", None)
+    )
+
+
+def _is_provider_challenge_exception(error: BaseException) -> bool:
+    """Return True when any exception carries provider-side challenge HTML."""
+    raw_response = getattr(error, "raw_response", None)
+    return _is_provider_challenge_response(raw_response) or _is_provider_challenge_response(
+        str(error)
+    )
+
+
+def _chatgpt_family(model_df: pd.DataFrame) -> pd.DataFrame:
+    """Rows backed by the ChatGPT/Codex subscription provider."""
+    return model_df[
+        model_df["model"].astype(str).str.lower().str.startswith("chatgpt/")
+    ].copy()
+
+
+def _chatgpt_default_for_request(family_df: pd.DataFrame, requested_model: Any) -> str:
+    """Resolve the ChatGPT-family default model for the current request."""
+    requested = str(requested_model or "").strip()
+    if requested:
+        chatgpt_name = (
+            requested
+            if requested.lower().startswith("chatgpt/")
+            else f"chatgpt/{requested.split('/', 1)[-1]}"
+        )
+        exact = family_df[
+            family_df["model"].astype(str).str.lower() == chatgpt_name.lower()
+        ]
+        if not exact.empty:
+            return str(exact.iloc[0]["model"])
+
+    preferred = family_df[
+        family_df["model"].astype(str).str.lower() == "chatgpt/gpt-5.5"
+    ]
+    if not preferred.empty:
+        return "chatgpt/gpt-5.5"
+    return str(family_df.loc[family_df["coding_arena_elo"].idxmax()]["model"])
+
+
+def _apply_codex_subscription_default(
+    model_df: pd.DataFrame,
+    effective_default_model: Any,
+) -> Tuple[pd.DataFrame, Any, bool]:
+    """Enable explicit ChatGPT/Codex subscription model selection.
+
+    Public ``llm_invoke`` keeps normal strength/catalog behavior unless the
+    caller explicitly selects a ``chatgpt/*`` subscription model. Product-level
+    defaults such as the GitHub app can opt in by setting
+    ``PDD_MODEL_DEFAULT=chatgpt/...`` and ``PDD_MODEL_DEFAULT_FIRST=1``.
+    """
+    requested = str(effective_default_model or "").strip()
+    if not requested.lower().startswith("chatgpt/"):
+        return model_df, effective_default_model, False
+
+    try:
+        from pdd.codex_subscription import has_codex_subscription_auth
+        has_codex_auth = has_codex_subscription_auth()
+    except Exception:
+        has_codex_auth = False
+    if not has_codex_auth:
+        return model_df, effective_default_model, False
+
+    family = _chatgpt_family(model_df)
+    if family.empty:
+        try:
+            packaged_df = _load_model_data(None)
+            packaged_family = _chatgpt_family(packaged_df)
+        except Exception:
+            packaged_family = pd.DataFrame()
+        if packaged_family.empty:
+            raise ValueError(
+                "Codex subscription auth is available, but the active model catalog "
+                "has no chatgpt/* rows. Remove or update ~/.pdd/llm_model.csv so PDD "
+                "can use the packaged OpenAI ChatGPT subscription models."
+            )
+        logger.warning(
+            "Active model catalog has no chatgpt/* rows; using packaged OpenAI "
+            "ChatGPT subscription rows for Codex default."
+        )
+        family = packaged_family
+
+    resolved_default = _chatgpt_default_for_request(family, requested)
+    non_chatgpt = model_df[
+        ~model_df["model"].astype(str).str.lower().str.startswith("chatgpt/")
+    ].copy()
+    candidate_df = family
+    if not non_chatgpt.empty:
+        candidate_df = pd.concat([family, non_chatgpt], ignore_index=True)
+    logger.info(
+        "Using explicit ChatGPT/Codex subscription model for llm_invoke: "
+        "provider=OpenAI ChatGPT model=%s",
+        resolved_default,
+    )
+    return candidate_df, resolved_default, True
+
+
+def _pin_default_model_first(
+    candidate_models: List[Dict[str, Any]],
+    effective_default_model: Any,
+) -> List[Dict[str, Any]]:
+    """Keep an explicitly pinned default ahead of strength/ELO interpolation."""
+    if not _truthy_env("PDD_MODEL_DEFAULT_FIRST") or not effective_default_model:
+        return candidate_models
+    default_name = str(effective_default_model)
+    candidate_models.sort(
+        key=lambda candidate: 0
+        if str(candidate.get("model")) == default_name
+        else 1
+    )
+    return candidate_models
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
@@ -3699,6 +3915,9 @@ def llm_invoke(
         # import-frozen DEFAULT_BASE_MODEL) so an in-process override such as
         # `pdd sync --model` takes effect this run (issue #1269).
         _effective_default_model = os.getenv("PDD_MODEL_DEFAULT", DEFAULT_BASE_MODEL)
+        model_df, _effective_default_model, _ = (
+            _apply_codex_subscription_default(model_df, _effective_default_model)
+        )
         # Diagnostic for the CSV-shadowing trap (issue #1269): llm_invoke prefers
         # ~/.pdd/llm_model.csv and project .pdd/llm_model.csv over the packaged
         # catalog, so an existing install with an older user/project CSV will not
@@ -3720,6 +3939,10 @@ def llm_invoke(
                     LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
                 )
         candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
+        candidate_models = _pin_default_model_first(
+            candidate_models,
+            _effective_default_model,
+        )
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
         _emit_llm_attribution(
@@ -3816,11 +4039,31 @@ def llm_invoke(
         pass
 
     attempt_counter = 0
+    skip_chatgpt_family = False
 
     for model_info in candidate_models:
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
+        is_chatgpt_candidate = str(model_name_litellm).lower().startswith("chatgpt/")
+
+        if skip_chatgpt_family and is_chatgpt_candidate:
+            _record_attempt(str(model_name_litellm))
+            _emit_llm_attribution(
+                attribution_context,
+                "llm_invoke.model_skipped",
+                model=str(model_name_litellm),
+                provider=str(provider),
+                api_key_env_names=_api_key_field_names(api_key_name),
+                reason="chatgpt_family_provider_challenge",
+            )
+            if verbose:
+                logger.info(
+                    "[SKIP] Skipping %s because another chatgpt/* model returned "
+                    "a provider challenge in this call.",
+                    model_name_litellm,
+                )
+            continue
 
         # Record this candidate before any pre-call validation/skip logic so
         # models skipped mid-call (context window pre-check, missing api_key,
@@ -4302,6 +4545,7 @@ def llm_invoke(
                                         break
                         except Exception:
                             result_text = None
+                        _raise_if_provider_challenge_response(result_text, model_name_litellm, 0)
 
                         # Calculate cost using usage + CSV rates
                         total_cost = 0.0
@@ -4372,6 +4616,7 @@ def llm_invoke(
                                     final_result = f"ERROR: Failed to parse structured output from Responses API. Raw: {repr(result_text)[:200]}"
                         else:
                             final_result = result_text
+                        _raise_if_provider_challenge_response(final_result, model_name_litellm, 0)
 
                         if verbose:
                             logger.info(f"[RESULT] Model Used: {model_name_litellm}")
@@ -4395,6 +4640,8 @@ def llm_invoke(
                             'finish_reason': finish_reason,
                             'attempted_models': list(attempted_models),
                         })
+                    except SchemaValidationError:
+                        raise
                     except Exception as e:
                         last_exception = e
                         _emit_llm_attribution(
@@ -4514,6 +4761,12 @@ def llm_invoke(
                     # override is needed here.
                     if verbose:
                         logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
+                    if is_chatgpt_subscription:
+                        # Disable cache per-request (litellm honors cache={"no-cache": True})
+                        # rather than mutating the process-global litellm.cache, which races
+                        # with concurrent calls and can leave cache disabled for unrelated
+                        # traffic (issue #1318 review FM3).
+                        litellm_kwargs = {**litellm_kwargs, "cache": {"no-cache": True}}
                     response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
 
                 end_time = time_module.time()
@@ -4569,6 +4822,7 @@ def llm_invoke(
                     # Result (String or Pydantic)
                     try:
                         raw_result = resp_item.choices[0].message.content
+                        _raise_if_provider_challenge_response(raw_result, model_name_litellm, i)
                         # Record the last (prompt, raw response) pair for the current operation.
                         if _record_llm_pair is not None and trace_prompt_repr is not None:
                             try:
@@ -4589,42 +4843,40 @@ def llm_invoke(
                                 modified_prompt = prompt + " "
                                 try:
                                     retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
-                                    # Disable cache for retry
-                                    litellm.cache = None
                                     # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
                                     _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
                                     _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                     _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                    try:
-                                        retry_kwargs = {
-                                            "model": model_name_litellm,
-                                            "messages": retry_messages,
-                                            "temperature": current_temperature,
-                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
-                                            "timeout": LLM_CALL_TIMEOUT,
-                                            **time_kwargs,
-                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
-                                        }
-                                        if _model_disallows_temperature(model_name_litellm):
-                                            retry_kwargs.pop("temperature", None)
-                                        retry_response = _completion_with_attribution(
-                                            context=attribution_context,
-                                            attempt_id=attempt_id,
-                                            call_type="completion_retry_cache_bypass",
-                                            model=str(model_name_litellm),
-                                            provider=str(provider),
-                                            api_key_name=api_key_name,
-                                            kwargs=retry_kwargs,
-                                        )
-                                    finally:
-                                        # Always restore cache, even if retry raises
-                                        litellm.cache = configured_cache
+                                    # Bypass cache per-request (issue #1318 review FM3): litellm honors
+                                    # cache={"no-cache": True}; avoids racy global litellm.cache mutation.
+                                    retry_kwargs = {
+                                        "model": model_name_litellm,
+                                        "messages": retry_messages,
+                                        "temperature": current_temperature,
+                                        **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
+                                        "timeout": LLM_CALL_TIMEOUT,
+                                        "cache": {"no-cache": True},
+                                        **time_kwargs,
+                                        **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                    }
+                                    if _model_disallows_temperature(model_name_litellm):
+                                        retry_kwargs.pop("temperature", None)
+                                    retry_response = _completion_with_attribution(
+                                        context=attribution_context,
+                                        attempt_id=attempt_id,
+                                        call_type="completion_retry_cache_bypass",
+                                        model=str(model_name_litellm),
+                                        provider=str(provider),
+                                        api_key_name=api_key_name,
+                                        kwargs=retry_kwargs,
+                                    )
                                     # Issue #509: Accumulate cost/tokens from original call + retry
                                     _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                     _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
                                     _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
+                                    _raise_if_provider_challenge_response(retry_raw_result, model_name_litellm, i)
                                     if _record_llm_pair is not None and trace_prompt_repr is not None:
                                         try:
                                             _record_llm_pair(
@@ -4641,7 +4893,10 @@ def llm_invoke(
                                         logger.error(f"[ERROR] Cache bypass retry also returned None for item {i}")
                                         results.append("ERROR: LLM returned None content even after cache bypass")
                                         continue
+                                except SchemaValidationError:
+                                    raise
                                 except Exception as retry_e:
+                                    _raise_if_provider_challenge_error(retry_e, model_name_litellm, i)
                                     logger.error(f"[ERROR] Cache bypass retry failed for item {i}: {retry_e}")
                                     results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
                                     continue
@@ -4659,50 +4914,50 @@ def llm_invoke(
                                 modified_prompt = prompt + " "
                                 try:
                                     retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
-                                    # Disable cache for retry
-                                    original_cache = litellm.cache
-                                    litellm.cache = None
                                     # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
                                     _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
                                     _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                     _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                    try:
-                                        retry_kwargs = {
-                                            "model": model_name_litellm,
-                                            "messages": retry_messages,
-                                            "temperature": current_temperature,
-                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
-                                            "timeout": LLM_CALL_TIMEOUT,
-                                            **time_kwargs,
-                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
-                                        }
-                                        if _model_disallows_temperature(model_name_litellm):
-                                            retry_kwargs.pop("temperature", None)
-                                        retry_response = _completion_with_attribution(
-                                            context=attribution_context,
-                                            attempt_id=attempt_id,
-                                            call_type="completion_retry_malformed_json",
-                                            model=str(model_name_litellm),
-                                            provider=str(provider),
-                                            api_key_name=api_key_name,
-                                            kwargs=retry_kwargs,
-                                        )
-                                    finally:
-                                        # Always restore cache, even if retry raises
-                                        litellm.cache = original_cache
+                                    # Bypass cache per-request (issue #1318 review FM3): litellm honors
+                                    # cache={"no-cache": True}; avoids racy global litellm.cache mutation.
+                                    retry_kwargs = {
+                                        "model": model_name_litellm,
+                                        "messages": retry_messages,
+                                        "temperature": current_temperature,
+                                        **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
+                                        "timeout": LLM_CALL_TIMEOUT,
+                                        "cache": {"no-cache": True},
+                                        **time_kwargs,
+                                        **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                    }
+                                    if _model_disallows_temperature(model_name_litellm):
+                                        retry_kwargs.pop("temperature", None)
+                                    retry_response = _completion_with_attribution(
+                                        context=attribution_context,
+                                        attempt_id=attempt_id,
+                                        call_type="completion_retry_malformed_json",
+                                        model=str(model_name_litellm),
+                                        provider=str(provider),
+                                        api_key_name=api_key_name,
+                                        kwargs=retry_kwargs,
+                                    )
                                     # Issue #509: Accumulate cost/tokens from original call + retry
                                     _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                     _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
                                     _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                     # Extract result from retry
                                     retry_raw_result = retry_response.choices[0].message.content
+                                    _raise_if_provider_challenge_response(retry_raw_result, model_name_litellm, i)
                                     if retry_raw_result is not None and not _is_malformed_json_response(retry_raw_result):
                                         logger.info(f"[SUCCESS] Cache bypass retry for malformed JSON succeeded for item {i}")
                                         raw_result = retry_raw_result
                                     else:
                                         # Retry also failed, but we'll continue with repair logic below
                                         logger.warning(f"[WARNING] Cache bypass retry also returned malformed JSON for item {i}, attempting repair...")
+                                except SchemaValidationError:
+                                    raise
                                 except Exception as retry_e:
+                                    _raise_if_provider_challenge_error(retry_e, model_name_litellm, i)
                                     logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
                             else:
                                 logger.warning(f"[WARNING] Cannot retry malformed JSON - batch mode or missing prompt/input_json, attempting repair...")
@@ -4929,43 +5184,40 @@ def llm_invoke(
                                     modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
                                     try:
                                         retry_messages = _build_chatgpt_retry_messages(modified_prompt, input_json, use_batch_mode, model_name_litellm, output_pydantic, output_schema)
-                                        # Disable cache for retry
-                                        original_cache = litellm.cache
-                                        litellm.cache = None
                                         # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
                                         _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
                                         _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
                                         _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                        try:
-                                            retry_kwargs = {
-                                                "model": model_name_litellm,
-                                                "messages": retry_messages,
-                                                "temperature": current_temperature,
-                                                **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
-                                                "timeout": LLM_CALL_TIMEOUT,
-                                                **time_kwargs,
-                                                **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
-                                            }
-                                            if _model_disallows_temperature(model_name_litellm):
-                                                retry_kwargs.pop("temperature", None)
-                                            retry_response = _completion_with_attribution(
-                                                context=attribution_context,
-                                                attempt_id=attempt_id,
-                                                call_type="completion_retry_invalid_python",
-                                                model=str(model_name_litellm),
-                                                provider=str(provider),
-                                                api_key_name=api_key_name,
-                                                kwargs=retry_kwargs,
-                                            )
-                                        finally:
-                                            # Always restore cache, even if retry raises
-                                            litellm.cache = original_cache
+                                        # Bypass cache per-request (issue #1318 review FM3): litellm honors
+                                        # cache={"no-cache": True}; avoids racy global litellm.cache mutation.
+                                        retry_kwargs = {
+                                            "model": model_name_litellm,
+                                            "messages": retry_messages,
+                                            "temperature": current_temperature,
+                                            **({} if str(model_name_litellm).lower().startswith("chatgpt/") else {"response_format": response_format}),
+                                            "timeout": LLM_CALL_TIMEOUT,
+                                            "cache": {"no-cache": True},
+                                            **time_kwargs,
+                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                        }
+                                        if _model_disallows_temperature(model_name_litellm):
+                                            retry_kwargs.pop("temperature", None)
+                                        retry_response = _completion_with_attribution(
+                                            context=attribution_context,
+                                            attempt_id=attempt_id,
+                                            call_type="completion_retry_invalid_python",
+                                            model=str(model_name_litellm),
+                                            provider=str(provider),
+                                            api_key_name=api_key_name,
+                                            kwargs=retry_kwargs,
+                                        )
                                         # Issue #509: Accumulate cost/tokens from original call + retry
                                         _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                         _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
                                         _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
                                         # Extract and re-parse the retry result
                                         retry_raw_result = retry_response.choices[0].message.content
+                                        _raise_if_provider_challenge_response(retry_raw_result, model_name_litellm, i)
                                         if retry_raw_result is not None:
                                             # Re-parse the retry result
                                             retry_parsed = None
@@ -4988,7 +5240,10 @@ def llm_invoke(
                                                 logger.warning(f"[WARNING] Cache bypass retry returned unparseable result for item {i}")
                                         else:
                                             logger.warning(f"[WARNING] Cache bypass retry returned None for item {i}")
+                                    except SchemaValidationError:
+                                        raise
                                     except Exception as retry_e:
+                                        _raise_if_provider_challenge_error(retry_e, model_name_litellm, i)
                                         logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
                                 else:
                                     logger.warning(f"[WARNING] Cannot retry invalid Python code - batch mode or missing prompt/input_json")
@@ -5011,6 +5266,7 @@ def llm_invoke(
 
                 final_result = results if use_batch_mode else results[0]
                 final_thinking = thinking_outputs if use_batch_mode else thinking_outputs[0]
+                _raise_if_provider_challenge_response(final_result, model_name_litellm, 0)
 
                 # --- Verbose Output for Success ---
                 if verbose:
@@ -5099,6 +5355,8 @@ def llm_invoke(
             except SchemaValidationError as e:
                 # Issue #168: Schema validation failures now trigger model fallback
                 last_exception = e
+                if is_chatgpt_candidate and _is_provider_challenge_validation_error(e):
+                    skip_chatgpt_family = True
                 _emit_llm_attribution(
                     attribution_context,
                     "llm_invoke.schema_validation_error",
@@ -5136,6 +5394,24 @@ def llm_invoke(
                 last_exception = e
                 error_type = type(e).__name__
                 error_str = str(e)
+
+                if _is_provider_challenge_exception(e):
+                    if is_chatgpt_candidate:
+                        skip_chatgpt_family = True
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.provider_challenge_error",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        **_safe_error_fields(e),
+                    )
+                    logger.warning(
+                        "[PROVIDER CHALLENGE] %s failed with provider challenge HTML. "
+                        "Trying next model.",
+                        model_name_litellm,
+                    )
+                    break
 
                 # Claude-specific handling for temperature + thinking/reasoning rules.
                 # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
