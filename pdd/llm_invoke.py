@@ -2364,8 +2364,8 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
                 raise ValueError(f"Missing required column in CSV: {col}")
 
         # Convert numeric columns, handling potential errors
-        numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
-                        'max_completion_tokens', 'max_reasoning_tokens']
+        numeric_cols = ['input', 'output', 'coding_arena_elo', 'model_rank_score',
+                        'max_tokens', 'max_completion_tokens', 'max_reasoning_tokens']
         for col in numeric_cols:
             if col in df.columns:
                 # Use errors='coerce' to turn unparseable values into NaN
@@ -2375,6 +2375,12 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
         df['input'] = df['input'].fillna(0.0)
         df['output'] = df['output'].fillna(0.0)
         df['coding_arena_elo'] = df['coding_arena_elo'].fillna(0) # Use 0 ELO for missing
+        if 'model_rank_score' in df.columns:
+             df['model_rank_score'] = df['model_rank_score'].fillna(df['coding_arena_elo'])
+        else:
+             df['model_rank_score'] = df['coding_arena_elo']
+        if 'model_rank_source' not in df.columns:
+             df['model_rank_source'] = 'legacy-coding-arena-elo'
         # Ensure max_reasoning_tokens is numeric, fillna with 0
         df['max_reasoning_tokens'] = df['max_reasoning_tokens'].fillna(0).astype(int) # Ensure int
 
@@ -2529,6 +2535,17 @@ def _select_model_candidates(
     # Allow models with empty api_key (e.g., Bedrock using AWS creds, local models)
     available_df = model_df[model_df['api_key'].notna()].copy()
 
+    # Older custom CSVs and a few tests only carry coding_arena_elo. Keep those
+    # usable by treating raw Arena ELO as the rank score fallback.
+    if 'model_rank_score' not in available_df.columns:
+        available_df['model_rank_score'] = available_df['coding_arena_elo']
+    else:
+        available_df['model_rank_score'] = available_df['model_rank_score'].fillna(
+            available_df['coding_arena_elo']
+        )
+    if 'model_rank_source' not in available_df.columns:
+        available_df['model_rank_source'] = 'legacy-coding-arena-elo'
+
     # In CI / headless environments, exclude local models (lm_studio, ollama)
     # that require a running local server — they hang on connection attempts.
     if os.environ.get("PDD_SKIP_LOCAL_MODELS"):
@@ -2626,16 +2643,17 @@ def _select_model_candidates(
 
     if strength == 0.5:
         # target_model = base_model
-        # Sort remaining by ELO closest to base (continuity limit of the > 0.5 branch:
-        # as strength → 0.5 from above, the interpolated target ELO collapses to base_elo).
-        base_elo = base_model['coding_arena_elo']
-        available_df['sort_metric'] = abs(available_df['coding_arena_elo'] - base_elo)
+        # Sort remaining by rank score closest to base (continuity limit of the
+        # > 0.5 branch: as strength → 0.5 from above, the interpolated target
+        # rank collapses to the base model's rank score).
+        base_rank = base_model['model_rank_score']
+        available_df['sort_metric'] = abs(available_df['model_rank_score'] - base_rank)
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
         # Ensure effective base model is first if it exists (supports surrogate base)
         effective_base_name = str(base_model['model']) if isinstance(base_model, pd.Series) else base_model_name
         if any(c['model'] == effective_base_name for c in candidates):
             candidates.sort(key=lambda x: 0 if x['model'] == effective_base_name else 1)
-        target_metric_value = f"Base Model ELO: {base_model['coding_arena_elo']}"
+        target_metric_value = f"Base Model Rank: {base_model['model_rank_score']}"
 
     elif strength < 0.5:
         # Interpolate by Cost (downwards from base)
@@ -2654,10 +2672,10 @@ def _select_model_candidates(
         target_metric_value = f"Target Cost: {target_cost:.6f}"
 
     else: # strength > 0.5
-        # Interpolate by ELO (upwards from base)
-        base_elo = base_model['coding_arena_elo']
-        highest_elo_model = available_df.loc[available_df['coding_arena_elo'].idxmax()]
-        highest_elo = highest_elo_model['coding_arena_elo']
+        # Interpolate by DeepSWE-weighted rank score (upwards from base)
+        base_elo = base_model['model_rank_score']
+        highest_elo_model = available_df.loc[available_df['model_rank_score'].idxmax()]
+        highest_elo = highest_elo_model['model_rank_score']
 
         if highest_elo <= base_elo: # Handle edge case where base has highest ELO
             target_elo = base_elo + (strength - 0.5) * (highest_elo - base_elo) # Will be >= base_elo
@@ -2665,9 +2683,9 @@ def _select_model_candidates(
             # Interpolate between base and highest
             target_elo = base_elo + ((strength - 0.5) / 0.5) * (highest_elo - base_elo)
 
-        available_df['sort_metric'] = abs(available_df['coding_arena_elo'] - target_elo)
+        available_df['sort_metric'] = abs(available_df['model_rank_score'] - target_elo)
         candidates = available_df.sort_values(by='sort_metric').to_dict('records')
-        target_metric_value = f"Target ELO: {target_elo:.2f}"
+        target_metric_value = f"Target Rank: {target_elo:.2f}"
 
 
     if not candidates:
@@ -2681,7 +2699,7 @@ def _select_model_candidates(
         logger.debug(f"Metric: {target_metric_value}")
         logger.debug("Available DF (Sorted by metric):")
         # Select columns relevant to the sorting metric
-        sort_cols = ['model', 'avg_cost', 'coding_arena_elo', 'sort_metric']
+        sort_cols = ['model', 'avg_cost', 'coding_arena_elo', 'model_rank_score', 'sort_metric']
         logger.debug(available_df.sort_values(by='sort_metric')[sort_cols])
         logger.debug("Final Candidates List (Model Names):")
         logger.debug([c['model'] for c in candidates])
@@ -3758,15 +3776,15 @@ def llm_invoke(
         # Calculate and print strength for each candidate model
         # Find min/max for cost and ELO
         min_cost = model_df['avg_cost'].min()
-        max_elo = model_df['coding_arena_elo'].max()
+        max_elo = model_df['model_rank_score'].max()
         base_cost = model_df[model_df['model'] == _effective_default_model]['avg_cost'].iloc[0] if not model_df[model_df['model'] == _effective_default_model].empty else min_cost
-        base_elo = model_df[model_df['model'] == _effective_default_model]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == _effective_default_model].empty else max_elo
+        base_elo = model_df[model_df['model'] == _effective_default_model]['model_rank_score'].iloc[0] if not model_df[model_df['model'] == _effective_default_model].empty else max_elo
 
         def calc_strength(candidate):
             # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)
-            # If strength > 0.5, interpolate by ELO (base = 0.5, highest = 1.0)
+            # If strength > 0.5, interpolate by rank score (base = 0.5, highest = 1.0)
             avg_cost = candidate.get('avg_cost', min_cost)
-            elo = candidate.get('coding_arena_elo', base_elo)
+            elo = candidate.get('model_rank_score', candidate.get('coding_arena_elo', base_elo))
             if strength < 0.5:
                 # Map cost to [0, 0.5]
                 if base_cost == min_cost:
@@ -3774,7 +3792,7 @@ def llm_invoke(
                 rel = (avg_cost - min_cost) / (base_cost - min_cost)
                 return max(0.0, min(0.5, rel * 0.5))
             elif strength > 0.5:
-                # Map ELO to [0.5, 1.0]
+                # Map DeepSWE-weighted rank to [0.5, 1.0]
                 if max_elo == base_elo:
                     return 0.5 # Avoid div by zero
                 rel = (elo - base_elo) / (max_elo - base_elo)

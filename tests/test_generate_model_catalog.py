@@ -274,9 +274,10 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
     monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {
         "gpt-5": {"elo": 1393.0, "votes": 0, "raw_name": "gpt-5"},
         "gpt-5-2": {"elo": 1404.0, "votes": 0, "raw_name": "gpt-5.2"},
+        "gpt-5-4": {"elo": 1437.0, "votes": 0, "raw_name": "gpt-5.4"},
     })
     monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {
-        "gpt-5-4": {"elo": 1479.0, "votes": 0, "raw_name": "gpt-5.4"},
+        "gpt-5-4": {"solve_rate": 56.0, "votes": 0, "raw_name": "gpt-5.4"},
     })
 
     rows = gmc.build_rows()
@@ -287,7 +288,7 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
     # ...but the curated subscription family IS preserved (provider "OpenAI ChatGPT")
     chatgpt_rows = {r["model"] for r in rows if r["model"].startswith("chatgpt/")}
     assert chatgpt_rows == {
-        "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
+        "chatgpt/gpt-5.5", "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
         "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
     }
     assert all(
@@ -295,7 +296,8 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
         for r in rows if r["model"].startswith("chatgpt/")
     )
     by_model = {r["model"]: r for r in rows if r["model"].startswith("chatgpt/")}
-    assert by_model["chatgpt/gpt-5.4"]["coding_arena_elo"] == "1479"
+    assert by_model["chatgpt/gpt-5.4"]["coding_arena_elo"] == "1437"
+    assert by_model["chatgpt/gpt-5.4"]["model_rank_score"] == "15600"
     assert by_model["chatgpt/gpt-5.2"]["coding_arena_elo"] == "1404"
     # No reviewed/static source yet, so the hand-managed fallback survives.
     assert by_model["chatgpt/gpt-5.3-codex-spark"]["coding_arena_elo"] == "1400"
@@ -342,6 +344,8 @@ def test_local_runner_default_survives_when_score_known(monkeypatch):
 def test_csv_fieldnames_include_interactive_only():
     # The column must be present (and last) so DictWriter emits it for every row.
     assert "interactive_only" in gmc.CSV_FIELDNAMES
+    assert "model_rank_score" in gmc.CSV_FIELDNAMES
+    assert "model_rank_source" in gmc.CSV_FIELDNAMES
     assert gmc.CSV_FIELDNAMES[-1] == "interactive_only"
 
 
@@ -424,24 +428,25 @@ def test_build_rows_includes_vertex_gemini_flash_ci_default(monkeypatch):
 
 def test_committed_csv_has_curated_chatgpt_subscription_rows():
     """The committed CSV carries the hand-managed ChatGPT subscription family
-    (issue #1269): 4 chatgpt/ rows under provider "OpenAI ChatGPT", empty api_key
+    (issue #1269): 5 chatgpt/ rows under provider "OpenAI ChatGPT", empty api_key
     (device-flow / codex login). They must NOT be the OPENAI_API_KEY-billed rows."""
     csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     text = csv_path.read_text(encoding="utf-8")
 
     for model in (
-        "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
+        "chatgpt/gpt-5.5", "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
         "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
     ):
         assert f"OpenAI ChatGPT,{model},0.0,0.0," in text, model
-    assert "OpenAI ChatGPT,chatgpt/gpt-5.4,0.0,0.0,1479," in text
+    assert "OpenAI ChatGPT,chatgpt/gpt-5.5,0.0,0.0,1450,17000,deepswe-solve-rate," in text
+    assert "OpenAI ChatGPT,chatgpt/gpt-5.4,0.0,0.0,1437,15600,deepswe-solve-rate," in text
     # subscription rows carry NO API key (device-flow / codex login). The cloud
     # deploy guard only rejects literal OPENAI_API_KEY rows; these chatgpt/ rows
     # are not those.
     for line in text.splitlines():
         if line.startswith("OpenAI ChatGPT,chatgpt/"):
             fields = line.split(",")
-            assert fields[6] == "", f"chatgpt row must have empty api_key: {line!r}"
+            assert fields[8] == "", f"chatgpt row must have empty api_key: {line!r}"
 
 
 def test_committed_csv_includes_vertex_gemini_flash_ci_default():
@@ -686,28 +691,31 @@ def test_committed_csv_includes_vertex_gemini_3_5_flash_ga_default():
     Gemini Flash row so PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash resolves
     directly instead of surrogating onto an unrelated first-row provider.
 
-    Pin the EXACT 12-column row (format + ELO 1442 + interactive_only=False)
-    and its ELO-sorted position (between the 1451 DeepSWE-ranked Flash preview
-    row and the 1440 glm row) so a regeneration that emitted a malformed or
-    mis-sorted row would fail here, not silently dirty the committed catalog."""
+    Pin the EXACT 14-column row (format + raw ELO 1442 +
+    DeepSWE-derived rank score 12800 + interactive_only=False)
+    and its rank-sorted position (after the bare Vertex alias with the same
+    rank and before the next lower DeepSWE-ranked Vertex model) so a
+    regeneration that emitted a malformed or mis-sorted row would fail here,
+    not silently dirty the committed catalog."""
     csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     lines = csv_path.read_text(encoding="utf-8").splitlines()
 
     exact_row = (
-        "Google Vertex AI,vertex_ai/gemini-3.5-flash,1.5,9.0,1442,,"
+        "Google Vertex AI,vertex_ai/gemini-3.5-flash,1.5,9.0,1442,12800,"
+        "deepswe-solve-rate,,"
         "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
         "0,True,effort,global,False"
     )
     assert exact_row in lines, "GA Vertex Gemini Flash row missing or malformed"
 
-    # ELO-descending order within the Google Vertex AI block: 1442 sits between
-    # the 1451 Flash preview row and the 1440 glm row.
+    # Rank-descending order within the Google Vertex AI block: DeepSWE rank
+    # 12800 sits after the bare alias and before the 11800 GLM row.
     idx = lines.index(exact_row)
     assert lines[idx - 1].startswith(
-        "Google Vertex AI,vertex_ai/gemini-3-flash-preview,"
+        "Google Vertex AI,gemini-3.5-flash,"
     )
     assert lines[idx + 1].startswith(
-        "Google Vertex AI,vertex_ai/zai-org/glm-4.7-maas,"
+        "Google Vertex AI,vertex_ai/zai-org/glm-5-maas,"
     )
 
 
@@ -766,16 +774,16 @@ def test_deepswe_manifest_file_is_checked_in_and_loadable():
     assert gmc.DEEPSWE_MANIFEST_PATH.exists()
     index = gmc._fetch_deepswe_elo()
     assert index
-    # The manifest has at least Claude Opus 4.7 as the top-ranked model.
-    assert "claude-opus-4-7" in index
-    assert index["claude-opus-4-7"]["elo"] >= 1500
+    # The current manifest has GPT-5.5 as the top-ranked model.
+    assert "gpt-5-5" in index
+    assert index["gpt-5-5"]["solve_rate"] == 70.0
 
 
-def test_deepswe_wins_over_arena_when_both_have_model():
-    """When a model appears in both DeepSWE and Arena, DeepSWE score wins."""
+def test_deepswe_rank_score_wins_over_arena_when_both_have_model():
+    """DeepSWE must drive model_rank_score without overwriting raw Arena ELO."""
     deepswe = {
         "claude-opus-4-6": {
-            "elo": 1539.0,
+            "solve_rate": 32.0,
             "votes": 0,
             "raw_name": "claude-opus-4-6",
         }
@@ -788,12 +796,15 @@ def test_deepswe_wins_over_arena_when_both_have_model():
         }
     }
     elo, source = gmc._get_elo("claude-opus-4-6", arena, deepswe)
-    assert source == "deepswe-exact"
-    assert elo == 1539
+    rank, rank_source = gmc._get_rank_score("claude-opus-4-6", arena, deepswe)
+    assert source == "arena-exact"
+    assert elo == 1400
+    assert rank_source == "deepswe-solve-rate"
+    assert rank == gmc.DEEPSWE_RANK_BASE + 3200
 
 
 def test_arena_used_when_deepswe_lacks_model():
-    """When a model is absent from DeepSWE, Arena score is the fallback."""
+    """When a model is absent from DeepSWE, Arena score is the fallback rank."""
     deepswe: dict = {}
     arena = {
         "arena-only-model": {
@@ -803,8 +814,11 @@ def test_arena_used_when_deepswe_lacks_model():
         }
     }
     elo, source = gmc._get_elo("arena-only-model", arena, deepswe)
+    rank, rank_source = gmc._get_rank_score("arena-only-model", arena, deepswe)
     assert source == "arena-exact"
     assert elo == 1420
+    assert rank_source == "arena-elo-fallback"
+    assert rank == 1420
 
 
 def test_static_fallback_when_neither_deepswe_nor_arena_has_model():

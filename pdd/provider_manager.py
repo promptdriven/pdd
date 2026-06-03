@@ -21,8 +21,8 @@ console = Console()
 # CSV column schema
 CSV_FIELDNAMES = [
     "provider", "model", "input", "output", "coding_arena_elo",
-    "base_url", "api_key", "max_reasoning_tokens", "structured_output",
-    "reasoning_type", "location",
+    "model_rank_score", "model_rank_source", "base_url", "api_key",
+    "max_reasoning_tokens", "structured_output", "reasoning_type", "location",
 ]
 
 # ---------------------------------------------------------------------------

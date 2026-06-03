@@ -243,19 +243,23 @@ def _packaged_csv_path():
 
 
 def test_codex_family_present_in_packaged_csv():
-    """The subscription family the user's plan actually serves, ELO-mirrored to twins."""
+    """The subscription family the user's plan serves, with raw ELO plus rank score."""
     df = li._load_model_data(_packaged_csv_path())
     fam = df[df["provider"] == "OpenAI ChatGPT"]
     by_model = {r["model"]: r for _, r in fam.iterrows()}
     expected = {
-        "chatgpt/gpt-5.4": 1479,
+        "chatgpt/gpt-5.5": (1450, 17000),
+        "chatgpt/gpt-5.4": (1437, 15600),
         "chatgpt/gpt-5.3-codex": 1407,
         "chatgpt/gpt-5.2": 1404,
         "chatgpt/gpt-5.3-codex-spark": 1400,
     }
     assert set(by_model) == set(expected), f"family mismatch: {sorted(by_model)}"
-    for model, elo in expected.items():
+    for model, expected_value in expected.items():
+        elo = expected_value[0] if isinstance(expected_value, tuple) else expected_value
         assert int(by_model[model]["coding_arena_elo"]) == elo
+        if isinstance(expected_value, tuple):
+            assert int(by_model[model]["model_rank_score"]) == expected_value[1]
         # subscription rows carry NO api_key (device-flow / codex login)
         assert str(by_model[model]["api_key"] or "") == ""
 
@@ -275,21 +279,19 @@ def test_chatgpt_and_openai_api_models_do_not_collide():
     assert str(sub.iloc[0]["api_key"] or "") == ""
 
 
-def test_codex_family_strength_orders_by_elo(monkeypatch):
-    """Within the Codex family, high strength selects the top-ELO model (gpt-5.4),
-    mirroring Anthropic's haiku->opus spread. (Flat cost => ELO is the ordering key
-    at strength>=0.5; same behavior as the GitHub Copilot family.)
+def test_codex_family_strength_orders_by_model_rank_score(monkeypatch):
+    """Within the Codex family, high strength selects the top-ranked model (gpt-5.5).
 
     Issue #1164: chatgpt/* rows are now ``interactive_only`` (device-flow / codex
     login), so the automatic candidate cascade skips the whole family by default
     — only the explicitly configured base would survive, collapsing this ranking.
     Intra-family ranking is therefore an opt-in scenario: set PDD_ALLOW_INTERACTIVE
-    so the family is included, then assert the ELO ordering."""
+    so the family is included, then assert the DeepSWE-weighted ranking."""
     monkeypatch.setenv("PDD_ALLOW_INTERACTIVE", "1")
     df = li._load_model_data(_packaged_csv_path())
     fam = df[df["provider"] == "OpenAI ChatGPT"].copy()
-    cands = li._select_model_candidates(0.8, "chatgpt/gpt-5.3-codex", fam)
-    assert cands[0]["model"] == "chatgpt/gpt-5.4", [c["model"] for c in cands]
+    cands = li._select_model_candidates(1.0, "chatgpt/gpt-5.3-codex", fam)
+    assert cands[0]["model"] == "chatgpt/gpt-5.5", [c["model"] for c in cands]
 
 
 def test_anthropic_outranks_codex_so_default_unchanged():
@@ -421,11 +423,13 @@ def test_catalog_generator_preserves_chatgpt_family():
     merged = gmc._merge_chatgpt_subscription_rows([{"model": "anthropic/claude", "provider": "Anthropic"}])
     cg = sorted(r["model"] for r in merged if str(r["model"]).startswith("chatgpt/"))
     assert cg == ["chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex",
-                  "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.4"], cg
+                  "chatgpt/gpt-5.3-codex-spark", "chatgpt/gpt-5.4",
+                  "chatgpt/gpt-5.5"], cg
     again = gmc._merge_chatgpt_subscription_rows(merged)
-    assert len([r for r in again if str(r["model"]).startswith("chatgpt/")]) == 4
+    assert len([r for r in again if str(r["model"]).startswith("chatgpt/")]) == 5
     elos = {r["model"]: r["coding_arena_elo"] for r in again if str(r["model"]).startswith("chatgpt/")}
     assert elos["chatgpt/gpt-5.4"] == "1437"
+    assert elos["chatgpt/gpt-5.5"] == "1450"
     assert elos["chatgpt/gpt-5.3-codex"] == "1407"
 
 
