@@ -313,6 +313,29 @@ def test_cli_context_compression_flags(mock_construct, mock_main, mock_auto_upda
     assert os.environ.get("PDD_COMPRESSION_FALLBACK") == "error"
 
 
+def test_generate_rejects_subcommand_local_context_compression(runner):
+    """Compression flags are global; they must appear before the subcommand."""
+    import pdd.cli
+
+    result = runner.invoke(
+        pdd.cli.cli,
+        ["generate", "--context-compression", "all", "--help"],
+        env={"PDD_AUTO_UPDATE": "false"},
+    )
+    assert result.exit_code == 2
+
+
+def test_preprocess_rejects_subcommand_local_context_compression(runner):
+    import pdd.cli
+
+    result = runner.invoke(
+        pdd.cli.cli,
+        ["preprocess", "--context-compression", "all", "--help"],
+        env={"PDD_AUTO_UPDATE": "false"},
+    )
+    assert result.exit_code == 2
+
+
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')

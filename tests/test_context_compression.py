@@ -113,6 +113,33 @@ def test_apply_compression_env_off_unsets_context_compression(
     assert "PDD_CONTEXT_COMPRESSION" not in os.environ
 
 
+def test_preprocess_test_compression_without_failing_tests_keeps_full(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preprocess must not erase test includes when compression is on but metadata is missing."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_QUIET", "1")
+    monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "test")
+    monkeypatch.delenv("PDD_FAILING_TESTS", raising=False)
+    clear_compression_fallback_events()
+
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_sample.py").write_text(
+        "def test_sample():\n    assert True\n",
+        encoding="utf-8",
+    )
+
+    result = preprocess(
+        "<include>tests/test_sample.py</include>",
+        recursive=False,
+        double_curly_brackets=False,
+        tests_dir="tests",
+    )
+    assert "def test_sample" in result
+    assert "assert True" in result
+
+
 def test_preprocess_test_interface_keeps_only_failing_test(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -207,6 +234,54 @@ def test_test_interface_mode_includes_helper_dependencies(monkeypatch: pytest.Mo
     assert "def test_fails" in result
     assert "def helper" in result
     assert "def test_passes" not in result
+
+
+def test_test_interface_mode_without_failing_tests_returns_full_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test compression must not erase includes when PDD_FAILING_TESTS is unset."""
+    from pdd.content_selector import ContentSelector
+
+    source = "def test_sample():\n    assert True\n"
+    monkeypatch.delenv("PDD_FAILING_TESTS", raising=False)
+    monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "test")
+    clear_compression_fallback_events()
+
+    result = ContentSelector.select(
+        source,
+        selectors=[],
+        mode="test_interface",
+        file_path="tests/test_sample.py",
+    )
+    assert result == source
+    assert any(
+        "PDD_FAILING_TESTS unset" in event
+        for event in format_compression_summary_lines()
+    )
+
+
+def test_test_interface_slice_failure_honors_compression_fallback_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pytest slicing failures must respect PDD_COMPRESSION_FALLBACK=error."""
+    from pdd.content_selector import ContentSelector
+
+    monkeypatch.setenv("PDD_FAILING_TESTS", "tests/test_sample.py::test_missing")
+    monkeypatch.setenv("PDD_COMPRESSION_FALLBACK", "error")
+    clear_compression_fallback_events()
+
+    with pytest.raises(CompressionFallbackError, match="pytest slice failed"):
+        ContentSelector.select(
+            "def test_foo():\n    assert True\n",
+            selectors=[],
+            mode="test_interface",
+            file_path="tests/test_sample.py",
+        )
+
+    assert any(
+        "Compression fallback triggered" in line
+        for line in format_compression_summary_lines()
+    )
 
 
 def test_test_interface_mode_matches_exact_test_not_prefix(monkeypatch: pytest.MonkeyPatch) -> None:

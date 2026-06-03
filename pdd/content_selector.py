@@ -21,6 +21,7 @@ from rich.theme import Theme
 
 from ._selector_parse import parse_selectors_string
 from .api_contract_slicer import ApiContractSlicer, ContractSlicerError
+from .compression_reporting import CompressionFallbackError, record_compression_fallback
 from .pytest_slicer import PytestSlicer, SlicerError
 
 # Conditional YAML support
@@ -887,6 +888,21 @@ def _node_id_to_slicer_name(ftid: str) -> str | None:
     return f"{parts[0]}.{parts[1]}"
 
 
+def _compression_fallback_policy() -> str:
+    return (os.environ.get("PDD_COMPRESSION_FALLBACK", "full") or "full").lower()
+
+
+def _handle_test_slice_failure(exc: SlicerError, *, file_path: str | None, content: str) -> str:
+    """Apply ``PDD_COMPRESSION_FALLBACK`` when pytest slicing fails."""
+    label = file_path or "<test>"
+    message = f"pytest slice failed for {label}: {exc}"
+    if _compression_fallback_policy() == "error":
+        record_compression_fallback(message)
+        raise CompressionFallbackError(message) from exc
+    record_compression_fallback(message)
+    return content
+
+
 def slice_test_interface_context(content: str, file_path: str | None = None) -> str:
     """Slice test source to failing tests and dependency-aware helpers via ``PytestSlicer``."""
     failing_tests_env = os.environ.get("PDD_FAILING_TESTS", "")
@@ -908,8 +924,8 @@ def slice_test_interface_context(content: str, file_path: str | None = None) -> 
     try:
         slicer = PytestSlicer(content, file_path=file_path)
         sliced_content, _ = slicer.slice(test_names)
-    except SlicerError:
-        return content
+    except SlicerError as exc:
+        return _handle_test_slice_failure(exc, file_path=file_path, content=content)
     return sliced_content
 
 
@@ -948,5 +964,10 @@ def _test_interface_mode(content: str, file_path: str | None) -> str:
     """Extract only failing tests and necessary fixtures using ``PytestSlicer``."""
     failing_tests_env = os.environ.get("PDD_FAILING_TESTS", "")
     if not failing_tests_env.strip():
-        return ""
+        label = file_path or "<test>"
+        record_compression_fallback(
+            f"test_interface compression skipped for {label}: PDD_FAILING_TESTS unset; "
+            "using full test content"
+        )
+        return content
     return slice_test_interface_context(content, file_path)
