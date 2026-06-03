@@ -1,0 +1,50 @@
+<pdd-reason>Parses capabilities tag text into a target-neutral effect IR (EffectItem / ContractEffectIR).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "parse_capabilities_ir", "signature": "(text: str) -> ContractEffectIR", "returns": "ContractEffectIR"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Write `pdd/capability_ir.py`.
+%
+% This module compiles raw `<capabilities>` block text into a language-neutral
+% effect IR, independent of any Python AST or code-analysis libraries.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Define a frozen dataclass `EffectItem` with fields:
+  - `modal: Literal['MAY', 'MUST_NOT']`
+  - `action: str` — the verb extracted from the bullet (e.g. `read`, `write`, `call`, `send`, `log`)
+  - `resource: str` — normalized snake_case noun phrase (e.g. `payment_records`, `email`, `secrets`)
+- Define a dataclass `ContractEffectIR` with fields:
+  - `capabilities_present: bool`
+  - `effect_count: int`
+  - `effects: list[EffectItem]`
+- Expose `parse_capabilities_ir(text: str) -> ContractEffectIR`:
+  - Accept the full `<capabilities>…</capabilities>` block **or** its inner text.
+  - Strip the outer XML tag if present before processing.
+  - Iterate bullet lines (lines starting with `-` or `*`); skip blank lines and `#` comment lines.
+  - Recognize exactly two modals: `MAY` (maps to `'MAY'`) and `MUST NOT` (maps to `'MUST_NOT'`).
+    Silently skip lines whose leading modal is unrecognized.
+  - Extract the first word after the modal as `action` (lowercased).
+  - Extract and normalize the remainder as `resource`:
+    - Lowercase the phrase.
+    - Strip trailing period.
+    - Split on the first occurrence of `, `, ` or `, or ` and `; take only the first segment.
+    - Replace internal spaces with `_`.
+  - Return `ContractEffectIR(capabilities_present=False, effect_count=0, effects=[])` when
+    the `<capabilities>` tag is absent or the inner text contains no parseable bullet lines.
+  - Set `capabilities_present=True` and `effect_count=len(effects)` when at least one bullet was parsed.
+- Use **only** stdlib imports: `re`, `dataclasses`, `typing`. MUST NOT import `ast`, `pylint`,
+  or any code-analysis / code-inspection library.
+- Export `EffectItem`, `ContractEffectIR`, and `parse_capabilities_ir` at module level.
+
+% Deliverables
+- Code: `pdd/capability_ir.py`
