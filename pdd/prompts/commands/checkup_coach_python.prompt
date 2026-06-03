@@ -1,0 +1,51 @@
+<pdd-reason>Click CLI wrapper for pdd checkup coach: schema-aware prompt coaching with deterministic and optional LLM suggestions.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "coach", "description": "Schema-aware prompt coaching: lint + contract + coverage + optional LLM suggestions"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>checkup_coach_python.prompt</pdd-dependency>
+
+% Write `pdd/commands/checkup_coach.py`, the Click wrapper for `pdd checkup coach`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Provide the command reached as `pdd checkup coach PROMPT [OPTIONS]` (dispatched from `pdd/commands/checkup.py`).
+- `PROMPT` is a required positional argument: path to the `.prompt` file to coach.
+- Options:
+  - `--llm` flag (default off): enable the LLM coaching pass for schema-shaped suggestions; when absent, only deterministic checks run.
+  - `--stories DIR` (default `"user_stories"`): directory to scan for linked `story__*.md` files.
+  - `--tests DIR` (default `"tests"`): directory to scan for test evidence.
+  - `--json` flag: emit machine-readable JSON (`pdd.prompt_coaching.v1` schema) to stdout instead of human-readable coaching cards.
+  - `--strict` flag: promote warnings to errors for deterministic checks (affects exit code only, not output content).
+- Call `run_checkup_coach(prompt_path=prompt, stories_dir=stories, tests_dir=tests, enable_llm=llm, verbose=verbose)` imported from `pdd.checkup_coach`.
+- Human-readable output (default): group suggestions by section; emit a header line `Coaching: <prompt_path>`, then for each suggestion a block:
+  ```
+  [<rule_id or section>] <finding>
+    <suggestion>
+    Evidence: <evidence_refs joined by ", "> (omit if empty)
+  ```
+  After suggestions, emit a one-line summary: `<N> suggestion(s), <lint_error_count> lint error(s), <lint_warn_count> lint warning(s), <len(coverage_gaps)> coverage gap(s)`.
+- JSON output (`--json`): print `report.model_dump_json(indent=2)` to stdout.
+- Exit code: `0` if no deterministic errors (and `--strict` is not set, or no warnings); `1` if any lint error, contract error, or (`--strict` and any warning). LLM failure never changes exit code.
+- Read `verbose` from `ctx.obj.get("verbose", False)`.
+- Read `quiet` from `ctx.obj.get("quiet", False)`.
+- Exception policy: re-raise `click.Abort` and `click.exceptions.Exit`; all other exceptions call `handle_error(exception, "checkup coach", quiet)` and return.
+- MUST NOT write any files; output goes to stdout only.
+
+% Dependencies
+- `pdd.checkup_coach`: provides `run_checkup_coach(prompt_path, stories_dir, tests_dir, enable_llm, strength, verbose) -> PromptCoachingReport` (see `pdd/checkup_coach.py`).
+<pdd.core_errors>
+<include select="def:handle_error">context/core/errors_example.py</include>
+</pdd.core_errors>
+
+% Deliverables
+- Code: `pdd/commands/checkup_coach.py`

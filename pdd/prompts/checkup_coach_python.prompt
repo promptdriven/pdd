@@ -1,0 +1,61 @@
+<pdd-reason>Schema-aware prompt coaching engine: runs deterministic checks then an optional LLM pass to produce PromptCoachingReport.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_checkup_coach", "signature": "(prompt_path, stories_dir, tests_dir, enable_llm, strength, verbose) -> PromptCoachingReport", "returns": "PromptCoachingReport"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>checkup_coach_LLM.prompt</pdd-dependency>
+<pdd-dependency>prompt_lint_python.prompt</pdd-dependency>
+<pdd-dependency>contract_check_python.prompt</pdd-dependency>
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+
+% Write `pdd/checkup_coach.py` implementing schema-aware prompt coaching.
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Run deterministic `lint` + `contract check` + `coverage` checks on a `.prompt` file, gather bounded read-only evidence from linked stories and tests, and optionally invoke an LLM coaching pass to produce a `PromptCoachingReport`.
+
+% Requirements
+1. Define `CoachingSuggestion` as a Pydantic v2 `BaseModel` with fields: `rule_id: str | None`, `section: str`, `finding: str`, `suggestion: str`, `evidence_refs: list[str]`.
+2. Define `PromptCoachingReport` as a Pydantic v2 `BaseModel` with fields: `schema_version: str` (default `"pdd.prompt_coaching.v1"`), `prompt_path: str`, `llm_model: str | None` (None when LLM skipped or unavailable), `suggestions: list[CoachingSuggestion]`, `evidence_files: list[str]`, `lint_warn_count: int`, `lint_error_count: int`, `contract_warn_count: int`, `contract_error_count: int`, `coverage_gaps: list[str]`.
+3. Implement `run_checkup_coach(prompt_path, stories_dir="user_stories", tests_dir="tests", enable_llm=False, strength=0.5, verbose=False) -> PromptCoachingReport`.
+4. Pipeline inside `run_checkup_coach`:
+   a. Run `lint` via `scan_prompt(path)` (import from `pdd.prompt_lint`); collect `result.warn_count` → `lint_warn_count` and `result.error_count` → `lint_error_count`.
+   b. Run `contract check` via `check_prompt(path)` (import from `pdd.contract_check`); collect `result.warn_count` → `contract_warn_count` and `result.error_count` → `contract_error_count`. If `check_prompt` raises, log a warning and continue with zero counts.
+   c. Parse the contract IR via `parse_prompt_contracts(path)` (import from `pdd.contract_ir`); collect the structured IR for the LLM pass. If `parse_prompt_contracts` raises, log a warning and continue with an empty IR.
+   d. Run `coverage` check by scanning the IR's `coverage_entries` dict for rules that have no linked story, test, or waiver; collect into `coverage_gaps`.
+   e. Gather bounded evidence via `BoundedEvidenceGatherer` (inline class, see requirement 5); collect `evidence_files`.
+   f. If `enable_llm`, run the LLM coaching pass via `_run_llm_coaching_pass(...)` (see requirement 6); append returned suggestions. On any exception, log a warning and set `llm_model=None`.
+   g. Return a populated `PromptCoachingReport`.
+5. Implement `BoundedEvidenceGatherer(prompt_path, stories_dir, tests_dir, max_files=20, max_depth=3, max_bytes_per_file=4096)`:
+   - Discover linked `story__*.md` files in `stories_dir` and test files matching the prompt stem in `tests_dir`.
+   - Limit traversal to `max_depth` directory levels below the repo root; never follow symlinks outside the project root.
+   - Read at most `max_files` files, truncating each at `max_bytes_per_file` bytes.
+   - Return `gathered: list[tuple[str, str]]` (path, content) and `file_paths: list[str]`.
+   - MUST NOT exec subprocesses or make network calls.
+   - TODO: migrate to `checkup_advisory.py` after issue #1379 lands.
+6. Implement `_run_llm_coaching_pass(prompt_path, ir, deterministic_issues, evidence, strength, verbose) -> tuple[list[CoachingSuggestion], str | None]`:
+   - Mirror the structure of `run_llm_ambiguity_pass()` in `pdd/prompt_lint.py`: lazy-import `llm_invoke` from `pdd.llm_invoke`, load the LLM prompt template from `pdd/prompts/checkup_coach_LLM.prompt`, call `llm_invoke(messages=[...], strength=strength, temperature=0.0)`, strip markdown fences with regex, `json.loads()` the result into a list of `CoachingSuggestion` objects.
+   - Embed the serialized IR, deterministic findings, gathered evidence, and `TypeAdapter(list[CoachingSuggestion]).json_schema()` into the template placeholders before invoking.
+   - Only include `rule_id` values that actually exist in the IR; discard LLM suggestions referencing non-existent rule IDs (anti-hallucination guard).
+   - On any exception, return `([], None)` so the deterministic exit code is never affected.
+7. MUST NOT write any files; all output is returned as data.
+8. MUST NOT make network calls or exec subprocesses (outside of `llm_invoke`).
+9. Pydantic v2 validation: use `TypeAdapter(list[CoachingSuggestion]).validate_python(parsed_json)` (from `pydantic import TypeAdapter`) to validate the parsed LLM JSON array; fallback to empty suggestions on `ValidationError`.
+
+% Dependencies
+- `pdd.prompt_lint`: provides `scan_prompt(path, *, strict=False) -> LintResult` and the `LintIssue`/`LintResult` types (see `pdd/prompt_lint.py`).
+- `pdd.contract_check`: provides `check_prompt(path, *, strict=False) -> ContractResult` for deterministic contract linting (see `pdd/contract_check.py`).
+- `pdd.contract_ir`: provides `parse_prompt_contracts(path) -> PromptContractIR` for structured IR extraction (see `pdd/contract_ir.py`).
+- `pdd.llm_invoke`: provides `llm_invoke(messages, strength, temperature, ...) -> str`; mirror the `run_llm_ambiguity_pass` advisory pattern from `pdd/prompt_lint.py` (lazy import, JSON parse with regex fence-strip, broad exception catch).
+
+% Deliverables
+- Code: `pdd/checkup_coach.py`

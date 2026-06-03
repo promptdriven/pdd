@@ -2857,7 +2857,7 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 `checkup` can also run against an existing pull request. With `--pr <PR_URL>` alone it reviews the PR diff on its own merits (correctness / quality), using full project context (architecture, `.pddrc`); the issue-alignment gate is skipped. Add `--issue <ISSUE_URL>` to also verify the PR resolves that issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop (which still requires `--issue`).
 
-**Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, **`pdd checkup snapshot`** for nondeterministic-prompt snapshot policy (prompts with `<shell>`, `<web>`, or `query=` includes must have a replayable artifact under `.pdd/evidence/`), and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` or `pdd policy snapshot` command—use `pdd checkup snapshot` only.
+**Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, **`pdd checkup coach`** for schema-aware prompt coaching (see below), **`pdd checkup snapshot`** for nondeterministic-prompt snapshot policy (prompts with `<shell>`, `<web>`, or `query=` includes must have a replayable artifact under `.pdd/evidence/`), and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` or `pdd policy snapshot` command—use `pdd checkup snapshot` only.
 
 `pdd checkup gate` accepts `--policy-file` to load waiver policy keys from a YAML file instead of `.pddrc`; `--skip-evidence` to run only waiver-policy checks; and `--skip-waivers` to run only evidence-manifest checks.
 
@@ -2868,6 +2868,8 @@ agentic providers instead. It operates over selected
 changed files. With `--attempts N`, PDD runs independent isolated candidates
 from the same input and copies back the smallest candidate that passes
 `--verify` by changed-file count; see [docs/checkup_simplify.md](docs/checkup_simplify.md).
+
+`pdd checkup coach` is a local, read-only subcommand that coaches you on improving a `.prompt` file and its linked stories against the `pdd.prompt_contract_ir.v1` schema. It runs deterministic `lint` + `contract check` + `coverage` checks first, then optionally invokes an LLM for schema-shaped suggestions (rule ID references, vocabulary gaps, coverage holes). No files are written — suggestions are advisory only. LLM unavailability is non-fatal; the deterministic findings always emit. See [docs/checkup_coach.md](docs/checkup_coach.md).
 
 ```
 pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
