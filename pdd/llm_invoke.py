@@ -475,6 +475,10 @@ from pdd.server.token_counter import (
     count_tokens_for_messages,
     get_context_limit,
 )
+try:
+    from pdd.server.token_counter import estimate_completion_cost as _estimate_completion_cost
+except ImportError:  # Prerequisite sub-issue may not be present in this checkout.
+    _estimate_completion_cost = None  # type: ignore[assignment]
 
 # Opt-in to future pandas behavior regarding downcasting
 try:
@@ -527,6 +531,15 @@ class InsufficientCreditsError(Exception):
     and should NOT fall back to local execution - the user needs to know.
     """
     pass
+
+
+class EstimateOnlyResult(Exception):
+    """Raised by llm_invoke when estimate mode should stop before providers."""
+
+    def __init__(self, estimate: Dict[str, Any]):
+        super().__init__("LLM estimate computed; provider call skipped")
+        self.estimate = estimate
+        self.payload = estimate
 
 
 # --- Cloud Execution Helpers ---
@@ -1468,6 +1481,206 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
         _MODEL_RATE_MAP = {}
         _MODEL_PROVIDER_MAP = {}
     _register_csv_models_with_litellm()
+
+
+_ESTIMATE_OUTPUT_RATIOS: Dict[str, float] = {
+    "generate": 0.35,
+    "example": 0.30,
+    "test": 0.50,
+    "fix": 0.40,
+    "crash": 0.35,
+    "conflicts": 0.25,
+    "default": 0.35,
+}
+
+
+def _estimate_mode_active(explicit: Optional[bool]) -> bool:
+    """Return whether this invocation should estimate and skip providers."""
+    if explicit is not None:
+        return bool(explicit)
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and isinstance(click_ctx.obj, dict):
+            if click_ctx.obj.get("estimate"):
+                return True
+    except Exception:
+        pass
+    return os.getenv("PDD_ESTIMATE", "").lower() in ("1", "true", "yes", "on")
+
+
+def _current_estimate_command_name() -> str:
+    """Best-effort command name for output-ratio selection and reporting."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and click_ctx.command is not None:
+            name = click_ctx.command.name
+            if name:
+                return str(name)
+    except Exception:
+        pass
+    return os.getenv("PDD_ESTIMATE_COMMAND", "unknown") or "unknown"
+
+
+def _estimate_output_ratio(command_name: str) -> float:
+    """Resolve the configurable output-token ratio for an estimate."""
+    env_keys = []
+    if command_name:
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", command_name).strip("_").upper()
+        if normalized:
+            env_keys.append(f"PDD_ESTIMATE_OUTPUT_RATIO_{normalized}")
+    env_keys.append("PDD_ESTIMATE_OUTPUT_RATIO")
+
+    for key in env_keys:
+        raw_value = os.getenv(key)
+        if raw_value is None:
+            continue
+        try:
+            value = float(raw_value)
+            if value >= 0:
+                return value
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r; expected a non-negative float", key, raw_value)
+
+    return _ESTIMATE_OUTPUT_RATIOS.get(
+        command_name,
+        _ESTIMATE_OUTPUT_RATIOS["default"],
+    )
+
+
+def _completion_cost_from_pricing_api(
+    input_tokens: int,
+    predicted_output_tokens: int,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """Call the token-counter completion-pricing API when this checkout has it."""
+    if _estimate_completion_cost is None:
+        return None
+    try:
+        estimate = _estimate_completion_cost(
+            input_tokens=input_tokens,
+            predicted_output_tokens=predicted_output_tokens,
+            model=model,
+            pricing_csv=LLM_MODEL_CSV_PATH,
+        )
+    except Exception as exc:
+        logger.debug("estimate_completion_cost failed for %s: %s", model, exc)
+        return None
+    if estimate is None:
+        return None
+    if hasattr(estimate, "to_dict"):
+        return estimate.to_dict()
+    if isinstance(estimate, dict):
+        return estimate
+    return None
+
+
+def _build_estimate_payload(
+    *,
+    command_name: str,
+    model_info: Any,
+    messages_for_count: Any,
+    model_name: str,
+    context_limit: Optional[int],
+    attempted_models: List[str],
+    call_type: str,
+) -> Dict[str, Any]:
+    """Build the provider-free estimate payload for one concrete LLM request."""
+    _ = model_info
+    input_tokens = int(count_tokens_for_messages(messages_for_count, model=model_name) or 0)
+    ratio = _estimate_output_ratio(command_name)
+    predicted_output_tokens = max(1, int(round(input_tokens * ratio)))
+    context_usage_percent = (
+        round((input_tokens / context_limit) * 100, 2)
+        if context_limit
+        else None
+    )
+
+    pricing = _completion_cost_from_pricing_api(
+        input_tokens,
+        predicted_output_tokens,
+        model_name,
+    )
+
+    input_rate = None
+    output_rate = None
+    input_cost = None
+    output_cost = None
+    total_cost = None
+    cost_known = False
+    pricing_model = model_name
+
+    if pricing:
+        input_rate = pricing.get("input_rate_per_million")
+        output_rate = pricing.get("output_rate_per_million")
+        input_cost = pricing.get("input_cost")
+        output_cost = pricing.get("output_cost")
+        total_cost = pricing.get("total_cost")
+        pricing_model = pricing.get("model") or model_name
+        cost_known = total_cost is not None
+
+    payload = {
+        "estimate": True,
+        "command": command_name,
+        "model": model_name,
+        "pricing_model": pricing_model,
+        "input_tokens": input_tokens,
+        "predicted_output_tokens": predicted_output_tokens,
+        "output_ratio": ratio,
+        "input_rate_per_million": input_rate if cost_known else None,
+        "output_rate_per_million": output_rate if cost_known else None,
+        "input_cost": round(float(input_cost), 6) if input_cost is not None else None,
+        "output_cost": round(float(output_cost), 6) if output_cost is not None else None,
+        "estimated_cost": round(float(total_cost), 6) if total_cost is not None else None,
+        "total_cost": round(float(total_cost), 6) if total_cost is not None else None,
+        "unknown_cost": not cost_known,
+        "cost_known": cost_known,
+        "currency": "USD",
+        "context_limit": context_limit,
+        "context_usage_percent": context_usage_percent,
+        "call_type": call_type,
+        "provider_call_made": False,
+        "attempted_models": list(attempted_models),
+    }
+    return payload
+
+
+def _accumulate_estimate_on_click_context(estimate: Dict[str, Any]) -> None:
+    """Store estimate rows on ctx.obj for command wrappers and tests."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is None:
+            return
+        if click_ctx.obj is None:
+            click_ctx.obj = {}
+        if not isinstance(click_ctx.obj, dict):
+            return
+        estimates = click_ctx.obj.setdefault("estimate_results", [])
+        if isinstance(estimates, list):
+            estimates.append(estimate)
+        totals = click_ctx.obj.setdefault(
+            "estimate_totals",
+            {
+                "input_tokens": 0,
+                "predicted_output_tokens": 0,
+                "total_cost": 0.0,
+                "cost_known": True,
+            },
+        )
+        if isinstance(totals, dict):
+            totals["input_tokens"] = int(totals.get("input_tokens", 0)) + int(estimate.get("input_tokens", 0))
+            totals["predicted_output_tokens"] = int(totals.get("predicted_output_tokens", 0)) + int(estimate.get("predicted_output_tokens", 0))
+            if estimate.get("cost_known"):
+                totals["total_cost"] = float(totals.get("total_cost", 0.0)) + float(estimate.get("total_cost", 0.0))
+            else:
+                totals["cost_known"] = False
+    except Exception:
+        pass
 
 
 def _register_csv_models_with_litellm() -> None:
@@ -3411,6 +3624,7 @@ def llm_invoke(
     use_cloud: Optional[bool] = None,
     grounding_overrides: Optional[Dict[str, List[str]]] = None,
     source_prompt: Optional[str] = None,
+    estimate_only: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -3429,6 +3643,7 @@ def llm_invoke(
         use_batch_mode: Use batch completion if True.
         messages: Pre-formatted list of messages (or list of lists for batch). If provided, ignores prompt and input_json.
         use_cloud: None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
+        estimate_only: If true, count the request and raise EstimateOnlyResult before provider calls.
 
     Returns:
         Dictionary containing 'result', 'cost', 'model_name', 'thinking_output'.
@@ -3442,6 +3657,7 @@ def llm_invoke(
     """
     # Set verbose logging if requested
     set_verbose_logging(verbose)
+    estimate_mode = _estimate_mode_active(estimate_only)
 
     if verbose:
         logger.debug("llm_invoke start - Arguments received:")
@@ -3455,6 +3671,7 @@ def llm_invoke(
         logger.debug(f"  use_batch_mode: {use_batch_mode}")
         logger.debug(f"  messages: {'provided' if messages else 'None'}")
         logger.debug(f"  use_cloud: {use_cloud}")
+        logger.debug(f"  estimate_only: {estimate_mode}")
 
     # --- 0. Validate Inputs (before any dispatch) ---
     # Validation runs before cloud dispatch so the ValueError contract holds
@@ -3478,6 +3695,12 @@ def llm_invoke(
          formatted_messages = _format_messages(prompt, input_json, use_batch_mode)
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
+
+    if estimate_mode and use_batch_mode:
+        raise RuntimeError(
+            "Estimate mode supports one concrete llm_invoke call only; batch mode "
+            "or list-of-message batches are outside this dry-run cost contract."
+        )
 
     resolved_grounding_overrides = resolve_grounding_overrides_for_invoke(
         grounding_overrides, source_prompt
@@ -3591,7 +3814,7 @@ def llm_invoke(
         attempted_models.append(model_label)
         _publish_attempted_models()
 
-    if use_cloud:
+    if use_cloud and not estimate_mode:
         from rich.console import Console
         console = Console()
 
@@ -3842,7 +4065,8 @@ def llm_invoke(
             attempt_id = f"{request_id}-{attempt_counter}"
 
             # --- 4. API Key Check & Acquisition ---
-            if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
+            # Estimate mode must not prompt for credentials or touch providers.
+            if not estimate_mode and not _ensure_api_key(model_info, newly_acquired_keys, verbose):
                 # Problem getting key, break inner loop, try next model candidate
                 _emit_llm_attribution(
                     attribution_context,
@@ -4200,6 +4424,45 @@ def llm_invoke(
                     logger.debug("Caching disabled for chatgpt/ subscription model (#1269)")
                 else:
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
+
+                if estimate_mode:
+                    estimate_context_limit = None
+                    try:
+                        estimate_context_limit = get_context_limit(model_name_litellm)
+                        extra_headers = litellm_kwargs.get("extra_headers", {})
+                        if (
+                            estimate_context_limit is not None
+                            and "anthropic-beta" in extra_headers
+                            and "context-1m" in extra_headers.get("anthropic-beta", "")
+                        ):
+                            estimate_context_limit = 1_000_000
+                    except Exception:
+                        estimate_context_limit = None
+
+                    call_type_for_estimate = (
+                        "batch_completion" if use_batch_mode else "completion"
+                    )
+                    estimate_payload = _build_estimate_payload(
+                        command_name=_current_estimate_command_name(),
+                        model_info=model_info,
+                        messages_for_count=litellm_kwargs.get("messages", []),
+                        model_name=str(model_name_litellm),
+                        context_limit=estimate_context_limit,
+                        attempted_models=attempted_models,
+                        call_type=call_type_for_estimate,
+                    )
+                    _accumulate_estimate_on_click_context(estimate_payload)
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.estimate_only",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        token_count=estimate_payload.get("input_tokens"),
+                        predicted_output_tokens=estimate_payload.get("predicted_output_tokens"),
+                        cost=estimate_payload.get("total_cost"),
+                    )
+                    raise EstimateOnlyResult(estimate_payload)
 
 
                 # Route OpenAI gpt-5* models through Responses API to support 'reasoning'
@@ -5063,6 +5326,9 @@ def llm_invoke(
                 })
 
             # --- 6b. Handle Invocation Errors ---
+            except EstimateOnlyResult:
+                raise
+
             except openai.AuthenticationError as e:
                 last_exception = e
                 error_message = str(e)

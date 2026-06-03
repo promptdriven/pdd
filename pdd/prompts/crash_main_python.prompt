@@ -24,6 +24,7 @@ def crash_main(
     5. Exceptions: return `(False, "", "", 0, 0.0, error_string)` instead of sys.exit. Re-raise `click.Abort` and `click.UsageError`.
     6. Pass `context_override` and `confirm_callback` to `construct_paths`.
     7. Use `from rich import print as rprint` (overrides preamble). Create parent dirs before writing. Print status/cost/save-locations unless `quiet`; add diagnostics if `verbose`.
+    8. Estimate mode: crash repair is a dependent multi-call flow, so the `crash` CLI command must reject global estimate mode before calling `crash_main`. If `crash_main` is called directly and `fix_code_module_errors` or another LLM helper raises `EstimateOnlyResult`, re-raise it unchanged before writing fixed code/program files.
 
 % Cloud vs Local Execution Strategy:
 %  1. If `ctx.obj.get('local')` is True, use local execution directly.
@@ -48,4 +49,3 @@ def crash_main(
    <include>context/fix_code_loop_example.py</include>
    </fix_code_loop_example>
 </examples>
-

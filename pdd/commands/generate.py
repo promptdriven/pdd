@@ -33,6 +33,28 @@ _GITHUB_ISSUE_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)(?:[/?#].*)?$"
 )
 
+
+def _estimate_mode_active(ctx: click.Context) -> bool:
+    """Return whether the global dry-run cost estimate mode is active."""
+    return bool((ctx.obj or {}).get("estimate")) or os.getenv("PDD_ESTIMATE", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _is_estimate_only_result(exception: Exception) -> bool:
+    """Identify llm_invoke.EstimateOnlyResult without importing llm_invoke eagerly."""
+    return (
+        exception.__class__.__name__ == "EstimateOnlyResult"
+        and isinstance(getattr(exception, "estimate", None), dict)
+    )
+
+
+def _estimate_result_tuple(exception: Exception) -> Tuple[Dict[str, Any], float, str]:
+    """Convert EstimateOnlyResult into the normal command return tuple."""
+    payload = getattr(exception, "payload", None) or getattr(exception, "estimate", {})
+    model = str(payload.get("model") or "unknown") if isinstance(payload, dict) else "unknown"
+    return payload, 0.0, model
+
 class GenerateCommand(click.Command):
     """
     Custom command class to handle the conditional requirement of PROMPT_FILE.
@@ -170,6 +192,7 @@ def generate(
 
         verbose = ctx.obj.get("verbose", False) if ctx.obj else False
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
+        estimate_mode = _estimate_mode_active(ctx)
         is_github_issue = bool(prompt_file and _GITHUB_ISSUE_RE.match(prompt_file.strip()))
         has_code_generation_options = bool(
             output
@@ -222,6 +245,10 @@ def generate(
             )
 
         if is_incremental_prd:
+            if estimate_mode:
+                raise click.UsageError(
+                    "Estimate mode is not supported for agentic or incremental PRD generate modes."
+                )
             from .. import DEFAULT_STRENGTH, DEFAULT_TIME
             from ..agentic_architecture import run_incremental_architecture
 
@@ -269,6 +296,10 @@ def generate(
 
         # Detect GitHub issue URL -> agentic architecture mode
         if is_github_issue:
+            if estimate_mode:
+                raise click.UsageError(
+                    "Estimate mode is not supported for agentic GitHub issue generate mode."
+                )
             from ..agentic_architecture import run_agentic_architecture
 
             success, message, cost, model, output_files = run_agentic_architecture(
@@ -330,16 +361,64 @@ def generate(
         os.environ.update(env_vars)
 
         # 4. Call Code Generator
-        generated_code, is_incremental, cost, model = code_generator_main(
-            ctx=ctx,
-            prompt_file=target_prompt_file,
-            output=output,
-            original_prompt_file_path=original_prompt,
-            force_incremental_flag=incremental,
-            env_vars=env_vars if env_vars else None,
-            unit_test_file=unit_test,
-            exclude_tests=exclude_tests
-        )
+        force_was_present = False
+        original_force = None
+        incremental_module = None
+        original_incremental_func = None
+        had_incremental_func = False
+        try:
+            if estimate_mode and isinstance(ctx.obj, dict):
+                force_was_present = "force" in ctx.obj
+                original_force = ctx.obj.get("force")
+                ctx.obj["force"] = True
+                try:
+                    import importlib
+
+                    incremental_module = importlib.import_module("pdd.code_generator_main")
+                    had_incremental_func = hasattr(
+                        incremental_module,
+                        "incremental_code_generator_func",
+                    )
+                    original_incremental_func = getattr(
+                        incremental_module,
+                        "incremental_code_generator_func",
+                        None,
+                    )
+
+                    def _estimate_skip_incremental(*_args: Any, **_kwargs: Any) -> Tuple[None, bool, float, str]:
+                        return None, False, 0.0, "estimate"
+
+                    incremental_module.incremental_code_generator_func = _estimate_skip_incremental
+                except Exception:
+                    incremental_module = None
+            generated_code, is_incremental, cost, model = code_generator_main(
+                ctx=ctx,
+                prompt_file=target_prompt_file,
+                output=output,
+                original_prompt_file_path=original_prompt,
+                force_incremental_flag=incremental,
+                env_vars=env_vars if env_vars else None,
+                unit_test_file=unit_test,
+                exclude_tests=exclude_tests
+            )
+        except Exception as exception:
+            if _is_estimate_only_result(exception):
+                return _estimate_result_tuple(exception)
+            raise
+        finally:
+            if estimate_mode and isinstance(ctx.obj, dict):
+                if force_was_present:
+                    ctx.obj["force"] = original_force
+                else:
+                    ctx.obj.pop("force", None)
+            if estimate_mode and incremental_module is not None:
+                if had_incremental_func:
+                    incremental_module.incremental_code_generator_func = original_incremental_func
+                else:
+                    try:
+                        delattr(incremental_module, "incremental_code_generator_func")
+                    except AttributeError:
+                        pass
 
         if evidence:
             ctx_obj = ctx.obj or {}
@@ -367,6 +446,8 @@ def generate(
     except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
+        if _is_estimate_only_result(e):
+            return _estimate_result_tuple(e)
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
         handle_error(e, "generate", quiet)
         return None
@@ -415,6 +496,8 @@ def example(
     except click.Abort:
         raise
     except Exception as exception:
+        if _is_estimate_only_result(exception):
+            return _estimate_result_tuple(exception)
         handle_error(exception, "example", (ctx.obj or {}).get("quiet", False))
         raise click.exceptions.Exit(1) from exception
 
@@ -472,6 +555,7 @@ def test(
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")
 
         is_url = bool(_GITHUB_ISSUE_RE.match(args[0].strip()))
+        estimate_mode = _estimate_mode_active(ctx)
         if clean_restart and (manual or not is_url):
             raise click.UsageError("--clean-restart can only be used with an agentic GitHub issue URL.")
 
@@ -479,6 +563,10 @@ def test(
         if (len(args) == 1 and not manual
                 and Path(args[0]).suffix.lower() == ".md"
                 and Path(args[0]).name.startswith("story__")):
+            if estimate_mode:
+                raise click.UsageError(
+                    "Estimate mode is not supported for story metadata linking because it rewrites story files."
+                )
             story_path = Path(args[0])
             obj = ctx.obj or {}
             success, message, cost, model, linked_prompts = cache_story_prompt_links(
@@ -517,6 +605,10 @@ def test(
 
         # Story generation: pdd test prompt1.prompt [prompt2.prompt ...]
         if not manual and args and all(Path(arg).suffix.lower() == ".prompt" for arg in args):
+            if estimate_mode:
+                raise click.UsageError(
+                    "Estimate mode is not supported for story generation because it writes story files before prompt-link detection."
+                )
             obj = ctx.obj or {}
             story_prompt_args = [str(Path(arg)) for arg in args]
             success, message, cost, model, generated_story_file, linked_prompts = generate_user_story(
@@ -554,6 +646,8 @@ def test(
             return result_dict, cost, model
 
         if is_url and not manual:
+            if estimate_mode:
+                raise click.UsageError("Estimate mode is not supported for agentic test mode.")
             # Agentic Mode
             if len(args) != 1:
                 raise click.UsageError("Agentic mode requires exactly one argument (the GitHub issue URL).")
@@ -606,20 +700,25 @@ def test(
             strength = ctx.obj.get("strength") if ctx.obj else None
             temperature = ctx.obj.get("temperature") if ctx.obj else None
 
-            test_result = cmd_test_main(
-                ctx=ctx,
-                prompt_file=prompt_file,
-                code_file=code_file,
-                output=output,
-                language=language,
-                coverage_report=coverage_report,
-                existing_tests=existing_tests,
-                target_coverage=target_coverage,
-                merge=merge,
-                strength=strength,
-                temperature=temperature,
-                manual=manual
-            )
+            try:
+                test_result = cmd_test_main(
+                    ctx=ctx,
+                    prompt_file=prompt_file,
+                    code_file=code_file,
+                    output=output,
+                    language=language,
+                    coverage_report=coverage_report,
+                    existing_tests=existing_tests,
+                    target_coverage=target_coverage,
+                    merge=merge,
+                    strength=strength,
+                    temperature=temperature,
+                    manual=manual
+                )
+            except Exception as exception:
+                if _is_estimate_only_result(exception):
+                    return _estimate_result_tuple(exception)
+                raise
 
             if evidence:
                 ctx_obj = ctx.obj or {}
@@ -648,6 +747,8 @@ def test(
     except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
+        if _is_estimate_only_result(e):
+            return _estimate_result_tuple(e)
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
         handle_error(e, "test", quiet)
         return None

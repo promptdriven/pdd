@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import sys
+import os
 from pathlib import Path
 from typing import Optional, Tuple, Any
 
@@ -30,6 +31,28 @@ _GITHUB_ISSUE_RE = re.compile(
 def _is_github_issue_url(value: str) -> bool:
     """Return True when value is a GitHub issue URL."""
     return bool(_GITHUB_ISSUE_RE.match(value.strip()))
+
+
+def _estimate_mode_active(ctx: click.Context) -> bool:
+    """Return whether the global dry-run cost estimate mode is active."""
+    return bool((ctx.obj or {}).get("estimate")) or os.getenv("PDD_ESTIMATE", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _is_estimate_only_result(exception: Exception) -> bool:
+    """Identify llm_invoke.EstimateOnlyResult without importing llm_invoke eagerly."""
+    return (
+        exception.__class__.__name__ == "EstimateOnlyResult"
+        and isinstance(getattr(exception, "estimate", None), dict)
+    )
+
+
+def _estimate_result_tuple(exception: Exception) -> Tuple[dict, float, str]:
+    """Convert EstimateOnlyResult into the normal command return tuple."""
+    payload = getattr(exception, "payload", None) or getattr(exception, "estimate", {})
+    model = str(payload.get("model") or "unknown") if isinstance(payload, dict) else "unknown"
+    return payload, 0.0, model
 
 @click.command()
 @click.argument("args", nargs=-1)
@@ -109,6 +132,8 @@ def split(
     try:
         quiet = ctx.obj.get("quiet", False)
         verbose = ctx.obj.get("verbose", False)
+        if _estimate_mode_active(ctx):
+            raise click.UsageError("Estimate mode is not supported for split.")
 
         if legacy:
             # Legacy mode: 3 positional args required
@@ -237,6 +262,8 @@ def change(
     try:
         # Set budget in context for manual mode usage
         ctx.obj["budget"] = budget
+        if _estimate_mode_active(ctx):
+            raise click.UsageError("Estimate mode is not supported for change.")
         
         quiet = ctx.obj.get("quiet", False)
         verbose = ctx.obj.get("verbose", False)
@@ -460,6 +487,8 @@ def update(
             modified_code_file = files[1]
             input_code_file = files[2]
 
+        estimate_mode = _estimate_mode_active(ctx)
+
         # Validate mode-specific options
         if is_repo_mode:
             # Repo-wide mode: --git and --output are not allowed
@@ -470,6 +499,10 @@ def update(
             if output:
                 raise click.UsageError(
                     "Cannot use --output in repository-wide mode"
+                )
+            if estimate_mode:
+                raise click.UsageError(
+                    "Estimate mode is not supported for repository-wide update."
                 )
         else:
             # File modes: --extensions, --directory, and --base-branch are not allowed
@@ -494,23 +527,33 @@ def update(
                     "--budget is only valid in repository-wide mode (no file arguments, or use --all)."
                 )
 
+        if estimate_mode and sync_metadata:
+            raise click.UsageError("Estimate mode is not supported with update --sync-metadata.")
+        if estimate_mode:
+            simple = True
+
         # Call update_main with correct parameters
-        ret = update_main(
-            ctx=ctx,
-            input_prompt_file=input_prompt_file,
-            modified_code_file=modified_code_file,
-            input_code_file=input_code_file,
-            output=output,
-            use_git=git,
-            repo=is_repo_mode,
-            extensions=extensions,
-            directory=directory,
-            simple=simple,
-            base_branch=base_branch,
-            budget=budget,
-            dry_run=dry_run,
-            sync_metadata=sync_metadata,
-        )
+        try:
+            ret = update_main(
+                ctx=ctx,
+                input_prompt_file=input_prompt_file,
+                modified_code_file=modified_code_file,
+                input_code_file=input_code_file,
+                output=output,
+                use_git=git,
+                repo=is_repo_mode,
+                extensions=extensions,
+                directory=directory,
+                simple=simple,
+                base_branch=base_branch,
+                budget=budget,
+                dry_run=dry_run,
+                sync_metadata=sync_metadata,
+            )
+        except Exception as exception:
+            if _is_estimate_only_result(exception):
+                return _estimate_result_tuple(exception)
+            raise
 
         if ret is None:
             return None
@@ -523,5 +566,7 @@ def update(
         # convert it to exit 0 and re-introduce the bug fixed for #871.
         raise
     except Exception as e:
+        if _is_estimate_only_result(e):
+            return _estimate_result_tuple(e)
         handle_error(e, "update", ctx.obj.get("quiet", False))
         return None

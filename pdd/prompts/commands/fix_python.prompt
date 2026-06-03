@@ -1,11 +1,11 @@
-<pdd-reason>Implements the pdd fix command with agentic E2E, user story, and manual fix modes.</pdd-reason>
+<pdd-reason>Implements pdd fix modes and fails closed for dependent dry-run estimates.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "cli",
   "cli": {
     "commands": [
-      {"name": "fix", "description": "Iteratively fix code and tests or orchestrate an agentic GitHub issue fix"}
+      {"name": "fix", "description": "Fix code/tests via agentic, story, or manual modes; reject dependent dry-run estimates."}
     ]
   }
 }
@@ -38,6 +38,11 @@
        Non-Loop Mode: `unit_test_files = args[2:-1]`, `error_file = args[-1]`.
        Iterate over `unit_test_files`, calling `fix_main(..., protect_tests=protect_tests)` for each.
        Result: `{"success": all_success, "fixed_unit_test": (first fixed), "fixed_unit_tests": (all fixed), "fixed_code": ..., "attempts": ..., "message": ...}`.
+  - **Estimate Mode**:
+    - Detect global estimate mode from `ctx.obj["estimate"]` or `PDD_ESTIMATE=1`.
+    - Reject agentic GitHub issue fix mode with `click.UsageError` before importing or calling `run_agentic_e2e_fix`.
+    - Reject user-story and manual fix modes with `click.UsageError` before importing or calling their helpers because these flows can require later LLM requests assembled from provider output; do not present the first request as a total command estimate.
+    - Identify `EstimateOnlyResult` without importing `llm_invoke` at module import time. Preserve existing non-estimate behavior and validation.
   - **Console Output**: Use `Console(file=sys.stdout)` for compatibility. Print bold green/red success/failure messages for each mode.
   - **Options**:
     - Agentic: `--timeout-adder`, `--max-cycles`, `--resume/--no-resume` (T), `--clean-restart` (sets agentic `resume=False` and is only valid with GitHub issue URLs; reject arbitrary HTTP/GitHub non-issue URLs), `--force`, `--no-github-state` (sets `use_github_state=False`), `--ci-retries INT` (default 3), `--skip-ci` (default False).

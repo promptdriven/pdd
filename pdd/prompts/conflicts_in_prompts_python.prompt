@@ -1,5 +1,18 @@
 <pdd-reason>Detects and reports conflicts within prompt files.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "conflicts_in_prompts", "signature": "(prompt1: str, prompt2: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False) -> Tuple[List[Dict], float, str]", "returns": "Tuple[List[Dict], float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write a Python function, "conflicts_in_prompts", that takes two prompts as input and finds conflicts between them and suggests how to resolve those conflicts.
 
 <include>./context/python_preamble.prompt</include>
@@ -42,5 +55,9 @@
         3b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
         3c. Extract 'changes_list' list values from the Pydantic output.
     Step 4. Return the changes_list, total_cost and model_name.
+
+% Estimate Mode:
+    - This helper is a dependent two-call flow: the extraction request is assembled from the first provider response, so it cannot produce a total command estimate before provider output exists.
+    - The `conflicts` CLI command must reject global estimate mode before calling this helper. If a direct library call still causes `llm_invoke` to raise `EstimateOnlyResult`, re-raise it unchanged instead of wrapping it in `RuntimeError`.
 
 % Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.

@@ -20,6 +20,7 @@ from pdd.llm_invoke import (
     CloudFallbackError,
     CloudInvocationError,
     InsufficientCreditsError,
+    EstimateOnlyResult,
     _pydantic_to_json_schema,
     _validate_with_pydantic,
     _build_llm_attribution_context,
@@ -504,6 +505,92 @@ def test_llm_invoke_valid_input(mock_load_models, mock_set_llm_cache):
                  call_args, call_kwargs = mock_completion.call_args
                  assert call_kwargs['model'] == 'gpt-5-nano'
                  assert call_kwargs['messages'] == [{"role": "user", "content": "Valid prompt about cats"}]
+
+
+def test_llm_invoke_estimate_only_skips_provider_call(mock_load_models, mock_set_llm_cache, monkeypatch):
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("PDD_ESTIMATE_COMMAND", "generate")
+    monkeypatch.setenv("PDD_ESTIMATE_OUTPUT_RATIO_GENERATE", "0.5")
+    pricing = {
+        "model": "gpt-5-nano",
+        "input_rate_per_million": 2.0,
+        "output_rate_per_million": 4.0,
+        "input_cost": 0.0002,
+        "output_cost": 0.0002,
+        "total_cost": 0.0004,
+        "currency": "USD",
+    }
+
+    with patch("pdd.llm_invoke.count_tokens_for_messages", return_value=100), \
+         patch("pdd.llm_invoke.get_context_limit", return_value=1000), \
+         patch("pdd.llm_invoke._estimate_completion_cost", return_value=pricing) as mock_pricing, \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        with pytest.raises(EstimateOnlyResult) as exc_info:
+            llm_invoke(
+                prompt="Estimate {thing}",
+                input_json={"thing": "cost"},
+                strength=0.5,
+                temperature=0.0,
+                verbose=False,
+                estimate_only=True,
+            )
+
+    mock_completion.assert_not_called()
+    mock_pricing.assert_called_once()
+    payload = exc_info.value.estimate
+    assert exc_info.value.payload is payload
+    assert payload["estimate"] is True
+    assert payload["provider_call_made"] is False
+    assert payload["input_tokens"] == 100
+    assert payload["predicted_output_tokens"] == 50
+    assert payload["estimated_cost"] == 0.0004
+    assert payload["unknown_cost"] is False
+    assert payload["context_usage_percent"] == 10.0
+
+
+def test_llm_invoke_estimate_only_rejects_batch_before_provider_call():
+    with patch("pdd.llm_invoke.litellm.batch_completion") as mock_batch_completion, \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        with pytest.raises(RuntimeError, match="batch mode"):
+            llm_invoke(
+                prompt="Estimate {thing}",
+                input_json=[{"thing": "cost"}],
+                strength=0.5,
+                temperature=0.0,
+                verbose=False,
+                use_batch_mode=True,
+                estimate_only=True,
+            )
+
+    mock_batch_completion.assert_not_called()
+    mock_completion.assert_not_called()
+
+
+def test_token_counter_estimate_completion_cost_output_inclusive(tmp_path):
+    from pdd.server.token_counter import CompletionCostEstimate, estimate_completion_cost
+
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join([
+            "model,input,output",
+            "gpt-5-nano,2.0,4.0",
+        ]),
+        encoding="utf-8",
+    )
+
+    estimate = estimate_completion_cost(
+        input_tokens=100,
+        predicted_output_tokens=50,
+        model="gpt-5-nano",
+        pricing_csv=pricing_csv,
+    )
+
+    assert isinstance(estimate, CompletionCostEstimate)
+    assert estimate.input_cost == pytest.approx(0.0002)
+    assert estimate.output_cost == pytest.approx(0.0002)
+    assert estimate.total_cost == pytest.approx(0.0004)
+    assert estimate.to_dict()["output_rate_per_million"] == 4.0
+
 
 def test_llm_invoke_missing_prompt():
     input_json = {"topic": "cats"}

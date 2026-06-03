@@ -58,4 +58,8 @@
     Step 6. If verbose is True, print the total cost of both runs.
     Step 7. Return update_program, update_code, fixed_program, fixed_code, program_code_fix, total_cost, and model_name.
 
+% Estimate Mode:
+    - This helper is a dependent two-call flow: extraction is assembled from the first provider response, so it cannot produce a total command estimate before provider output exists.
+    - CLI commands such as `crash` must reject global estimate mode before calling this helper. If a direct library call still causes `llm_invoke` to raise `EstimateOnlyResult`, re-raise it unchanged instead of wrapping it.
+
 % Ensure that the function handles potential errors gracefully, such as missing input parameters or issues with the LLM model responses.

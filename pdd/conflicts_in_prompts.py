@@ -108,6 +108,8 @@ def conflicts_in_prompts(
         return changes_list, total_cost, model_name
 
     except Exception as e:
+        if e.__class__.__name__ == "EstimateOnlyResult":
+            raise
         error_msg = f"Error in conflicts_in_prompts: {str(e)}"
         if verbose:
             rprint(f"[red]{error_msg}[/red]")

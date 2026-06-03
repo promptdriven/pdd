@@ -17,14 +17,18 @@ A utility module that counts tokens and looks up model context windows using lit
    - Return `None` if litellm raises any exception (unknown model — caller should skip validation)
    - Do NOT use a hardcoded MODEL_CONTEXT_LIMITS dict
 3. Function: `estimate_cost(token_count, model, pricing_csv) -> Optional[CostEstimate]`
-4. Function: `get_token_metrics(text, model, pricing_csv) -> TokenMetrics` combining all metrics
-5. Dataclass `CostEstimate`: input_cost, model, tokens, cost_per_million, currency (default USD)
-6. Dataclass `TokenMetrics`: token_count, context_limit (Optional[int]), context_usage_percent (Optional[float]), cost_estimate
-7. Both dataclasses have `to_dict()` methods for serialization
-8. Pricing loaded from CSV with columns: model, input (cost per million tokens)
-9. Model matching for cost: exact match first, then partial/substring match, then fallback to defaults
-10. Cache pricing data with lru_cache; do NOT cache litellm calls (litellm has its own cache)
-11. Return None for cost estimate if pricing CSV missing or model not found
+4. Function: `estimate_completion_cost(input_tokens, predicted_output_tokens, model, pricing_csv) -> Optional[CompletionCostEstimate]`
+   - Estimate input plus predicted output cost from CSV `input` and `output` rates per million tokens
+   - Return `None` when pricing CSV is missing or no model/rate match is available
+5. Function: `get_token_metrics(text, model, pricing_csv) -> TokenMetrics` combining all metrics
+6. Dataclass `CostEstimate`: input_cost, model, tokens, cost_per_million, currency (default USD)
+7. Dataclass `CompletionCostEstimate`: input_tokens, predicted_output_tokens, input_cost, output_cost, total_cost, model, input_rate_per_million, output_rate_per_million, currency (default USD)
+8. Dataclass `TokenMetrics`: token_count, context_limit (Optional[int]), context_usage_percent (Optional[float]), cost_estimate
+9. All dataclasses have `to_dict()` methods for serialization
+10. Pricing loaded from CSV with columns: model, input (cost per million input tokens), output (cost per million output tokens)
+11. Model matching for cost: exact match first, then partial/substring match, then fallback to defaults
+12. Cache pricing data with lru_cache; do NOT cache litellm calls (litellm has its own cache)
+13. Return None for cost estimate if pricing CSV missing or model not found
 
 % Dependencies
 - litellm: for token counting and context window lookup (primary)
@@ -35,4 +39,5 @@ A utility module that counts tokens and looks up model context windows using lit
 - `get_context_limit` returning None means the model is unknown — callers must skip context validation, not raise an error
 - Context usage percent is None when context_limit is None
 - Cost calculation: (token_count / 1_000_000) * cost_per_million
+- Completion cost calculation: `(input_tokens / 1_000_000) * input_rate + (predicted_output_tokens / 1_000_000) * output_rate`
 - Context usage is percentage: (tokens / limit) * 100

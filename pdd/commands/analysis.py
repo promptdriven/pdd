@@ -34,6 +34,28 @@ def get_context_obj(ctx: click.Context) -> Dict[str, Any]:
     """Safely retrieve the context object, defaulting to empty dict if None."""
     return ctx.obj or {}
 
+
+def _estimate_mode_active(ctx: click.Context) -> bool:
+    """Return whether global dry-run cost estimate mode is active."""
+    return bool((ctx.obj or {}).get("estimate")) or os.getenv("PDD_ESTIMATE", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _is_estimate_only_result(exception: Exception) -> bool:
+    """Identify llm_invoke.EstimateOnlyResult without importing llm_invoke eagerly."""
+    return (
+        exception.__class__.__name__ == "EstimateOnlyResult"
+        and isinstance(getattr(exception, "estimate", None), dict)
+    )
+
+
+def _estimate_result_tuple(exception: Exception) -> Tuple[Dict[str, Any], float, str]:
+    """Convert EstimateOnlyResult into the normal command return tuple."""
+    payload = getattr(exception, "payload", None) or getattr(exception, "estimate", {})
+    model = str(payload.get("model") or "unknown") if isinstance(payload, dict) else "unknown"
+    return payload, 0.0, model
+
 @click.command("detect")
 @click.argument("files", nargs=-1, type=click.Path(exists=True, dir_okay=False))
 @click.option(
@@ -173,6 +195,11 @@ def conflicts(
 ) -> Optional[Tuple[List, float, str]]:
     """Check for conflicts between two prompt files."""
     try:
+        if _estimate_mode_active(ctx):
+            raise click.UsageError(
+                "Estimate mode is not supported for conflicts because the extraction request "
+                "depends on provider output from the first request."
+            )
         result, total_cost, model_name = conflicts_main(
             ctx=ctx,
             prompt1=prompt1,
@@ -184,6 +211,8 @@ def conflicts(
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
+        if _is_estimate_only_result(exception):
+            return _estimate_result_tuple(exception)
         handle_error(exception, "conflicts", get_context_obj(ctx).get("quiet", False))
         return None
 
@@ -362,6 +391,11 @@ def crash(
 ) -> Optional[Tuple[str, float, str]]:
     """Analyze a crash and fix the code and program."""
     try:
+        if _estimate_mode_active(ctx):
+            raise click.UsageError(
+                "Estimate mode is not supported for crash because the repair/extraction flow "
+                "can require later requests assembled from provider output."
+            )
         # crash_main returns: success, final_code, final_program, attempts, total_cost, model_name
         success, final_code, final_program, attempts, total_cost, model_name = crash_main(
             ctx=ctx,
@@ -381,6 +415,8 @@ def crash(
     except (click.Abort, click.ClickException):
         raise
     except Exception as exception:
+        if _is_estimate_only_result(exception):
+            return _estimate_result_tuple(exception)
         handle_error(exception, "crash", get_context_obj(ctx).get("quiet", False))
         return None
 

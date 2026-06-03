@@ -413,7 +413,8 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
             else:
                 if not _looks_like_user_intent_path(file_path):
                     return match.group(0)
-            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
+            if not _is_quiet_mode():
+                console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             if _failed is not None:
                 _failed.append(file_path)
             return f"```[File not found: {file_path}]```"
@@ -574,7 +575,8 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                 encoded_string = base64.b64encode(content).decode('utf-8')
                 return f"data:{mime_type};base64,{encoded_string}"
             else:
-                console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
+                if not _is_quiet_mode():
+                    console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
                 with open(full_path, 'r', encoding='utf-8') as file:
                     content = file.read()
                     
@@ -610,11 +612,12 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                                 except Exception:
                                     pass
                             import warnings
-                            warnings.warn(
-                                f"ContentSelector not importable for select=\"{selectors_str}\" "
-                                f"on file {full_path}. Including full file content."
-                            )
-                            console.print(f"[yellow]Warning: pdd.content_selector not found for select=\"{selectors_str}\" on {full_path}. Including full content.[/yellow]")
+                            if not _is_quiet_mode():
+                                warnings.warn(
+                                    f"ContentSelector not importable for select=\"{selectors_str}\" "
+                                    f"on file {full_path}. Including full file content."
+                                )
+                                console.print(f"[yellow]Warning: pdd.content_selector not found for select=\"{selectors_str}\" on {full_path}. Including full content.[/yellow]")
                         except Exception as e:
                             # Fall back to query if originally present, otherwise full file
                             fallback_query = attrs.get('query')
@@ -626,11 +629,12 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                                 except Exception:
                                     pass
                             import warnings
-                            warnings.warn(
-                                f"ContentSelector failed for select=\"{selectors_str}\" "
-                                f"on file {full_path}: {e}. Including full file content."
-                            )
-                            console.print(f"[yellow]Warning: ContentSelector failed for select=\"{selectors_str}\" on {full_path}: {e}. Including full content.[/yellow]")
+                            if not _is_quiet_mode():
+                                warnings.warn(
+                                    f"ContentSelector failed for select=\"{selectors_str}\" "
+                                    f"on file {full_path}: {e}. Including full file content."
+                                )
+                                console.print(f"[yellow]Warning: ContentSelector failed for select=\"{selectors_str}\" on {full_path}: {e}. Including full content.[/yellow]")
                     
                     if recursive:
                         child_seen = _seen | {resolved}
@@ -696,7 +700,8 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                 if not _looks_like_user_intent_path(file_path):
                     return match.group(0)
 
-            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
+            if not _is_quiet_mode():
+                console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             if _failed is not None:
                 _failed.append(file_path)
             return f"[File not found: {file_path}]"
@@ -940,7 +945,8 @@ def process_include_many_tags(
                 else:
                     if not _looks_like_user_intent_path(p):
                         continue
-                console.print(f"[bold red]Warning:[/bold red] File not found: {p}")
+                if not _is_quiet_mode():
+                    console.print(f"[bold red]Warning:[/bold red] File not found: {p}")
                 if _failed is not None:
                     _failed.append(p)
                 contents.append(f"[File not found: {p}]")
