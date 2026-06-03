@@ -376,8 +376,19 @@ def _strip_selectors_from_small_files(directives: str, threshold: int = 100, dir
             return match
         file_path = file_match.group(1).strip()
         if _resolve_and_count(file_path) < threshold:
-            # Remove select/query attributes but keep the include
-            return re.sub(r'<include\s+[^>]+>', '<include>', match)
+            # Remove select/query attributes but keep mode="compressed" (#876).
+            def _shrink_include_tag(tag_match: re.Match[str]) -> str:
+                tag = tag_match.group(0)
+                mode_match = re.search(
+                    r'\bmode\s*=\s*"(?:compressed|interface|full)"',
+                    tag,
+                    re.IGNORECASE,
+                )
+                if mode_match:
+                    return f"<include {mode_match.group(0)}>"
+                return "<include>"
+
+            return re.sub(r"<include\s+[^>]+>", _shrink_include_tag, match)
         return match
 
     # Process <new> blocks

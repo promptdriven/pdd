@@ -259,7 +259,15 @@ def preprocess(
         _dbg(f"Initial length: {len(prompt)} characters")
         if not _is_quiet_mode():
             console.print(Panel("Starting prompt preprocessing", style="bold blue"))
-        prompt = process_backtick_includes(prompt, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths, snapshot_recorder=snapshot_recorder)
+        prompt = process_backtick_includes(
+            prompt,
+            recursive,
+            compress=compress,
+            _seen=_seen,
+            _failed=_failed,
+            _user_intent_paths=_user_intent_paths,
+            snapshot_recorder=snapshot_recorder,
+        )
         _dbg("After backtick includes processed")
         prompt = process_xml_tags(
             prompt,
@@ -355,6 +363,8 @@ def _process_nested_includes(
     _seen: set,
     _failed: Optional[List[str]],
     _user_intent_paths: Optional[set],
+    *,
+    compress: bool = False,
     snapshot_recorder: Optional[Any] = None,
 ) -> str:
     """Resolve include syntax from included content while preserving the include stack."""
@@ -362,6 +372,7 @@ def _process_nested_includes(
     content = process_backtick_includes(
         content,
         recursive=False,
+        compress=compress,
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
@@ -370,6 +381,7 @@ def _process_nested_includes(
     content = process_include_tags(
         content,
         recursive=False,
+        compress=compress,
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
@@ -378,13 +390,22 @@ def _process_nested_includes(
     content = process_include_many_tags(
         content,
         recursive=False,
+        compress=compress,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
         snapshot_recorder=snapshot_recorder,
     )
     return content
 
-def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None, snapshot_recorder: Optional[Any] = None) -> str:
+def process_backtick_includes(
+    text: str,
+    recursive: bool,
+    compress: bool = False,
+    _seen: Optional[set] = None,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
+) -> str:
     if _seen is None:
         _seen = set()
     # More specific pattern that doesn't match nested > characters
@@ -405,6 +426,7 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
                         content,
                         recursive=True,
                         double_curly_brackets=False,
+                        compress=compress,
                         _seen=child_seen,
                         _failed=_failed,
                         _user_intent_paths=_user_intent_paths,
@@ -416,6 +438,7 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
                         _seen=child_seen,
                         _failed=_failed,
                         _user_intent_paths=_user_intent_paths,
+                        compress=compress,
                         snapshot_recorder=snapshot_recorder,
                     )
                 if snapshot_recorder is not None:
@@ -677,50 +700,27 @@ def process_include_tags(
                             selectors.extend(parse_selectors_string(selectors_str))
                         if lines_str:
                             selectors.append(f"lines:{lines_str}")
-                        
+
                         try:
-                            from pdd.content_selector import (
-                                ContentSelector,
-                                _COMPRESSED_MAX_CHARS,
-                            )
-                            selector = ContentSelector()
                             raw_include_content = content
-                            content = selector.select(
-                                content=raw_include_content,
-                                selectors=selectors,
-                                file_path=full_path,
-                                mode=mode,
-                            )
-                            if mode == "compressed" and len(content) > _COMPRESSED_MAX_CHARS:
-                                est_tokens = len(content) // 4
-                                console.print(
-                                    f"[yellow]Warning: compressed include for {full_path} "
-                                    f"estimated at {est_tokens} tokens; falling back to "
-                                    f"interface mode[/yellow]"
+                            if mode == "compressed":
+                                from pdd.content_selector import (
+                                    apply_compressed_include_with_fallback,
                                 )
-                                from pdd.content_selector import (  # pylint: disable=import-outside-toplevel
-                                    augment_interface_with_patch_targets,
-                                    discover_sibling_patch_targets,
+                                content = apply_compressed_include_with_fallback(
+                                    raw_include_content,
+                                    file_path=full_path,
+                                    selectors=selectors,
                                 )
+                            else:
+                                from pdd.content_selector import ContentSelector
+                                selector = ContentSelector()
                                 content = selector.select(
                                     content=raw_include_content,
                                     selectors=selectors,
                                     file_path=full_path,
-                                    mode="interface",
+                                    mode=mode,
                                 )
-                                patch_targets = discover_sibling_patch_targets(full_path)
-                                content = augment_interface_with_patch_targets(
-                                    content,
-                                    raw_include_content,
-                                    patch_targets,
-                                )
-                                if len(content) > _COMPRESSED_MAX_CHARS:
-                                    console.print(
-                                        f"[yellow]Warning: interface include for {full_path} "
-                                        f"still exceeds budget; falling back to truncated full "
-                                        f"content[/yellow]"
-                                    )
-                                    content = raw_include_content[:_COMPRESSED_MAX_CHARS]
                         except ImportError:
                             # Fall back to query if originally present, otherwise full file
                             fallback_query = attrs.get('query')
@@ -788,6 +788,7 @@ def process_include_tags(
                             content,
                             recursive=True,
                             double_curly_brackets=False,
+                            compress=compress,
                             _seen=child_seen,
                             _failed=_failed,
                             _user_intent_paths=_user_intent_paths,
@@ -800,6 +801,7 @@ def process_include_tags(
                             _seen=child_seen,
                             _failed=_failed,
                             _user_intent_paths=_user_intent_paths,
+                            compress=compress,
                             snapshot_recorder=snapshot_recorder,
                         )
                     if snapshot_recorder is not None:

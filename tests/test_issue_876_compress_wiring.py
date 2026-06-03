@@ -4,12 +4,15 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import click
+import pytest
 
 from pdd.auto_include import (
     AutoIncludeResult,
     NewInclude,
     _apply_compress_to_include_tags,
     _build_include_directives,
+    _strip_selectors_from_small_files,
+    auto_include,
 )
 from pdd.auto_deps_main import auto_deps_main
 from pdd.insert_includes import insert_includes
@@ -27,6 +30,26 @@ def test_build_include_directives_adds_compressed_mode_for_python() -> None:
     directives = _build_include_directives(result, compress=True)
     assert 'mode="compressed"' in directives
     assert "context/fewshot.py" in directives
+
+
+def test_strip_selectors_from_small_files_preserves_compressed_mode(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Small-file selector stripping must not drop mode=\"compressed\" (#876)."""
+    monkeypatch.chdir(tmp_path)
+    tiny = tmp_path / "fewshot.py"
+    tiny.write_text("def mold():\n    return True\n", encoding="utf-8")
+    directives = (
+        "<new>\n<context>"
+        '<include mode="compressed" select="def:mold">fewshot.py</include>'
+        "</context>\n</new>"
+    )
+    stripped = _strip_selectors_from_small_files(
+        directives,
+        directory_path=str(tmp_path),
+    )
+    assert 'mode="compressed">fewshot.py' in stripped
+    assert "select=" not in stripped
 
 
 def test_apply_compress_to_include_tags_skips_non_python() -> None:
@@ -99,3 +122,56 @@ def test_insert_includes_forwards_compress_to_auto_include(
     )
 
     assert mock_auto_include.call_args.kwargs["compress"] is True
+
+
+@patch("pdd.auto_include.llm_invoke")
+@patch("pdd.auto_include.summarize_directory")
+def test_auto_include_compress_true_emits_compressed_python_tags(
+    mock_summarize: MagicMock,
+    mock_llm: MagicMock,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Real auto_include(compress=True) tags discovered Python includes (#876)."""
+    monkeypatch.chdir(tmp_path)
+    context_dir = tmp_path / "context"
+    context_dir.mkdir()
+    (context_dir / "fewshot.py").write_text(
+        '"""Few-shot example."""\n\ndef mold():\n    return True\n',
+        encoding="utf-8",
+    )
+
+    mock_summarize.return_value = (
+        "full_path,file_summary,key_exports,dependencies,content_hash\n"
+        "fewshot.py,Example,\"[]\",\"[]\",abc\n",
+        0.001,
+        "mock-model",
+    )
+    mock_llm.return_value = {
+        "result": AutoIncludeResult(
+            reasoning="Need few-shot mold",
+            new_includes=[
+                NewInclude(
+                    file="fewshot.py",
+                    module="context",
+                    select=None,
+                    query=None,
+                ),
+            ],
+            existing_include_annotations=[],
+        ),
+        "cost": 0.01,
+        "model_name": "mock-model",
+    }
+
+    directives, _, cost, model = auto_include(
+        input_prompt="Generate a module using few-shot context",
+        directory_path=str(context_dir),
+        strength=0.7,
+        temperature=0.0,
+        compress=True,
+    )
+
+    assert 'mode="compressed">fewshot.py' in directives
+    assert cost == pytest.approx(0.011)
+    assert model == "mock-model"

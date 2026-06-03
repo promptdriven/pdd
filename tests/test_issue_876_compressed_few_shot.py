@@ -3,7 +3,8 @@
 Marketplace few-shot compression: deterministic, contract-preserving, with
 fallback when over token budget. Run:
 
-    pytest -vv tests/test_issue_876_compressed_few_shot.py
+    pytest -vv tests/test_issue_876_compress_wiring.py \\
+             tests/test_issue_876_compressed_few_shot.py
 """
 from __future__ import annotations
 
@@ -273,4 +274,27 @@ def test_preprocess_include_many_compress_strips_python_docstrings(
         compress=True,
     )
     assert '"""Module doc."""' not in expanded
+    assert "return 1" in expanded
+
+
+def test_preprocess_nested_include_inherits_compress(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Nested <include> inside an expanded file inherits compress=True (#876)."""
+    inner = tmp_path / "inner.py"
+    bundle = tmp_path / "bundle.prompt"
+    inner.write_text(
+        '"""Inner module."""\n\ndef inner_fn():\n    return 1\n',
+        encoding="utf-8",
+    )
+    bundle.write_text("<include>inner.py</include>\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    expanded = preprocess(
+        "<include>bundle.prompt</include>",
+        recursive=False,
+        double_curly_brackets=False,
+        compress=True,
+    )
+    assert '"""Inner module."""' not in expanded
+    assert "def inner_fn():" in expanded
     assert "return 1" in expanded

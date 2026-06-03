@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from .llm_invoke import llm_invoke
 from .load_prompt_template import load_prompt_template
-from .auto_include import _apply_compress_to_include_tags, auto_include
+from .auto_include import auto_include
 from .preprocess import preprocess
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
 
