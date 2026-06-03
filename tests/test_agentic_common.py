@@ -9503,3 +9503,214 @@ class TestDuplicateStateCommentHandling:
         assert "1003" in warning_text, (
             f"Expected stale id 1003 named in warning; got: {warning_text!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Additional tests: OpenCode helpers, dataclasses, template substitution,
+# control-token detection tiers. (Appended; no duplicate names.)
+# ---------------------------------------------------------------------------
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+from pdd.agentic_common import (
+    SteerEntry,
+    TokenMatch,
+    detect_control_token,
+    substitute_template_variables,
+    set_agentic_progress,
+    clear_agentic_progress,
+    get_and_clear_agentic_interrupt_context,
+)
+
+
+def test_steer_entry_dataclass_fields():
+    s = SteerEntry(comment_id="1", author="a", body="b")
+    assert s.comment_id == "1"
+    assert s.author == "a"
+    assert s.body == "b"
+
+
+def test_token_match_truthy_and_fields():
+    tm = TokenMatch(tier="exact", token="ALL_TESTS_PASS")
+    assert bool(tm) is True
+    assert tm.tier == "exact"
+    assert tm.token == "ALL_TESTS_PASS"
+    assert tm.pattern is None
+    assert tm.cost is None
+
+
+def test_detect_control_token_returns_none_on_empty():
+    assert detect_control_token("", "ALL_TESTS_PASS") is None
+    assert detect_control_token(None, "ALL_TESTS_PASS") is None
+
+
+def test_detect_control_token_tier1_exact():
+    result = detect_control_token("Result: ALL_TESTS_PASS\nDone.", "ALL_TESTS_PASS")
+    assert result is not None
+    assert result.tier == "exact"
+    assert result.token == "ALL_TESTS_PASS"
+
+
+def test_detect_control_token_tier2_case_insensitive():
+    result = detect_control_token("Status: all_tests_pass here", "ALL_TESTS_PASS")
+    assert result is not None
+    assert result.tier == "case_insensitive"
+
+
+def test_detect_control_token_tier3_semantic():
+    result = detect_control_token("Summary: all 42 tests pass cleanly.", "ALL_TESTS_PASS")
+    assert result is not None
+    assert result.tier == "semantic"
+    assert result.pattern is not None
+
+
+def test_detect_control_token_unknown_token_returns_none():
+    assert detect_control_token("hello world", "ALL_TESTS_PASS") is None
+
+
+def test_substitute_template_variables_basic():
+    result = substitute_template_variables("Hello {name}", {"name": "World"})
+    assert result == "Hello World"
+
+
+def test_substitute_template_variables_unknown_key_preserved():
+    """Unknown placeholders should remain intact (no KeyError)."""
+    result = substitute_template_variables("Hi {name} and {missing}", {"name": "Bob"})
+    assert result == "Hi Bob and {missing}"
+
+
+def test_substitute_template_variables_braces_in_values():
+    """Values containing braces are preserved verbatim."""
+    result = substitute_template_variables("Data: {x}", {"x": '{"key": "value"}'})
+    assert result == 'Data: {"key": "value"}'
+
+
+def test_substitute_template_variables_strict_unresolved_raises():
+    import pytest
+    with pytest.raises(KeyError):
+        substitute_template_variables("Hi {missing}", {}, strict_unresolved=True)
+
+
+def test_substitute_template_variables_template_with_format_method():
+    """Mock template object with .format() method should be used."""
+    class FakeTemplate:
+        def format(self, **kwargs):
+            return f"formatted:{kwargs.get('x')}"
+    result = substitute_template_variables(FakeTemplate(), {"x": 42})
+    assert result == "formatted:42"
+
+
+def test_agentic_progress_set_and_clear():
+    set_agentic_progress("wf", 3, 10, "step3", [1, 2])
+    ctx = get_and_clear_agentic_interrupt_context()
+    assert ctx is not None
+    assert ctx["workflow"] == "wf"
+    assert ctx["current_step"] == 3
+    assert ctx["total_steps"] == 10
+    assert ctx["step_name"] == "step3"
+    assert ctx["completed_steps"] == [1, 2]
+    # Should be cleared after retrieval
+    assert get_and_clear_agentic_interrupt_context() is None
+
+
+def test_clear_agentic_progress_clears_state():
+    set_agentic_progress("wf", 1, 5, "s", None)
+    clear_agentic_progress()
+    assert get_and_clear_agentic_interrupt_context() is None
+
+
+def test_translate_to_opencode_model_rules():
+    from pdd.agentic_common import _translate_to_opencode_model
+    assert _translate_to_opencode_model("github_copilot/gpt-5") == "github-copilot/gpt-5"
+    assert _translate_to_opencode_model("gemini/flash-2") == "google/flash-2"
+    assert _translate_to_opencode_model("claude-sonnet-4") == "anthropic/claude-sonnet-4"
+    assert _translate_to_opencode_model("gpt-5") == "openai/gpt-5"
+    assert _translate_to_opencode_model("anthropic/claude-x") == "anthropic/claude-x"
+    assert _translate_to_opencode_model("") == ""
+
+
+def test_parse_opencode_jsonl_empty_returns_defaults():
+    from pdd.agentic_common import _parse_opencode_jsonl
+    result = _parse_opencode_jsonl("")
+    assert result["text"] == ""
+    assert result["cost"] == 0.0
+    assert result["cost_reported"] is False
+    assert result["model"] == ""
+    assert result["error"] == ""
+    assert result["tokens"]["input"] == 0
+
+
+def test_parse_opencode_jsonl_text_and_cost():
+    import json
+    import pytest
+    from pdd.agentic_common import _parse_opencode_jsonl
+    lines = [
+        json.dumps({"type": "step_start"}),
+        json.dumps({"type": "text", "part": {"text": "Hello "}}),
+        json.dumps({"type": "text", "part": {"text": "world."}}),
+        json.dumps({
+            "type": "step_finish",
+            "part": {"cost": 0.123, "usage": {"input": 10, "output": 5}},
+            "model": "anthropic/claude-sonnet-4",
+        }),
+    ]
+    result = _parse_opencode_jsonl("\n".join(lines))
+    assert result["text"] == "Hello world."
+    assert result["cost"] == pytest.approx(0.123)
+    assert result["cost_reported"] is True
+    assert result["model"] == "anthropic/claude-sonnet-4"
+    assert result["tokens"]["input"] == 10
+    assert result["tokens"]["output"] == 5
+
+
+def test_parse_opencode_jsonl_error_event():
+    import json
+    from pdd.agentic_common import _parse_opencode_jsonl
+    line = json.dumps({"type": "error", "message": "provider not configured"})
+    result = _parse_opencode_jsonl(line)
+    assert "provider not configured" in result["error"]
+
+
+def test_parse_opencode_jsonl_skips_invalid_lines():
+    import json
+    from pdd.agentic_common import _parse_opencode_jsonl
+    stdout = "not json\n{bad}\n" + json.dumps({"type": "text", "part": {"text": "ok"}})
+    result = _parse_opencode_jsonl(stdout)
+    assert result["text"] == "ok"
+
+
+def test_codex_auth_failure_message_returns_none_for_unrelated():
+    from pdd.agentic_common import _codex_auth_failure_message
+    assert _codex_auth_failure_message("some other error") is None
+    assert _codex_auth_failure_message("") is None
+
+
+def test_codex_auth_failure_message_detects_stale_token():
+    from pdd.agentic_common import _codex_auth_failure_message
+    msg = _codex_auth_failure_message(
+        "access token could not be refreshed; 401 Unauthorized"
+    )
+    assert msg is not None
+    assert "codex login" in msg
+    assert "PDD_AGENTIC_PROVIDER" in msg
+
+
+def test_get_job_deadline_empty_string_returns_none():
+    import os
+    from unittest.mock import patch
+    with patch.dict(os.environ, {"PDD_JOB_DEADLINE": ""}):
+        from pdd.agentic_common import get_job_deadline
+        assert get_job_deadline() is None
+
+
+def test_extract_step_report_alias_exported():
+    from pdd.agentic_common import extract_step_report
+    assert extract_step_report("<step_report>body</step_report>") == "body"
+    assert extract_step_report("no tags") is None
