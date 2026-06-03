@@ -118,7 +118,7 @@
     - strength < 0.5: Interpolate by cost from base down to cheapest.
     - strength > 0.5: Interpolate by ELO from base up to highest.
     - strength = 0.5: Use base model, fallback to candidates with ELO closest to base on failure — sort remaining candidates ascending by `abs(coding_arena_elo - base_elo)`. This is the continuity limit of the `> 0.5` branch: as strength → 0.5 from above, the interpolated target ELO collapses to `base_elo`, so the correct ordering at exactly 0.5 is closest-ELO-to-base, not highest ELO.
-    - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning).
+    - Soft fallback: If base model not in CSV (and no provider-aware alternative resolves), use first available model as surrogate (silently, no warning). Issue #1364: when the configured base name carries a known provider routing prefix (`vertex_ai/`, `gemini/`, `anthropic/`, `azure_ai/`), scope the surrogate to that same provider's rows (fall back to the first overall row only if that provider has none), so a prefixed default that drifted ahead of the bundled catalog does not silently cross providers (changing model, pricing, and billing endpoint). Only the surrogate base row is provider-scoped — the candidate fallback set stays full and strength-sorted, and missing-credential rows are still skipped per-candidate.
 
 % API Key Management:
     - The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3").

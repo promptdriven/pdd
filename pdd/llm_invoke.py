@@ -2516,6 +2516,24 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
+def _provider_lock(base_model_name: str) -> Optional[str]:
+    """Return the provider a configured base name is locked to by its routing
+    prefix (e.g. ``vertex_ai/...`` → ``Google Vertex AI``), or ``None`` when the
+    name carries no known prefix.
+
+    Used so the soft-fallback surrogate stays inside the configured provider
+    instead of drifting to the first CSV row of an unrelated provider when a
+    prefixed default is missing from the bundled catalog (issue #1364). Mirrors
+    the prefix-recognition in :func:`_alternative_base_lookups`.
+    """
+    if not base_model_name:
+        return None
+    for prefix, provider in _PROVIDER_PREFIX_TO_PROVIDER.items():
+        if base_model_name.startswith(prefix):
+            return provider
+    return None
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
@@ -2603,15 +2621,38 @@ def _select_model_candidates(
                 raise ValueError(
                     f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
                 )
-            # Option A': Soft fallback – choose a reasonable surrogate base and continue
-            # Strategy (simplified and deterministic): pick the first available model
-            # from the CSV as the surrogate base. This mirrors typical CSV ordering
+            # Option A': Soft fallback – choose a reasonable surrogate base and
+            # continue. Default strategy (deterministic): pick the first
+            # available model from the CSV. This mirrors typical CSV ordering
             # expectations and keeps behavior predictable across environments.
+            #
+            # Issue #1364: when the configured base carries a known provider
+            # routing prefix (vertex_ai/, gemini/, anthropic/, azure_ai/) and
+            # exact + provider-aware-alias lookups all missed — e.g. the cloud
+            # advanced PDD_MODEL_DEFAULT to a new vertex_ai/gemini-* id before
+            # the bundled catalog shipped the row — scope the surrogate to that
+            # SAME provider's rows. Otherwise the surrogate drifts to the first
+            # CSV row of an unrelated provider (the bundled catalog leads with
+            # AWS Bedrock Opus), silently changing the model, pricing, and
+            # billing endpoint. Only the surrogate BASE row is provider-scoped
+            # here; the candidate fallback set built below stays full and
+            # strength-sorted, and missing-credential rows are still skipped
+            # per-candidate, so a transient failure on the locked provider can
+            # still widen to other usable providers.
             # Fix for issue #296: Don't warn when any base model (from env var or default) is not found in CSV
             try:
-                base_model = available_df.iloc[0]
-                # Silently use the first available model from user's CSV without warning
-                # Users who intentionally customize their CSV shouldn't see warnings about removed models
+                surrogate_df = available_df
+                locked_provider = _provider_lock(base_model_name)
+                if locked_provider is not None:
+                    same_provider_df = available_df[
+                        available_df['provider'] == locked_provider
+                    ]
+                    if not same_provider_df.empty:
+                        surrogate_df = same_provider_df
+                base_model = surrogate_df.iloc[0]
+                # Silently use the first available (provider-scoped, if locked)
+                # model from user's CSV without warning. Users who intentionally
+                # customize their CSV shouldn't see warnings about removed models
             except Exception:
                 # If any unexpected error occurs during fallback, raise a clear error
                 raise ValueError(
