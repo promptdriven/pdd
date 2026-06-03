@@ -2759,7 +2759,7 @@ def sync_orchestration(
                                             sync_result["model_name"] = result[2]
                                         elif isinstance(result, dict):
                                             sync_result.update(result)
-                                        
+
                                         validation = validation_from_sync(
                                             sync_result,
                                             skip_tests=skip_tests,

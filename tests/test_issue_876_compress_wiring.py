@@ -12,6 +12,7 @@ from pdd.auto_include import (
     _build_include_directives,
 )
 from pdd.auto_deps_main import auto_deps_main
+from pdd.insert_includes import insert_includes
 
 
 def test_build_include_directives_adds_compressed_mode_for_python() -> None:
@@ -73,3 +74,28 @@ def test_auto_deps_main_forwards_compress(
     )
 
     assert mock_insert_includes.call_args.kwargs["compress"] is True
+
+
+@patch("pdd.insert_includes.llm_invoke")
+@patch("pdd.insert_includes.auto_include")
+@patch("pdd.insert_includes.preprocess", return_value="processed")
+@patch("pdd.insert_includes.load_prompt_template", return_value="template")
+def test_insert_includes_forwards_compress_to_auto_include(
+    mock_lpt: MagicMock,
+    mock_pp: MagicMock,
+    mock_auto_include: MagicMock,
+    mock_llm: MagicMock,
+    tmp_path,
+) -> None:
+    """insert_includes passes compress through to auto_include (#876 review)."""
+    csv_path = tmp_path / "deps.csv"
+    mock_auto_include.return_value = ("", "csv_out", 0.0, "model")
+
+    insert_includes(
+        input_prompt="my prompt",
+        directory_path="context/",
+        csv_filename=str(csv_path),
+        compress=True,
+    )
+
+    assert mock_auto_include.call_args.kwargs["compress"] is True

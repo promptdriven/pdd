@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -198,4 +199,78 @@ def test_preprocess_compress_flag_defaults_to_compressed_mode(
         compress=True,
     )
     assert '"""Doc."""' not in expanded
+    assert "return 1" in expanded
+
+
+def test_contract_selector_compressed_strips_slice_banners_and_docstrings() -> None:
+    """contract: slices must honor mode=compressed (#876 review)."""
+    source = textwrap.dedent(
+        '''
+        """Module doc."""
+
+        def _helper():
+            """Hidden helper."""
+            return 1
+
+        def run():
+            """Public entry."""
+            return _helper()
+        '''
+    )
+    out = ContentSelector.select(source, ["contract:run"], file_path="mod.py", mode="compressed")
+    assert "# --- API Contract Slice ---" not in out
+    assert '"""Module doc."""' not in out
+    assert '"""Hidden helper."""' not in out
+    assert '"""Public entry."""' not in out
+    assert "def run():" in out
+    assert "return _helper()" in out
+
+
+def test_pytest_selector_compressed_strips_docstrings(tmp_path: Path) -> None:
+    """pytest: slices must honor mode=compressed (#876 review)."""
+    test_file = tmp_path / "test_sample.py"
+    test_file.write_text(
+        textwrap.dedent(
+            '''
+            """Test module."""
+
+            def test_one():
+                """One."""
+                assert 1 == 1
+
+            def test_two():
+                assert 2 == 2
+            '''
+        ),
+        encoding="utf-8",
+    )
+    out = ContentSelector.select(
+        test_file.read_text(encoding="utf-8"),
+        ["pytest:test_one"],
+        file_path=str(test_file),
+        mode="compressed",
+    )
+    assert '"""Test module."""' not in out
+    assert '"""One."""' not in out
+    assert "def test_one():" in out
+    assert "test_two" not in out
+
+
+def test_preprocess_include_many_compress_strips_python_docstrings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """<include-many> with compress=True applies Python compression (#876 review)."""
+    module = tmp_path / "sample.py"
+    module.write_text(
+        '"""Module doc."""\n\ndef run():\n    return 1\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    expanded = preprocess(
+        f"<include-many>{module.name}</include-many>",
+        recursive=False,
+        double_curly_brackets=False,
+        compress=True,
+    )
+    assert '"""Module doc."""' not in expanded
     assert "return 1" in expanded

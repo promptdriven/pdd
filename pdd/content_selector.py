@@ -733,6 +733,34 @@ def _resolve_path(content: str, value: str, file_path: str | None) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
+def apply_compressed_include_with_fallback(
+    content: str,
+    *,
+    file_path: str,
+    selectors: list[str] | str | None = None,
+) -> str:
+    """Apply compressed-mode include transform with interface/truncation fallback."""
+    if not _is_python(file_path):
+        return content
+    if isinstance(selectors, str):
+        sel_list = parse_selectors_string(selectors)
+    elif selectors:
+        sel_list = [s.strip() for s in selectors if s.strip()]
+    else:
+        sel_list = []
+    selector = ContentSelector()
+    raw = content
+    compressed = selector.select(raw, sel_list, file_path=file_path, mode="compressed")
+    if len(compressed) <= _COMPRESSED_MAX_CHARS:
+        return compressed
+    iface = selector.select(raw, sel_list, file_path=file_path, mode="interface")
+    patch_targets = discover_sibling_patch_targets(file_path)
+    restored = augment_interface_with_patch_targets(iface, raw, patch_targets)
+    if len(restored) <= _COMPRESSED_MAX_CHARS:
+        return restored
+    return raw[:_COMPRESSED_MAX_CHARS]
+
+
 class ContentSelector:
     """Precise content extraction from file content."""
 
@@ -922,7 +950,17 @@ class ContentSelector:
             else:
                 parts.append(_extract_spans(source_lines, all_spans))
 
-        # Path-based content
+        # Path-based content (pytest:/contract:/path: selectors)
+        if path_results and mode == "compressed" and is_python:
+            compressed_paths: list[str] = []
+            for chunk in path_results:
+                try:
+                    compressed_paths.append(
+                        _full_compressed(chunk, file_path=file_path)
+                    )
+                except SyntaxError:
+                    compressed_paths.append(chunk)
+            path_results = compressed_paths
         parts.extend(path_results)
 
         if not parts:

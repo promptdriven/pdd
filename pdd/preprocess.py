@@ -1146,6 +1146,12 @@ def process_include_many_tags(
                 console.print(f"Including (many): [cyan]{full_path}[/cyan]")
                 with open(full_path, 'r', encoding='utf-8') as fh:
                     content = fh.read()
+                    if compress:
+                        from pdd.content_selector import apply_compressed_include_with_fallback
+                        content = apply_compressed_include_with_fallback(
+                            content,
+                            file_path=full_path,
+                        )
                     contents.append(content)
                 if snapshot_recorder is not None:
                     snapshot_recorder.record_include(source_path=full_path, content=content)

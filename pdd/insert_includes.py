@@ -196,6 +196,7 @@ def insert_includes(
             csv_path=csv_filename,
             include_docs=include_docs,
             max_workers=max_workers,
+            compress=compress,
         )
 
         if verbose:
