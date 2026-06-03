@@ -5483,6 +5483,9 @@ def post_step_comment_once(
     """
     if step_num in posted_steps:
         return True
+    if os.environ.get("PDD_NO_GITHUB_STATE") == "1":
+        posted_steps.add(step_num)
+        return True
     if not _find_cli_binary("gh"):
         return False
     final_body = _sanitize_comment_body(body)
@@ -5582,6 +5585,8 @@ def post_step_comment(
         True if the comment posted successfully, False otherwise (including
         when ``gh`` is not on PATH).
     """
+    if os.environ.get("PDD_NO_GITHUB_STATE") == "1":
+        return True
     if not _find_cli_binary("gh"):
         return False
 

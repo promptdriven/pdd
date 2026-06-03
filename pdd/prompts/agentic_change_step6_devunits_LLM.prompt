@@ -203,18 +203,14 @@ After the PR from `pdd change` is merged, run `pdd sync <module>` to regenerate 
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+After completing your analysis, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+Your final response must include exactly one `<step_report>...</step_report>` block. The report should follow this format:
 
 ```markdown
 ## Step 6: Dev Units Identified
 
-**Status:** [Found N dev units | No Dev Units Found]
+**Status:** [Found N dev units | No Prompt Dev Units Found - Direct Edits Required | No Dev Units Found]
 
 ### Change Summary
 [1-2 sentence summary of what needs to change]
@@ -280,6 +276,7 @@ For each new dev unit proposed, explain:
 | [file path] | [uncomment/remove placeholder] | [TODO marker text or placeholder text found] |
 
 **Note:** Direct edits are limited to: uncommenting code, removing "coming soon" placeholders, removing TEMPORARY error throws.
+If any Direct Edit Candidates are listed, do not use status `No Dev Units Found`; use `No Prompt Dev Units Found - Direct Edits Required` so the orchestrator continues to Step 8/9.
 
 ### Files Explored
 - [List of files/directories checked]
@@ -310,4 +307,4 @@ For each new dev unit proposed, explain:
 - Be thorough in exploring the codebase
 - Consider both direct changes and ripple effects on dependencies
 - If no dev units can be identified, STOP the workflow
-- Always post your findings as a GitHub comment before completing
+- Always include exactly one `<step_report>...</step_report>` block before completing

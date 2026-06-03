@@ -4930,6 +4930,26 @@ def test_post_step_comment_posts_to_github(tmp_path):
         assert "owner/repo" in cmd
 
 
+def test_post_step_comment_skips_github_when_disabled(tmp_path):
+    """PDD_NO_GITHUB_STATE suppresses visible step comments too."""
+    with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}), \
+         patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=3,
+            total_steps=13,
+            description="Research",
+            output="All good",
+            cwd=tmp_path,
+        )
+
+        assert result is True
+        mock_run.assert_not_called()
+
+
 def test_post_step_comment_no_gh_cli(tmp_path):
     """Test that post_step_comment returns False without crashing when gh is not installed."""
     with patch("shutil.which", return_value=None):
@@ -9209,6 +9229,26 @@ class TestPostStepCommentOnce:
             )
             assert result is False
             assert posted == set()
+
+    def test_skips_github_and_marks_posted_when_disabled(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = set()
+        with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}), \
+             patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=5,
+                body="body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is True
+            assert posted == {5}
+            mock_run.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
