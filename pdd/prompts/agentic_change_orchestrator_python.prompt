@@ -173,10 +173,10 @@ Before the step loop begins, load `.pddrc` configuration to provide context keys
      - `source_dir` from `generate_output_path`
      - `test_dir` from `test_output_path`
      - `example_dir` from `example_output_path`
-   - Derive `ext` using `get_extension(language)` (strip leading dot if present); if extension lookup raises because local data resolution is unavailable (for example `PDD_PATH` is unset), keep the loaded `.pddrc` paths and fall back only to `"py"` for Python / the default extension otherwise
+   - Derive `ext` using `get_extension(language)` (strip leading dot if present); if extension lookup fails or returns empty, fall back to the default `ext` while preserving parsed `.pddrc` paths
    - Derive `lang` as `f"_{language}"`
    - Return dict with all 6 keys
-   - On any exception outside extension lookup, return defaults
+   - On locate/parse/context detection exceptions, return defaults
 
 3. **Add to context dict** before step loop:
    ```python
@@ -249,12 +249,12 @@ The orchestrator must parse step output to detect stop conditions. Use `_check_h
 | 5 | Docs analysis complete | (no stop condition - continues to step 6) |
 | 6 | No dev units found | Line-anchored verdict match: `^(?:\*\*)?(?:status|result)[:\s*]*no dev units found` with `re.MULTILINE`. Accepts bold and plain formats, must be at start of line. |
 | 7 | Architectural decision needed | Requires explicit `STOP_CONDITION:` tag with "architectural" |
-| 8 | No changes needed | Line-anchored verdict match: `^(?:\*\*)?(?:status|result)[:\s*]*no changes required` with `re.MULTILINE`. Accepts bold and plain formats, must be at start of line. |
+| 8 | Prompt analysis complete | (no stop condition - continues to step 9; `No Changes Required` means no prompt edits, not no work, because Step 9 may still apply documentation changes or scoped Direct Edit Candidates from Step 6) |
 | 9 | Implementation failed | Output contains "FAIL:" |
 | 10 | Architecture update complete | (no stop condition - continues to step 11) |
 | 11 | No issues found | Output contains "No Issues Found" (exits loop, continues to step 13) |
 
-**STOP_CONDITION tag**: A universal `STOP_CONDITION: <reason>` tag is recognized on any step as a fallback. Steps 4 and 7 (clarification steps) ONLY stop via this tag (not substring matching), because LLMs sometimes use "clarification" or "architectural" in normal prose.
+**STOP_CONDITION tag**: A `STOP_CONDITION: <reason>` tag is recognized as a fallback only on stop-capable steps that do not have a stricter handler. Steps 4 and 7 (clarification steps) ONLY stop via this tag (not substring matching), because LLMs sometimes use "clarification" or "architectural" in normal prose. Step 8 MUST ignore `STOP_CONDITION` and continue to Step 9 because no prompt edits can still leave documentation changes or scoped Direct Edit Candidates to apply.
 
 **Hard stop behavior:**
 - Call `post_step_comment()` to post findings to GitHub

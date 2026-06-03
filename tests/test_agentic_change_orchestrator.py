@@ -1947,7 +1947,6 @@ def test_z3_stop_conditions():
     has_clarification = z3.Bool('has_clarification')
     has_no_dev_units = z3.Bool('has_no_dev_units')
     has_arch_decision = z3.Bool('has_arch_decision')
-    has_no_changes = z3.Bool('has_no_changes')
     has_fail = z3.Bool('has_fail')
 
     # Output: Stop Reason (0 = None/Continue, >0 = Stop Reason ID)
@@ -1959,8 +1958,7 @@ def test_z3_stop_conditions():
     # 3: "Clarification needed"
     # 4: "No dev units found"
     # 5: "Architectural decision needed"
-    # 6: "No changes needed"
-    # 7: "Implementation failed"
+    # 6: "Implementation failed"
     
     # Constraints defining the function logic
     logic = z3.If(z3.And(step_num == 1, has_duplicate), stop_reason == 1,
@@ -1968,9 +1966,8 @@ def test_z3_stop_conditions():
             z3.If(z3.And(step_num == 4, has_clarification), stop_reason == 3,
             z3.If(z3.And(step_num == 6, has_no_dev_units), stop_reason == 4,
             z3.If(z3.And(step_num == 7, has_arch_decision), stop_reason == 5,
-            z3.If(z3.And(step_num == 8, has_no_changes), stop_reason == 6,
-            z3.If(z3.And(step_num == 9, has_fail), stop_reason == 7,
-            stop_reason == 0)))))))
+            z3.If(z3.And(step_num == 9, has_fail), stop_reason == 6,
+            stop_reason == 0))))))
     
     s.add(logic)
 
@@ -2004,6 +2001,13 @@ def test_z3_stop_conditions():
     s.add(has_fail == False)
     s.add(stop_reason != 0)
     assert s.check() == z3.unsat, "Step 9 without FAIL should continue"
+    s.pop()
+
+    # Verification Case 5: Step 8 should not hard stop on no-prompt-change analysis
+    s.push()
+    s.add(step_num == 8)
+    s.add(stop_reason != 0)
+    assert s.check() == z3.unsat, "Step 8 prompt analysis should continue to implementation"
     s.pop()
 
 
@@ -3626,14 +3630,17 @@ def test_check_hard_stop_case_insensitive_substring_matching():
     assert _check_hard_stop(6, "**Status:** NO DEV UNITS FOUND") is not None
     assert _check_hard_stop(6, "Status: No Dev Units Found") is not None
 
-    # Step 8: matches verdict line (bold and plain, case-insensitive)
-    assert _check_hard_stop(8, "**Status:** No Changes Required") is not None
-    assert _check_hard_stop(8, "**Status:** NO CHANGES REQUIRED") is not None
-    assert _check_hard_stop(8, "Status: No Changes Required") is not None
+    # Step 8: no prompt changes is not a workflow stop. Step 9 may still need
+    # to apply documentation changes or scoped Direct Edit Candidates from
+    # Step 6.
+    assert _check_hard_stop(8, "**Status:** No Changes Required") is None
+    assert _check_hard_stop(8, "**Status:** NO CHANGES REQUIRED") is None
+    assert _check_hard_stop(8, "Status: No Changes Required") is None
+    assert _check_hard_stop(8, "STOP_CONDITION: No prompt changes required") is None
 
 
 def test_check_hard_stop_universal_stop_condition_tag():
-    """Any step can trigger via STOP_CONDITION: tag as a universal fallback."""
+    """Unhandled stop-capable steps can trigger via STOP_CONDITION: tag."""
     from pdd.agentic_change_orchestrator import _check_hard_stop
 
     # Step 3 has no specific handler — universal fallback should catch it
@@ -3656,14 +3663,14 @@ def test_check_hard_stop_empty_and_none_output():
 
 
 def test_check_hard_stop_case_insensitive_fallbacks():
-    """Substring fallbacks for steps 1, 2, 6, 8, 9 are case-insensitive."""
+    """Substring fallbacks for true hard-stop steps remain case-insensitive."""
     from pdd.agentic_change_orchestrator import _check_hard_stop
 
     assert _check_hard_stop(1, "DUPLICATE OF #42") is not None
     assert _check_hard_stop(1, "duplicate of #42") is not None
     assert _check_hard_stop(2, "**Status:** ALREADY IMPLEMENTED") is not None
     assert _check_hard_stop(6, "**Status:** NO DEV UNITS FOUND") is not None
-    assert _check_hard_stop(8, "**Status:** NO CHANGES REQUIRED") is not None
+    assert _check_hard_stop(8, "**Status:** NO CHANGES REQUIRED") is None
     assert _check_hard_stop(9, "FAIL: build error") is not None
 
 
@@ -3673,6 +3680,45 @@ def test_step4_prompt_has_stop_condition_instruction():
     prompt_content = prompt_path.read_text()
     assert "STOP_CONDITION: Clarification needed" in prompt_content
     assert "CRITICAL" in prompt_content
+
+
+def test_change_step_prompts_do_not_post_github_comments_directly():
+    """Successful step progress comments are orchestrator-owned."""
+    prompts_dir = Path(__file__).parent.parent / "pdd" / "prompts"
+    prompt_paths = sorted(prompts_dir.glob("agentic_change_step*_LLM.prompt"))
+    assert prompt_paths, "expected change step prompts to be present"
+
+    for prompt_path in prompt_paths:
+        prompt_content = prompt_path.read_text()
+        assert "gh issue comment" not in prompt_content, prompt_path.name
+        assert "Do not post GitHub issue comments yourself" in prompt_content, prompt_path.name
+        assert "<step_report>" in prompt_content, prompt_path.name
+
+
+def test_step8_prompt_no_prompt_changes_continue_to_step9_contract():
+    """Step 8 'No Changes Required' means no prompt edits, not no workflow work."""
+    prompt_path = Path(__file__).parent.parent / "pdd" / "prompts" / "agentic_change_step8_analyze_LLM.prompt"
+    prompt_content = prompt_path.read_text()
+
+    assert "No Changes Required" in prompt_content
+    assert "Proceeding to Step 9: Implement Changes" in prompt_content
+    assert "If no changes are needed, STOP the workflow" not in prompt_content
+    assert "do not emit `STOP_CONDITION` for this case" in prompt_content
+    assert "Do NOT create new code edits in this step" in prompt_content
+    assert "Step 6 already listed Direct Edit Candidates" in prompt_content
+    assert "Do NOT recommend creating or modifying:\n- Code files" not in prompt_content
+
+
+def test_no_github_state_contract_is_in_generating_prompts():
+    """Prompt sources must preserve visible-comment suppression on future syncs."""
+    prompts_dir = Path(__file__).parent.parent / "pdd" / "prompts"
+    modify_prompt = (prompts_dir / "commands" / "modify_python.prompt").read_text()
+    common_prompt = (prompts_dir / "agentic_common_python.prompt").read_text()
+
+    assert "PDD_NO_GITHUB_STATE=1" in modify_prompt
+    assert "visible orchestrator step comments" in modify_prompt
+    assert "PDD_NO_GITHUB_STATE=1" in common_prompt
+    assert "without invoking `gh issue comment`" in common_prompt
 
 
 def test_step4_stop_with_stop_condition_prefix(mock_dependencies, temp_cwd):
@@ -5062,8 +5108,7 @@ def test_hard_stop_returns_changed_files_not_empty(mock_dependencies, temp_cwd):
     initial_state["step_outputs"]["9"] = "FILES_MODIFIED: prompts/foo.prompt"
     mock_load_state.return_value = (initial_state, None)
 
-    # Step 10 succeeds but contains "No Changes Required" (hard stop for step 8, not 10)
-    # Use STOP_CONDITION tag on step 10 for a universal hard stop
+    # Step 10 succeeds but emits an explicit universal hard-stop tag.
     def side_effect_run(**kwargs):
         label = kwargs.get("label", "")
         if label == "step10":
@@ -5239,28 +5284,27 @@ def test_check_hard_stop_step8_negated_no_changes_required():
 
 # Scope addition: covers expansion item "Step 8 line 640 naive substring 'no changes required'
 # needs regex hardening to target **Status:** verdict line" identified by Step 6
-def test_check_hard_stop_step8_structured_status_triggers_stop():
-    """Step 8 must stop when **Status:** No Changes Required verdict is present."""
+def test_check_hard_stop_step8_structured_status_does_not_stop():
+    """Step 8 no-prompt-change verdict must not stop direct-edit workflows."""
     from pdd.agentic_change_orchestrator import _check_hard_stop
 
     result = _check_hard_stop(
         8,
         "**Status:** No Changes Required\nThe codebase already handles this correctly."
     )
-    assert result is not None, (
-        "Structured **Status:** No Changes Required verdict must trigger hard stop"
+    assert result is None, (
+        "Structured **Status:** No Changes Required means no prompt edits, not no work"
     )
-    assert result == "No changes needed"
 
 
 def test_check_hard_stop_plain_status_no_bold():
-    """Verdict lines without bold markdown must still trigger hard stop."""
+    """Verdict lines without bold markdown still trigger true hard stops."""
     from pdd.agentic_change_orchestrator import _check_hard_stop
 
     assert _check_hard_stop(2, "Status: Already Implemented") is not None
     assert _check_hard_stop(2, "Result: Already Implemented") is not None
     assert _check_hard_stop(6, "Status: No Dev Units Found") is not None
-    assert _check_hard_stop(8, "Status: No Changes Required") is not None
+    assert _check_hard_stop(8, "Status: No Changes Required") is None
 
 
 def test_check_hard_stop_quoted_token_false_positive():
@@ -5313,6 +5357,74 @@ def test_orchestrator_continues_past_step2_with_negated_already_implemented(mock
     assert mocks["run"].call_count >= 3, (
         "Orchestrator should continue past step 2 when verdict is not 'Already Implemented'"
     )
+
+
+def test_orchestrator_continues_past_step8_no_prompt_changes_with_direct_edits(
+    mock_dependencies_v2, tmp_path
+):
+    """Step 8 "No Changes Required" only means no prompt edits.
+
+    Regression for promptdriven/Generative-Video-Studio#607: Step 6 identified
+    direct-edit files with no corresponding prompts, Step 8 correctly reported
+    no prompt changes, and the workflow incorrectly stopped before Step 9 could
+    apply the scoped direct edits.
+    """
+    mocks = mock_dependencies_v2
+
+    def side_effect_run(instruction, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step6":
+            return (
+                True,
+                "## Step 6: Dev Units Identified\n\n"
+                "**Status:** No Dev Units Found\n\n"
+                "### Direct Edit Candidates (No Prompt)\n"
+                "| File | Edit Type | Description |\n"
+                "|------|-----------|-------------|\n"
+                "| `lib/agent-api/auth.ts` | logic fix | Remove allowlist gate |\n",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step8":
+            return (
+                True,
+                "## Step 8: Prompt Change Analysis\n\n"
+                "**Status:** No Changes Required\n\n"
+                "No prompt file exists for lib/agent-api/auth.ts; Step 9 should "
+                "apply the direct edit from Step 6.",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step9":
+            return (
+                True,
+                "DIRECT_EDITS: lib/agent-api/auth.ts",
+                0.5,
+                "gpt-4",
+            )
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (
+                True,
+                "PR Created: https://github.com/owner/repo/pull/607",
+                0.1,
+                "gpt-4",
+            )
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mocks["run"].side_effect = side_effect_run
+
+    success, msg, _, _, files = run_agentic_change_orchestrator(
+        MOCK_ISSUE_URL, MOCK_ISSUE_CONTENT, MOCK_REPO_OWNER, MOCK_REPO_NAME,
+        MOCK_ISSUE_NUMBER, MOCK_ISSUE_AUTHOR, MOCK_ISSUE_TITLE, cwd=tmp_path,
+    )
+
+    labels = [call.kwargs.get("label") for call in mocks["run"].call_args_list]
+    assert success is True
+    assert "Stopped at step 8" not in msg
+    assert "step9" in labels
+    assert "lib/agent-api/auth.ts" in files
 
 
 def test_orchestrator_stops_at_step2_with_structured_verdict(mock_dependencies_v2, tmp_path):

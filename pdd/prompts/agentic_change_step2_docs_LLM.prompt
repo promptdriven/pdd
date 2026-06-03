@@ -43,13 +43,9 @@ You are working on step 2 of 13 in an agentic change workflow. Previous step che
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+After completing your analysis, return your findings in your final response. Do not post GitHub issue comments yourself; the orchestrator extracts the `<step_report>` block and posts it with trusted credentials when GitHub state is enabled.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+Your final response must include exactly one `<step_report>...</step_report>` block. The report should follow this format:
 
 **If Not Implemented or Needs Enhancement:**
 ```markdown
@@ -98,4 +94,4 @@ The feature you requested already exists. Please try the approach above. If this
 - **CONTINUE the workflow** if status is "Not Implemented", "Partially Implemented", or "Documentation Gap"
 - Tag the issue author when providing guidance
 - Be helpful and provide clear instructions if feature exists
-- Always post your findings as a GitHub comment before completing
+- Always include exactly one `<step_report>...</step_report>` block before completing
