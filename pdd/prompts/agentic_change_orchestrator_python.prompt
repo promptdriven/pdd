@@ -226,6 +226,7 @@ After Step 9 parses FILES_CREATED/FILES_MODIFIED/DIRECT_EDITS, pass the extracte
 After Step 6 completes, parse the "Direct Edit Candidates" table from the output:
 - Extract file paths from rows in the table
 - Store in `context["direct_edit_candidates"]` as a list
+- On resume from cached Step 6 output, rehydrate `context["direct_edit_candidates"]` before the step loop begins
 - Pass to Step 9 so it knows which files can be directly edited
 - Step 9 can only directly edit files that appear in this list
 
