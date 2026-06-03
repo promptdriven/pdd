@@ -210,28 +210,6 @@ def test_bridge_fresh_codex_api_key_beats_stale_staged_copy(codex_env, monkeypat
     assert staged == "FRESH-env-token-1234"  # fresh env token wins, not the stale copy
 
 
-# --------------------------------------------------------------------------- #
-# issue #1318 review FM2: the Codex-subscription default must not hijack an
-# explicit non-OpenAI provider pin whose model name merely contains "codex".
-# --------------------------------------------------------------------------- #
-
-@pytest.mark.parametrize("model_id,expected", [
-    ("chatgpt/gpt-5.5", True),
-    ("openai/gpt-5.5", True),
-    ("openai/codex-mini", True),
-    ("gpt-5.5", True),
-    ("gpt-5.3-codex", True),
-    ("github_copilot/gpt-5.3-codex", False),     # explicit non-OpenAI provider
-    ("openrouter/openai/gpt-5.3-codex", False),  # routed via openrouter, not the sub
-    ("anthropic/claude-opus-4", False),
-    ("claude-opus-4-1", False),
-    ("", False),
-    (None, False),
-])
-def test_is_openai_codex_default_is_provider_aware(model_id, expected):
-    assert li._is_openai_codex_default(model_id) is expected
-
-
 def test_codex_default_does_not_hijack_explicit_nonopenai_provider(monkeypatch):
     # Even with Codex auth present (the "both Claude and Codex auth" machine in
     # the review), an explicit github_copilot/* pin must be left untouched.
@@ -371,7 +349,8 @@ def test_default_codex_auth_uses_chatgpt_even_when_anthropic_key_present(monkeyp
     # exported PDD_MODEL_DEFAULT (a non-OpenAI model) at import freezes it into
     # DEFAULT_BASE_MODEL, which delenv can't undo — then no restriction fires and
     # claude (ANTHROPIC_API_KEY) wins by ELO (issue #1318 cloud-test).
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
 
     captured = {}
 
@@ -403,7 +382,8 @@ def test_chatgpt_default_disables_cache_per_request_not_globally(monkeypatch):
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
     # Pin an OpenAI/Codex default at call time (env-robust; see the note in
     # test_default_codex_auth_uses_chatgpt_even_when_anthropic_key_present).
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
 
     sentinel = object()
     monkeypatch.setattr(li.litellm, "cache", sentinel, raising=False)
@@ -517,31 +497,39 @@ def test_codex_family_strength_orders_by_elo(monkeypatch):
     assert cands[0]["model"] == "chatgpt/gpt-5.5", [c["model"] for c in cands]
 
 
-def test_codex_subscription_default_excludes_anthropic_when_auth_exists(monkeypatch):
-    """With codex auth, default selection is Codex first plus Gemini fallback."""
+def test_codex_subscription_does_not_capture_unset_public_default(monkeypatch):
+    """Public llm_invoke does not force unset/default users onto chatgpt/*."""
     df = li._load_model_data(_packaged_csv_path())
     monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
     monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
     restricted, default_model, used = li._apply_codex_subscription_default(df, None)
 
-    assert used is True
-    assert default_model == "chatgpt/gpt-5.5"
-    assert "OpenAI ChatGPT" in set(restricted["provider"])
-    assert any(restricted["model"].astype(str).str.contains("gemini"))
-    assert not any(restricted["api_key"].astype(str).str.contains("ANTHROPIC_API_KEY"))
+    assert used is False
+    assert default_model is None
+    assert restricted is df
 
 
-def test_codex_subscription_maps_gpt55_default_to_chatgpt(monkeypatch):
-    """Cloud sets PDD_MODEL_DEFAULT=gpt-5.5; subscription auth should route chatgpt/gpt-5.5."""
+def test_codex_subscription_does_not_capture_bare_openai_default(monkeypatch):
+    """Bare gpt-5.5 remains normal catalog/OpenAI selection in public pdd."""
     df = li._load_model_data(_packaged_csv_path())
     monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
     restricted, default_model, used = li._apply_codex_subscription_default(df, "gpt-5.5")
 
+    assert used is False
+    assert default_model == "gpt-5.5"
+    assert restricted is df
+
+
+def test_explicit_chatgpt_default_uses_subscription_family_with_normal_fallback(monkeypatch):
+    """Apps/users opt in explicitly with PDD_MODEL_DEFAULT=chatgpt/..."""
+    df = li._load_model_data(_packaged_csv_path())
+    monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
+    restricted, default_model, used = li._apply_codex_subscription_default(df, "chatgpt/gpt-5.5")
+
     assert used is True
     assert default_model == "chatgpt/gpt-5.5"
     assert "OpenAI ChatGPT" in set(restricted["provider"])
-    assert any(restricted["model"].astype(str).str.contains("gemini"))
-    assert not any(restricted["api_key"].astype(str).str.contains("ANTHROPIC_API_KEY"))
+    assert any(restricted["api_key"].astype(str).str.contains("ANTHROPIC_API_KEY"))
 
 
 def test_codex_subscription_uses_packaged_rows_when_active_catalog_is_stale(monkeypatch):
@@ -576,18 +564,18 @@ def test_codex_subscription_uses_packaged_rows_when_active_catalog_is_stale(monk
     )
     monkeypatch.setattr(li, "_load_model_data", lambda path: packaged)
     monkeypatch.setattr("pdd.codex_subscription.has_codex_subscription_auth", lambda: True)
-    restricted, default_model, used = li._apply_codex_subscription_default(active, "gpt-5.5")
+    restricted, default_model, used = li._apply_codex_subscription_default(active, "chatgpt/gpt-5.5")
 
     assert used is True
     assert default_model == "chatgpt/gpt-5.5"
-    assert restricted["model"].tolist() == ["chatgpt/gpt-5.5"]
+    assert restricted["model"].tolist() == ["chatgpt/gpt-5.5", "claude-sonnet-4-6"]
 
 
 def test_codex_cloudflare_falls_back_to_vertex_gemini_not_anthropic(monkeypatch):
     """Cloudflare HTML from chatgpt/ must not strand sync or use Anthropic API key."""
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
     monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
     monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
@@ -635,7 +623,7 @@ def test_codex_cloudflare_plain_text_generation_falls_back_to_vertex(monkeypatch
     """The initial code-generation call is unstructured; challenge HTML must not be accepted."""
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
     monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
     monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
@@ -681,7 +669,7 @@ def test_codex_cloudflare_skips_remaining_chatgpt_family(monkeypatch):
     """After one chatgpt/ challenge, jump to Vertex instead of another chatgpt/ model."""
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
     monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
     monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
@@ -738,7 +726,7 @@ def test_codex_cloudflare_cache_bypass_retry_falls_back_to_vertex(monkeypatch):
     """Challenge HTML from the cache-bypass retry must also trigger fallback."""
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
     monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
     monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
@@ -786,7 +774,7 @@ def test_codex_cloudflare_cache_bypass_exception_falls_back_to_vertex(monkeypatc
     """Challenge HTML raised by LiteLLM during retry must not become an ERROR string."""
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
     monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
     monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
@@ -836,7 +824,7 @@ def test_codex_cloudflare_initial_exception_skips_chatgpt_family(monkeypatch):
     """Challenge HTML raised by the initial chatgpt call must jump to Vertex."""
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
     monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
     monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")
@@ -897,7 +885,7 @@ def test_codex_cloudflare_pydantic_content_falls_back_to_vertex(monkeypatch):
 
     monkeypatch.setenv("PDD_FORCE", "1")
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
-    monkeypatch.setenv("PDD_MODEL_DEFAULT", "gpt-5.5")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "chatgpt/gpt-5.5")
     monkeypatch.setenv("PDD_MODEL_DEFAULT_FIRST", "1")
     monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/fake-adc.json")
     monkeypatch.setenv("VERTEXAI_PROJECT", "test-project")

@@ -2530,30 +2530,6 @@ def _truthy_env(name: str) -> bool:
     }
 
 
-def _is_openai_codex_default(model_name: Any) -> bool:
-    """Return True for OpenAI/Codex model ids that can use ChatGPT subscription auth.
-
-    Only the OpenAI-subscription families qualify: ``chatgpt/*``, ``openai/*``
-    (gpt-5*/codex), and bare ``gpt-5*``/``*codex*`` ids that default to OpenAI.
-    A model id carrying an explicit *non*-OpenAI provider prefix
-    (e.g. ``github_copilot/gpt-5.3-codex``, ``openrouter/openai/gpt-5``) is the
-    caller deliberately choosing another provider, so it must NOT be captured by
-    the Codex-subscription default and silently rewritten to ``chatgpt/*`` —
-    even though its bare name contains ``gpt-5``/``codex`` (issue #1318 review).
-    """
-    value = str(model_name or "").strip().lower()
-    if not value:
-        return False
-    if value.startswith("chatgpt/"):
-        return True
-    if value.startswith("openai/"):
-        value = value.split("/", 1)[1]
-    if "/" in value:
-        # A surviving provider prefix means an explicit non-OpenAI provider pin.
-        return False
-    return value.startswith("gpt-5") or "codex" in value
-
-
 def _provider_challenge_text_fragments(content: Any, depth: int = 0) -> List[str]:
     """Return string fragments worth scanning for provider-side HTML challenges."""
     if depth > 5 or content is None:
@@ -2660,28 +2636,6 @@ def _chatgpt_family(model_df: pd.DataFrame) -> pd.DataFrame:
     ].copy()
 
 
-def _gemini_subscription_fallback_family(model_df: pd.DataFrame) -> pd.DataFrame:
-    """Gemini rows allowed after Codex subscription models fail.
-
-    Cloud Run can occasionally receive a Cloudflare challenge from the
-    ChatGPT subscription backend. In the default Codex route, the next safe
-    fallback is Gemini/Vertex-Gemini, never direct Anthropic API-key rows.
-    """
-    provider = model_df["provider"].astype(str).str.lower()
-    model = model_df["model"].astype(str).str.lower()
-    api_key = model_df["api_key"].astype(str).str.upper()
-
-    chatgpt = model.str.startswith("chatgpt/")
-    direct_anthropic = provider.eq("anthropic") | api_key.str.contains("ANTHROPIC_API_KEY", na=False)
-    gemini = (
-        provider.eq("google gemini")
-        | model.str.startswith("gemini/")
-        | (provider.eq("google vertex ai") & model.str.contains("gemini", na=False))
-        | model.str.startswith("vertex_ai/gemini")
-    )
-    return model_df[gemini & ~chatgpt & ~direct_anthropic].copy()
-
-
 def _chatgpt_default_for_request(family_df: pd.DataFrame, requested_model: Any) -> str:
     """Resolve the ChatGPT-family default model for the current request."""
     requested = str(requested_model or "").strip()
@@ -2709,15 +2663,15 @@ def _apply_codex_subscription_default(
     model_df: pd.DataFrame,
     effective_default_model: Any,
 ) -> Tuple[pd.DataFrame, Any, bool]:
-    """Prefer the Codex subscription family for default OpenAI/Codex routes.
+    """Enable explicit ChatGPT/Codex subscription model selection.
 
-    This is the bill-control guard for issue #1318. If a usable ``codex login``
-    token is present and the caller did not explicitly choose a non-OpenAI
-    model, constrain automatic selection to ``chatgpt/*`` so ELO interpolation
-    cannot pick an Anthropic row first.
+    Public ``llm_invoke`` keeps normal strength/catalog behavior unless the
+    caller explicitly selects a ``chatgpt/*`` subscription model. Product-level
+    defaults such as the GitHub app can opt in by setting
+    ``PDD_MODEL_DEFAULT=chatgpt/...`` and ``PDD_MODEL_DEFAULT_FIRST=1``.
     """
     requested = str(effective_default_model or "").strip()
-    if requested and not _is_openai_codex_default(requested):
+    if not requested.lower().startswith("chatgpt/"):
         return model_df, effective_default_model, False
 
     try:
@@ -2729,15 +2683,12 @@ def _apply_codex_subscription_default(
         return model_df, effective_default_model, False
 
     family = _chatgpt_family(model_df)
-    gemini_fallback = _gemini_subscription_fallback_family(model_df)
     if family.empty:
         try:
             packaged_df = _load_model_data(None)
             packaged_family = _chatgpt_family(packaged_df)
-            packaged_gemini_fallback = _gemini_subscription_fallback_family(packaged_df)
         except Exception:
             packaged_family = pd.DataFrame()
-            packaged_gemini_fallback = pd.DataFrame()
         if packaged_family.empty:
             raise ValueError(
                 "Codex subscription auth is available, but the active model catalog "
@@ -2749,18 +2700,18 @@ def _apply_codex_subscription_default(
             "ChatGPT subscription rows for Codex default."
         )
         family = packaged_family
-        if gemini_fallback.empty:
-            gemini_fallback = packaged_gemini_fallback
 
     resolved_default = _chatgpt_default_for_request(family, requested)
+    non_chatgpt = model_df[
+        ~model_df["model"].astype(str).str.lower().str.startswith("chatgpt/")
+    ].copy()
     candidate_df = family
-    if not gemini_fallback.empty:
-        candidate_df = pd.concat([family, gemini_fallback], ignore_index=True)
+    if not non_chatgpt.empty:
+        candidate_df = pd.concat([family, non_chatgpt], ignore_index=True)
     logger.info(
-        "Using Codex subscription default for llm_invoke: provider=OpenAI ChatGPT model=%s "
-        "with %d Gemini fallback candidate(s)",
+        "Using explicit ChatGPT/Codex subscription model for llm_invoke: "
+        "provider=OpenAI ChatGPT model=%s",
         resolved_default,
-        len(gemini_fallback.index),
     )
     return candidate_df, resolved_default, True
 
