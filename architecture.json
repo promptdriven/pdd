@@ -4153,7 +4153,7 @@
     }
   },
   {
-    "reason": "Defines the llm_model.csv catalog schema: provider, pricing, ELO, structured_output, and interactive_only columns.",
+    "reason": "Defines the llm_model.csv catalog schema: provider, pricing, raw Arena ELO, DeepSWE-first rank score, structured_output, and interactive_only columns.",
     "description": "Defines llm model settings and data. Used by runtime modules.",
     "dependencies": [],
     "priority": 115,
@@ -9150,8 +9150,8 @@
     }
   },
   {
-    "reason": "Regenerate pdd/data/llm_model.csv from LiteLLM metadata with agent-reviewed DeepSWE and Arena scores, pricing overrides, and provider-scoped filtering.",
-    "description": "Deterministic CLI that rebuilds llm_model.csv from LiteLLM metadata plus pdd/data/deepswe_manifest.json (primary) and pdd/data/arena_elo_manifest.json (fallback). The manifests are refreshed agentically with reviewed aliases and provenance; Python validates/applies them, falls back to static scores, deduplicates, and Pareto-filters per provider.",
+    "reason": "Regenerate pdd/data/llm_model.csv from LiteLLM metadata with agent-reviewed DeepSWE-first rank scores, raw Arena ELO metadata, pricing overrides, and provider-scoped filtering.",
+    "description": "Deterministic CLI that rebuilds llm_model.csv from LiteLLM metadata plus pdd/data/deepswe_manifest.json (primary model_rank_score source) and pdd/data/arena_elo_manifest.json (raw ELO / rank fallback). The manifests are refreshed agentically with reviewed aliases and provenance; Python validates/applies them, falls back to static scores, deduplicates, and Pareto-filters per provider.",
     "dependencies": [],
     "priority": 5,
     "filename": "generate_model_catalog_python.prompt",

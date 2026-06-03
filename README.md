@@ -376,7 +376,9 @@ The CSV includes columns for:
 - `provider`: The LLM provider (e.g., "openai", "anthropic", "google")
 - `model`: The LiteLLM model identifier (e.g., "gpt-4", "claude-3-opus-20240229")
 - `input`/`output`: Costs per million tokens
-- `coding_arena_elo`: ELO rating for coding ability
+- `coding_arena_elo`: Raw Arena/static ELO metadata
+- `model_rank_score`: Primary selection rank. DeepSWE rows use a high solve-rate band; Arena/static rows fall back to raw ELO.
+- `model_rank_source`: Source of `model_rank_score` (for example `deepswe-solve-rate`, `arena-elo-fallback`, or `static`)
 - `api_key`: The environment variable name for required authentication, or
   blank for local and device-flow providers such as Ollama, LM Studio, and
   GitHub Copilot
@@ -718,7 +720,7 @@ These options can be used with any command:
 - `--strength FLOAT`: Set the strength of the AI model (0.0 to 1.0, default is 0.5).
   - 0.0: Cheapest available model
   - 0.5: Default base model
-  - 1.0: Most powerful model (highest ELO rating)
+  - 1.0: Most powerful model (highest DeepSWE-first rank score)
 - `--time FLOAT`: Controls the reasoning allocation for LLM models supporting reasoning capabilities (0.0 to 1.0, default is 0.25).
   - For models with specific reasoning token limits (e.g., 64k), a value of `1.0` utilizes the maximum available tokens.
   - For models with discrete effort levels, `1.0` corresponds to the highest effort level.
@@ -3476,7 +3478,7 @@ This tiered approach allows for both shared project configurations and individua
 
 **Note:** You can manually edit this CSV, but running `pdd setup` again is the recommended way to add providers and update models.
 
-**ELO scores are agent-reviewed.** The `coding_arena_elo` column is resolved through a four-tier priority chain: (1) `pdd/data/deepswe_manifest.json` — primary coding-task ranking from DeepSWE SWE-bench solve rates converted to ELO (`1300 + round(solve_rate × 4)`); (2) `pdd/data/arena_elo_manifest.json` — Arena leaderboard fallback for models absent from DeepSWE; (3) a curated static fallback for local, niche, or not-yet-reviewed models; (4) canonical-prefix match against the same static fallback. The intended refresh path is agentic: inspect current DeepSWE and Arena source rows, record the raw model row, leaderboard/category, publish date, rank, rating bounds, vote count, match reason, and aliases in the respective manifest, then run the deterministic generator. See [Regenerate Model Catalog](#regenerate-model-catalog-pddgenerate_model_catalogpy) under Utilities.
+**Model ranking is agent-reviewed.** The `model_rank_score` column is the selector score: DeepSWE solve-rate rows are primary and use `10000 + round(solve_rate_percent * 100)`, while models absent from DeepSWE fall back to raw Arena/static ELO. The `coding_arena_elo` column remains raw Arena/static metadata and is not overwritten with fake DeepSWE ELO. The intended refresh path is agentic: inspect current DeepSWE and Arena source rows, record the raw model row, leaderboard/category, publish date, rank, rating bounds, vote count, match reason, and aliases in the respective manifest, then run the deterministic generator. See [Regenerate Model Catalog](#regenerate-model-catalog-pddgenerate_model_catalogpy) under Utilities.
 
 *Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*
 
@@ -3845,22 +3847,24 @@ python pdd/update_model_costs.py [--csv-path path/to/your/project/llm_model.csv]
 
 This script rebuilds the bundled `pdd/data/llm_model.csv` catalog from `litellm.model_cost` metadata, enriched with agent-reviewed coding scores from two checked-in manifests. Python generation is intentionally deterministic: it does not scrape or fetch leaderboard data at runtime.
 
-**Score resolution order (four-tier chain):**
+**Rank resolution order:**
 
-1. `deepswe-exact` — exact normalized alias match in `pdd/data/deepswe_manifest.json` (primary coding-task ranking via DeepSWE SWE-bench solve rates; ELO = `1300 + round(solve_rate × 4)`)
-2. `arena-exact` — exact normalized alias match in `pdd/data/arena_elo_manifest.json` (Arena leaderboard fallback for models absent from DeepSWE)
-3. `static` — exact key in the curated `STATIC_ELO_FALLBACK` dict (local-runner roots, niche models, not-yet-reviewed models)
-4. `static-prefix` — longest canonical-prefix match in `STATIC_ELO_FALLBACK`
+1. `deepswe-solve-rate` — exact normalized alias match in `pdd/data/deepswe_manifest.json`; `model_rank_score = 10000 + round(solve_rate_percent * 100)`.
+2. `arena-elo-fallback` — exact normalized alias match in `pdd/data/arena_elo_manifest.json` for models absent from DeepSWE.
+3. `static` — exact key in the curated `STATIC_ELO_FALLBACK` dict (local-runner roots, niche models, not-yet-reviewed models).
+4. `static-prefix` — longest canonical-prefix match in `STATIC_ELO_FALLBACK`.
 
 If no tier produces a non-zero score the row is excluded (below `ELO_CUTOFF = 1300`).
 
+Raw `coding_arena_elo` is resolved separately from Arena/static sources only. DeepSWE never writes a fake ELO into that column.
+
 It performs the following steps:
-*   **Loads** reviewed scores, aliases, and row-level provenance from both manifests. Each DeepSWE entry carries a `match_reason` explaining the harness, effort level, and date rationale for the mapping.
+*   **Loads** reviewed scores, aliases, and row-level provenance from both manifests. Each DeepSWE entry carries a `solve_rate` plus `match_reason` explaining the harness, effort level, and date rationale for the mapping.
 *   **Normalizes** LiteLLM model IDs and applies only exact reviewed aliases from the manifests. Runtime fuzzy matching is intentionally disabled so model identity decisions stay reviewable. Reasoning-effort variants such as `-high`, `-medium`, `-low`, and `-minimal` remain distinct unless the manifest explicitly maps them.
 *   **Falls back** gracefully — if either manifest is missing or malformed, the run still succeeds using lower-priority sources or the curated static fallback dict for local-runner roots like `lm_studio/`, `ollama/`, aliases, and not-yet-reviewed models.
 *   Applies pricing overrides, deprecation/placeholder filtering, dedup, and a per-provider Pareto filter, then writes the resulting CSV.
 *   **Emits** the `interactive_only` column, setting it to `True` for the provider roots that require interactive human auth or a running local server (`github_copilot`, `chatgpt`, `lm_studio`, `ollama`) and `False` for everyone else. Automatic model selection skips `interactive_only` rows unless `PDD_ALLOW_INTERACTIVE` is set (see [Core Environment Variables](#core-environment-variables)).
-*   **Prints** an ELO diagnostic breakdown reporting counts for all five source labels: `deepswe-exact`, `arena-exact`, `static`, `static-prefix`, and `none`.
+*   **Prints** a raw-ELO diagnostic breakdown reporting counts for `arena-exact`, `static`, `static-prefix`, and `none`. DeepSWE provenance is visible per row in `model_rank_source`.
 
 **Usage:**
 

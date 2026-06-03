@@ -1234,7 +1234,9 @@ Java,//,.java```
     - 'model': the available model strings for that provider (e.g. "gpt-4o-mini")
     - 'input': The input cost per million tokens (e.g. 0.15)
     - 'output': The output cost per million tokens (e.g. 0.60)
-    - 'coding_arena_elo': The ELO score (e.g., 1300) (Integer, nullable)
+    - 'coding_arena_elo': Raw Arena/static ELO score (e.g., 1300) (Integer, nullable)
+    - 'model_rank_score': Primary selection rank. DeepSWE rows use 10000 + solve_rate_percent * 100; Arena/static fallback rows use raw ELO.
+    - 'model_rank_source': Source label for model_rank_score (e.g., deepswe-solve-rate, arena-elo-fallback, static)
     - 'api_key': Name of the environment variable holding the API key (e.g., OPENAI_API_KEY)
     - 'base_url': Optional base URL for specific providers (e.g., Azure, Ollama)
     - 'max_reasoning_tokens': Optional maximum tokens for internal reasoning (Integer, nullable)
@@ -1247,7 +1249,7 @@ Java,//,.java```
 
 % Here are the inputs and outputs of the function:
     Input: 
-        'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
+        'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest DeepSWE-first rank score.
         'temperature' - Floating point number indicating the temperature of the LLM.
     Output: 
         'llm' - Instantiated LLM model with the appropriate parameters.
@@ -1260,20 +1262,17 @@ Java,//,.java```
 
 % Here is an example of a token counter function: ```<./context/llm_token_counter_example.py>```
 
-% Here is an example (but not actual values) of the llm_model.csv:```provider,model,input,output,coding_arena_elo,base_url,api_key,counter,encoder,max_reasoning_tokens,structured_output
-OpenAI,gpt-4o-mini,0.15,0.60,1283,,,tiktoken,o200k_base,16384
-OpenAI,gpt-4o-2024-08-06,2.5,10,1333,,,tiktoken,o200k_base,16384
-OpenAI,deepseek-coder,0.14,0.28,1263,https://api.deepseek.com,DEEPSEEK_API_KEY,autotokenizer,deepseek-coder-7b-instruct-v1.5,4096
-Anthropic,claude-3-5-sonnet-20240620,3,15,1340,,,anthropic,claude-3-sonnet-20240229,8192
-Google,gemini-pro-experimental,3.5,7,1273,,,,,8192
+% Here is an example (but not actual values) of the llm_model.csv:```provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,interactive_only
+OpenAI,gpt-example,1.0,5.0,1450,17000,deepswe-solve-rate,,OPENAI_API_KEY,0,True,effort,,False
+Anthropic,claude-example,3.0,15.0,1525,13200,deepswe-solve-rate,,ANTHROPIC_API_KEY,16000,True,budget,,False
 Fireworks,accounts/fireworks/models/llama-v3p1-405b-instruct,3,3,1280,,,,,2048```
 
 % Here are the rules to follow when selecting the appropriate model:
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model, otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
     - When strength < 0.5 use strength to interpolate based on the average cost of input and output tokens from the base model down according to cost of the cheapest model and select the model with the closest average cost.
-    - When strength > 0.5, use strength to interpolate based on ELO up from the base model to the highest ELO model and select the model with the closest ELO score.
+    - When strength > 0.5, use strength to interpolate based on model_rank_score up from the base model to the highest ranked model and select the model with the closest rank score.
     - Use base model when strength is 0.5.
-    - If there is a model with the same or higher ELO ranking, use that model if it is at or below the same average cost of input and output token cost of a lower rank model.
+    - If there is a model with the same or higher model_rank_score, use that model if it is at or below the same average cost of input and output token cost of a lower rank model.
     - Make sure temperature is set for every llm model instantiation.
 
 % Note: The `llm_token_counter` function should be imported using a relative import, as it is part of the same package or module structure.
@@ -1919,7 +1918,7 @@ Make your tone concise and professional. Follow this structure:
     Input:
         'prompt' - String with the prompt template to be used for the LLM model.
         'input_json' - JSON object with the input variables OR **a list of JSON objects** if `use_batch_mode` is True.
-        'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest ELO score.
+        'strength' - Floating point number with 0 being the cheapest model, 0.5 being the base model and 1 being the model with the highest DeepSWE-first rank score.
         'temperature' - Floating point number indicating the temperature of the LLM.
         'verbose' - Boolean indicating whether to print extra information.
         'output_pydantic' - Optional. This specifies a pydantic_object output format from the LLM model. If not given, the output will be a string.
@@ -1988,7 +1987,7 @@ Make your tone concise and professional. Follow this structure:
 
 % Here are the rules to follow when selecting the appropriate model via LiteLLM:
     - If environmental variable $PDD_MODEL_DEFAULT is set, use that as the base model name (e.g., "gpt-4o-mini"), otherwise it is "gpt-4o-mini". If $PDD_PATH is set load $PDD_PATH/data/llm_model.csv, otherwise, assume $PDD_PATH is current working directory.
-    - Read the `llm_model.csv` file to get all necessary model details (LiteLLM model identifier, input/output costs, ELO, provider, **API key environment variable name**, max_reasoning_tokens, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "ollama/llama2"). **It is assumed that a separate utility keeps the cost and structured_output data in this CSV up-to-date.**
+    - Read the `llm_model.csv` file to get all necessary model details (LiteLLM model identifier, input/output costs, raw ELO, model_rank_score, provider, **API key environment variable name**, max_reasoning_tokens, structured_output flag, etc.). The `model_name` column must contain the identifier LiteLLM uses (e.g., "openai/gpt-3.5-turbo", "ollama/llama2"). **It is assumed that a separate utility keeps the cost and structured_output data in this CSV up-to-date.**
     - Filter models first based on availability: initially check only if the required API key environment variable *name* exists in the CSV. **The actual presence of the key value in the environment is checked later (Step 4 in Logic Flow).**
     - When strength < 0.5:
         - Identify available candidate models based on the filtered CSV data.
@@ -1996,11 +1995,11 @@ Make your tone concise and professional. Follow this structure:
         - Select the available model with the closest average cost to the target.
         - If calling the model fails, LiteLLM should handle retries, or the logic should try the next cheapest model.
     - When strength > 0.5:
-        - Use the **ELO score read from the CSV** to interpolate up from the base model to the highest ELO available model.
-        - Select the available model with the closest ELO score.
-        - If calling the model fails, retry with the next highest ELO model.
-    - Use base model when strength is 0.5. If calling the model fails, retry with candidates sorted by ELO closest to the base model (using ELO from CSV).
-    - Sort the final candidate models by how close they match the target cost (for strength < 0.5, using CSV costs) or target ELO (for strength > 0.5, using CSV ELO).
+        - Use the **model_rank_score read from the CSV** to interpolate up from the base model to the highest ranked available model.
+        - Select the available model with the closest rank score.
+        - If calling the model fails, retry with the next closest ranked model.
+    - Use base model when strength is 0.5. If calling the model fails, retry with candidates sorted by model_rank_score closest to the base model.
+    - Sort the final candidate models by how close they match the target cost (for strength < 0.5, using CSV costs) or target rank score (for strength > 0.5, using CSV model_rank_score).
     - For test environments (where api_key is "EXISTING_KEY"), use a special logic that respects the mock model setup, potentially by passing specific parameters to LiteLLM.
     - Ensure proper error handling for file operations and LiteLLM calls.
 
@@ -2064,8 +2063,8 @@ Make your tone concise and professional. Follow this structure:
     - **Convert** these per-token costs to per-million token costs (cost * 1,000,000) before updating the DataFrame.
     - For each model listed, check if the 'structured_output' column is missing (`pd.isna()`).
     - If needed, determine structured output support using `litellm.supports_response_schema` and update the DataFrame with True/False.
-    - Add any missing expected columns (like `max_reasoning_tokens`) with `pd.NA`.
-    - **Enforce Data Types:** After loading and adding columns, explicitly cast relevant columns (e.g., `coding_arena_elo`, `max_reasoning_tokens`) to nullable integers (`'Int64'`).
+    - Add any missing expected columns (including `model_rank_score`, `model_rank_source`, `max_reasoning_tokens`, `reasoning_type`, `location`, and `interactive_only`) with `pd.NA`.
+    - **Enforce Data Types:** After loading and adding columns, explicitly cast relevant columns (e.g., `coding_arena_elo`, `model_rank_score`, `max_reasoning_tokens`) to nullable integers (`'Int64'`).
     - Update the CSV file in place with the fetched/calculated costs and structured output support flags.
     - **Note:** This script does *not* automatically populate the `max_reasoning_tokens` column's values, as this data is not reliably available via LiteLLM. This column needs manual maintenance.
 
@@ -2074,9 +2073,9 @@ Make your tone concise and professional. Follow this structure:
     - Ensure the directory for the CSV path exists, creating it if necessary (`os.makedirs`).
 
 % Core Logic:
-    1. Define expected columns including `max_reasoning_tokens`. Define columns intended to be nullable integers.
+    1. Define expected columns including `model_rank_score`, `model_rank_source`, `max_reasoning_tokens`, `reasoning_type`, `location`, and `interactive_only`. Define columns intended to be nullable integers.
     2. Load the CSV file into a Pandas DataFrame. Handle potential file not found errors. Check if all expected columns exist; add missing ones with `pd.NA`.
-    3. **Enforce Data Types:** Convert columns to their intended types (float, `'Int64'`, object for boolean/NA). Specifically handle `coding_arena_elo` and `max_reasoning_tokens` as `'Int64'`.
+    3. **Enforce Data Types:** Convert columns to their intended types (float, `'Int64'`, object for boolean/NA). Specifically handle `coding_arena_elo`, `model_rank_score`, and `max_reasoning_tokens` as `'Int64'`.
     4. **Pre-fetch Costs:** Get the `litellm.model_cost` dictionary. Handle potential errors during fetch.
     5. Iterate through each row of the DataFrame.
     6. Get the LiteLLM model identifier from the 'model' column.
@@ -2114,4 +2113,3 @@ Make your tone concise and professional. Follow this structure:
 // ... existing code ...
 
 </pdd_main_python.prompt>
-

@@ -125,7 +125,7 @@ Main orchestrator for `pdd setup`. Implements a two-phase flow designed for mini
 
 <llm_model_csv_schema>
 The user-level CSV at ~/.pdd/llm_model.csv has columns:
-provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
+provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,interactive_only
 This file is created/managed by the auto-configuration step or manually by the user.
 The reference CSV at pdd/data/llm_model.csv contains known models for all major providers.
 </llm_model_csv_schema>

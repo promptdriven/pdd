@@ -15,13 +15,14 @@ console = Console()
 
 # Define expected columns in the CSV, including the manually maintained one
 EXPECTED_COLUMNS = [
-    'provider', 'model', 'input', 'output', 'coding_arena_elo', 'base_url',
-    'api_key',
-    'max_reasoning_tokens', 'structured_output'
+    'provider', 'model', 'input', 'output', 'coding_arena_elo',
+    'model_rank_score', 'model_rank_source', 'base_url', 'api_key',
+    'max_reasoning_tokens', 'structured_output', 'reasoning_type',
+    'location', 'interactive_only',
 ]
 
 # Define columns that should be nullable integers
-INT_COLUMNS = ['coding_arena_elo', 'max_reasoning_tokens']
+INT_COLUMNS = ['coding_arena_elo', 'model_rank_score', 'max_reasoning_tokens']
 
 # Placeholder for missing numeric values (optional, pd.NA is generally better)
 # MISSING_VALUE_PLACEHOLDER = -1.0 # Not used in current logic, pd.NA preferred
@@ -85,6 +86,14 @@ def update_model_data(csv_path: str) -> None:
                     )
                 )
             ).astype('object') # Keep as object to hold True, False, pd.NA
+        if 'interactive_only' in df.columns:
+            df['interactive_only'] = df['interactive_only'].apply(
+                lambda x: pd.NA if pd.isna(x) or str(x).strip().lower() in ['', 'na', 'nan', '<na>'] else (
+                    True if str(x).strip().lower() == 'true' else (
+                        False if str(x).strip().lower() == 'false' else pd.NA
+                    )
+                )
+            ).astype('object')
 
         # Integers (allow NA)
         for col in INT_COLUMNS:
