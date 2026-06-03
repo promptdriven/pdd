@@ -1,0 +1,93 @@
+<pdd-reason>Benchmark gate comparing compression strategies to prove context reduction without pass-rate regression (#879).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_benchmark", "signature": "(fixtures_dir: Path, *, strategies: Sequence[str] | None = None, live_llm: bool = False) -> list[CompressionBenchmarkResult]", "returns": "list[CompressionBenchmarkResult]"},
+      {"name": "check_compression_benchmark", "signature": "(results: list[CompressionBenchmarkResult], baselines: dict[str, dict]) -> GateResult", "returns": "GateResult"},
+      {"name": "print_benchmark_report", "signature": "(results: list[CompressionBenchmarkResult], *, output_path: Path | None = None) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>api_contract_slicer_python.prompt</pdd-dependency>
+<pdd-dependency>server/token_counter_python.prompt</pdd-dependency>
+<pdd-dependency>content_selector_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write `pdd/compression_benchmark.py`, a benchmark harness that compares five context-compression strategies across frozen fixtures and enforces a CI gate: fail if any strategy drops required contract symbols or regresses pass rate.
+
+% Responsibilities
+- Build compressed context for each strategy from a frozen fixture.
+- Collect metrics: pass/fail, input token count, wall-clock time, churn score, and missing contract symbols.
+- Gate: exit code 1 on contract-symbol loss, pass-rate regression below baseline, or churn below threshold.
+- Print a Markdown strategy × fixture table and optionally write a JSON report.
+
+% Non-responsibilities
+- Does not make live LLM calls in default mode; live mode is opt-in via `live_llm=True` and the `pytest.mark.live_llm` marker.
+- Does not implement the compression strategies themselves; it calls `ContentSelector` and `ApiContractSlicer` from existing modules.
+- Does not write test files; tests are generated separately.
+
+% Vocabulary
+- Strategy: one of `full_tests`, `ast_tests`, `ast_contracts`, `full_fewshot`, `compressed_fewshot`. Each is a callable that returns a compressed context string from a fixture dict.
+- Fixture: a directory under `tests/fixtures/compression_benchmark/` with `source.py`, `test_file.py`, `contract_seeds.json`, `expected_results.json`, and optional per-strategy files `expected_output_{strategy}.py` (fallback: `expected_output.py`).
+- Pass: generated output contains all required contract symbols from `contract_seeds.json`.
+- Churn score: `difflib.SequenceMatcher(None, expected_output, actual_output).ratio()`. Range [0.0, 1.0]; 1.0 means identical.
+- Missing contracts: list of symbol names absent from actual output that `ApiContractSlicer.verify_contract` raises for.
+- Baseline: per-strategy dict in `expected_results.json` with keys `passed`, `max_input_tokens`, `min_churn_score`.
+
+% Contract rules
+R1 - Contract-symbol gate
+For every fixture × strategy combination where the baseline records `passed: true`, `check_compression_benchmark` MUST return a failing `GateResult` when `missing_contracts` is non-empty.
+This rule is violated if a result with missing contracts — against a passing baseline — produces `GateResult.passed = True`.
+Strategies whose baseline records `passed: false` are comparison data points; a non-empty `missing_contracts` on those does NOT trigger this gate (their failure is expected and documented).
+
+R2 - Pass-rate gate
+`check_compression_benchmark` MUST return a failing `GateResult` when any strategy's observed pass rate falls below its baseline `passed` value (boolean: any failure when baseline is True).
+This rule is violated if a failing result is accepted when the baseline records it as passing.
+
+R3 - Churn gate
+`check_compression_benchmark` MUST return a failing `GateResult` when any result's `churn_score` is below `PDD_COMPRESSION_CHURN_THRESHOLD` (default 0.90) AND below the fixture's baseline `min_churn_score`.
+This rule is violated if a below-threshold churn result produces `GateResult.passed = True`.
+
+R4 - Token measurement
+`run_benchmark` MUST call `count_tokens` from `pdd.server.token_counter` BEFORE any LLM call or simulation to record `input_tokens` for each strategy × fixture.
+This rule is violated if `input_tokens` is 0 or unset when `run_benchmark` returns.
+
+R5 - Wall-clock timing
+`run_benchmark` MUST use `time.perf_counter` around the context-build + (optional) LLM call to populate `elapsed_sec`.
+
+R6 - Frozen-fixture mode
+When `live_llm=False`, `run_benchmark` MUST use a per-strategy simulated output file as the LLM output instead of calling a real model. The file is named `expected_output_{strategy}.py` inside the fixture directory. If that file does not exist, fall back to `expected_output.py`. This keeps CI deterministic and allows different strategies to produce different (incomplete) outputs so that contract-symbol gate failures can actually trigger.
+
+R7 - Strategy coverage
+`run_benchmark` MUST run all five strategies by default when `strategies` is None.
+
+% Public API
+1. `@dataclass CompressionBenchmarkResult` with fields: `strategy: str`, `fixture_id: str`, `passed: bool`, `input_tokens: int`, `elapsed_sec: float`, `churn_score: float`, `missing_contracts: list[str]`.
+2. `run_benchmark(fixtures_dir, *, strategies=None, live_llm=False) -> list[CompressionBenchmarkResult]` — iterates fixture subdirectories, runs each strategy, and returns results.
+3. `check_compression_benchmark(results, baselines) -> GateResult` — enforces R1–R3 using `GateFailure` / `GateResult` from `pdd.gate_main`. `baselines` maps `fixture_id` → `strategy` → baseline dict.
+4. `print_benchmark_report(results, *, output_path=None)` — prints a rich Markdown table (strategy × fixture, with token %, churn score, pass/fail emoji). When `output_path` is given, also writes JSON.
+
+% Strategy callables (inner helpers)
+5. `_build_full_tests(fixture: dict) -> str` — returns the raw test file content unchanged.
+6. `_build_ast_tests(fixture: dict) -> str` — applies `ContentSelector` with `select="contract:{seeds}"` on the test file.
+7. `_build_ast_contracts(fixture: dict) -> str` — calls `ApiContractSlicer(source).slice(seeds)` and returns compressed source; only symbols reachable from seeds are kept.
+8. `_build_full_fewshot(fixture: dict) -> str` — returns the test file as a full few-shot usage example, WITHOUT the source implementation. Represents "show the LLM the tests but not the private helpers."
+9. `_build_compressed_fewshot(fixture: dict) -> str` — concatenates `_build_ast_contracts` output + `_build_ast_tests` output. This is the contract-source proof: compressed source preserving all reachable helpers + compressed tests.
+
+% Fixture loading
+10. `_load_fixture(fixture_dir: Path) -> dict` — reads `source.py`, `test_file.py`, `contract_seeds.json`, and `expected_results.json`. Also reads per-strategy output files `expected_output_{strategy}.py` for each of the five strategy names; falls back to `expected_output.py` when a per-strategy file is absent. Returns a dict with keys `source`, `test_file`, `expected_outputs` (mapping strategy→str), `seeds`, `expected_results`, `fixture_id`.
+
+% Dependencies
+<gate_main><include select="class:GateFailure,class:GateResult">pdd/gate_main.py</include></gate_main>
+<api_contract_slicer><include select="class:ApiContractSlicer,class:ContractSlicerError">pdd/api_contract_slicer.py</include></api_contract_slicer>
+<token_counter><include select="def:count_tokens" mode="interface">pdd/server/token_counter.py</include></token_counter>
+<content_selector><include select="class:ContentSelector" mode="interface">pdd/content_selector.py</include></content_selector>
+
+% Deliverables
+- Code: `pdd/compression_benchmark.py`
