@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -136,6 +137,78 @@ def test_residual_non_update_drift_warns_by_default_and_blocks_strict(monkeypatc
     assert "residual non-update drift" in " ".join(default.messages)
     assert strict.ok is False
     assert "residual non-update drift" in " ".join(strict.messages)
+
+
+def test_drift_sync_does_not_rewrite_unrelated_architecture_entries(monkeypatch, tmp_path):
+    """The gate's drift-sync must scope architecture.json to the touched prompt.
+
+    Greg's blocker on PR #1327 (issue #1293): the Step 12.5 gate runs after the
+    change orchestrator's ``_scope_architecture_to_changed_files()`` protection
+    and before Step 13's ``git add -A``, so if drift-sync rewrote unrelated
+    modules' architecture.json entries it would silently commit repo-wide drift
+    into a feature PR (the fix path can commit the same via ``_commit_and_push``).
+
+    This drives the REAL ``sync_all_prompts_to_architecture`` inside
+    ``_run_drift_sync`` — only ``detect_drift`` is stubbed (to avoid invoking
+    heal/LLM on a bare fixture) and ``run_metadata_sync`` is a no-op success — so
+    it also proves the per-prompt metadata-sync step does not leak. The unrelated
+    entry must be left untouched while the touched prompt actually syncs (a fix
+    that simply skips everything would fail the second assertion).
+    """
+    prompt_dir = tmp_path / "pdd" / "prompts"
+    prompt_dir.mkdir(parents=True)
+    (tmp_path / "pdd" / "foo.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "pdd" / "bar.py").write_text("def bar():\n    return 2\n", encoding="utf-8")
+    # Touched + unrelated prompt, each with a reason that DIFFERS from its stale
+    # arch entry, so a full-scan sync would rewrite BOTH.
+    (prompt_dir / "foo_python.prompt").write_text(
+        "<pdd-reason>Fresh foo</pdd-reason>\n", encoding="utf-8"
+    )
+    (prompt_dir / "bar_python.prompt").write_text(
+        "<pdd-reason>Fresh bar</pdd-reason>\n", encoding="utf-8"
+    )
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(
+        json.dumps(
+            [
+                {"filename": "foo_python.prompt", "filepath": "pdd/foo.py",
+                 "reason": "Stale foo", "description": "DF", "dependencies": [],
+                 "priority": 1, "tags": []},
+                {"filename": "bar_python.prompt", "filepath": "pdd/bar.py",
+                 "reason": "Stale bar", "description": "DB", "dependencies": [],
+                 "priority": 2, "tags": []},
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    bar_before = {m["filename"]: m for m in json.loads(arch_path.read_text())}["bar_python.prompt"]
+
+    # Metadata-sync a no-op success; skip heal/LLM. The leak under test lives in
+    # architecture-sync, which runs for real here.
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "run_metadata_sync",
+        lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None),
+    )
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["pdd/prompts/foo_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    synced = {m["filename"]: m for m in json.loads(arch_path.read_text())}
+    # Unrelated entry untouched — compare the PARSED dict (re-serialization can
+    # shift formatting even when values do not change, so byte comparison would
+    # be brittle).
+    assert synced["bar_python.prompt"] == bar_before
+    assert synced["bar_python.prompt"]["reason"] == "Stale bar"
+    # ...while the touched prompt actually synced from its prompt file.
+    assert synced["foo_python.prompt"]["reason"] == "Fresh foo"
+    assert outcome.ok is True
 
 
 def test_quarantined_targeted_tests_report_without_blocking(monkeypatch, tmp_path):
