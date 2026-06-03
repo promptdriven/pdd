@@ -2316,6 +2316,63 @@ def test_include_select_multiple_selectors(tmp_path, monkeypatch) -> None:
     assert call_kwargs.kwargs['selectors'] == ['def:a', 'def:b']
 
 
+def test_include_select_pytest_comma_separated(tmp_path, monkeypatch) -> None:
+    """pytest:test_one,test_two must stay one selector (not split on the comma)."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "tests/test_sample.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(
+        "def helper():\n    return 1\n\n"
+        "def test_one():\n    assert helper() == 1\n\n"
+        "def test_two():\n    assert True\n"
+    )
+    prompt = '<include select="pytest:test_one,test_two">tests/test_sample.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "sliced"
+        preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['selectors'] == ['pytest:test_one,test_two']
+
+
+def test_preprocess_contract_include_real(tmp_path, monkeypatch) -> None:
+    """E2E: preprocess + contract: keeps transitive helpers (no ContentSelector mock)."""
+    monkeypatch.chdir(tmp_path)
+    module = tmp_path / "worker.py"
+    module.write_text(
+        "def _get_job_secrets(job_id):\n"
+        "    return {'id': job_id}\n\n"
+        "def run_worker(job_id):\n"
+        "    return _get_job_secrets(job_id)\n",
+        encoding="utf-8",
+    )
+    prompt = '<include select="contract:run_worker">worker.py</include>'
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert "API Contract Slice" in result
+    assert "def run_worker" in result
+    assert "def _get_job_secrets" in result
+    assert "def test_" not in result
+
+
+def test_preprocess_pytest_include_real(tmp_path, monkeypatch) -> None:
+    """E2E: preprocess + pytest: with comma-grouped test names."""
+    monkeypatch.chdir(tmp_path)
+    test_file = tmp_path / "tests" / "test_sample.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def helper():\n    return 1\n\n"
+        "def test_one():\n    assert helper() == 1\n\n"
+        "def test_two():\n    assert True\n",
+        encoding="utf-8",
+    )
+    prompt = '<include select="pytest:test_one,test_two">tests/test_sample.py</include>'
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert "def test_one" in result
+    assert "def test_two" in result
+    assert "def helper" in result
+
+
 def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
     """If ContentSelector can't be imported, fall back to full file content with a warning."""
     monkeypatch.chdir(tmp_path)

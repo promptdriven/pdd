@@ -137,6 +137,11 @@ This tutorial walks through implementing a GitHub issue using PDD.
 
 Adding a new test case is a great way to improve the robustness of PDD. This guide will walk you through the process of creating **unit tests** - low-level tests that focus on testing individual functions and modules for robustness and functionality.
 
+> **Tip**: When using `pdd generate` or `pdd fix`, you can use the `pytest:` selector (Python only) to include only relevant tests and their dependencies from an existing test file. This is more token-efficient than including the whole file:
+> ```xml
+> <include select="pytest:test_my_feature">tests/test_existing.py</include>
+> ```
+
 > **Note**: This section covers unit tests. For high-level integration testing that validates entire workflows, see the [regression tests section](#how-to-create-a-new-regression-test) below.
 
 ### 1. Prerequisite: Ensure Existing Tests Pass
