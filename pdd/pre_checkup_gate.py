@@ -592,39 +592,51 @@ def _run_command(
     return result.returncode in success_codes, _excerpt(output)
 
 
-# Precise provider/cloud/VCS prefixes + the canonical secret-key SUFFIXES —
-# NOT a broad ``KEY|TOKEN|SECRET`` substring match. This gate hard-blocks, so an
-# over-broad scrub that strips a var a target repo's unit test legitimately
-# reads (e.g. ``DJANGO_SECRET_KEY``) would false-block it — the exact
-# false-positive class the caller-compat sweep was hardened against. Since the
-# env scrub is defence-in-depth on the workflow's own worktree (not untrusted
-# fork code), precision matters more than catching every conceivable secret.
-_SECRET_ENV_PREFIXES = (
-    "AWS_", "GOOGLE_", "GCP_", "AZURE_", "ANTHROPIC", "OPENAI", "GEMINI",
-    "MISTRAL", "COHERE", "GROQ", "DEEPSEEK", "OPENROUTER", "HUGGINGFACE", "HF_",
-    "GH_", "GITHUB_",
-)
-_SECRET_ENV_SUFFIX_RE = re.compile(r"_(API_KEY|ACCESS_KEY|SECRET_ACCESS_KEY)$", re.IGNORECASE)
+# Allowlist of env vars the gate hands to the worktree subprocesses it runs
+# (per-file compile, import probe, route probe, runtime existence probe, targeted
+# pytest). The gate IMPORTS and pytest-runs untrusted PR code in those
+# subprocesses, so the env is built by ALLOWLIST, not denylist: only the
+# definitively non-secret runtime/locale vars below survive, plus the controlled
+# PATH / PYTHONPATH / PDD_PATH the probes need. EVERYTHING else is dropped — all
+# credential surfaces (API keys, ``*_TOKEN`` / ``*_SECRET*`` vars, GitHub/cloud
+# creds) AND every ``PDD_*`` except ``PDD_PATH``. A denylist let
+# ``PDD_GH_TOKEN_FILE`` / ``PDD_GITHUB_TOKEN`` / ``SLACK_BOT_TOKEN`` /
+# ``*_API_TOKEN`` / ``*_SECRET_KEY`` through; the allowlist closes that class by
+# construction (issue #1293, code review). Trade-off: a non-secret config var a
+# target repo reads at import time (e.g. ``DATABASE_URL``,
+# ``DJANGO_SETTINGS_MODULE``) is also dropped — deliberate, security over
+# convenience. Add a name here only when a real import/test demonstrably needs it.
+_SAFE_ENV_EXACT = frozenset({
+    "HOME", "USER", "LOGNAME", "SHELL", "PWD", "PATH",
+    "TMPDIR", "TEMP", "TMP", "TERM", "TZ",
+    "LANG", "LANGUAGE",
+    "PYTHONHASHSEED", "PYTHONDONTWRITEBYTECODE", "PYTHONUNBUFFERED",
+    "PYTHONIOENCODING", "SOURCE_DATE_EPOCH",
+    "SYSTEMROOT", "COMSPEC", "PATHEXT",  # Windows runtime (harmless on POSIX)
+    "PDD_PATH",
+})
+_SAFE_ENV_PREFIXES = ("LC_",)
 
 
-def _is_secret_env_key(key: str) -> bool:
-    return key.startswith(_SECRET_ENV_PREFIXES) or bool(_SECRET_ENV_SUFFIX_RE.search(key))
+def _is_safe_env_key(key: str) -> bool:
+    return key in _SAFE_ENV_EXACT or key.startswith(_SAFE_ENV_PREFIXES)
 
 
 def _python_import_env(worktree: Path) -> Dict[str, str]:
     """Hardened subprocess env for the gate's OWN Python subprocesses (import /
     route / existence probe / targeted tests).
 
-    The gate executes worktree code (imports modules, runs pytest), so as
-    defence in depth it MUST NOT hand that code the parent's live credentials:
-    drop secret-bearing vars (LLM/cloud/VCS keys + tokens) and sanitize PATH
-    (drop ``.``/relative/worktree-resolving entries via checkup_gates'
-    ``_sanitized_path`` so a PR-shipped shim cannot become a tool). It KEEPS the
-    controlled ``PYTHONPATH=worktree`` the import + existence probes need (the
-    checkup_gates env builder strips PYTHONPATH, which would silently break
-    them) and non-secret vars like ``PDD_PATH`` (PDD unit tests resolve data
-    from it and mock LLM calls, so removing API keys does not break them)."""
-    env = {k: v for k, v in os.environ.items() if not _is_secret_env_key(k)}
+    The gate imports and pytest-runs untrusted PR worktree code in these
+    subprocesses, so the env is built by ALLOWLIST (``_is_safe_env_key``): only
+    definitively non-secret runtime/locale vars survive, plus the controlled
+    ``PYTHONPATH=worktree`` the probes need, a sanitized ``PATH`` (via
+    checkup_gates' ``_sanitized_path`` — drop ``.``/relative/worktree-resolving
+    entries so PR code cannot shadow a tool), and ``PDD_PATH`` (PDD resolves data
+    from it; unit tests mock LLM calls, so dropping API keys does not break
+    them). EVERYTHING else is dropped — all credential surfaces and every
+    ``PDD_*`` except ``PDD_PATH`` — so PR code/tests the gate executes cannot
+    read the parent process's live credentials (issue #1293)."""
+    env = {k: v for k, v in os.environ.items() if _is_safe_env_key(k)}
     try:
         from .checkup_gates import _sanitized_path
 

@@ -822,34 +822,59 @@ def test_caller_compat_resolves_from_dot_import_submodule(tmp_path):
 
 
 def test_python_import_env_drops_secrets_keeps_pythonpath(monkeypatch, tmp_path):
-    """Issue #1293 (security): the gate executes worktree code, so its subprocess
-    env must drop secret-bearing vars (LLM/cloud/VCS keys + tokens) while keeping
-    the controlled PYTHONPATH=worktree the import/existence probes need."""
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-be-dropped")  # prefix
-    monkeypatch.setenv("GITHUB_TOKEN", "ghp_should_be_dropped")  # prefix
-    monkeypatch.setenv("MYPROVIDER_API_KEY", "drop-me")  # canonical suffix
-    monkeypatch.setenv("PDD_PATH", str(tmp_path))  # non-secret -> preserved
-    # Must NOT be over-stripped (a target repo's unit test may legitimately read
-    # these); the scrub is precise, not a broad KEY/SECRET substring match.
-    monkeypatch.setenv("DJANGO_SECRET_KEY", "keep-me")
-    monkeypatch.setenv("DATABASE_URL", "keep-me-too")
-    # _python_import_env uses setdefault("CI", "1"), so it preserves an ambient
-    # CI value when one is already set. CI runners (GitHub Actions) export
-    # CI=true, which would otherwise make the default-set assertion below see
-    # "true" instead of "1". Clear it so the test deterministically exercises the
-    # default-setting contract regardless of where it runs.
-    monkeypatch.delenv("CI", raising=False)
+    """Issue #1293 (security): the gate imports + pytest-runs untrusted PR code,
+    so its subprocess env is built by ALLOWLIST — credential surfaces are dropped
+    while the controlled PYTHONPATH=worktree / PDD_PATH the probes need survive.
+    The allowlist is security-over-convenience: non-secret config a target repo
+    might read at import time (DATABASE_URL, DJANGO_SECRET_KEY) is dropped too."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-be-dropped")  # provider key
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_should_be_dropped")  # VCS token
+    monkeypatch.setenv("MYPROVIDER_API_KEY", "drop-me")  # generic *_API_KEY
+    monkeypatch.setenv("DJANGO_SECRET_KEY", "drop-me")  # *_SECRET_KEY -> dropped
+    monkeypatch.setenv("DATABASE_URL", "drop-me")  # credential surface -> dropped
+    monkeypatch.setenv("PDD_PATH", str(tmp_path))  # allowlisted -> preserved
+    monkeypatch.setenv("LANG", "C.UTF-8")  # allowlisted non-secret runtime var
 
     env = pre_checkup_gate._python_import_env(tmp_path)
 
-    assert "ANTHROPIC_API_KEY" not in env
-    assert "GITHUB_TOKEN" not in env
-    assert "MYPROVIDER_API_KEY" not in env
-    assert env.get("DJANGO_SECRET_KEY") == "keep-me"  # not over-stripped
-    assert env.get("DATABASE_URL") == "keep-me-too"
+    # credential surfaces dropped
+    for k in (
+        "ANTHROPIC_API_KEY", "GITHUB_TOKEN", "MYPROVIDER_API_KEY",
+        "DJANGO_SECRET_KEY", "DATABASE_URL",
+    ):
+        assert k not in env, f"{k} should be stripped by the allowlist"
+    # controlled + allowlisted vars survive
     assert env.get("PYTHONPATH") == str(tmp_path)
-    assert env.get("PDD_PATH") == str(tmp_path)  # non-secret vars survive
-    assert env.get("CI") == "1"
+    assert env.get("PDD_PATH") == str(tmp_path)
+    assert env.get("LANG") == "C.UTF-8"
+    assert env.get("CI") == "1"  # forced for the subprocess regardless of ambient CI
+
+
+def test_python_import_env_strips_github_tokens_and_token_suffixes(monkeypatch, tmp_path):
+    """Issue #1293 (security, code review): the denylist predecessor leaked the
+    PDD GitHub-token envs and generic token-shaped vars into worktree subprocesses.
+    Regression: every credential surface below must be absent; every PDD_* except
+    PDD_PATH must be dropped."""
+    leaky = {
+        "PDD_GH_TOKEN_FILE": "/tmp/tok",          # checkup_review_loop._github_token_from_env
+        "PDD_GITHUB_TOKEN": "ghp_leak",           # checkup_review_loop._github_token_from_env
+        "SLACK_BOT_TOKEN": "xoxb-leak",           # generic *_TOKEN
+        "ACME_API_TOKEN": "leak",                 # generic *_API_TOKEN
+        "ACME_SECRET_KEY": "leak",                # generic *_SECRET_KEY
+        "PDD_CLOUD_API_KEY": "leak",              # PDD_* (not PDD_PATH)
+        "PDD_TEST_BOT_TOKEN": "leak",             # PDD_* token
+    }
+    for k, v in leaky.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("PDD_PATH", str(tmp_path))  # the one PDD_* kept
+
+    env = pre_checkup_gate._python_import_env(tmp_path)
+
+    for k in leaky:
+        assert k not in env, f"{k} must be stripped from the worktree subprocess env"
+    # No PDD_* other than PDD_PATH survives.
+    assert {k for k in env if k.startswith("PDD_")} == {"PDD_PATH"}
+    assert env.get("PDD_PATH") == str(tmp_path)
 
 
 def test_targeted_tests_exclude_integration_marker_and_handle_no_tests(tmp_path):
