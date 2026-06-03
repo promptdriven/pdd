@@ -1,0 +1,32 @@
+{
+  "full_tests": {
+    "passed": false,
+    "max_input_tokens": 500,
+    "min_churn_score": 0.0,
+    "note": "Test file alone lacks _get_job_secrets implementation — contract symbol lost without source preservation"
+  },
+  "ast_tests": {
+    "passed": false,
+    "max_input_tokens": 300,
+    "min_churn_score": 0.0,
+    "note": "AST-sliced tests still lack the private helper body — contract symbol lost without source preservation"
+  },
+  "ast_contracts": {
+    "passed": true,
+    "max_input_tokens": 400,
+    "min_churn_score": 0.85,
+    "note": "ApiContractSlicer preserves _get_job_secrets as transitive dependency of run_worker — contract symbol kept"
+  },
+  "full_fewshot": {
+    "passed": false,
+    "max_input_tokens": 500,
+    "min_churn_score": 0.0,
+    "note": "Full test file as few-shot usage example has no source implementation — private helper body absent from context"
+  },
+  "compressed_fewshot": {
+    "passed": true,
+    "max_input_tokens": 500,
+    "min_churn_score": 0.85,
+    "note": "Contract-source (ast_contracts) + compressed tests: all required symbols preserved with reduced token count"
+  }
+}
