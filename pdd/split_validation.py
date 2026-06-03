@@ -224,6 +224,20 @@ def _patch_object_attr_name(node: ast.AST) -> Optional[str]:
     return None
 
 
+def _patch_object_attr_from_call(node: ast.Call) -> Optional[str]:
+    """Return the patched attribute name from positional or keyword args."""
+    if len(node.args) >= 2:
+        attr = _patch_object_attr_name(node.args[1])
+        if attr:
+            return attr
+    for keyword in node.keywords:
+        if keyword.arg in {"attribute", "method", "name"}:
+            attr = _patch_object_attr_name(keyword.value)
+            if attr:
+                return attr
+    return None
+
+
 def _patch_object_target_ref(node: ast.AST) -> Optional[str]:
     if isinstance(node, ast.Name):
         return node.id
@@ -240,15 +254,15 @@ def _patch_object_target_ref(node: ast.AST) -> Optional[str]:
 
 
 def _is_patch_object_callee(func: ast.AST) -> bool:
+    """True for ``patch.object``, ``mocker.patch.object``, ``unittest.mock.patch.object``, etc."""
     if not isinstance(func, ast.Attribute) or func.attr != "object":
         return False
-    if isinstance(func.value, ast.Name) and func.value.id == "patch":
-        return True
-    return (
-        isinstance(func.value, ast.Attribute)
-        and func.value.attr == "patch"
-        and isinstance(func.value.value, ast.Name)
-    )
+    node: ast.AST = func.value
+    while isinstance(node, ast.Attribute):
+        if node.attr == "patch":
+            return True
+        node = node.value
+    return isinstance(node, ast.Name) and node.id == "patch"
 
 
 def _symbols_for_patch_object_target(
@@ -265,7 +279,11 @@ def _symbols_for_patch_object_target(
 
 
 def _collect_patch_object_symbols_ast(test_file_content: str, module_stem: str) -> set[str]:
-    """Resolve ``patch.object(ImportedClass, \"method\")`` via test import aliases."""
+    """Resolve ``patch.object(ImportedClass, \"method\")`` via test import aliases.
+
+    Only targets imported from the module under test are mapped; a ``Service``
+    class defined locally in the test file without a matching import is ignored.
+    """
     try:
         tree = ast.parse(test_file_content)
     except SyntaxError:
@@ -275,10 +293,8 @@ def _collect_patch_object_symbols_ast(test_file_content: str, module_stem: str) 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not _is_patch_object_callee(node.func):
             continue
-        if len(node.args) < 2:
-            continue
-        attr = _patch_object_attr_name(node.args[1])
-        target_ref = _patch_object_target_ref(node.args[0])
+        attr = _patch_object_attr_from_call(node)
+        target_ref = _patch_object_target_ref(node.args[0]) if node.args else None
         if attr is None or target_ref is None:
             continue
         symbols.update(_symbols_for_patch_object_target(target_ref, attr, import_map, module_stem))

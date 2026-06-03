@@ -281,6 +281,173 @@ def test_patch_object_imported_class_target_collects_and_protects(tmp_path):
             prompt_content="% Goal: Refactor service.py",
         )
 
+    selected = ContentSelector.select(
+        existing_code,
+        "def:public_api",
+        file_path=str(module_path),
+        expand_dependencies=True,
+    )
+    assert "def _private(self):" in selected
+
+
+def test_patch_object_class_signature_drift_raises(tmp_path):
+    """patch.object(Service, \"_private\") must block signature drift on class methods."""
+    module_path = tmp_path / "service.py"
+    test_path = tmp_path / "test_service.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            class Service:
+                def _private(self, x):
+                    return x
+
+                def public_api(self):
+                    return self._private(1)
+            """
+        ),
+        encoding="utf-8",
+    )
+    test_path.write_text(
+        textwrap.dedent(
+            """
+            from unittest.mock import patch
+            from service import Service
+
+            @patch.object(Service, "_private")
+            def test_service(mock_private):
+                pass
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    existing_code = module_path.read_text(encoding="utf-8")
+    generated_code = textwrap.dedent(
+        """
+        class Service:
+            def _private(self, x, y):
+                return x + y
+
+            def public_api(self):
+                return self._private(1, 2)
+        """
+    )
+
+    with pytest.raises(PublicSurfaceRegressionError, match="Service._private"):
+        _verify_public_surface_regression(
+            existing_code=existing_code,
+            generated_code=generated_code,
+            prompt_name="service_python",
+            output_path=str(module_path),
+            language="python",
+            prompt_content="% Goal: Refactor service.py",
+        )
+
+
+def test_patch_object_keyword_attribute_collects(tmp_path):
+    """patch.object(Service, attribute=\"_private\") resolves like the positional form."""
+    from pdd.split_validation import collect_patch_symbols_for_module
+
+    module_path = tmp_path / "service.py"
+    test_path = tmp_path / "test_service.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            class Service:
+                def _private(self):
+                    return 1
+            """
+        ),
+        encoding="utf-8",
+    )
+    test_path.write_text(
+        textwrap.dedent(
+            """
+            from unittest.mock import patch
+            from service import Service
+
+            @patch.object(Service, attribute="_private")
+            def test_service(mock_private):
+                pass
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    symbols = collect_patch_symbols_for_module(module_path)
+    assert "Service._private" in symbols
+
+
+def test_unittest_mock_patch_object_collects(tmp_path):
+    """unittest.mock.patch.object(Service, \"_private\") resolves via import map."""
+    from pdd.split_validation import collect_patch_symbols_for_module
+
+    module_path = tmp_path / "service.py"
+    test_path = tmp_path / "test_service.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            class Service:
+                def _private(self):
+                    return 1
+            """
+        ),
+        encoding="utf-8",
+    )
+    test_path.write_text(
+        textwrap.dedent(
+            """
+            import unittest.mock
+            from service import Service
+
+            @unittest.mock.patch.object(Service, "_private")
+            def test_service(mock_private):
+                pass
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    symbols = collect_patch_symbols_for_module(module_path)
+    assert "Service._private" in symbols
+
+
+def test_patch_object_ignores_test_local_class_without_import(tmp_path):
+    """A Service class defined only in the test file must not map to the module."""
+    from pdd.split_validation import collect_patch_symbols_for_module
+
+    module_path = tmp_path / "service.py"
+    test_path = tmp_path / "test_service.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            class Service:
+                def _private(self):
+                    return 1
+            """
+        ),
+        encoding="utf-8",
+    )
+    test_path.write_text(
+        textwrap.dedent(
+            """
+            from unittest.mock import patch
+
+            class Service:
+                def _private(self):
+                    pass
+
+            @patch.object(Service, "_private")
+            def test_service(mock_private):
+                pass
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    symbols = collect_patch_symbols_for_module(module_path)
+    assert "Service._private" not in symbols
+
 
 def test_patch_target_protection(tmp_path):
     """Verify _verify_public_surface_regression protects symbols referenced in tests."""
