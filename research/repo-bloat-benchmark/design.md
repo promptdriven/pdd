@@ -46,6 +46,7 @@ These constraints come directly from issue #1209's "Hold constant", "Distractor 
 - **Hidden-test isolation.** Hidden verifiers live outside the repo tree handed to the agent and are never placed in model context, never copied as distractors, and never used as grounding. Visible tests and hidden verifiers are physically separate trees.
 - **Only one thing varies.** Across sizes `S ∈ {1x, 5x, 20x, 50x}` for a given scenario, the base commit, task brief, target files, allowed edit scope, model, timeout, visible tests, and hidden verifier are byte-identical. The *only* difference is the set of injected distractor files.
 - **Realistic distractors.** Distractors must be plausible enough that agentic search may legitimately inspect them (same package/layer, shared vocabulary). No random filler, no synthetic noise, no files that change target behavior by merely existing, no import collisions, no leaked answers.
+- **No benchmark tell.** Nothing the agent can observe inside the sandbox may reveal which files are distractors vs. target. The manifest is never mounted into the sandbox; distractors carry **no marker** — no `_distractors/` directory, no naming prefix, no tier label, no comment. They are interleaved into realistic locations and named like real code. A file may be distinguishable as irrelevant **only by genuine reasoning** (reachability, imports, test references) — never by a benchmark artifact. Distractor-vs-target classification for metrics is done **post-hoc** by the harness against the out-of-tree manifest, not by anything in the repo. *(See [§3.3](#33-determinism-and-isolation-guarantees), [§5.3](#53-sourcing-and-placing-distractor-files), [§6.2](#62-how-we-capture-it-defense-in-depth).)*
 - **Hidden success is the verdict.** A visible-test pass with a hidden-verifier failure counts as a failure. Token economy is secondary to whether the agent actually fixed the bug under the hidden contract.
 - **Reproducible by a third party.** The harness, raw traces, manifests, and analysis must let an external evaluator re-derive every table from raw logs.
 
@@ -115,6 +116,8 @@ These constraints come directly from issue #1209's "Hold constant", "Distractor 
 - **No network for materialization.** Variant building is offline and reproducible.
 - **One sandbox per run.** No state leaks between sizes or seeds. Each run starts from the base commit; the agent's edits are confined to the sandbox.
 - **Hidden verifier never enters the sandbox** the agent sees. It is mounted/executed from a sibling location the agent's working tree does not include.
+- **Manifest never enters the sandbox.** The distractor manifest, `scenario.json`, `target_files`, and the donor pool are harness infrastructure under `research/repo-bloat-benchmark/`. The variant builder copies **only** the base repo + the materialized distractor *files* (at interleaved realistic paths) into the OverlayFS `merged` mount. The agent therefore cannot read the answer key — the FS tap confirms it can only `open()` paths that were actually mounted.
+- **No on-disk distractor marker.** Distractors are placed inside real package/layer directories with realistic names; there is no `_distractors/` root or label anywhere the agent can see. The mapping of which paths are distractors lives solely in the out-of-tree manifest and is applied only during post-hoc analysis ([§6.2](#62-how-we-capture-it-defense-in-depth)).
 - **Frozen-before-runs invariant** is enforced: the harness refuses to run a `(scenario, size)` whose manifest hash is not present in a committed lockfile.
 
 ### 3.4 Proposed directory layout (this branch)
@@ -129,15 +132,17 @@ research/repo-bloat-benchmark/
       task.md                    issue-style task brief given to the agent
       scenario.json              scenario descriptor (see §4)
       hidden/                    hidden verifier — NOT mounted into the agent sandbox
-  distractors/
-    pool/                        donor files (real project files, deterministically sourced)
+  distractors/                   ← HARNESS-ONLY; never mounted into the agent sandbox
+    pool/                        donor modules (hand-authored, deterministically sourced)
     manifests/
-      <scenario_id>.<size>.json  per-size distractor manifest (see §5)
+      <scenario_id>.<size>.json  per-size distractor manifest = the secret label key (see §5)
     manifests.lock               sha256 lockfile of all committed manifests
   harness/                       runner, variant builder, instrumentation tap, verifier driver
   reports/
     <run_id>/                    raw traces, run records (JSONL), generated tables/plots
 ```
+
+The `distractors/` and `scenarios/<id>/{scenario.json,hidden}` paths above are **harness infrastructure** and are deliberately *outside* what the agent sees. At run time the variant builder produces a sandbox repo that contains only `base/` plus the materialized distractor files placed at **interleaved, realistic destinations inside the real source tree** (e.g. a `same-package` distractor lands next to the target in `src/pkg/`). The materialized repo has no `_distractors/` directory and nothing labeling a file as a distractor — that knowledge stays in the manifest.
 
 > Note on placement: experiment infra (harness code, fixtures, manifests, raw traces) lives under a top-level `research/` tree on this branch to keep it isolated from the shipped `pdd` package. Polished write-ups intended for the product narrative can later be promoted to `docs/whitepaper_with_benchmarks/`, consistent with existing repo convention.
 
@@ -180,7 +185,6 @@ To reduce single-codebase bias, the 3 scenarios should not all be trivial varian
     "src/pkg/**"
   ],
   "forbidden_paths": [
-    "_distractors/**",
     "hidden/**"
   ],
   "visible_tests": {
@@ -203,8 +207,9 @@ To reduce single-codebase bias, the 3 scenarios should not all be trivial varian
 
 Field notes:
 
-- `target_files` + `allowed_edit_globs` define the ground truth for `wrong_file_edit_rate` and `forbidden_file_edits`.
-- `forbidden_paths` always includes the distractor root and the hidden tree; reads/edits there are recorded as `forbidden_file_reads` / `forbidden_file_edits`.
+- `target_files` + `allowed_edit_globs` define the ground truth for `wrong_file_edit_rate`. They live only in `scenario.json` (out-of-tree) and are **not** given to the agent.
+- Reading a distractor is **not** forbidden — it is exactly the irrelevant read we measure (`irrelevant_file_read_ratio`), classified post-hoc against the manifest ([§6.2](#62-how-we-capture-it-defense-in-depth)), not via any in-repo path. Editing a distractor is a wrong-file edit (outside `allowed_edit_globs`), captured by `wrong_file_edit_rate`.
+- `forbidden_paths` is reserved for the hidden tree only — a defense-in-depth assertion; since the hidden tree is never mounted, any `forbidden_file_reads`/`forbidden_file_edits` count > 0 indicates an isolation bug, not agent behavior.
 - `base_repo_sha256` and `hidden_verifier.sha256` are tree hashes that the harness checks before each run (freeze enforcement).
 - `mounted_into_agent_sandbox: false` is asserted by the harness; a run aborts if the hidden tree is ever visible to the agent.
 
@@ -248,9 +253,11 @@ Tiers control how "near" a distractor is to the target, so we can later see whet
 
 The manifest records each file's tier so the report can break `irrelevant_file_read_ratio` down by tier.
 
-### 5.3 Sourcing donor files
+### 5.3 Sourcing and placing distractor files
 
-Because the base repos are **hand-authored** (decision [§10](#10-locked-decisions).3), there is no upstream project to harvest distractors from, so the donor pool is **hand-authored too** — a curated `distractors/pool/` of plausible modules written in the same domain vocabulary, imports, and architectural layer as each scenario. To fill large LOC budgets (up to 50x) without resorting to "obviously synthetic filler," the pool is expanded by a **deterministic rename/templating transform**: a fixed rule maps `pool/<path>` → `_distractors/<tier>/<scenario_id>/<slug>`, applying content-stable identifier rewrites (module/class/function renames) so each materialized distractor has unique importable names and does not collide with the target.
+Because the base repos are **hand-authored** (decision [§10](#10-locked-decisions).3), there is no upstream project to harvest distractors from, so the donor pool is **hand-authored too** — a curated `distractors/pool/` of plausible modules written in the same domain vocabulary, imports, and architectural layer as each scenario. To fill large LOC budgets (up to 50x) without resorting to "obviously synthetic filler," the pool is expanded by a **deterministic rename/templating transform** that applies content-stable identifier rewrites (module/class/function renames) so each materialized distractor has unique importable names and does not collide with the target.
+
+**Placement (critical for validity).** Materialized distractors are written to **interleaved, realistic destinations inside the real source tree** — a `same-package` distractor lands in the *same directory* as the target (`src/pkg/<realistic_name>.py`), a `same-layer` distractor in a sibling layer dir (`src/services/...`), etc. There is **no `_distractors/` root, no tier folder, no naming convention** that an agent could filter on; on disk a distractor is indistinguishable from genuine code. The only record of which materialized paths are distractors is the out-of-tree manifest ([§5.5](#55-manifest-format)), used solely for post-hoc classification. This is what prevents the agent from reading a label and jumping straight to the real file.
 
 This has a known honesty cost: templated siblings of an authored donor are less organically varied than real-project files, and a sufficiently sharp agent might pattern-match them as boilerplate. We mitigate with a **varied donor set + per-file identifier/domain variation** and accept the residual as a recorded methodology caveat ([§7.4](#74-methodology-note)); the [§10](#10-locked-decisions) plausibility review is the gate that keeps near-tier distractors from becoming trivially ignorable. If the pilot shows agents skip distractors regardless of size (flat `irrelevant_file_read_ratio`), that is itself reported — it would indicate the distractors, not the agent, are the limiting factor.
 
@@ -281,12 +288,11 @@ Extends the issue's suggested schema with hashes and enforcement metadata:
   "realized_total_loc": 24680,
   "size_loc_target": 23446,
   "size_loc_tolerance_pct": 2.0,
-  "distractor_root": "_distractors",
   "materialized_tree_sha256": "…hash of base+distractors…",
   "files": [
     {
       "source_path": "distractors/pool/billing/invoice_renderer.py",
-      "destination_path": "_distractors/same-package/off-by-one-pagination/ledger_formatter.py",
+      "destination_path": "src/pkg/ledger_formatter.py",
       "loc": 200,
       "sha256": "…content hash after rename transform…",
       "tier": "same-package",
@@ -295,6 +301,8 @@ Extends the issue's suggested schema with hashes and enforcement metadata:
   ]
 }
 ```
+
+The `destination_path` values are **interleaved into the real source tree** (note: `src/pkg/...`, the target's own directory — no `_distractors/` marker), so the on-disk repo gives the agent no tell. Every path listed under `files[]` is, by definition, a distractor — this manifest *is* the secret label key the post-hoc classifier ([§6.2](#62-how-we-capture-it-defense-in-depth)) uses to tag reads/edits as distractor vs. target. The harness must also assert no `destination_path` collides with a real base-repo file or a `target_files` path.
 
 A `manifests.lock` aggregates the sha256 of every committed manifest; the harness checks a run's manifest against this lock before executing (freeze enforcement).
 
@@ -322,9 +330,9 @@ For every run, segmented at the **first edit** boundary (the issue's key cut poi
 
 **Targeting quality:**
 
-- `irrelevant_file_read_ratio` = distractor reads / total file reads
-- `wrong_file_edit_rate` = edits outside `target_files` ∪ allowed scope
-- `forbidden_file_reads`, `forbidden_file_edits` (distractor root / hidden tree)
+- `irrelevant_file_read_ratio` = distractor reads / total file reads (distractor set resolved post-hoc from the manifest, not from any in-repo marker)
+- `wrong_file_edit_rate` = edits outside `target_files` ∪ allowed scope (includes edits to interleaved distractor paths)
+- `forbidden_file_reads`, `forbidden_file_edits` = reads/edits of the hidden tree only; expected to be 0 (non-zero ⇒ isolation bug)
 
 **Outcome:**
 
@@ -345,6 +353,14 @@ The agent arm may report some of this; we do **not** trust self-report alone. Th
 3. **Git diff tap (ground truth for edits).** Post-run `git diff` against the base commit classifies every changed path as target / in-scope / wrong-file / forbidden, giving `wrong_file_edit_rate` and `forbidden_file_edits` independent of the transcript.
 
 The **first-edit boundary** is determined by the first write event that lands in the OverlayFS `upperdir` (tap 1), and is used to split tap-2 events into before/after. The git-diff tap (3) is retained as a redundant cross-check on the OverlayFS `upperdir`, not the primary edit source.
+
+**Post-hoc classification (where the secret label key is applied).** The agent's sandbox carries no distractor/target labels ([§2](#2-design-principles), [§3.3](#33-determinism-and-isolation-guarantees)). Classification happens **after** the run, in the analysis step, never during it:
+
+1. Load the run's manifest (out-of-tree) → the authoritative set of distractor `destination_path`s — plus the scenario's `target_files` and `allowed_edit_globs`.
+2. For each read in the FS-tap log, tag it `target` / `base-non-target` / `distractor` by matching its path against those sets → `irrelevant_file_read_ratio` (and the per-tier breakdown).
+3. For each path in the `upperdir` edit set, tag it `in-scope` / `wrong-file` (incl. distractor) / `forbidden` → `wrong_file_edit_rate`, `forbidden_file_edits`.
+
+Because the manifest is consulted only here — by the scorer, on logs, after the agent has finished — knowing the answer key cannot influence the agent. If a future arm were ever found to expose any label to the agent, that run is void.
 
 ### 6.3 Run record schema
 
@@ -456,6 +472,7 @@ A short prose section recording, per the acceptance criteria:
 
 - what was held constant vs varied,
 - how hidden-test isolation was enforced (and the harness assertion that proves the hidden tree never entered the agent sandbox),
+- how distractor-label isolation was enforced — that the manifest never entered the sandbox, that materialized distractors carried no on-disk marker, and that distractor/target classification was applied post-hoc against the out-of-tree manifest,
 - exactly what each hidden verifier checks beyond the visible tests,
 - manifest hashes used (proving freeze-before-runs),
 - seed count and variance handling,
