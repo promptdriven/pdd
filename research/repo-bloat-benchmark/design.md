@@ -1,7 +1,7 @@
 # Design: Agentic Localization Degradation Under Repository Bloat
 
 **Issue:** [#1209](https://github.com/promptdriven/pdd/issues/1209) — Research: measure agentic localization degradation under repository bloat
-**Status:** Draft (pilot design)
+**Status:** Draft (pilot design) — **§10 decisions LOCKED** (Codex CLI · hand-authored repos · Linux container + OverlayFS + FUSE byte-extent reads · N=5 · 30-min timeout)
 **Branch:** `research/issue-1209-repo-bloat-benchmark`
 **Last updated:** 2026-06-03
 
@@ -250,7 +250,9 @@ The manifest records each file's tier so the report can break `irrelevant_file_r
 
 ### 5.3 Sourcing donor files
 
-Prefer **real project files copied/renamed deterministically** over synthesized ones (issue: "real project files copied/renamed deterministically where possible"; avoid "obviously synthetic filler"). Donor candidates come from a curated `distractors/pool/`. Renaming is deterministic: a fixed transform maps `pool/<path>` → `_distractors/<tier>/<scenario_id>/<slug>`, with identifier rewrites (module/class/function renames) applied via a fixed, content-stable rule so the copy does not collide with the target's importable names.
+Because the base repos are **hand-authored** (decision [§10](#10-locked-decisions).3), there is no upstream project to harvest distractors from, so the donor pool is **hand-authored too** — a curated `distractors/pool/` of plausible modules written in the same domain vocabulary, imports, and architectural layer as each scenario. To fill large LOC budgets (up to 50x) without resorting to "obviously synthetic filler," the pool is expanded by a **deterministic rename/templating transform**: a fixed rule maps `pool/<path>` → `_distractors/<tier>/<scenario_id>/<slug>`, applying content-stable identifier rewrites (module/class/function renames) so each materialized distractor has unique importable names and does not collide with the target.
+
+This has a known honesty cost: templated siblings of an authored donor are less organically varied than real-project files, and a sufficiently sharp agent might pattern-match them as boilerplate. We mitigate with a **varied donor set + per-file identifier/domain variation** and accept the residual as a recorded methodology caveat ([§7.4](#74-methodology-note)); the [§10](#10-locked-decisions) plausibility review is the gate that keeps near-tier distractors from becoming trivially ignorable. If the pilot shows agents skip distractors regardless of size (flat `irrelevant_file_read_ratio`), that is itself reported — it would indicate the distractors, not the agent, are the limiting factor.
 
 **Hard constraints enforced by the builder (run aborts on violation):**
 
@@ -310,7 +312,7 @@ For every run, segmented at the **first edit** boundary (the issue's key cut poi
 
 - `files_read_before_first_edit`
 - `search_or_tool_calls_before_first_edit`
-- `tokens_read_before_first_edit` (where the arm exposes per-read token counts)
+- `tokens_read_before_first_edit` (derived from FUSE byte-extent read logs → bytes → token estimate; measured via the FS tap, not the agent's self-report)
 
 **Cumulative cost (whole run):**
 
@@ -334,11 +336,15 @@ For every run, segmented at the **first edit** boundary (the issue's key cut poi
 
 The agent arm may report some of this; we do **not** trust self-report alone. Three independent taps, reconciled in analysis:
 
-1. **Filesystem tap (ground truth for reads).** The sandbox exposes the repo through a layer that logs every `open`/`read` with path + byte/line extent + timestamp. Implementation options, in order of preference: a FUSE/overlay read-logging mount; failing that, an `strace`/`dtrace`-style syscall trace filtered to the sandbox path; failing that, a wrapper FS shim. The tap is the authoritative source for "which files were read" and underpins `irrelevant_file_read_ratio` and `forbidden_file_reads` regardless of what the agent claims.
+1. **Filesystem tap (ground truth for reads + edits) — LOCKED: Linux container + OverlayFS + FUSE passthrough.** The agent runs inside a **Linux container** (Docker/Podman/Colima) so the kernel features below work regardless of the macOS dev host. Two stacked layers:
+   - **OverlayFS for write isolation / edit ground truth.** `lowerdir` = the frozen materialized repo (base + distractors, read-only), `upperdir` = empty scratch, `merged` = what the agent sees and edits. Every file the agent writes lands in `upperdir`, so post-run the `upperdir` **is** the edit set (no diff heuristics) and the base stays provably pristine. This feeds `wrong_file_edit_rate` and `forbidden_file_edits`.
+   - **FUSE passthrough for read ground truth.** A passthrough FUSE daemon mounts the repo and logs every `open`/`read` with `{path, offset, length, pid, ts}`, forwarding to the backing files. **Byte-extent granularity is locked** (over coarser fanotify open-events) specifically so `tokens_read_before_first_edit` is *measured*, not estimated. This underpins `irrelevant_file_read_ratio`, `forbidden_file_reads`, and the read-token series regardless of what the agent claims.
+
+   The container needs `/dev/fuse` + `CAP_SYS_ADMIN`. FUSE adds per-read latency, which inflates `wall_clock_seconds` (a secondary metric) but **not** the read/token *counts* that are the primary signal — flagged in the methodology note ([§7.4](#74-methodology-note)). This kernel/FS-boundary tap is chosen over an in-process shim precisely because Codex may shell out to tools (`ripgrep`, `grep`, subprocesses) whose reads a wrapper shim would miss.
 2. **Tool-call / transcript tap.** The agent runner emits a structured event log of tool invocations (search, read, edit, shell) and per-request token accounting from the provider response (input tokens, output tokens). This yields `*_before_first_edit` counts and the token series. The `pdd context-audit` token accounting (#789) and existing `pdd.server.token_counter` utilities are reused for any prompt-space token attribution.
 3. **Git diff tap (ground truth for edits).** Post-run `git diff` against the base commit classifies every changed path as target / in-scope / wrong-file / forbidden, giving `wrong_file_edit_rate` and `forbidden_file_edits` independent of the transcript.
 
-The **first-edit boundary** is determined by the first write event that lands inside the repo tree (from tap 1/3), and is used to split tap-2 events into before/after.
+The **first-edit boundary** is determined by the first write event that lands in the OverlayFS `upperdir` (tap 1), and is used to split tap-2 events into before/after. The git-diff tap (3) is retained as a redundant cross-check on the OverlayFS `upperdir`, not the primary edit source.
 
 ### 6.3 Run record schema
 
@@ -352,7 +358,7 @@ One JSONL line per run, plus pointers to raw trace artifacts:
   "size": "20x",
   "arm": "agentic_code_patch",
   "seed": 0,
-  "model": "<frozen model id>",
+  "model": "<frozen Codex model id + reasoning effort>",
   "timeout_seconds": 1800,
   "manifest_sha256": "…",
   "base_repo_sha256": "…",
@@ -399,7 +405,7 @@ Every non-pass run is labeled with exactly one primary `failure_class` (issue re
 
 ### 6.5 Replication and seeds
 
-Each `(scenario, size)` is run over `N` seeds (pilot default `N = 5`, revisited after a variance check) to separate trend from noise. Model nondeterminism is the main variance source; seeds vary the agent's sampling, not the inputs. All seeds for a cell share identical materialized repos.
+Each `(scenario, size)` is run over **`N = 5` seeds (LOCKED)** to separate trend from noise — 3 scenarios × 4 sizes × 5 = **60 runs** for the pilot arm. Revisited only if a variance check shows CIs too wide to read a trend. Model nondeterminism is the main variance source; seeds vary the agent's sampling, not the inputs. All seeds for a cell share identical materialized repos.
 
 ---
 
@@ -475,7 +481,7 @@ The report closes by filing follow-up issues for any product gaps surfaced (e.g.
 
 ### 8.1 `agentic_code_patch` (pilot, required)
 
-An agentic code-patching workflow receives `task.md` and the materialized repo, may search/read before editing, and edits implementation code. All [§6](#6-instrumentation-plan) instrumentation applies. The specific agent/CLI and model are frozen in `scenario.json`/run config before runs and held constant across sizes.
+**LOCKED: Codex CLI (GPT), run inside the Linux container ([§6.2](#62-how-we-capture-it-defense-in-depth)).** Codex receives `task.md` and the materialized repo via the OverlayFS `merged` mount, may search/read before editing, and edits implementation code. All [§6](#6-instrumentation-plan) instrumentation applies. The exact Codex model id and reasoning-effort setting are frozen in the run config before runs and held constant across all sizes and seeds (see [§10](#10-locked-decisions) for the two Codex specifics still to confirm).
 
 ### 8.2 `pdd_prompt_space` (deferred comparison)
 
@@ -494,13 +500,26 @@ A PDD-style prompt/test/spec context rendered from a fixed manifest. The key pro
 - [ ] Failures classified (esp. wrong-file, overflow, timeout, hidden-contract miss).
 - [ ] Report states explicitly: supports / weakens / inconclusive for the effective-context-window claim.
 
-## 10. Open questions / decisions to lock before runs
+## 10. Locked decisions
 
-1. **Agent/CLI + model** for the pilot arm (must be frozen and stated).
-2. **Filesystem tap** mechanism on the run host (FUSE overlay vs syscall trace vs FS shim) — pick the most reliable available.
-3. **Base repo source** for the 3 scenarios: extract from real OSS bug-fix commits vs author small self-contained repos. Real commits give realistic distractor pools from the same project.
-4. **Seed count `N`** — start at 5, confirm with a variance pilot before scaling.
-5. **Timeout** value that is generous enough not to bias large sizes purely on wall-clock.
+Frozen before any model run (pre-registration). A change to any of these is a new experiment, not an edit to this one.
+
+| # | Decision | Locked choice | Where it lands |
+|---|----------|---------------|----------------|
+| 1 | Pilot arm agent/CLI + model | **Codex CLI (GPT)**, held constant across all sizes/seeds | [§8.1](#81-agentic_code_patch-pilot-required) |
+| 2 | Filesystem tap | **Linux container + OverlayFS (edits) + FUSE passthrough, byte-extent reads** | [§6.2](#62-how-we-capture-it-defense-in-depth) |
+| 3 | Base repo source | **Hand-authored minimal repos** (controlled, deterministic, easy hidden-test isolation) | [§4](#4-scenario-format), [§5.3](#53-sourcing-donor-files) |
+| 4 | Seeds per `(scenario, size)` | **`N = 5`** → 60 runs for the pilot arm | [§6.5](#65-replication-and-seeds) |
+| 5 | Per-run timeout | **1800 s (30 min)** — generous enough that 50x is not penalized on wall-clock alone | run config / [§6.3](#63-run-record-schema) |
+
+### Still to confirm (Codex specifics — do not block scenario authoring)
+
+1. **Exact Codex model id + reasoning-effort** setting to pin in the run config (must be stated in the report).
+2. **Codex read/search execution path** — confirm whether Codex shells out (e.g. `ripgrep`) vs reads in-process. Either way the kernel-level FUSE tap captures it; this only affects how we *reconcile* the transcript tap against the FS tap.
+
+### Consequence of choice #3 (hand-authored repos) — realism guardrail
+
+Hand-authored repos trade organic realism for control, so the issue's non-goal — "no synthetic filler an agent would trivially ignore" — becomes an explicit authoring obligation, enforced by the distractor constraints in [§5.3](#53-sourcing-donor-files): distractors must share the target's vocabulary, imports, and architectural layer, and must compile/import cleanly. A pre-run **plausibility review** (a human spot-check that near-tier distractors are not obviously irrelevant) is added to the freeze checklist.
 
 ---
 

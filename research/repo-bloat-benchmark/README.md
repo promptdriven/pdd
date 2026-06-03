@@ -37,6 +37,19 @@ research/repo-bloat-benchmark/
 - Primary outcomes: hidden-pass-rate and token usage, plus localization cost
   (files read / tool calls before first edit).
 
+## Locked decisions (frozen before runs — see design §10)
+
+| Decision | Choice |
+|----------|--------|
+| Pilot agent + model | **Codex CLI (GPT)** |
+| Base repo source | **Hand-authored minimal repos** |
+| Filesystem tap | **Linux container + OverlayFS (edits) + FUSE passthrough, byte-extent reads** |
+| Seeds per cell | **5** (→ 60 runs) |
+| Per-run timeout | **30 min** |
+
+Still to confirm (does not block scenario authoring): exact Codex model id +
+reasoning effort, and whether Codex shells out for reads/search.
+
 ## Ground rules (see design §2)
 
 - Determinism + content hashing before any model run.
@@ -47,6 +60,7 @@ research/repo-bloat-benchmark/
 ## Status
 
 - [x] Design document drafted.
+- [x] §10 pilot decisions locked.
 - [ ] Scenarios defined.
 - [ ] Distractor pool + manifests committed.
 - [ ] Harness + instrumentation implemented.
