@@ -426,6 +426,40 @@ def test_json_includes_capability_authoring_warnings(tmp_path: Path) -> None:
     )
 
 
+def test_must_not_overrides_later_may_same_category(tmp_path: Path) -> None:
+    """MUST NOT blocks an effect category even when a later MAY bullet would allow it."""
+    prompt = tmp_path / "deny_wins.prompt"
+    prompt.write_text(
+        "<capabilities>\n"
+        "- MUST NOT call external APIs.\n"
+        "- MAY call the Stripe refund API.\n"
+        "</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "network.py"
+    target.write_text("import requests\n", encoding="utf-8")
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "network" for i in result.issues)
+
+
+def test_must_not_overrides_earlier_may_same_category(tmp_path: Path) -> None:
+    """MUST NOT blocks an effect category regardless of bullet order."""
+    prompt = tmp_path / "deny_wins_reverse.prompt"
+    prompt.write_text(
+        "<capabilities>\n"
+        "- MAY call the Stripe refund API.\n"
+        "- MUST NOT call external APIs.\n"
+        "</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "network.py"
+    target.write_text("import requests\n", encoding="utf-8")
+    result = run_policy_check(target, prompt)
+    assert not result.passed
+    assert any(i.category == "network" for i in result.issues)
+
+
 def test_human_output_includes_capability_authoring_warnings(tmp_path: Path) -> None:
     """Human-readable CLI output includes warnings and suggested phrasing."""
     prompt = tmp_path / "ambiguous.prompt"

@@ -334,8 +334,23 @@ def _bullet_is_ambiguous(text: str, categories: frozenset[str], *, is_must_not: 
 
 
 def analyze_capability_allowances(capabilities: list[Capability]) -> _CapabilityAllowances:
-    """Derive conservative allowances and authoring warnings from capability bullets."""
+    """Derive conservative allowances and authoring warnings from capability bullets.
+
+    For each effect category, an unambiguous ``MUST NOT`` blocks the category even when a
+    later ``MAY`` bullet would otherwise allow it (deny-wins, order-independent).
+    """
     allowances = _CapabilityAllowances()
+    may_network = False
+    may_shell = False
+    may_file = False
+    may_env = False
+    may_email = False
+    block_network = False
+    block_shell = False
+    block_file = False
+    block_env = False
+    block_email = False
+
     for cap in capabilities:
         categories = _bullet_effect_categories(cap.text, is_must_not=cap.is_must_not)
         if _bullet_is_ambiguous(cap.text, categories, is_must_not=cap.is_must_not):
@@ -344,67 +359,34 @@ def analyze_capability_allowances(capabilities: list[Capability]) -> _Capability
 
         if cap.is_must_not:
             if _EFFECT_NETWORK in categories:
-                allowances.allowed_network = False
+                block_network = True
             if _EFFECT_SHELL in categories:
-                allowances.allowed_shell = False
+                block_shell = True
             if _EFFECT_FILESYSTEM_WRITE in categories:
-                allowances.allowed_file = False
+                block_file = True
             if _EFFECT_ENV_READ in categories:
-                allowances.allowed_env = False
+                block_env = True
             if _EFFECT_EMAIL in categories:
-                allowances.allowed_email = False
+                block_email = True
             continue
 
         if _EFFECT_NETWORK in categories:
-            allowances.allowed_network = True
+            may_network = True
         if _EFFECT_SHELL in categories:
-            allowances.allowed_shell = True
+            may_shell = True
         if _EFFECT_FILESYSTEM_WRITE in categories:
-            allowances.allowed_file = True
+            may_file = True
         if _EFFECT_ENV_READ in categories:
-            allowances.allowed_env = True
+            may_env = True
         if _EFFECT_EMAIL in categories:
-            allowances.allowed_email = True
+            may_email = True
 
+    allowances.allowed_network = may_network and not block_network
+    allowances.allowed_shell = may_shell and not block_shell
+    allowances.allowed_file = may_file and not block_file
+    allowances.allowed_env = may_env and not block_env
+    allowances.allowed_email = may_email and not block_email
     return allowances
-
-
-def _capability_allows(capabilities: list[Capability], keywords: tuple[str, ...]) -> bool:
-    """Return True when a MAY/SHOULD capability mentions any keyword; False on MUST NOT."""
-    lowered_keywords = tuple(kw.lower() for kw in keywords)
-    for cap in capabilities:
-        text = cap.text.lower()
-        if cap.is_must_not and any(kw in text for kw in lowered_keywords):
-            return False
-    for cap in capabilities:
-        if cap.is_must_not:
-            continue
-        if any(kw in cap.text.lower() for kw in lowered_keywords):
-            return True
-    return False
-
-
-def _capability_allows_filesystem(capabilities: list[Capability]) -> bool:
-    """Return True only for capabilities that explicitly authorize filesystem I/O."""
-    for cap in capabilities:
-        text = cap.text.lower()
-        if cap.is_must_not and (
-            any(kw in text for kw in _FILESYSTEM_CAPABILITY_KEYWORDS)
-            or any(phrase in text for phrase in _FILESYSTEM_WRITE_PHRASES)
-            or ("write" in text and any(fs in text for fs in ("file", "files", "disk", "filesystem")))
-        ):
-            return False
-    for cap in capabilities:
-        if cap.is_must_not:
-            continue
-        text = cap.text.lower()
-        if any(kw in text for kw in _FILESYSTEM_CAPABILITY_KEYWORDS):
-            return True
-        if any(phrase in text for phrase in _FILESYSTEM_WRITE_PHRASES):
-            return True
-        if "write" in text and any(fs in text for fs in ("file", "files", "disk", "filesystem", "storage")):
-            return True
-    return False
 
 
 class PolicyVisitor(ast.NodeVisitor):
