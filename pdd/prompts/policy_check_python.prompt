@@ -6,11 +6,22 @@
     "functions": [
       {
         "name": "run_policy_check",
-        "signature": "(target_path: Path, prompt_path: Optional[Path] = None, strict: bool = False) -> PolicyResult",
+        "signature": "(target_path: Path, prompt_path: Optional[Path] = None, *, strict: bool = False) -> PolicyResult",
         "returns": "PolicyResult"
+      },
+      {
+        "name": "analyze_capability_allowances",
+        "signature": "(capabilities: list[Capability]) -> _CapabilityAllowances",
+        "returns": "_CapabilityAllowances"
+      },
+      {
+        "name": "suggest_capability_phrases",
+        "signature": "(effect: str) -> list[str]",
+        "returns": "list[str]"
       }
     ],
     "classes": [
+      { "name": "PolicyWarning" },
       { "name": "PolicyIssue" },
       { "name": "PolicyResult" },
       { "name": "PolicyVisitor" }
@@ -23,24 +34,27 @@
 <include>context/python_preamble.prompt</include>
 
 % Goal
-Scan Python source code for violations of side-effect policies defined in prompt capability contracts.
+Scan Python source code for violations of side-effect policies defined in prompt capability contracts, with conservative natural-language mapping and actionable authoring diagnostics.
 
 % Role & Scope
-Expert Python security engineer. This module provides deterministic, AST-based checks for network access, shell execution, environment reads, and sensitive data leakage. It is the core engine for `pdd checkup policy check`.
+Expert Python security engineer. Deterministic AST-based checks for network access, shell execution, environment reads, filesystem writes, email imports, and sensitive data leakage. Core engine for `pdd policy check` and `pdd checkup policy check`.
 
 % Requirements
-1. Define `PolicyIssue` dataclass: `category: str`, `message: str`, `line: int`, `col: int`, `severity: str = "error"`.
-2. Define `PolicyResult` dataclass: `target_path: Path`, `issues: List[PolicyIssue]`, `passed: bool`.
-3. Implement `PolicyVisitor` (subclass of `ast.NodeVisitor`) to identify side effects.
-4. Exhaustive `NETWORK_LIBS` and `SHELL_LIBS` sets (include `urllib3`, `paramiko`, `httpx`, `requests`, `aiohttp`, `subprocess`, `os`, `shutil`, `pty`, `socket`, `ftplib`, `telnetlib`, `smtplib`).
-5. Detect forbidden shell execution: `os.system`, `subprocess.*`, `shutil.rmtree`, `os.remove`, `os.unlink`, `os.chmod`, etc.
-6. Detect environment access: `os.getenv`, `os.environ`, `os.environb`.
-7. Detect sensitive data leakage in `print()` and logging calls (variables/keys like `token`, `secret`, `password`, `api_key`, `cvv`, `pan`, `bearer`). Handle f-strings, `%` formatting, and `.format()`.
-8. For requirements 4-7, map natural language `<capabilities>` (e.g., "MAY call API") to the AST checker using simple keyword matching on the `MAY` capability text (from `contract_ir.extract_capabilities`) to selectively suppress side-effect warnings for specific categories.
-9. Support inline waivers using `# pdd-policy-ignore: <reason>` comments.
-10. Support prompt-level waivers via the `<waivers>` IR in `contract_ir`.
-11. Support a `strict` mode that flags all high-risk side effects even if `<capabilities>` are absent from the prompt.
-12. Ensure the visitor handles syntax errors and encoding issues gracefully. `passed` is True if no errors are found (or all are suppressed/waived).
+1. Define `PolicyWarning` dataclass for authoring-time diagnostics: `message`, `capability`, `suggestions`, `severity="warning"`, `source="capability_parser"`, `kind="unmapped_capability"`, `line`.
+2. Define `PolicyIssue` dataclass: `category`, `message`, `line`, `col`, `severity="error"`, `kind` (`missing_capability` or `blocked_by_must_not`), `source="enforcement"`, `effect`, `suggestions`.
+3. Define `PolicyResult` dataclass: `target_path`, `issues`, `capability_warnings`, `passed`, `capabilities`. `passed` is True only when `issues` is empty (authoring warnings alone do not fail).
+4. Implement `analyze_capability_allowances(capabilities)`:
+   - Map each bullet conservatively to effect categories (network, shell, filesystem write, env read, email, domain records).
+   - Emit `PolicyWarning` for ambiguous/unmapped MAY bullets; ambiguous bullets must not grant permissions.
+   - Deny-wins: an unambiguous `MUST NOT` blocks a category even when a later `MAY` would allow it (order-independent). Track `may_*_bullets` and `block_*_bullets` per category for diagnostics.
+5. Enforcement denials use `_denied_effect_diagnostic`:
+   - `missing_capability` when no recognized allowance exists.
+   - `blocked_by_must_not` when `MUST NOT` blocks the category (including when a conflicting `MAY` is also present); remediation must not suggest adding a capability that is already in the prompt.
+6. Implement `PolicyVisitor` (subclass of `ast.NodeVisitor`) for side effects. Domain bullets such as "MAY write refund records" must not authorize filesystem I/O; filesystem writes require explicit file/disk/storage wording.
+7. Detect pathlib writes (`Path.write_text`, aliased `Path`, `Path(...).open(..., "w")`), `import os as o` call paths, `from os import environ`, and related patterns.
+8. Support inline waivers `# pdd-policy-ignore` and prompt-level waivers via `contract_ir`.
+9. Support `strict` mode when `<capabilities>` are absent.
+10. Handle syntax/encoding errors as `system` issues with `passed=False`.
 
 % Dependencies
 <contract_ir></contract_ir>

@@ -1,4 +1,4 @@
-"""Capability policy CLI for ``pdd checkup policy`` (not a top-level command)."""
+"""Capability policy CLI for ``pdd policy check`` and ``pdd checkup policy check``."""
 from __future__ import annotations
 
 import json
@@ -176,7 +176,10 @@ def check(
                 for issue in result.issues:
                     click.echo(f"  [{issue.category}] {issue.message} (line {issue.line})")
                     if issue.suggestions:
-                        click.echo(f"    Add a capability such as: {issue.suggestions[0]}")
+                        if issue.kind == "blocked_by_must_not":
+                            click.echo(f"    Suggested remediation: {issue.suggestions[0]}")
+                        else:
+                            click.echo(f"    Add a capability such as: {issue.suggestions[0]}")
 
     if evidence:
         policy_status = "passed" if not any_violations else "failed"

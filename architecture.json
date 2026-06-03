@@ -9501,7 +9501,7 @@
   },
   {
     "reason": "Core logic for scanning Python code for policy violations using AST-based static analysis.",
-    "description": "Exhaustive side-effect analysis for network access, shell execution, env reads, and sensitive data leakage, supporting inline and prompt-level waivers.",
+    "description": "Deterministic side-effect enforcement with capability authoring warnings, deny-wins MUST NOT semantics, and actionable missing vs blocked diagnostics.",
     "dependencies": [
       "contract_ir_python.prompt"
     ],
@@ -9519,18 +9519,32 @@
         "functions": [
           {
             "name": "run_policy_check",
-            "signature": "(source_path, prompt_path=None, *, strict=False) -> PolicyResult",
+            "signature": "(target_path, prompt_path=None, *, strict=False) -> PolicyResult",
             "returns": "PolicyResult"
+          },
+          {
+            "name": "analyze_capability_allowances",
+            "signature": "(capabilities) -> _CapabilityAllowances",
+            "returns": "_CapabilityAllowances"
+          },
+          {
+            "name": "suggest_capability_phrases",
+            "signature": "(effect) -> list[str]",
+            "returns": "list[str]"
           }
         ],
         "classes": [
           {
+            "name": "PolicyWarning",
+            "description": "Authoring-time warning for unmapped capability bullets."
+          },
+          {
             "name": "PolicyIssue",
-            "description": "Represents a single policy violation."
+            "description": "Enforcement finding (missing_capability or blocked_by_must_not)."
           },
           {
             "name": "PolicyResult",
-            "description": "Aggregates policy issues for a scan."
+            "description": "Scan result with issues, capability_warnings, and passed flag."
           },
           {
             "name": "PolicyVisitor",
@@ -9546,7 +9560,7 @@
   },
   {
     "reason": "Registers the pdd policy CLI command group for side-effect enforcement.",
-    "description": "Implements `pdd policy check` for deterministic side-effect validation with JSON and evidence manifest support.",
+    "description": "Implements `pdd policy check` and `pdd checkup policy check` with JSON findings, capability authoring warnings, and evidence manifest support.",
     "dependencies": [
       "policy_check_python.prompt",
       "contract_ir_python.prompt",

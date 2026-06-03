@@ -153,6 +153,16 @@ class _CapabilityAllowances:
     allowed_file: bool = False
     allowed_env: bool = False
     allowed_email: bool = False
+    may_network_bullets: list[str] = field(default_factory=list)
+    block_network_bullets: list[str] = field(default_factory=list)
+    may_shell_bullets: list[str] = field(default_factory=list)
+    block_shell_bullets: list[str] = field(default_factory=list)
+    may_file_bullets: list[str] = field(default_factory=list)
+    block_file_bullets: list[str] = field(default_factory=list)
+    may_env_bullets: list[str] = field(default_factory=list)
+    block_env_bullets: list[str] = field(default_factory=list)
+    may_email_bullets: list[str] = field(default_factory=list)
+    block_email_bullets: list[str] = field(default_factory=list)
     warnings: list[PolicyWarning] = field(default_factory=list)
 
 
@@ -191,39 +201,23 @@ def suggest_capability_phrases(effect: str) -> list[str]:
     return list(_CAPABILITY_SUGGESTIONS.get(effect, _CAPABILITY_SUGGESTIONS["unmapped_capability"]))
 
 
+def _effect_action_phrase(effect: str) -> str:
+    """Short phrase describing what the generated code did for an effect category."""
+    phrases = {
+        _EFFECT_FILESYSTEM_WRITE: "writes to the filesystem",
+        _EFFECT_NETWORK: "makes an external network or API call",
+        _EFFECT_ENV_READ: "reads environment variables",
+        _EFFECT_SHELL: "runs a shell command",
+        _EFFECT_EMAIL: "uses email functionality",
+        _EFFECT_SENSITIVE_LOGGING: "may log sensitive values",
+    }
+    return phrases.get(effect, f"performs a {effect.replace('_', ' ')} side effect")
+
+
 def _missing_capability_message(effect: str) -> tuple[str, list[str]]:
     """Plain-language denial when code performs an effect with no recognized allowance."""
     suggestions = suggest_capability_phrases(effect)
-    if effect == _EFFECT_FILESYSTEM_WRITE:
-        return (
-            "Generated code writes to the filesystem, but no capability allowing file "
-            "writes was recognized.",
-            suggestions,
-        )
-    if effect == _EFFECT_NETWORK:
-        return (
-            "Generated code makes an external network or API call, but no capability "
-            "allowing external calls was recognized.",
-            suggestions,
-        )
-    if effect == _EFFECT_ENV_READ:
-        return (
-            "Generated code reads environment variables, but no capability allowing "
-            "environment access was recognized.",
-            suggestions,
-        )
-    if effect == _EFFECT_SHELL:
-        return (
-            "Generated code runs a shell command, but no capability allowing shell "
-            "execution was recognized.",
-            suggestions,
-        )
-    if effect == _EFFECT_EMAIL:
-        return (
-            "Generated code uses email functionality, but no capability allowing "
-            "email was recognized.",
-            suggestions,
-        )
+    action = _effect_action_phrase(effect)
     if effect == _EFFECT_SENSITIVE_LOGGING:
         return (
             "Generated code may log sensitive values, but the capability contract "
@@ -233,10 +227,63 @@ def _missing_capability_message(effect: str) -> tuple[str, list[str]]:
             suggestions,
         )
     return (
-        f"Generated code performs a {effect.replace('_', ' ')} side effect, but no "
-        "matching capability was recognized.",
+        f"Generated code {action}, but no capability allowing this was recognized.",
         suggestions,
     )
+
+
+def _blocked_by_must_not_remediation() -> list[str]:
+    return [
+        "Narrow or remove the conflicting MUST NOT capability bullet.",
+        "Split the side effect into another module with a clearer capability contract.",
+        "Add an inline `# pdd-policy-ignore` or prompt waiver with justification if review accepts the risk.",
+    ]
+
+
+def _denied_effect_diagnostic(
+    effect: str,
+    *,
+    may_bullets: list[str],
+    block_bullets: list[str],
+) -> tuple[str, str, list[str]]:
+    """Return message, issue kind, and remediation suggestions for a denied effect."""
+    action = _effect_action_phrase(effect)
+    if block_bullets and may_bullets:
+        must_not = block_bullets[0]
+        may = may_bullets[0]
+        message = (
+            f"Generated code {action}, but the capability contract blocks this category "
+            f'via MUST NOT: "{must_not}". A MAY capability is also present ("{may}") but '
+            "does not apply while the MUST NOT blocks this category (deny-wins)."
+        )
+        return message, "blocked_by_must_not", _blocked_by_must_not_remediation()
+    if block_bullets:
+        must_not = block_bullets[0]
+        message = (
+            f"Generated code {action}, but a MUST NOT capability forbids it: "
+            f'"{must_not}".'
+        )
+        return message, "blocked_by_must_not", _blocked_by_must_not_remediation()
+    message, suggestions = _missing_capability_message(effect)
+    return message, "missing_capability", suggestions
+
+
+def _may_block_bullets_for_effect(
+    allowances: _CapabilityAllowances,
+    effect: str,
+) -> tuple[list[str], list[str]]:
+    """Return (may_bullets, block_bullets) recorded for an effect category."""
+    if effect == _EFFECT_NETWORK:
+        return allowances.may_network_bullets, allowances.block_network_bullets
+    if effect == _EFFECT_SHELL:
+        return allowances.may_shell_bullets, allowances.block_shell_bullets
+    if effect == _EFFECT_FILESYSTEM_WRITE:
+        return allowances.may_file_bullets, allowances.block_file_bullets
+    if effect == _EFFECT_ENV_READ:
+        return allowances.may_env_bullets, allowances.block_env_bullets
+    if effect == _EFFECT_EMAIL:
+        return allowances.may_email_bullets, allowances.block_email_bullets
+    return [], []
 
 
 def _unmapped_capability_warning(cap: Capability) -> PolicyWarning:
@@ -357,29 +404,40 @@ def analyze_capability_allowances(capabilities: list[Capability]) -> _Capability
             allowances.warnings.append(_unmapped_capability_warning(cap))
             continue
 
+        bullet = cap.text.strip()
         if cap.is_must_not:
             if _EFFECT_NETWORK in categories:
                 block_network = True
+                allowances.block_network_bullets.append(bullet)
             if _EFFECT_SHELL in categories:
                 block_shell = True
+                allowances.block_shell_bullets.append(bullet)
             if _EFFECT_FILESYSTEM_WRITE in categories:
                 block_file = True
+                allowances.block_file_bullets.append(bullet)
             if _EFFECT_ENV_READ in categories:
                 block_env = True
+                allowances.block_env_bullets.append(bullet)
             if _EFFECT_EMAIL in categories:
                 block_email = True
+                allowances.block_email_bullets.append(bullet)
             continue
 
         if _EFFECT_NETWORK in categories:
             may_network = True
+            allowances.may_network_bullets.append(bullet)
         if _EFFECT_SHELL in categories:
             may_shell = True
+            allowances.may_shell_bullets.append(bullet)
         if _EFFECT_FILESYSTEM_WRITE in categories:
             may_file = True
+            allowances.may_file_bullets.append(bullet)
         if _EFFECT_ENV_READ in categories:
             may_env = True
+            allowances.may_env_bullets.append(bullet)
         if _EFFECT_EMAIL in categories:
             may_email = True
+            allowances.may_email_bullets.append(bullet)
 
     allowances.allowed_network = may_network and not block_network
     allowances.allowed_shell = may_shell and not block_shell
@@ -410,6 +468,7 @@ class PolicyVisitor(ast.NodeVisitor):
         self.should_check = self.strict or self.has_capabilities
 
         resolved = allowances or analyze_capability_allowances(capabilities)
+        self.allowances = resolved
         self.allowed_network = resolved.allowed_network
         self.allowed_shell = resolved.allowed_shell
         self.allowed_file = resolved.allowed_file
@@ -439,6 +498,7 @@ class PolicyVisitor(ast.NodeVisitor):
         *,
         effect: str = "",
         suggestions: Optional[list[str]] = None,
+        kind: str = "",
     ) -> None:
         if not self.should_check or self._is_waived(node, category, message):
             return
@@ -450,20 +510,26 @@ class PolicyVisitor(ast.NodeVisitor):
                 message=message,
                 line=lineno,
                 col=col,
-                kind="missing_capability" if effect else "",
+                kind=kind or ("missing_capability" if effect else ""),
                 effect=effect,
                 suggestions=list(suggestions or []),
             )
         )
 
     def _add_missing_capability(self, node: ast.AST, category: str, effect: str) -> None:
-        message, suggestions = _missing_capability_message(effect)
+        may_bullets, block_bullets = _may_block_bullets_for_effect(self.allowances, effect)
+        message, kind, suggestions = _denied_effect_diagnostic(
+            effect,
+            may_bullets=may_bullets,
+            block_bullets=block_bullets,
+        )
         self._add_issue(
             node,
             category,
             message,
             effect=effect,
             suggestions=suggestions,
+            kind=kind,
         )
 
     def visit_Import(self, node: ast.Import) -> None:

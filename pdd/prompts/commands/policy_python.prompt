@@ -1,4 +1,4 @@
-<pdd-reason>Exposes capability policy under ``pdd checkup policy`` (no top-level ``pdd policy``).</pdd-reason>
+<pdd-reason>Exposes capability policy via top-level ``pdd policy`` and ``pdd checkup policy``.</pdd-reason>
 <pdd-interface>
 {
   "type": "cli",
@@ -26,26 +26,27 @@
 Provide a CLI interface for the deterministic side-effect policy checker.
 
 % Role & Scope
-CLI developer. This module implements the `policy_group` Click group invoked only via `pdd checkup policy`.
+CLI developer. This module implements the `policy_group` Click group registered on the top-level CLI as `pdd policy` and nested under checkup as `pdd checkup policy`.
 
 % Requirements
 1. Define a Click group `policy_group` with `name="policy"`.
-2. Implement `pdd checkup policy check TARGET` command. `TARGET` can be a file or directory.
+2. Implement `pdd policy check TARGET` (and the same via `pdd checkup policy check`). `TARGET` can be a file or directory.
 3. Options:
    - `--prompt PATH`: Explicitly specify the prompt file to use for capability rules.
-   - `--json`: Output results in machine-readable JSON format.
+   - `--json`: Output results in machine-readable JSON (`capabilities`, `issues`, `capability_warnings`, unified `findings`).
    - `--evidence`: Write findings to an evidence manifest.
    - `--strict`: Enable strict mode in the policy engine.
 4. Logic:
    - For each target file, resolve its associated prompt (if not overridden).
    - Use `pdd.contract_ir.parse_prompt_contracts` to parse capabilities and waivers.
    - Use `pdd.policy_check.run_policy_check(target_path: Path, prompt_path: Optional[Path] = None, strict: bool = False) -> PolicyResult`.
-   - Report violations to stdout (or JSON).
+   - Print capability authoring warnings (from `PolicyResult.capability_warnings`) before PASS/FAIL when present.
+   - Report enforcement issues to stdout (or JSON). Use `issue.kind` to choose remediation wording: `blocked_by_must_not` → "Suggested remediation:", `missing_capability` → "Add a capability such as:".
 5. Exit codes:
-   - `0`: Clean (no violations).
-   - `1`: Policy warnings found.
-   - `2`: Errors (missing files, syntax errors, or violations in strict mode).
-6. Do not register `policy_group` on the top-level CLI; only `pdd/commands/checkup.py` dispatches to it.
+   - `0`: Clean (no enforcement errors; capability authoring warnings alone still exit 0).
+   - `1`: Policy enforcement violations (non-strict).
+   - `2`: Violations in `--strict` mode, or system/parse errors.
+6. Register `policy_group` on the top-level CLI (`pdd/commands/__init__.py`) and keep checkup dispatch to the same group.
 
 % Dependencies
 <contract_ir><include select="class:PromptContractIR,def:parse_prompt_contracts">pdd/contract_ir.py</include></contract_ir>

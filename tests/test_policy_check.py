@@ -355,8 +355,8 @@ def test_missing_filesystem_capability_guidance(tmp_path: Path) -> None:
     assert not result.passed
     file_issue = next(i for i in result.issues if i.category == "file")
     assert "filesystem" in file_issue.message.lower()
-    assert "file writes" in file_issue.message.lower()
     assert file_issue.kind == "missing_capability"
+    assert any("disk" in s.lower() for s in file_issue.suggestions)
     assert any("disk" in s.lower() for s in file_issue.suggestions)
 
 
@@ -441,6 +441,61 @@ def test_must_not_overrides_later_may_same_category(tmp_path: Path) -> None:
     result = run_policy_check(target, prompt)
     assert not result.passed
     assert any(i.category == "network" for i in result.issues)
+
+
+def test_deny_wins_diagnostic_blocked_by_must_not_not_missing_capability(tmp_path: Path) -> None:
+    """Deny-wins failures explain MUST NOT blocking, not adding an existing MAY bullet."""
+    prompt = tmp_path / "deny_diag.prompt"
+    prompt.write_text(
+        "<capabilities>\n"
+        "- MUST NOT call external APIs.\n"
+        "- MAY call the Stripe refund API.\n"
+        "</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "network.py"
+    target.write_text("import requests\n", encoding="utf-8")
+    result = run_policy_check(target, prompt)
+    issue = next(i for i in result.issues if i.category == "network")
+    assert issue.kind == "blocked_by_must_not"
+    assert "MUST NOT" in issue.message
+    assert "Stripe refund API" in issue.message
+    assert "deny-wins" in issue.message.lower()
+    assert issue.kind != "missing_capability"
+    assert not any("Add a capability such as" in issue.message for _ in [0])
+    assert all("MAY call the Stripe refund API" not in s for s in issue.suggestions)
+
+
+def test_deny_wins_json_and_human_diagnostic(tmp_path: Path) -> None:
+    """CLI JSON and human output surface blocked_by_must_not remediation text."""
+    prompt = tmp_path / "deny_diag.prompt"
+    prompt.write_text(
+        "<capabilities>\n"
+        "- MUST NOT call external APIs.\n"
+        "- MAY call the Stripe refund API.\n"
+        "</capabilities>\n",
+        encoding="utf-8",
+    )
+    target = tmp_path / "network.py"
+    target.write_text("import requests\n", encoding="utf-8")
+    json_result = CliRunner().invoke(
+        cli.cli,
+        ["policy", "check", str(target), "--prompt", str(prompt), "--json"],
+        env=_CLI_ENV,
+    )
+    assert json_result.exit_code != 0, json_result.output
+    payload = _cli_json_payload(json_result.output)[0]
+    network_issue = next(i for i in payload["issues"] if i["category"] == "network")
+    assert network_issue["kind"] == "blocked_by_must_not"
+    assert "MUST NOT" in network_issue["message"]
+    human_result = CliRunner().invoke(
+        cli.cli,
+        ["policy", "check", str(target), "--prompt", str(prompt)],
+        env=_CLI_ENV,
+    )
+    assert human_result.exit_code != 0, human_result.output
+    assert "Suggested remediation:" in human_result.output
+    assert "Narrow or remove" in human_result.output
 
 
 def test_must_not_overrides_earlier_may_same_category(tmp_path: Path) -> None:
