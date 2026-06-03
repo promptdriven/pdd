@@ -5,21 +5,9 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "write_evidence_manifest", "signature": "(*, command: str, grounding: Optional[Dict[str, Any]] = None, ...) -> Path", "returns": "Path"},
-      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> dict", "returns": "dict"},
+      {"name": "write_evidence_manifest", "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, policy_check: Optional[Mapping[str, Any]] = None) -> Path", "returns": "Path"},
+      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> Mapping[str, str]", "returns": "Mapping[str, str]"},
       {"name": "resolve_generate_output_paths", "signature": "(prompt_file, *, output=None, ...) -> list[str]", "returns": "list[str]"}
-    ]
-  }
-}
-</pdd-interface>
-
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "write_evidence_manifest", "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None) -> Path", "returns": "Path"},
-      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False)", "returns": "Mapping[str, str]"}
     ]
   }
 }
@@ -42,6 +30,14 @@
 - Provide `validation_from_sync(sync_result, *, skip_tests, skip_verify, dry_run=False)` mapping real sync outcomes.
 - Never claim `passed` unless the invoking command established that state.
 - Contract enrichment is optional: lazy-import `coverage_contracts` when present.
+- Accept an optional `policy_check` kwarg (type `Optional[Mapping[str, Any]]`) and emit a `policy_check` block in the manifest when supplied. The block MUST contain a `semantic_review` sub-object with:
+  - `enabled` (bool): `True` when `--semantic-review` is not `"off"`; `False` otherwise.
+  - `mode` (str): one of `"off"`, `"llm"`, or `"agentic"`. Set to `"off"` when `enabled` is `False`.
+  - `max_files` (int): value of `--max-agent-files` (present when `enabled` is `True`).
+  - `max_follow_depth` (int): value of `--max-agent-depth` (present when `enabled` is `True`).
+  - `finding_count` (int): total number of agentic findings recorded (present when `enabled` is `True`).
+  - `max_confidence` (float or null): highest `confidence` score among agentic findings, or `null` when no findings (present when `enabled` is `True`).
+  When `policy_check` kwarg is absent, omit the `policy_check` block entirely.
 - Accept an optional `grounding` kwarg and always emit a `generation.grounding` object in the manifest. The object MUST contain:
   - `mode`: one of `"cloud"`, `"local"`, or `"unavailable"`. Default to `"unavailable"` when no grounding info is supplied (local/no-cloud runs MUST record `unavailable` rather than failing).
   - `selected_examples`: list of `{module, prompt_sha256, code_sha256, similarity, source}` entries (omit fields that are not available; never invent values).

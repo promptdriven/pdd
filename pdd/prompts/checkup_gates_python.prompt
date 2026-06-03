@@ -23,6 +23,11 @@
         "name": "run_doc_contract_check",
         "signature": "(worktree_path: Path, base_ref: Optional[str] = None) -> int",
         "returns": "int"
+      },
+      {
+        "name": "normalize_agentic_findings",
+        "signature": "(raw_findings: List[dict], *, semantic_review_severity: str = \"warning\") -> List[ReviewFinding]",
+        "returns": "List[ReviewFinding]"
       }
     ]
   }
@@ -147,6 +152,16 @@ loop refuses to ship and the fixer addresses the failure.
         - Added skip CONTRACTS (`operation` + `condition`) MUST document the CONDITION — accepting any spelling (`skip_tests`, `skip-tests`, or `--skip-tests`) — within THAT OPERATION'S OWN documented entry/block in BOTH `README.md` AND `pdd/prompts/sync_orchestration_python.prompt`, NOT merely anywhere in the file. Extract the operation's labeled entry (e.g. the `- fix: …` bullet plus its wrapped continuation lines, bounded by the next bullet/blank line/heading) and require the condition token inside it. A doc that mentions only the operation (e.g. "fix: Resolve test failures") fails; and — the #1303/#1238 round-2 drift — a doc that ties `--skip-tests` only to the `test` step while leaving `fix` documented as unconditional ALSO fails, because the condition is not tied to `fix`'s own contract.
         - Added `PDD_*` env vars MUST be documented in `README.md` under the "Environment Variables" section.
       - If any added item is not documented in the expected file/section, print detailed error messages to stdout/stderr and exit with code 1; otherwise exit with code 0.
+
+% Agentic findings adapter
+36. `normalize_agentic_findings(raw_findings: List[dict], *, semantic_review_severity: str = "warning") -> List[ReviewFinding]` — convert raw `agentic_reviewer` findings (each a dict with `source`, `severity`, `confidence`, `effect`, `message`, `evidence`, `agent_steps`) into `ReviewFinding` objects. Rules:
+    - By default (`semantic_review_severity="warning"`), all agentic findings are tagged `severity="warning"` and treated as advisory (non-blocking) regardless of the raw `severity` field.
+    - When `semantic_review_severity="error"`, agentic findings whose `confidence >= 0.85` are escalated to `severity="blocker"` (gate-failing); those below the threshold retain `severity="warning"`.
+    - `reviewer` is always set to `"agentic_reviewer"`.
+    - `area` is set to `"semantic-review"`.
+    - `source: agentic_reviewer` is preserved in the `evidence` field alongside the raw finding's `evidence` and `agent_steps`.
+    - Findings with missing or falsy `message` fields are skipped.
+    - Never raises — return an empty list if `raw_findings` is empty, None, or not iterable.
 
 % Dependencies
 <pdd.checkup_review_loop><include select="class:ReviewFinding,def:_scrub_secrets">../pdd/checkup_review_loop.py</include></pdd.checkup_review_loop>
