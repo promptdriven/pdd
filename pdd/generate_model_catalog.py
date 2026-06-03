@@ -1381,17 +1381,28 @@ _CHATGPT_SUBSCRIPTION_ROWS: List[Dict[str, str]] = [
 ]
 
 
-def _merge_chatgpt_subscription_rows(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+def _merge_chatgpt_subscription_rows(
+    rows: List[Dict[str, str]],
+    arena_index: Optional[Dict[str, Dict[str, Any]]] = None,
+    deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, str]]:
     """Append the hand-managed ChatGPT subscription rows, model-keyed deduped.
 
     Mirrors the local-runner preserve path so a catalog regeneration never drops
-    the subscription fallback (issue #1269).
+    the subscription fallback (issue #1269). Re-resolves ELO from the reviewed
+    manifests/static fallback so subscription rows mirror their API twins under
+    the same DeepSWE -> Arena -> static policy as generated rows.
     """
     have = {r.get("model") for r in rows}
     merged = list(rows)
     for sub in _CHATGPT_SUBSCRIPTION_ROWS:
         if sub["model"] not in have:
-            merged.append(dict(sub))
+            seeded = dict(sub)
+            if arena_index is not None or deepswe_index is not None:
+                elo, _src = _get_elo(seeded["model"], arena_index, deepswe_index)
+                if elo >= ELO_CUTOFF:
+                    seeded["coding_arena_elo"] = str(elo)
+            merged.append(seeded)
     return merged
 
 
@@ -1740,7 +1751,7 @@ def build_rows(
     # (intentionally skipped during litellm-derived generation above) BEFORE
     # the final sort, so the rows land under their "OpenAI ChatGPT" provider
     # block deterministically rather than appended after the last provider.
-    rows = _merge_chatgpt_subscription_rows(rows)
+    rows = _merge_chatgpt_subscription_rows(rows, arena_index, deepswe_index)
 
     # Classify every emitted row (litellm-derived, seeded local-runner,
     # mandatory, user-preserved, and the merged ChatGPT rows alike) for the

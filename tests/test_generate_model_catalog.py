@@ -275,6 +275,9 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
         "gpt-5": {"elo": 1393.0, "votes": 0, "raw_name": "gpt-5"},
         "gpt-5-2": {"elo": 1404.0, "votes": 0, "raw_name": "gpt-5.2"},
     })
+    monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {
+        "gpt-5-4": {"elo": 1479.0, "votes": 0, "raw_name": "gpt-5.4"},
+    })
 
     rows = gmc.build_rows()
 
@@ -291,6 +294,11 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
         r["provider"] == "OpenAI ChatGPT"
         for r in rows if r["model"].startswith("chatgpt/")
     )
+    by_model = {r["model"]: r for r in rows if r["model"].startswith("chatgpt/")}
+    assert by_model["chatgpt/gpt-5.4"]["coding_arena_elo"] == "1479"
+    assert by_model["chatgpt/gpt-5.2"]["coding_arena_elo"] == "1404"
+    # No reviewed/static source yet, so the hand-managed fallback survives.
+    assert by_model["chatgpt/gpt-5.3-codex-spark"]["coding_arena_elo"] == "1400"
 
 
 def test_build_rows_accepts_custom_score_manifest(tmp_path, monkeypatch):
@@ -426,6 +434,7 @@ def test_committed_csv_has_curated_chatgpt_subscription_rows():
         "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
     ):
         assert f"OpenAI ChatGPT,{model},0.0,0.0," in text, model
+    assert "OpenAI ChatGPT,chatgpt/gpt-5.4,0.0,0.0,1479," in text
     # subscription rows carry NO API key (device-flow / codex login). The cloud
     # deploy guard only rejects literal OPENAI_API_KEY rows; these chatgpt/ rows
     # are not those.
@@ -678,9 +687,9 @@ def test_committed_csv_includes_vertex_gemini_3_5_flash_ga_default():
     directly instead of surrogating onto an unrelated first-row provider.
 
     Pin the EXACT 12-column row (format + ELO 1442 + interactive_only=False)
-    and its ELO-sorted position (between the 1456 customtools row and the 1440
-    glm row) so a regeneration that emitted a malformed/mis-sorted row would
-    fail here, not silently dirty the committed catalog."""
+    and its ELO-sorted position (between the 1451 DeepSWE-ranked Flash preview
+    row and the 1440 glm row) so a regeneration that emitted a malformed or
+    mis-sorted row would fail here, not silently dirty the committed catalog."""
     csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     lines = csv_path.read_text(encoding="utf-8").splitlines()
 
@@ -692,10 +701,10 @@ def test_committed_csv_includes_vertex_gemini_3_5_flash_ga_default():
     assert exact_row in lines, "GA Vertex Gemini Flash row missing or malformed"
 
     # ELO-descending order within the Google Vertex AI block: 1442 sits between
-    # the 1456 customtools row and the 1440 glm row.
+    # the 1451 Flash preview row and the 1440 glm row.
     idx = lines.index(exact_row)
     assert lines[idx - 1].startswith(
-        "Google Vertex AI,gemini-3.1-pro-preview-customtools,"
+        "Google Vertex AI,vertex_ai/gemini-3-flash-preview,"
     )
     assert lines[idx + 1].startswith(
         "Google Vertex AI,vertex_ai/zai-org/glm-4.7-maas,"

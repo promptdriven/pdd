@@ -248,7 +248,7 @@ def test_codex_family_present_in_packaged_csv():
     fam = df[df["provider"] == "OpenAI ChatGPT"]
     by_model = {r["model"]: r for _, r in fam.iterrows()}
     expected = {
-        "chatgpt/gpt-5.4": 1437,
+        "chatgpt/gpt-5.4": 1479,
         "chatgpt/gpt-5.3-codex": 1407,
         "chatgpt/gpt-5.2": 1404,
         "chatgpt/gpt-5.3-codex-spark": 1400,
