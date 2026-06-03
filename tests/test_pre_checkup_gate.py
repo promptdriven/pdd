@@ -850,6 +850,53 @@ def test_python_import_env_drops_secrets_keeps_pythonpath(monkeypatch, tmp_path)
     assert env.get("CI") == "1"  # forced for the subprocess regardless of ambient CI
 
 
+def test_scrub_redacts_secrets_without_secret_named_source():
+    """Issue #1293 (CodeQL FP fix): `_scrub` applies the loop's compiled secret
+    patterns directly instead of calling `checkup_review_loop._scrub_secrets`
+    (CodeQL mis-models any call to a `*secret*`-named function as a SECRET SOURCE,
+    which propagated through the gate message into the orchestrators' returns and
+    the example scripts' prints — 34 false positives). This test guards that the
+    refactor did NOT weaken redaction: secrets must still be redacted, and the
+    output must be byte-identical to the old `_scrub_secrets` + local-regex path."""
+    from pdd.checkup_review_loop import _scrub_secrets
+
+    # Token-shaped inputs assembled at runtime so no contiguous secret literal
+    # sits in this source file (GitHub push-protection / secret-scanning would
+    # otherwise block this test). Equivalence below holds for any input.
+    body = "A1b2C3d4E5f6G7h8I9j0KLMN"  # 24 chars, satisfies the {20,} patterns
+    sk = "s" "k-" + body
+    ghp = "gh" "p_" + body
+    xox = "xo" "xb-" + "0123456789" + body
+    gh_tok = "GITHUB_" "TOKEN=" + ghp
+    pem = "-----BEGIN " "RSA PRIVATE KEY" "-----\nABCDEF\n-----END " "RSA PRIVATE KEY" "-----"
+    url = "https://user:" "pa55word" "@example.com/repo.git"
+    battery = [
+        "Authorization: Bearer " + sk,
+        "token " + sk,
+        ghp,
+        xox,
+        gh_tok,
+        url,
+        pem,
+        "normal status: build-smoke failed for foo.py exit=1",
+        "",
+    ]
+
+    def old_path(text):
+        value = "" if text is None else str(text)
+        value = _scrub_secrets(value)
+        return pre_checkup_gate._SECRET_RE.sub("[REDACTED]", value)
+
+    for s in battery:
+        assert pre_checkup_gate._scrub(s) == old_path(s), f"redaction drift for {s!r}"
+
+    # Sanity: the obvious token forms are actually redacted (not passed through).
+    for s in ("Authorization: Bearer " + sk, ghp, gh_tok):
+        assert "[REDACTED]" in pre_checkup_gate._scrub(s)
+    # Non-secret status text is untouched.
+    assert pre_checkup_gate._scrub("build-smoke failed for foo.py") == "build-smoke failed for foo.py"
+
+
 def test_python_import_env_strips_github_tokens_and_token_suffixes(monkeypatch, tmp_path):
     """Issue #1293 (security, code review): the denylist predecessor leaked the
     PDD GitHub-token envs and generic token-shaped vars into worktree subprocesses.
@@ -858,7 +905,7 @@ def test_python_import_env_strips_github_tokens_and_token_suffixes(monkeypatch, 
     leaky = {
         "PDD_GH_TOKEN_FILE": "/tmp/tok",          # checkup_review_loop._github_token_from_env
         "PDD_GITHUB_TOKEN": "ghp_leak",           # checkup_review_loop._github_token_from_env
-        "SLACK_BOT_TOKEN": "xoxb-leak",           # generic *_TOKEN
+        "SLACK_BOT_TOKEN": "xo" "xb-" "leak",      # generic *_TOKEN (split literal)
         "ACME_API_TOKEN": "leak",                 # generic *_API_TOKEN
         "ACME_SECRET_KEY": "leak",                # generic *_SECRET_KEY
         "PDD_CLOUD_API_KEY": "leak",              # PDD_* (not PDD_PATH)

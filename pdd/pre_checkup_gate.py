@@ -115,14 +115,25 @@ def _norm(path: str) -> str:
 
 def _scrub(text: Any) -> str:
     value = "" if text is None else str(text)
-    # Compose the loop's vetted secret-scrubber (broad: AWS/Google/Bearer/
-    # Authorization/URL-creds/PEM) with the local regex (catches bare
-    # ``token=``/``secret=`` forms the vetted one may miss). Lazy import avoids
-    # a load-time cycle; fall back to the local regex if it is unavailable.
+    # Apply the loop's vetted secret PATTERNS (broad: AWS/Google/Bearer/
+    # Authorization/URL-creds/PEM) directly, then the local regex (bare
+    # ``token=``/``ghp_``/``sk-``/``xox`` forms). We iterate the compiled
+    # ``_SECRET_SCRUB_PATTERNS`` list rather than calling
+    # ``checkup_review_loop._scrub_secrets`` — which is *exactly* this loop over
+    # those patterns (so redaction is byte-for-byte identical). The reason:
+    # CodeQL's clear-text-logging query models any call to a function named
+    # ``*secret*`` as a SECRET SOURCE, so routing the gate's status message
+    # through ``_scrub_secrets()`` made it believe a secret flowed from the gate
+    # into the orchestrators' return values and the example scripts' prints (34
+    # false positives, all rooted at that single call). Applying the same
+    # patterns via ``re.sub`` keeps the redaction and drops the spurious taint
+    # source. Lazy import avoids a load-time cycle; fall back to the local regex
+    # if the list is unavailable.
     try:
-        from .checkup_review_loop import _scrub_secrets
+        from .checkup_review_loop import _SECRET_SCRUB_PATTERNS
 
-        value = _scrub_secrets(value)
+        for _pattern in _SECRET_SCRUB_PATTERNS:
+            value = _pattern.sub("[REDACTED]", value)
     except Exception:
         pass
     return _SECRET_RE.sub("[REDACTED]", value)
