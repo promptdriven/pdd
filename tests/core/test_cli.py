@@ -365,6 +365,8 @@ def test_cli_context_compression_off_clears_env(
     )
     assert result.exit_code == 0
     assert "PDD_CONTEXT_COMPRESSION" not in os.environ
+    assert "PDD_COMPRESS_EXAMPLES" not in os.environ
+    assert "PDD_COMPRESS_TEST_CONTEXT" not in os.environ
 
 
 @patch('pdd.core.cli.auto_update')

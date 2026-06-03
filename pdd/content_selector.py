@@ -14,6 +14,7 @@ import os
 import re
 import textwrap
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from rich.console import Console
@@ -892,6 +893,29 @@ _LOGICAL_SECTION_TAGS = (
 )
 
 
+def _failing_test_ids_for_file(
+    failing_test_ids: list[str],
+    file_path: str | None,
+) -> list[str]:
+    """Keep only pytest node IDs that belong to the file being sliced."""
+    if not file_path:
+        return failing_test_ids
+
+    target = Path(file_path).as_posix()
+    target_name = Path(target).name
+    filtered: list[str] = []
+    for ftid in failing_test_ids:
+        file_part = ftid.split("::", 1)[0]
+        node_path = Path(file_part).as_posix()
+        if (
+            node_path == target
+            or node_path.endswith(f"/{target}")
+            or (Path(node_path).name == target_name and target.endswith(node_path))
+        ):
+            filtered.append(ftid)
+    return filtered
+
+
 def _node_id_to_slicer_name(ftid: str) -> str | None:
     """Map a pytest node id to a ``PytestSlicer`` symbol name."""
     parts = [part for part in ftid.split("::") if part]
@@ -938,6 +962,7 @@ def slice_test_interface_context(content: str, file_path: str | None = None) -> 
     """Slice test source to failing tests and dependency-aware helpers via ``PytestSlicer``."""
     failing_tests_env = os.environ.get("PDD_FAILING_TESTS", "")
     failing_test_ids = [item.strip() for item in failing_tests_env.split(",") if item.strip()]
+    failing_test_ids = _failing_test_ids_for_file(failing_test_ids, file_path)
     if not failing_test_ids:
         return content
 

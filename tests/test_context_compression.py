@@ -16,7 +16,12 @@ from pdd.compression_reporting import (
     format_compression_summary_lines,
     record_compression_fallback,
 )
-from pdd.config_resolution import apply_compression_env, resolve_effective_config
+from pdd.config_resolution import (
+    apply_compression_env,
+    effective_compression_config,
+    resolve_effective_config,
+    set_cli_compression_override,
+)
 from pdd.construct_paths import construct_paths
 from pdd.preprocess import preprocess
 from pdd.pytest_output import _count_skipped_by_compression, _test_context_compression_active
@@ -110,8 +115,137 @@ def test_apply_compression_env_off_unsets_context_compression(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "examples")
+    monkeypatch.setenv("PDD_COMPRESS_EXAMPLES", "1")
+    monkeypatch.setenv("PDD_COMPRESS_TEST_CONTEXT", "1")
     apply_compression_env({"context_compression": "off"})
     assert "PDD_CONTEXT_COMPRESSION" not in os.environ
+    assert "PDD_COMPRESS_EXAMPLES" not in os.environ
+    assert "PDD_COMPRESS_TEST_CONTEXT" not in os.environ
+
+
+def test_effective_compression_config_off_disables_pddrc_legacy_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--context-compression off`` must clear legacy boolean compression env vars."""
+    monkeypatch.setenv("PDD_COMPRESS_EXAMPLES", "1")
+    monkeypatch.setenv("PDD_COMPRESS_TEST_CONTEXT", "1")
+    set_cli_compression_override({"context_compression": "off"})
+    try:
+        apply_compression_env(
+            effective_compression_config(
+                {
+                    "context_compression": "examples",
+                    "compress_examples": True,
+                    "compress_test_context": True,
+                }
+            )
+        )
+    finally:
+        set_cli_compression_override(None)
+
+    assert "PDD_CONTEXT_COMPRESSION" not in os.environ
+    assert "PDD_COMPRESS_EXAMPLES" not in os.environ
+    assert "PDD_COMPRESS_TEST_CONTEXT" not in os.environ
+
+
+def test_construct_paths_respects_cli_compression_off_over_pddrc(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """construct_paths must not re-enable .pddrc compression after CLI ``off``."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_CONTEXT_COMPRESSION", raising=False)
+    monkeypatch.delenv("PDD_COMPRESS_EXAMPLES", raising=False)
+
+    pddrc = tmp_path / ".pddrc"
+    pddrc.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "contexts": {
+                    "default": {
+                        "defaults": {
+                            "context_compression": "examples",
+                            "compress_examples": True,
+                        }
+                    }
+                },
+            }
+        )
+    )
+    prompt_file = tmp_path / "demo_python.prompt"
+    prompt_file.write_text("prompt body")
+    set_cli_compression_override({"context_compression": "off"})
+    try:
+        with patch("pdd.construct_paths.generate_output_paths", return_value={"output": str(tmp_path / "out.py")}):
+            construct_paths(
+                {"prompt_file": str(prompt_file)},
+                force=True,
+                quiet=True,
+                command="generate",
+                command_options={},
+            )
+    finally:
+        set_cli_compression_override(None)
+
+    assert "PDD_CONTEXT_COMPRESSION" not in os.environ
+    assert "PDD_COMPRESS_EXAMPLES" not in os.environ
+
+
+def test_preprocess_off_overrides_pddrc_examples_compression(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preprocess keeps full example content when CLI disables compression."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PDD_QUIET", "1")
+    set_cli_compression_override({"context_compression": "off"})
+    try:
+        apply_compression_env(
+            effective_compression_config(
+                {
+                    "context_compression": "examples",
+                    "compress_examples": True,
+                }
+            )
+        )
+        examples_dir = tmp_path / "examples"
+        examples_dir.mkdir()
+        (examples_dir / "helper_example.py").write_text(
+            "def helper():\n    return 42\n",
+            encoding="utf-8",
+        )
+        result = preprocess(
+            "<include>examples/helper_example.py</include>",
+            recursive=False,
+            double_curly_brackets=False,
+            examples_dir="examples",
+        )
+    finally:
+        set_cli_compression_override(None)
+
+    assert "def helper" in result
+    assert "return 42" in result
+    assert "..." not in result
+
+
+def test_slice_test_interface_ignores_other_file_failure_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only failing node IDs for the target file should be passed to PytestSlicer."""
+    from pdd.content_selector import slice_test_interface_context
+
+    monkeypatch.setenv(
+        "PDD_FAILING_TESTS",
+        "tests/test_primary.py::test_primary,tests/test_extra.py::test_extra",
+    )
+    monkeypatch.setenv("PDD_COMPRESSION_FALLBACK", "error")
+
+    sliced = slice_test_interface_context(
+        "def test_primary():\n    assert False\n",
+        "tests/test_primary.py",
+    )
+    assert "def test_primary" in sliced
 
 
 def _cli_ctx_with_unset_compression() -> click.Context:
@@ -169,6 +303,29 @@ def test_resolve_effective_config_cli_compression_overrides_pddrc(
 
     assert effective["compress_test_context"] is True
     assert os.environ.get("PDD_COMPRESS_TEST_CONTEXT") == "1"
+
+
+def test_resolve_effective_config_off_overrides_pddrc_legacy_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PDD_COMPRESS_EXAMPLES", "1")
+    monkeypatch.setenv("PDD_COMPRESS_TEST_CONTEXT", "1")
+
+    ctx = _cli_ctx_with_unset_compression()
+    ctx.obj["context_compression"] = "off"
+
+    resolved_config = {
+        "context_compression": "examples",
+        "compress_examples": True,
+        "compress_test_context": True,
+    }
+    effective = resolve_effective_config(ctx, resolved_config, param_overrides={})
+
+    assert effective["context_compression"] == "off"
+    assert effective["compress_examples"] is False
+    assert effective["compress_test_context"] is False
+    assert "PDD_COMPRESS_EXAMPLES" not in os.environ
+    assert "PDD_COMPRESS_TEST_CONTEXT" not in os.environ
 
 
 def test_resolve_effective_config_fix_command_local_flag_overrides_pddrc(

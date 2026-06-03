@@ -458,9 +458,14 @@ def cli(
 
     # Context compression options (issue #877)
     from ..compression_reporting import clear_compression_fallback_events
-    from ..config_resolution import apply_compression_env
+    from ..config_resolution import (
+        apply_compression_env,
+        effective_compression_config,
+        set_cli_compression_override,
+    )
 
     clear_compression_fallback_events()
+    set_cli_compression_override(None)
     ctx.obj["compress_examples"] = compress_examples
     ctx.obj["compress_test_context"] = compress_test_context
     ctx.obj["context_compression"] = context_compression
@@ -474,8 +479,9 @@ def cli(
         cli_compression["context_compression"] = context_compression
     if compression_fallback is not None:
         cli_compression["compression_fallback"] = compression_fallback
+    set_cli_compression_override(cli_compression if cli_compression else None)
     if cli_compression:
-        apply_compression_env(cli_compression)
+        apply_compression_env(effective_compression_config({}))
 
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
