@@ -300,6 +300,76 @@ def test_estimate_completion_cost_unknown_model_returns_none(mock_pricing_csv):
     )
 
 
+# ---------------------------------------------------------------------------
+# default pricing CSV resolution (#1357: usable pre-flight cost primitives)
+# ---------------------------------------------------------------------------
+
+def test_default_pricing_csv_resolution_order(tmp_path, monkeypatch):
+    """Resolution prefers $HOME/.pdd, then cwd/.pdd, then the bundled CSV."""
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    (home / ".pdd").mkdir(parents=True)
+    (project / ".pdd").mkdir(parents=True)
+    home_csv = home / ".pdd" / "llm_model.csv"
+    project_csv = project / ".pdd" / "llm_model.csv"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.chdir(project)
+
+    # Nothing user/project-level yet -> falls back to the bundled package CSV.
+    assert token_counter.default_pricing_csv() == token_counter._BUNDLED_PRICING_CSV
+    assert token_counter._BUNDLED_PRICING_CSV.is_file()  # bundled CSV ships with the package
+
+    # Project-level CSV wins over the bundled fallback.
+    project_csv.write_text("model,input,output\ngpt-4,30.00,60.00\n")
+    assert token_counter.default_pricing_csv() == project_csv
+
+    # $HOME-level CSV takes precedence over the project CSV.
+    home_csv.write_text("model,input,output\ngpt-4,30.00,60.00\n")
+    assert token_counter.default_pricing_csv() == home_csv
+
+
+def test_estimate_completion_cost_uses_default_pricing_when_csv_omitted(monkeypatch, mock_pricing_csv):
+    """With no pricing_csv, the completion estimate resolves the canonical CSV."""
+    token_counter._load_model_pricing.cache_clear()
+    monkeypatch.setattr(token_counter, "default_pricing_csv", lambda: mock_pricing_csv)
+
+    estimate = estimate_completion_cost(
+        input_tokens=1_000_000, predicted_output_tokens=500_000, model="gpt-4"
+    )
+
+    assert estimate is not None
+    assert estimate.total_cost == pytest.approx(60.00)
+
+
+def test_estimate_completion_cost_no_default_pricing_returns_none(monkeypatch):
+    """When no pricing source exists at all, cost stays explicitly unknown."""
+    token_counter._load_model_pricing.cache_clear()
+    monkeypatch.setattr(token_counter, "default_pricing_csv", lambda: None)
+    assert estimate_completion_cost(1000, 1000, "gpt-4") is None
+
+
+def test_estimate_completion_cost_explicit_missing_path_not_replaced(monkeypatch, tmp_path):
+    """An explicit (but missing) path is honored, never swapped for the default."""
+    token_counter._load_model_pricing.cache_clear()
+    sentinel = {"called": False}
+
+    def _should_not_run():
+        sentinel["called"] = True
+        return None
+
+    monkeypatch.setattr(token_counter, "default_pricing_csv", _should_not_run)
+    assert estimate_completion_cost(1000, 1000, "gpt-4", tmp_path / "nope.csv") is None
+    assert sentinel["called"] is False
+
+
+def test_estimate_cost_default_none_still_unknown(monkeypatch, mock_pricing_csv):
+    """Legacy input-only API keeps treating None pricing_csv as 'no pricing'."""
+    token_counter._load_model_pricing.cache_clear()
+    # Even if a default exists, estimate_cost must not auto-resolve it.
+    monkeypatch.setattr(token_counter, "default_pricing_csv", lambda: mock_pricing_csv)
+    assert estimate_cost(1000, "gpt-4") is None
+
+
 def test_estimate_cost_serialization(mock_pricing_csv):
     """CostEstimate.to_dict() serializes all fields correctly."""
     token_counter._load_model_pricing.cache_clear()

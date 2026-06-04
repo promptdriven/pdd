@@ -3,7 +3,13 @@ Token counting and cost estimation utilities.
 
 Uses litellm for model-aware token counting and context window lookup.
 Falls back to tiktoken for unknown models.
-Loads model pricing from .pdd/llm_model.csv.
+
+Model pricing is read from an explicit ``pricing_csv`` when provided. The
+output-inclusive ``estimate_completion_cost`` API additionally resolves a
+canonical pricing CSV via ``default_pricing_csv()`` (``$HOME/.pdd``, then the
+project ``.pdd``, then the bundled ``pdd/data/llm_model.csv``) so pre-flight
+cost previews work out of the box. When no pricing is available, cost is
+reported as explicitly unknown rather than guessed.
 """
 
 from __future__ import annotations
@@ -286,6 +292,11 @@ class ModelPricing(NamedTuple):
 
 PricingCsvPath = Union[str, Path]
 
+# Canonical list-price CSV shipped inside the package (pdd/data/llm_model.csv),
+# used as the final pricing fallback so cost estimation works without any user
+# configuration. Resolved relative to this module: pdd/server/ -> pdd/data/.
+_BUNDLED_PRICING_CSV = Path(__file__).resolve().parent.parent / "data" / "llm_model.csv"
+
 
 def _existing_pricing_path(pricing_csv: Optional[PricingCsvPath]) -> Optional[Path]:
     """Normalize a pricing CSV path and return it only when it exists."""
@@ -293,6 +304,27 @@ def _existing_pricing_path(pricing_csv: Optional[PricingCsvPath]) -> Optional[Pa
         return None
     path = Path(pricing_csv)
     return path if path.exists() else None
+
+
+def default_pricing_csv() -> Optional[Path]:
+    """Resolve the canonical pricing CSV when a caller does not pass one.
+
+    Resolution order (first existing wins):
+      1. ``$HOME/.pdd/llm_model.csv`` — the user's configured pricing.
+      2. ``<cwd>/.pdd/llm_model.csv`` — project-local pricing.
+      3. the ``pdd/data/llm_model.csv`` bundled with the package.
+
+    Returns ``None`` only when none of these exist, so callers still observe
+    the "cost is explicitly unknown" contract when no pricing is available.
+    """
+    for candidate in (
+        Path.home() / ".pdd" / "llm_model.csv",
+        Path.cwd() / ".pdd" / "llm_model.csv",
+        _BUNDLED_PRICING_CSV,
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 @lru_cache(maxsize=1)
@@ -399,10 +431,18 @@ def estimate_completion_cost(
     """
     Estimate combined input and predicted output cost for a completion.
 
+    When ``pricing_csv`` is omitted, the canonical pricing CSV is resolved via
+    ``default_pricing_csv()`` so pre-flight cost previews work without callers
+    plumbing a path through. An explicitly supplied path is used as-is and is
+    never silently replaced by the default.
+
     Returns None when pricing is unavailable or the model has no valid pricing
     row. Unknown models must not borrow another model's price.
     """
-    pricing_path = _existing_pricing_path(pricing_csv)
+    if pricing_csv is None:
+        pricing_path = default_pricing_csv()
+    else:
+        pricing_path = _existing_pricing_path(pricing_csv)
     if pricing_path is None:
         return None
 
