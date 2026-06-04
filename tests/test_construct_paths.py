@@ -1933,9 +1933,10 @@ def test_construct_paths_generate_command(setup_test_files):
     # assert "Could not determine language" in str(excinfo.value)
     assert actual_determined_language == "prompt"
     # Basename should be "main_gen" after stripping "_prompt"
+    expected_output_locations = {"output": str(output_dir_abs)}
     mock_gen_ops.assert_called_once_with(
         command='generate',
-        output_locations=command_options, # output_dir_abs is in command_options['output']
+        output_locations=expected_output_locations,
         basename='main_gen',
         language='prompt',
         file_extension='.prompt',

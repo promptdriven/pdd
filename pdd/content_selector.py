@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import textwrap
 from dataclasses import dataclass, field
@@ -21,6 +22,11 @@ from rich.theme import Theme
 
 from ._selector_parse import parse_selectors_string
 from .api_contract_slicer import ApiContractSlicer, ContractSlicerError
+from .compression_reporting import (
+    CompressionFallbackError,
+    record_compression_applied,
+    record_compression_fallback,
+)
 from .pytest_slicer import PytestSlicer, SlicerError
 
 # Conditional YAML support
@@ -548,7 +554,6 @@ def augment_interface_with_patch_targets(
         return interface_text
     return interface_text.rstrip() + "\n\n" + "\n\n".join(extras) + "\n"
 
-
 # ---------------------------------------------------------------------------
 # Markdown section selector
 # ---------------------------------------------------------------------------
@@ -836,6 +841,12 @@ class ContentSelector:
                 _report_error(f"Failed to parse Python source: {exc}", file_path)
                 raise SelectorError(f"Python parse error: {exc}") from exc
 
+        if not selectors and mode == "contracts":
+            return _contracts_mode(content)
+
+        if not selectors and mode == "test_interface":
+            return _test_interface_mode(content, file_path)
+
         if not selectors and mode == "compressed":
             if not _is_python(file_path):
                 return content
@@ -933,7 +944,14 @@ class ContentSelector:
                         slicer = PytestSlicer(content, file_path=file_path)
                         sliced_content, _ = slicer.slice(test_names)
                     except SlicerError as exc:
-                        raise SelectorError(str(exc)) from exc
+                        sliced_content = _handle_selector_slice_failure(
+                            exc,
+                            slice_kind="pytest",
+                            file_path=file_path,
+                            content=content,
+                        )
+                    if sliced_content != content and file_path:
+                        record_compression_applied(file_path, f"pytest:{sel.value}")
                     path_results.append(sliced_content)
                 elif sel.kind == "contract":
                     symbols = [t.strip() for t in sel.value.split(",") if t.strip()]
@@ -941,11 +959,18 @@ class ContentSelector:
                         slicer = ApiContractSlicer(content, file_path=file_path)
                         sliced_content, _ = slicer.slice(symbols)
                     except ContractSlicerError as exc:
-                        raise SelectorError(str(exc)) from exc
+                        sliced_content = _handle_selector_slice_failure(
+                            exc,
+                            slice_kind="contract",
+                            file_path=file_path,
+                            content=content,
+                        )
+                    if sliced_content != content and file_path:
+                        record_compression_applied(file_path, f"contract:{sel.value}")
                     path_results.append(sliced_content)
                 else:
                     raise SelectorError(f"Unknown selector kind: '{sel.kind}'")
-            except SelectorError:
+            except (SelectorError, CompressionFallbackError):
                 raise
             except Exception as exc:
                 _report_error(
@@ -973,7 +998,7 @@ class ContentSelector:
             else:
                 parts.append(_extract_spans(source_lines, all_spans))
 
-        # Path-based content (pytest:/contract:/path: selectors)
+        # Path-based content
         if path_results and mode == "compressed" and is_python:
             compressed_paths: list[str] = []
             for chunk in path_results:
@@ -1080,3 +1105,153 @@ def _report_error(message: str, file_path: str | None = None) -> None:
     """Print a formatted error to the rich console."""
     location = f" in [path]{file_path}[/path]" if file_path else ""
     console.print(f"[error]ContentSelector error{location}:[/error] {message}")
+# ---------------------------------------------------------------------------
+# Contract and Test Interface Modes
+# ---------------------------------------------------------------------------
+
+_PDD_META_TAGS = ("pdd-reason", "pdd-interface", "pdd-dependency")
+_LOGICAL_SECTION_TAGS = (
+    "responsibility",
+    "non_responsibilities",
+    "vocabulary",
+    "contract_rules",
+    "capabilities",
+    "waivers",
+    "coverage",
+)
+
+
+def _failing_test_ids_for_file(
+    failing_test_ids: list[str],
+    file_path: str | None,
+) -> list[str]:
+    """Keep only pytest node IDs that belong to the file being sliced."""
+    if not file_path:
+        return failing_test_ids
+
+    target = Path(file_path).as_posix()
+    target_name = Path(target).name
+    filtered: list[str] = []
+    for ftid in failing_test_ids:
+        file_part = ftid.split("::", 1)[0]
+        node_path = Path(file_part).as_posix()
+        if (
+            node_path == target
+            or node_path.endswith(f"/{target}")
+            or (Path(node_path).name == target_name and target.endswith(node_path))
+        ):
+            filtered.append(ftid)
+    return filtered
+
+
+def _node_id_to_slicer_name(ftid: str) -> str | None:
+    """Map a pytest node id to a ``PytestSlicer`` symbol name."""
+    parts = [part for part in ftid.split("::") if part]
+    if not parts:
+        return None
+    if parts[0].endswith(".py") or "/" in parts[0]:
+        parts = parts[1:]
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return f"{parts[0]}.{parts[1]}"
+
+
+def _compression_fallback_policy() -> str:
+    return (os.environ.get("PDD_COMPRESSION_FALLBACK", "full") or "full").lower()
+
+
+def _handle_selector_slice_failure(
+    exc: Exception,
+    *,
+    slice_kind: str,
+    file_path: str | None,
+    content: str,
+) -> str:
+    """Apply ``PDD_COMPRESSION_FALLBACK`` when pytest/contract slicing fails."""
+    label = file_path or "<file>"
+    message = f"{slice_kind} slice failed for {label}: {exc}"
+    if _compression_fallback_policy() == "error":
+        record_compression_fallback(message)
+        raise CompressionFallbackError(message) from exc
+    record_compression_fallback(message)
+    return content
+
+
+def _handle_test_slice_failure(exc: SlicerError, *, file_path: str | None, content: str) -> str:
+    """Apply ``PDD_COMPRESSION_FALLBACK`` when pytest test_interface slicing fails."""
+    return _handle_selector_slice_failure(
+        exc, slice_kind="pytest", file_path=file_path, content=content
+    )
+
+
+def slice_test_interface_context(content: str, file_path: str | None = None) -> str:
+    """Slice test source to failing tests and dependency-aware helpers via ``PytestSlicer``."""
+    failing_tests_env = os.environ.get("PDD_FAILING_TESTS", "")
+    failing_test_ids = [item.strip() for item in failing_tests_env.split(",") if item.strip()]
+    failing_test_ids = _failing_test_ids_for_file(failing_test_ids, file_path)
+    if not failing_test_ids:
+        return content
+
+    test_names: list[str] = []
+    seen: set[str] = set()
+    for ftid in failing_test_ids:
+        name = _node_id_to_slicer_name(ftid)
+        if name and name not in seen:
+            test_names.append(name)
+            seen.add(name)
+
+    if not test_names:
+        return content
+
+    try:
+        slicer = PytestSlicer(content, file_path=file_path)
+        sliced_content, _ = slicer.slice(test_names)
+    except SlicerError as exc:
+        return _handle_test_slice_failure(exc, file_path=file_path, content=content)
+    return sliced_content
+
+
+def _contracts_mode(content: str) -> str:
+    """Extract contract-related elements from prompt or documentation files."""
+    output_parts: list[str] = []
+
+    for tag in _PDD_META_TAGS:
+        output_parts.extend(
+            re.findall(rf"<{tag}>.*?</{tag}>", content, re.DOTALL)
+        )
+
+    for tag in _LOGICAL_SECTION_TAGS:
+        output_parts.extend(
+            re.findall(rf"<{tag}>.*?</{tag}>", content, re.DOTALL)
+        )
+
+    rule_lines: list[str] = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if re.match(r"^R\d+ -", stripped):
+            rule_lines.append(line)
+        elif re.match(r"^- (MAY|MUST|MUST NOT)\b", stripped):
+            rule_lines.append(line)
+
+    if rule_lines:
+        output_parts.append("\n".join(rule_lines))
+
+    if not output_parts:
+        return content
+
+    return "\n".join(output_parts)
+
+
+def _test_interface_mode(content: str, file_path: str | None) -> str:
+    """Extract only failing tests and necessary fixtures using ``PytestSlicer``."""
+    failing_tests_env = os.environ.get("PDD_FAILING_TESTS", "")
+    if not failing_tests_env.strip():
+        label = file_path or "<test>"
+        record_compression_fallback(
+            f"test_interface compression skipped for {label}: PDD_FAILING_TESTS unset; "
+            "using full test content"
+        )
+        return content
+    return slice_test_interface_context(content, file_path)
