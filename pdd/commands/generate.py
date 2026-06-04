@@ -563,6 +563,8 @@ def test(
                     console.print(f"[bold red]Story generation failed:[/bold red] {message}")
                 if linked_prompts:
                     console.print(f"Linked prompts: {', '.join(linked_prompts)}")
+            if not success:
+                raise click.ClickException(message)
             result_dict = {
                 "success": success,
                 "message": message,
@@ -672,7 +674,7 @@ def test(
                 )
             return test_result.content, test_result.cost, test_result.model
 
-    except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+    except (click.Abort, click.exceptions.Exit, click.ClickException, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False

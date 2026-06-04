@@ -677,6 +677,29 @@ def test_test_story_generation_mode_from_prompt_inputs(runner):
     assert kwargs["verbose"] is False
 
 
+def test_test_story_generation_failure_exits_nonzero(runner):
+    """Story generation failure must fail the CLI instead of silently
+    succeeding without writing an LLM-authored story."""
+    with runner.isolated_filesystem():
+        with open("upload_python.prompt", "w") as f:
+            f.write("Upload prompt")
+
+        with patch.object(generate_module, "generate_user_story") as mock_generate_story:
+            mock_generate_story.return_value = (
+                False,
+                "User story generation requires a valid LLM-authored story.",
+                0.0,
+                "",
+                "",
+                [],
+            )
+            result = runner.invoke(generate_module.test, ["upload_python.prompt"])
+
+    assert result.exit_code != 0
+    assert "requires a valid LLM-authored story" in result.output
+    mock_generate_story.assert_called_once()
+
+
 def test_test_story_mode_links_uses_env_prompts_dir(runner, monkeypatch):
     """Regression for codex finding on pdd/commands/generate.py:469.
 

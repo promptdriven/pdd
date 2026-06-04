@@ -9,7 +9,7 @@ Implement user story utilities that:
 - discover story files (`story__*.md`) and prompt files (`*.prompt`)
 - validate stories against prompts via `detect_change`
 - generate LLM-authored `story__*.md` files from prompt inputs (`pdd test <*.prompt>`),
-  with a deterministic contract-aware fallback template
+  without any deterministic story-generation fallback
 - apply prompt fixes for a single story by orchestrating `change_main`
 
 % Issue #820 — contract-aware story template (epic #833)
@@ -23,7 +23,7 @@ the guide may say `## Forbidden Outcomes` — same intent).
 `## Non-Goals`, `## Notes`. Do not emit `## Prompt Scope`; list scoped prompts in
 `## Context` and in `<!-- pdd-story-prompts: ... -->` metadata.
 
-**`generate_user_story()` / `_llm_generate_story_markdown()` / `_render_story_markdown_from_prompts()`**
+**`generate_user_story()` / `_llm_generate_story_markdown()`**
 - Invoked from `pdd/commands/generate.py` when `pdd test` receives `.prompt` files.
 - **Issue #1356 — LLM-authored stories.** `generate_user_story()` first calls
   `_llm_generate_story_markdown()`, which loads the `generate_user_story_LLM`
@@ -31,7 +31,7 @@ the guide may say `## Forbidden Outcomes` — same intent).
   with the prompt file(s)' text so the MODEL writes the real user story
   (persona / capability / benefit, Context, Acceptance Criteria, Negative Cases,
   ...). The narrative is derived from the prompt content, not a fixed template.
-- **Required-section validation + deterministic fallback.** Accept the LLM output
+- **Required-section validation, no deterministic fallback.** Accept the LLM output
   only when it contains the FULL canonical section set required by issue #1356 —
   `## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
   `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, and `## Notes` — (strip a
@@ -40,19 +40,20 @@ the guide may say `## Forbidden Outcomes` — same intent).
   `<action>`. A response carrying only `## Story` and `## Acceptance Criteria` is
   rejected so an incomplete LLM story is never written. When the LLM is unavailable
   (no provider key, offline, error) OR the output is empty, missing any required
-  canonical section, or placeholder-filled,
-  `_llm_generate_story_markdown()` returns `(None, cost, model)` and
-  `generate_user_story()` falls back to `_render_story_markdown_from_prompts()`
-  so `pdd test <*.prompt>` still produces a valid story in CI/tests without a key.
-- **Deterministic fallback template (`_render_story_markdown_from_prompts`).** Seed
-  `## Covers` from `<contract_rules>` via `parse_prompt_contracts()` in
-  `pdd/contract_ir.py` (Path-based API; do not duplicate parsing).
-  Single-prompt: `- R{n}: <summary>`. Multi-prompt: `prompts/<file>.prompt#R{n}: <summary>`.
-  When no contract rules exist, derive Covers, Story, Acceptance Criteria, Oracle,
-  and Negative Cases from concrete prompt lines; do not emit placeholder text such
-  as `<persona>`, `<behavior>`, or "Add contract rule IDs here". Seed `## Negative
-  Cases` bullets from MUST/SHALL/MAY NOT rule text when present. This path stays
-  fully deterministic (no LLM) so it is safe offline and in tests.
+  canonical section, or placeholder-filled, `_llm_generate_story_markdown()`
+  returns `(None, cost, model)` and `generate_user_story()` returns failure without
+  writing a story file. Do not use any deterministic prompt-content renderer or
+  template path for the story body. A deterministic story can be too shallow and
+  pass `pdd detect --stories` after meaningful prompt drift, so `pdd test <*.prompt>`
+  must require a valid LLM-authored story.
+- **Prompt-behavior extraction quality.** The `generate_user_story_LLM` meta-prompt
+  must tell the model to ignore PDD metadata tags (`<pdd-reason>`, `<pdd-interface>`,
+  `<pdd-dependency>`), raw JSON interface declarations, include directives, and
+  deliverable filenames as story behavior. It must prioritize `% Goal`,
+  `% Requirements`, contract rules, CLI options, inputs/outputs, warnings, exit
+  codes, side effects, and explicit negative constraints. The resulting story must
+  be specific enough that behavior-changing prompt mutations (for example changing
+  per-source token attribution to aggregate-only totals) fail user-story validation.
 - **Metadata is independent of generation.** Regardless of which path produced the
   body, `generate_user_story()` stitches `<!-- pdd-story-prompts: ... -->`
   metadata directly from the exact prompt files the user passed. It must not call
@@ -95,8 +96,8 @@ the guide may say `## Forbidden Outcomes` — same intent).
 
 3. **Story generation (#820, #1356)**
    - `generate_user_story` writes the body via `_llm_generate_story_markdown` (LLM,
-     issue #1356) and falls back to the deterministic template when the LLM is
-     unavailable, returns markdown missing any required canonical section
+     issue #1356) and returns failure without writing a story when the LLM is
+     unavailable or returns markdown missing any required canonical section
      (`## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
      `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Notes`), or leaves
      template placeholders in the output.
@@ -106,10 +107,6 @@ the guide may say `## Forbidden Outcomes` — same intent).
      prompt file text, strips a wrapping code fence, validates required sections,
      rejects placeholder-filled output, and returns `(markdown_or_None, cost, model)`.
      All imports are lazy to avoid an `llm_invoke` import cycle.
-   - `_seed_covers_from_prompts`, `_rule_covers_summary`, `_cross_module_covers_ref`,
-     `_seed_negative_cases_from_rules`, prompt-signal extraction helpers, and
-     `_render_story_markdown_from_prompts` implement the deterministic contract-aware
-     FALLBACK template. Use `Rule` and `parse_prompt_contracts` from `contract_ir`.
    - After writing the story file, directly upsert metadata for the exact prompt
      files passed by the user. Do not call `detect_change` or
      `cache_story_prompt_links` from `generate_user_story`.
