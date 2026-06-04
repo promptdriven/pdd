@@ -157,6 +157,66 @@ def _record_agentic_verify_fallback_event(
         )
 
 
+def _run_non_python_agentic_verify_fallback(
+    *,
+    agentic_fallback: bool,
+    prompt_file: str,
+    code_file: str,
+    verification_program: str,
+    verification_log_file: str,
+    verbose: bool,
+) -> tuple[bool, str, float, str | None, list[str]]:
+    """Invoke agentic verify for non-Python targets when fallback is enabled."""
+    if not agentic_fallback:
+        console.print(
+            "[yellow]Agentic verify fallback disabled; non-Python verify cannot "
+            "complete without it.[/yellow]"
+        )
+        return False, "agentic verify fallback disabled", 0.0, None, []
+
+    agent_cwd = Path(prompt_file).parent if prompt_file else None
+    console.print(
+        f"[cyan]Attempting agentic verify fallback "
+        f"(prompt_file={rich_escape(repr(prompt_file))})...[/cyan]"
+    )
+    success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
+        prompt_file=prompt_file,
+        code_file=code_file,
+        program_file=verification_program,
+        verification_log_file=verification_log_file,
+        verbose=verbose,
+        cwd=agent_cwd,
+    )
+    if not success:
+        console.print(
+            f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]"
+        )
+    if agent_changed_files:
+        console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+        for changed in agent_changed_files:
+            console.print(f"  • {changed}")
+    return success, agent_msg, agent_cost, agent_model, agent_changed_files
+
+
+def _read_non_python_final_artifacts(
+    verification_program: str,
+    code_file: str,
+) -> tuple[str, str]:
+    final_program = ""
+    final_code = ""
+    try:
+        with open(verification_program, "r", encoding="utf-8") as f:
+            final_program = f.read()
+    except Exception:
+        pass
+    try:
+        with open(code_file, "r", encoding="utf-8") as f:
+            final_code = f.read()
+    except Exception:
+        pass
+    return final_program, final_code
+
+
 def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None, deadline=None):
     """
     Call (possibly monkeypatched) run_agentic_verify and normalize its return.
@@ -321,43 +381,29 @@ def fix_verification_errors_loop(
                     f.write(f"No verification command available for language: {lang}\n")
                     f.write("Agentic fix will attempt to resolve the issue.\n")
 
-            agent_cwd = Path(prompt_file).parent if prompt_file else None
-            console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={rich_escape(repr(prompt_file))})...[/cyan]")
-            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
-                prompt_file=prompt_file,
-                code_file=code_file,
-                program_file=verification_program,
-                verification_log_file=verification_log_file,
-                verbose=verbose,
-                cwd=agent_cwd,
+            success, _agent_msg, agent_cost, agent_model, _changed = (
+                _run_non_python_agentic_verify_fallback(
+                    agentic_fallback=agentic_fallback,
+                    prompt_file=prompt_file,
+                    code_file=code_file,
+                    verification_program=verification_program,
+                    verification_log_file=verification_log_file,
+                    verbose=verbose,
+                )
             )
-            if not success:
-                console.print(f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]")
-            if agent_changed_files:
-                console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-                for f in agent_changed_files:
-                    console.print(f"  • {f}")
-            final_program = ""
-            final_code = ""
-            try:
-                with open(verification_program, "r") as f:
-                    final_program = f.read()
-            except Exception:
-                pass
-            try:
-                with open(code_file, "r") as f:
-                    final_code = f.read()
-            except Exception:
-                pass
-            _record_agentic_verify_fallback_event(
-                agentic_fallback_events,
-                success=success,
-                detail=(
-                    "agentic verify fallback succeeded (non-Python, no verify command)"
-                    if success
-                    else "agentic verify fallback failed (non-Python, no verify command)"
-                ),
+            final_program, final_code = _read_non_python_final_artifacts(
+                verification_program, code_file
             )
+            if agentic_fallback:
+                _record_agentic_verify_fallback_event(
+                    agentic_fallback_events,
+                    success=success,
+                    detail=(
+                        "agentic verify fallback succeeded (non-Python, no verify command)"
+                        if success
+                        else "agentic verify fallback failed (non-Python, no verify command)"
+                    ),
+                )
             return {
                 "success": success,
                 "final_program": final_program,
@@ -376,43 +422,29 @@ def fix_verification_errors_loop(
         with open(verification_log_path, "w") as f:
             f.write(pytest_output)
         
-        agent_cwd = Path(prompt_file).parent if prompt_file else None
-        console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={rich_escape(repr(prompt_file))})...[/cyan]")
-        success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
-            prompt_file=prompt_file,
-            code_file=code_file,
-            program_file=verification_program,
-            verification_log_file=verification_log_file,
-            verbose=verbose,
-            cwd=agent_cwd,
+        success, _agent_msg, agent_cost, agent_model, _changed = (
+            _run_non_python_agentic_verify_fallback(
+                agentic_fallback=agentic_fallback,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                verification_program=verification_program,
+                verification_log_file=verification_log_file,
+                verbose=verbose,
+            )
         )
-        if not success:
-            console.print(f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]")
-        if agent_changed_files:
-            console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-            for f in agent_changed_files:
-                console.print(f"  • {f}")
-        final_program = ""
-        final_code = ""
-        try:
-            with open(verification_program, "r") as f:
-                final_program = f.read()
-        except Exception:
-            pass
-        try:
-            with open(code_file, "r") as f:
-                final_code = f.read()
-        except Exception:
-            pass
-        _record_agentic_verify_fallback_event(
-            agentic_fallback_events,
-            success=success,
-            detail=(
-                "agentic verify fallback succeeded (non-Python, after verify command)"
-                if success
-                else "agentic verify fallback failed (non-Python, after verify command)"
-            ),
+        final_program, final_code = _read_non_python_final_artifacts(
+            verification_program, code_file
         )
+        if agentic_fallback:
+            _record_agentic_verify_fallback_event(
+                agentic_fallback_events,
+                success=success,
+                detail=(
+                    "agentic verify fallback succeeded (non-Python, after verify command)"
+                    if success
+                    else "agentic verify fallback failed (non-Python, after verify command)"
+                ),
+            )
         return {
             "success": success,
             "final_program": final_program,

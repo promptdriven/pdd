@@ -1246,6 +1246,112 @@ def test_non_python_after_verify_cmd_records_agentic_fallback_events(
     assert "after verify command" in events[0]["detail"]
 
 
+def test_non_python_no_verify_cmd_records_failed_fallback_used_false(tmp_path, mocker):
+    """Failed non-Python agentic verify must record used=False."""
+    prompt = tmp_path / "thing.prompt"
+    code = tmp_path / "thing.ts"
+    program = tmp_path / "verify.ts"
+    log = tmp_path / "verify.log"
+    prompt.write_text("prompt", encoding="utf-8")
+    code.write_text("export const x = 1;", encoding="utf-8")
+    program.write_text("console.log(x)", encoding="utf-8")
+    events: list[dict] = []
+
+    mocker.patch("pdd.fix_verification_errors_loop.get_language", return_value="typescript")
+    mocker.patch("pdd.fix_verification_errors_loop.default_verify_cmd_for", return_value=None)
+    mocker.patch(
+        "pdd.fix_verification_errors_loop._safe_run_agentic_verify",
+        return_value=(False, "fail", 0.12, "agent-model", []),
+    )
+
+    result = fix_verification_errors_loop(
+        program_file=str(program),
+        code_file=str(code),
+        prompt="prompt",
+        prompt_file=str(prompt),
+        verification_program=str(program),
+        strength=0.5,
+        temperature=0.0,
+        max_attempts=0,
+        budget=1.0,
+        verification_log_file=str(log),
+        agentic_fallback_events=events,
+    )
+
+    assert result["success"] is False
+    assert len(events) == 1
+    assert events[0]["used"] is False
+    assert events[0]["attempted"] is True
+
+
+def test_non_python_after_verify_cmd_records_failed_fallback_used_false(
+    setup_test_environment, mocker,
+):
+    """Failed agentic verify after a verify command must record used=False."""
+    env = setup_test_environment
+    go_code_file = env["output_path"] / "code_module.go"
+    go_code_file.write_text("package main\n", encoding="utf-8")
+    env["default_args"]["code_file"] = str(go_code_file)
+    events: list[dict] = []
+    env["default_args"]["agentic_fallback_events"] = events
+
+    mocker.patch("pdd.fix_verification_errors_loop.get_language", return_value="go")
+    mocker.patch(
+        "pdd.fix_verification_errors_loop.default_verify_cmd_for",
+        return_value="go test ./...",
+    )
+    mocker.patch(
+        "pdd.fix_verification_errors_loop.subprocess.run",
+        return_value=mocker.Mock(stdout="FAIL", stderr="", returncode=1),
+    )
+    mocker.patch(
+        "pdd.fix_verification_errors_loop._safe_run_agentic_verify",
+        return_value=(False, "fail", 0.0, "agentic-cli", []),
+    )
+
+    result = fix_verification_errors_loop(**env["default_args"])
+
+    assert result["success"] is False
+    assert len(events) == 1
+    assert events[0]["used"] is False
+
+
+def test_non_python_agentic_fallback_disabled_skips_agentic_verify(tmp_path, mocker):
+    """Non-Python paths must honor agentic_fallback=False like the Python loop."""
+    prompt = tmp_path / "thing.prompt"
+    code = tmp_path / "thing.ts"
+    program = tmp_path / "verify.ts"
+    log = tmp_path / "verify.log"
+    prompt.write_text("prompt", encoding="utf-8")
+    code.write_text("export const x = 1;", encoding="utf-8")
+    program.write_text("console.log(x)", encoding="utf-8")
+    events: list[dict] = []
+    mock_agentic = mocker.patch(
+        "pdd.fix_verification_errors_loop._safe_run_agentic_verify",
+    )
+    mocker.patch("pdd.fix_verification_errors_loop.get_language", return_value="typescript")
+    mocker.patch("pdd.fix_verification_errors_loop.default_verify_cmd_for", return_value=None)
+
+    result = fix_verification_errors_loop(
+        program_file=str(program),
+        code_file=str(code),
+        prompt="prompt",
+        prompt_file=str(prompt),
+        verification_program=str(program),
+        strength=0.5,
+        temperature=0.0,
+        max_attempts=0,
+        budget=1.0,
+        verification_log_file=str(log),
+        agentic_fallback=False,
+        agentic_fallback_events=events,
+    )
+
+    mock_agentic.assert_not_called()
+    assert result["success"] is False
+    assert events == []
+
+
 def test_agentic_fallback_invoked_on_python_loop_failure(setup_test_environment, mocker):
     """Test that agentic fallback is invoked when Python loop fails and agentic_fallback=True."""
     env = setup_test_environment

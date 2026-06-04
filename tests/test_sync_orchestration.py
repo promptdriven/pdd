@@ -275,6 +275,61 @@ def test_sync_orchestration_agentic_fallback_metadata_reflects_fix_events(
     assert fix_entries[-1]["agentic_fallback"]["used"] is True
 
 
+def test_sync_orchestration_verify_agentic_fallback_metadata_non_python(
+    orchestration_fixture,
+):
+    """Verify-phase agentic_fallback_events must aggregate for non-Python sync."""
+    mock_determine = orchestration_fixture["sync_determine_operation"]
+    mock_determine.side_effect = [
+        SyncDecision(operation="verify", reason="Verify typescript module"),
+        SyncDecision(operation="all_synced", reason="Done"),
+    ]
+
+    pdd_files = orchestration_fixture["get_pdd_file_paths"].return_value
+    ts_code = pdd_files["code"].with_suffix(".ts")
+    ts_example = pdd_files["example"].with_suffix(".ts")
+    pdd_files["code"] = ts_code
+    pdd_files["example"] = ts_example
+    for path in (ts_code, ts_example, pdd_files["prompt"]):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("// stub\n", encoding="utf-8")
+
+    def _fake_verify_main(*_args, **kwargs):
+        events = kwargs.get("agentic_fallback_events")
+        if events is not None:
+            events.append(
+                {
+                    "phase": "verify",
+                    "attempted": True,
+                    "used": True,
+                    "detail": "agentic verify fallback succeeded (non-Python, no verify command)",
+                }
+            )
+        return (True, "", "", 1, 0.10, "mock-model")
+
+    orchestration_fixture["fix_verification_main"].side_effect = _fake_verify_main
+
+    result = sync_orchestration(
+        basename="calculator",
+        language="typescript",
+        quiet=True,
+        budget=1.0,
+        agentic_mode=False,
+    )
+
+    assert result["success"] is True
+    assert result["agentic_fallback"]["attempted"] is True
+    assert result["agentic_fallback"]["used"] is True
+    assert any(
+        phase.get("phase") == "verify" and phase.get("used") is True
+        for phase in result["agentic_fallback"]["phases"]
+    )
+    orchestration_fixture["fix_verification_main"].assert_called_once()
+    assert orchestration_fixture["fix_verification_main"].call_args.kwargs.get(
+        "agentic_fallback_events"
+    ) is not None
+
+
 def test_compressed_context_generate_verify_fix_loop_records_phase_metadata(
     orchestration_fixture,
 ):

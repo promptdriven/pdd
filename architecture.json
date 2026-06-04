@@ -2206,7 +2206,7 @@
           },
           {
             "name": "fix_verification_errors_loop",
-            "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = \"verification.log\", output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]",
+            "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = \"verification.log\", output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False, compressed_context: Optional[Mapping[str, Any]] = None, agentic_fallback_events: Optional[list[dict[str, Any]]] = None) -> Dict[str, Any]",
             "returns": "Dict[str, Any]"
           }
         ]
