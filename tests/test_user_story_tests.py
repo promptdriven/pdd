@@ -675,6 +675,40 @@ _LLM_STORY_MD = (
 )
 
 
+_CONTEXT_AUDIT_PROMPT_BASE = "\n".join(
+    [
+        "<pdd-reason>Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation.</pdd-reason>",
+        "",
+        "% Goal",
+        "Write the `pdd/commands/context_audit.py` module.",
+        "",
+        "% Requirements",
+        "1. Define a Click command named `context_audit` with a required `prompt_path` argument.",
+        "2. Provide options `--model`, `--json`, and `--threshold`.",
+        "3. Preprocess the prompt file; do NOT make an LLM call.",
+        "4. Detect dynamic tags such as `<shell>` and `<web>` and emit warnings.",
+        "5. Attribute tokens per source segment, including `prompt_body` and one row per resolved include.",
+    ]
+)
+
+
+_CONTEXT_AUDIT_PROMPT_AGGREGATE_ONLY = "\n".join(
+    [
+        "<pdd-reason>Reports only aggregate token totals for a hydrated prompt so users can audit context-window cost before generation, without per-source attribution.</pdd-reason>",
+        "",
+        "% Goal",
+        "Write the `pdd/commands/context_audit.py` module.",
+        "",
+        "% Requirements",
+        "1. Define a Click command named `context_audit` with a required `prompt_path` argument.",
+        "2. Provide options `--model`, `--json`, and `--threshold`.",
+        "3. Preprocess the prompt file; do NOT make an LLM call.",
+        "4. Detect dynamic tags such as `<shell>` and `<web>` and emit warnings.",
+        "5. Report only aggregate token totals, without per-source attribution rows.",
+    ]
+)
+
+
 _CONTEXT_AUDIT_STORY_MD = (
     "# User Story: Context Audit\n\n"
     "## Covers\n\n"
@@ -767,24 +801,7 @@ def test_generate_user_story_context_audit_story_protects_per_source_attribution
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
     prompt_one = prompts_dir / "context_audit_python.prompt"
-    prompt_one.write_text(
-        "\n".join(
-            [
-                "<pdd-reason>Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation.</pdd-reason>",
-                "",
-                "% Goal",
-                "Write the `pdd/commands/context_audit.py` module.",
-                "",
-                "% Requirements",
-                "1. Define a Click command named `context_audit` with a required `prompt_path` argument.",
-                "2. Provide options `--model`, `--json`, and `--threshold`.",
-                "3. Preprocess the prompt file; do NOT make an LLM call.",
-                "4. Detect dynamic tags such as `<shell>` and `<web>` and emit warnings.",
-                "5. Attribute tokens per source segment, including `prompt_body` and one row per resolved include.",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    prompt_one.write_text(_CONTEXT_AUDIT_PROMPT_BASE, encoding="utf-8")
 
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.user_story_tests._llm_generate_story_markdown",
@@ -806,6 +823,63 @@ def test_generate_user_story_context_audit_story_protects_per_source_attribution
     assert "does not make an LLM call" in story_text
     assert "<pdd-reason>" not in story_text
     assert "\"type\": \"cli\"" not in story_text
+
+
+def test_run_user_story_tests_fails_for_harmful_context_audit_prompt_change(tmp_path):
+    """A generated story must fail validation when the prompt drifts from
+    per-source attribution to aggregate-only totals."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    prompt_one = prompts_dir / "context_audit_python.prompt"
+    prompt_one.write_text(_CONTEXT_AUDIT_PROMPT_AGGREGATE_ONLY, encoding="utf-8")
+    story = stories_dir / "story__context_audit.md"
+    story.write_text(
+        "<!-- pdd-story-prompts: context_audit_python.prompt -->\n\n"
+        f"{_CONTEXT_AUDIT_STORY_MD}",
+        encoding="utf-8",
+    )
+
+    harmful_changes = [
+        {
+            "prompt_name": "context_audit_python.prompt",
+            "change_instructions": (
+                "Restore per-source token attribution rows; aggregate-only "
+                "token totals violate the generated user story."
+            ),
+        }
+    ]
+    captured_prompt_inputs = []
+
+    def fake_detect(prompt_paths, story_content, *_args, **_kwargs):
+        captured_prompt_inputs.append(prompt_paths)
+        prompt_text = Path(prompt_paths[0]).read_text(encoding="utf-8")
+        assert "Report only aggregate token totals" in prompt_text
+        assert "per-source token attribution" in story_content
+        assert "Aggregate-only token totals are not sufficient" in story_content
+        return harmful_changes, 0.2, "gpt-test"
+
+    with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
+        passed, results, cost, model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+            quiet=True,
+            fail_fast=True,
+        )
+
+    assert passed is False
+    assert results == [
+        {
+            "story": str(story),
+            "passed": False,
+            "changes": harmful_changes,
+        }
+    ]
+    assert captured_prompt_inputs == [[str(prompt_one)]]
+    assert cost == pytest.approx(0.2)
+    assert model == "gpt-test"
 
 
 def test_generate_user_story_fails_when_llm_errors(tmp_path):

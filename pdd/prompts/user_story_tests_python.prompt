@@ -54,6 +54,9 @@ the guide may say `## Forbidden Outcomes` — same intent).
   codes, side effects, and explicit negative constraints. The resulting story must
   be specific enough that behavior-changing prompt mutations (for example changing
   per-source token attribution to aggregate-only totals) fail user-story validation.
+  Keep a regression test for a harmful prompt mutation that verifies
+  `run_user_story_tests()` returns a failed result when `detect_change` reports the
+  story no longer matches the mutated prompt.
 - **Metadata is independent of generation.** Regardless of which path produced the
   body, `generate_user_story()` stitches `<!-- pdd-story-prompts: ... -->`
   metadata directly from the exact prompt files the user passed. It must not call
