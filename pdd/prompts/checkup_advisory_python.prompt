@@ -1,0 +1,42 @@
+<pdd-reason>Lightweight read-only advisory dataclasses and exit-code invariant for checkup subcommands.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "final_exit_code", "signature": "(deterministic: int, report: CheckupReport) -> int", "returns": "int"},
+      {"name": "failed_report", "signature": "(message: str) -> CheckupReport", "returns": "CheckupReport"},
+      {"name": "report_as_dict", "signature": "(report: CheckupReport) -> dict", "returns": "dict"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Write `pdd/checkup_advisory.py`, a lightweight advisory layer for `pdd checkup` subcommands.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+This module provides the shared read-only advisory dataclasses and the deterministic-first exit-code invariant used by all `pdd checkup` subcommands that support `--review explain`.
+
+% Non-responsibilities
+- Does not invoke LLM calls (callers do that).
+- Does not read or write files.
+- Does not alter exit codes.
+
+% Vocabulary
+- Advisory pass: a single-pass, read-only LLM review appended after deterministic checks.
+- Deterministic exit code: the exit code computed from local heuristic checks alone, before any LLM call.
+- Advisory status: one of "skipped" (--review off), "ok" (LLM ran, no issues), "warned" (LLM found issues), "failed" (LLM call errored).
+
+% Requirements
+1. Define `CheckupFinding` as a `dataclass` with fields: `severity: str`, `area: str`, `message: str`, `evidence: str = ""`.
+2. Define `CheckupReport` as a `dataclass` with fields: `status: str` (one of "skipped", "ok", "warned", "failed") and `findings: list[CheckupFinding]`.
+3. Provide `SKIPPED_REPORT: CheckupReport` as a module-level constant with `status="skipped"` and empty findings.
+4. Provide `failed_report(message: str) -> CheckupReport` that returns a `CheckupReport` with `status="failed"` and a single finding whose `message` is the supplied text.
+5. Implement `final_exit_code(deterministic: int, report: CheckupReport) -> int` that always returns `deterministic` unchanged — LLM advisory results MUST NOT alter the exit code.
+6. Provide `report_as_dict(report: CheckupReport) -> dict` that serializes a `CheckupReport` to a plain dict suitable for JSON embedding: `{"status": ..., "findings": [{...}, ...]}`.
+
+% Deliverables
+- Code: `pdd/checkup_advisory.py`

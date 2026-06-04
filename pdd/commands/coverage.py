@@ -19,6 +19,8 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 
+from ..checkup_advisory import advisory_for_review, final_exit_code, report_as_dict
+from .checkup_review_options import review_option
 from ..coverage_contracts import (
     STATUS_CHECKED,
     STATUS_STORY_ONLY,
@@ -168,9 +170,11 @@ def _render_result_table(result: CoverageResult) -> None:
     default="prompts/",
     required=False,
 )
+@review_option
 @click.pass_context
 def coverage_cmd(
-    ctx: click.Context,  # pylint: disable=unused-argument
+    ctx: click.Context,
+    review: str,
     use_contracts: bool,  # pylint: disable=unused-argument
     as_json: bool,
     stories_dir: Optional[str],
@@ -220,12 +224,20 @@ def coverage_cmd(
         for rc in r.rules
     )
 
+    deterministic_exit = 2 if has_fatal else (1 if has_gap or has_read_errors else 0)
+    output = {
+        "results": [r.as_dict() for r in results],
+        "total_prompts": len(results),
+        "prompts_with_contracts": sum(1 for r in results if r.has_contract_rules),
+    }
+    advisory = advisory_for_review(
+        review,
+        output,
+        command="pdd checkup coverage",
+        ctx_obj=ctx.obj,
+    )
     if as_json:
-        output = {
-            "results": [r.as_dict() for r in results],
-            "total_prompts": len(results),
-            "prompts_with_contracts": sum(1 for r in results if r.has_contract_rules),
-        }
+        output["advisory"] = report_as_dict(advisory)
         print(json.dumps(output, indent=2))
     else:
         if not results:
@@ -234,7 +246,4 @@ def coverage_cmd(
             for result in results:
                 _render_result_table(result)
 
-    if has_fatal:
-        raise click.exceptions.Exit(2)
-    if has_gap or has_read_errors:
-        raise click.exceptions.Exit(1)
+    raise click.exceptions.Exit(final_exit_code(deterministic_exit, advisory))

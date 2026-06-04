@@ -11,8 +11,10 @@ import yaml
 
 from ..contract_check import _check_coverage_entries
 from ..contract_ir import parse_prompt_contracts
+from ..checkup_advisory import advisory_for_review, final_exit_code, report_as_dict
 from ..gate_main import GateResult, run_gate_policy
 from ..waiver_policy import summarize_waivers, waiver_id_to_rule_map
+from .checkup_review_options import review_option
 
 
 def _discover_prompts(target: Path) -> list[Path]:
@@ -206,7 +208,11 @@ def _run_waiver_gate(
     default=False,
     help="Run evidence policy only (no waiver scans).",
 )
+@review_option
+@click.pass_context
 def gate_cmd(  # pylint: disable=too-many-arguments,too-many-locals
+    ctx: click.Context,
+    review: str,
     target: Optional[str],
     evidence_policy_path: Optional[str],
     waiver_policy_file: Path | None,
@@ -265,12 +271,23 @@ def gate_cmd(  # pylint: disable=too-many-arguments,too-many-locals
     passed = evidence_result.passed and waiver_result.passed
     exit_code = 0 if passed else 1
 
+    advisory = advisory_for_review(
+        review,
+        {
+            "passed": passed,
+            "evidence": evidence_result.as_dict(),
+            "waivers": waiver_result.as_dict(),
+        },
+        command="pdd checkup gate",
+        ctx_obj=ctx.obj,
+    )
     if as_json:
         payload: dict[str, Any] = {
             "passed": passed,
             "exit_code": exit_code,
             "evidence": evidence_result.as_dict(),
             "waivers": waiver_result.as_dict(),
+            "advisory": report_as_dict(advisory),
         }
         if hasattr(evidence_result, "manifests_checked"):
             payload["manifests_checked"] = evidence_result.manifests_checked
@@ -304,5 +321,9 @@ def gate_cmd(  # pylint: disable=too-many-arguments,too-many-locals
                 click.echo(f"  - {violation}")
         if not passed:
             click.echo("PDD gate failed")
+        if review == "explain" and advisory.findings:
+            click.echo(f"[advisory] status={advisory.status}")
+            for finding in advisory.findings:
+                click.echo(f"  [{finding.severity}] {finding.area}: {finding.message}")
 
-    raise click.exceptions.Exit(exit_code)
+    raise click.exceptions.Exit(final_exit_code(exit_code, advisory))

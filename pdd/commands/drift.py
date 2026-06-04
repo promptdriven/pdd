@@ -7,7 +7,9 @@ from typing import Optional
 
 import click
 
+from ..checkup_advisory import advisory_for_review, final_exit_code, report_as_dict
 from ..drift_main import DEFAULT_MAX_COST_USD, run_drift
+from .checkup_review_options import review_option
 
 
 @click.command("drift")
@@ -43,7 +45,11 @@ from ..drift_main import DEFAULT_MAX_COST_USD, run_drift
         f"(default ${DEFAULT_MAX_COST_USD:.0f} for non-dry-run runs)."
     ),
 )
+@review_option
+@click.pass_context
 def drift_cmd(
+    ctx: click.Context,
+    review: str,
     devunit: str,
     runs: int,
     model: Optional[str],
@@ -82,8 +88,16 @@ def drift_cmd(
     except (FileNotFoundError, RuntimeError) as exc:
         raise click.ClickException(str(exc)) from exc
 
+    payload = report.as_dict()
+    advisory = advisory_for_review(
+        review,
+        payload,
+        command="pdd checkup drift",
+        ctx_obj=ctx.obj,
+    )
     if as_json:
-        click.echo(json.dumps(report.as_dict(), indent=2))
+        payload["advisory"] = report_as_dict(advisory)
+        click.echo(json.dumps(payload, indent=2))
     else:
         click.echo(f"PDD Drift Report: {report.devunit}\n")
         payload = report.as_dict()
@@ -106,4 +120,4 @@ def drift_cmd(
         click.echo(f"- behavior: {behavior_status}")
         click.echo(f"\nStatus: {report.status}")
 
-    raise click.exceptions.Exit(report.exit_code)
+    raise click.exceptions.Exit(final_exit_code(report.exit_code, advisory))

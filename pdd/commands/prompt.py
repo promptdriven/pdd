@@ -8,7 +8,9 @@ from typing import Optional
 
 import click
 
+from ..checkup_advisory import advisory_for_review, final_exit_code, report_as_dict
 from ..prompt_lint import LintResult, run_llm_ambiguity_pass, scan_prompt, scan_stories
+from .checkup_review_options import review_option
 
 
 @click.group(name="prompt")
@@ -45,14 +47,13 @@ def _exit_code(results: list[LintResult], *, strict: bool) -> int:
     "use_llm",
     is_flag=True,
     default=False,
-    help=(
-        "Add advisory LLM review of ambiguous prompt/story prose (recommended for authoring; "
-        "requires PDD Cloud or configured API credentials)."
-    ),
+    help="Deprecated alias for --review explain.",
 )
+@review_option
 @click.pass_context
 def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches,unknown-option-value
     ctx: click.Context,
+    review: str,
     target: Optional[str],
     stories_dir: Optional[str],
     as_json: bool,
@@ -68,6 +69,13 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-argum
     if target is None and stories_dir is None:
         raise click.UsageError("Missing argument 'TARGET' unless --stories is supplied.")
 
+    if use_llm:
+        click.echo(
+            "DeprecationWarning: --llm is deprecated; use --review explain",
+            err=True,
+        )
+        review = "explain"
+
     results: list[LintResult] = []
     if target is not None:
         path = Path(target)
@@ -82,25 +90,21 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-argum
         results.extend(scan_stories(Path(stories_dir), strict=strict))
 
     deterministic_exit_code = _exit_code(results, strict=strict)
-    if use_llm:
-        obj = ctx.obj or {}
-        use_cloud = not bool(obj.get("local", False))
-        for result in results:
-            llm_issues = run_llm_ambiguity_pass(
-                result.path,
-                strength=obj.get("strength", 0.5),
-                temperature=obj.get("temperature", 0.0),
-                time=obj.get("time"),
-                verbose=obj.get("verbose", False),
-                use_cloud=use_cloud,
-            )
-            if strict:
-                for issue in llm_issues:
-                    issue.level = "error"
-            result.issues.extend(llm_issues)
+    payload = [result.as_dict() for result in results]
+    advisory = advisory_for_review(
+        review,
+        payload,
+        command="pdd checkup lint",
+        ctx_obj=ctx.obj,
+    )
 
     if as_json:
-        click.echo(json.dumps([result.as_dict() for result in results], indent=2))
+        if review == "explain":
+            payload = [
+                {**item, "advisory": report_as_dict(advisory)}
+                for item in payload
+            ]
+        click.echo(json.dumps(payload, indent=2))
     else:
         for result in results:
             click.echo(
@@ -110,9 +114,8 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-positional-argum
             for issue in result.issues:
                 click.echo(f"  {issue.level.upper()} [{issue.section}] {issue.message}")
 
-    if strict:
-        raise click.exceptions.Exit(_exit_code(results, strict=True))
-    raise click.exceptions.Exit(deterministic_exit_code)
+    exit_code = _exit_code(results, strict=True) if strict else deterministic_exit_code
+    raise click.exceptions.Exit(final_exit_code(exit_code, advisory))
 
 
 prompt_group.add_command(prompt_lint)
