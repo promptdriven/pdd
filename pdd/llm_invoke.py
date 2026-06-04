@@ -3774,11 +3774,21 @@ def llm_invoke(
     if verbose:
         # This print statement is crucial for the verbose test
         # Calculate and print strength for each candidate model
-        # Find min/max for cost and ELO
-        min_cost = model_df['avg_cost'].min()
-        max_elo = model_df['model_rank_score'].max()
-        base_cost = model_df[model_df['model'] == _effective_default_model]['avg_cost'].iloc[0] if not model_df[model_df['model'] == _effective_default_model].empty else min_cost
-        base_elo = model_df[model_df['model'] == _effective_default_model]['model_rank_score'].iloc[0] if not model_df[model_df['model'] == _effective_default_model].empty else max_elo
+        # Find min/max for cost and rank. Older custom CSVs and several tests only
+        # provide raw Arena ELO, so mirror the selection fallback here too.
+        verbose_model_df = model_df.copy()
+        if 'model_rank_score' not in verbose_model_df.columns:
+            verbose_model_df['model_rank_score'] = verbose_model_df['coding_arena_elo']
+        else:
+            verbose_model_df['model_rank_score'] = verbose_model_df['model_rank_score'].fillna(
+                verbose_model_df['coding_arena_elo']
+            )
+
+        min_cost = verbose_model_df['avg_cost'].min()
+        max_elo = verbose_model_df['model_rank_score'].max()
+        base_row = verbose_model_df[verbose_model_df['model'] == _effective_default_model]
+        base_cost = base_row['avg_cost'].iloc[0] if not base_row.empty else min_cost
+        base_elo = base_row['model_rank_score'].iloc[0] if not base_row.empty else max_elo
 
         def calc_strength(candidate):
             # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)
