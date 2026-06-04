@@ -32,7 +32,7 @@
   - `--pr <pr-url>` (PR-verification mode — verify an existing PR instead of opening one; `--issue` is OPTIONAL (with no issue the PR is reviewed on its own merits); mutually exclusive with `target`)
   - `--issue <issue-url>` (OPTIONAL PR-mode companion to `--pr` — when given, the source issue the PR is meant to resolve and the PR is verified for issue alignment; cannot be passed without `--pr`)
   - `--review-loop` (PR mode only — run the primary-reviewer/fixer review loop; still requires both `--pr` and `--issue`)
-  - `--final-gate` (`final_gate`, flag — the canonical final PR gate, issue #1406; requires both `--pr` and `--issue`; runs the PR-scoped checkup as Layer 1 then the review-loop as Layer 2 and returns a real ship verdict; this is what "ready for maintainer review" means once a PR exists; cannot be combined with `--review-loop`, `--no-fix`, `--review-only`, or `--start-step`)
+  - `--final-gate` (`final_gate`, flag — the canonical final PR gate, issue #1406; requires both `--pr` and `--issue`; runs the PR-scoped checkup as Layer 1 then the review-loop as Layer 2 and returns a real ship verdict; this is what "ready for maintainer review" means once a PR exists; cannot be combined with `--review-loop`, `--no-fix`, `--review-only`, `--start-step`, `--no-gates`, or `--test-scope targeted` (the canonical verdict requires the deterministic gates and the full suite))
   - `--review-only` (requires `--review-loop`; run only the primary reviewer first pass and do not invoke fixer/commit/push; may be combined with `--no-fix`)
   - `--reviewers` (legacy comma-separated role order, default `codex,claude`; first role is reviewer, second role is fixer)
   - `--reviewer` (explicit primary reviewer role; overrides the first `--reviewers` role)

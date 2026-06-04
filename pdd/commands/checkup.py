@@ -133,7 +133,8 @@ from .prompt import prompt_lint
         "returns a real ship verdict (exit non-zero unless the PR is "
         "shippable). This is what \"ready for maintainer review\" means once a "
         "PR exists. Cannot be combined with --review-loop, --no-fix, "
-        "--review-only, or --start-step."
+        "--review-only, --start-step, --no-gates, or --test-scope targeted "
+        "(the verdict requires the deterministic gates and the full suite)."
     ),
 )
 @click.option(
