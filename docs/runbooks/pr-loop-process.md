@@ -246,7 +246,7 @@ gh pr diff <PR> --name-only              # only the files you intended
 
 ### `auto-heal` semantics
 
-`auto-heal` runs an LLM-driven prompt-healing pass in Cloud Build under the `prompt-driven-development-stg` project. On internal (non-fork) PRs it can push a heal commit back to the PR branch. Don't be surprised if a `/heal` run adds a commit you didn't write; review it before merging.
+`auto-heal` runs an LLM-driven prompt-healing pass in Cloud Build under the `prompt-driven-development-stg` project. On internal (non-fork) PRs it can push a heal commit back to the PR branch. Don't be surprised if a `/heal` run adds a commit you didn't write; review it before merging. In PR mode (no `--skip-ci`) the heal is scope-preserving: it applies only narrow prompt/code/example/meta drift fixes and no longer escalates a narrow fix PR into coverage-driven `test_extend`, so a heal commit will not append unrelated generated tests.
 
 ## Stopping criteria
 
