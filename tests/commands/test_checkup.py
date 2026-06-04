@@ -299,6 +299,69 @@ def test_checkup_pr_without_issue_invalid_pr_url_rejected() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Issue #1411: checkup prompt subcommand (stub)
+# ---------------------------------------------------------------------------
+
+
+def test_checkup_prompt_help_exits_zero() -> None:
+    """pdd checkup prompt --help renders checkup_prompt_cmd options and exits 0."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        checkup,
+        ["prompt", "--help"],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "--explain" in result.output
+    assert "--interactive" in result.output
+    assert "--apply" in result.output
+
+
+def test_checkup_prompt_help_does_not_contain_coach() -> None:
+    """checkup prompt help text must not contain the word 'coach' (spec requirement)."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        checkup,
+        ["prompt", "--help"],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "coach" not in result.output.lower()
+
+
+def test_checkup_prompt_stub_raises_not_implemented() -> None:
+    """pdd checkup prompt <target> body raises NotImplementedError (stub)."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        checkup,
+        ["prompt", "some_prompt.prompt"],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code != 0
+    assert isinstance(result.exception, NotImplementedError)
+
+
+def test_checkup_prompt_interactive_and_apply_mutually_exclusive() -> None:
+    """--interactive and --apply cannot be used together."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        checkup,
+        ["prompt", "some_prompt.prompt", "--interactive", "--apply"],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code == 2
+    assert "Mutually exclusive" in result.output or "--interactive" in result.output
+
+
 @pytest.mark.e2e
 @pytest.mark.real
 def test_checkup_pr_without_issue_real() -> None:

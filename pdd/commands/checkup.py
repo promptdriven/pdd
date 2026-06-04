@@ -17,10 +17,21 @@ from .checkup_simplify import checkup_simplify
 from .checkup_snapshot import checkup_snapshot
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
-from .gate import gate_cmd
 from .drift import drift_cmd
 from .gate import gate_cmd
 from .prompt import prompt_lint
+
+
+@click.command()
+@click.argument("target", required=True)
+@click.option("--explain", is_flag=True, help="Show detailed reasoning.")
+@click.option("--interactive", "interactive", is_flag=True, help="Interactive review.")
+@click.option("--apply", "apply_suggestions", is_flag=True, help="Auto-apply suggestions.")
+def checkup_prompt_cmd(target: str, explain: bool, interactive: bool, apply_suggestions: bool) -> None:
+    """Check a prompt file for issues."""
+    if interactive and apply_suggestions:
+        raise click.UsageError("Mutually exclusive flags: --interactive and --apply cannot be used together.")
+    raise NotImplementedError("Stub checkup prompt command.")
 
 
 @click.command(
@@ -365,6 +376,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:
       pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
+    Prompt checks:
+      pdd checkup prompt TARGET [OPTIONS]  →  Check a prompt file for issues.
     Contract checks:
       pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
     Contract coverage:
@@ -387,6 +400,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "gate",
         "simplify",
         "snapshot",
+        "prompt",
     }:
         click.echo(ctx.command.get_help(ctx))
         return None
@@ -446,6 +460,22 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         exit_code = checkup_simplify.main(
             args=simplify_args,
             prog_name="pdd checkup simplify",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if show_help:
+            ctx.exit()
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+
+    if target == "prompt":
+        prompt_args = list(ctx.args)
+        if show_help:
+            prompt_args.append("--help")
+        exit_code = checkup_prompt_cmd.main(
+            args=prompt_args,
+            prog_name="pdd checkup prompt",
             standalone_mode=False,
             obj=ctx.obj,
         )
