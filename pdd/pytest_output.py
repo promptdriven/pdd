@@ -50,6 +50,29 @@ def _strip_ansi(text: str) -> str:
     return _ANSI_ESCAPE_RE.sub("", text)
 
 
+def _test_context_compression_active() -> bool:
+    compression = (os.environ.get("PDD_CONTEXT_COMPRESSION") or "").lower()
+    modes = [m.strip() for m in compression.split(",") if m.strip()]
+    return (
+        os.environ.get("PDD_COMPRESS_TEST_CONTEXT") == "1"
+        or "test" in modes
+        or "all" in modes
+    )
+
+
+def _count_skipped_by_compression(stdout: str) -> int:
+    cleaned = _strip_ansi(stdout or "")
+    total = 0
+    for line in cleaned.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("="):
+            continue
+        match = re.search(r"(\d+)\s+deselected", stripped, re.IGNORECASE)
+        if match:
+            total += int(match.group(1))
+    return total
+
+
 def extract_failing_files_from_output(pytest_output: str) -> list[str]:
     """
     Extract unique file paths from pytest FAILED output lines.
@@ -245,6 +268,7 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
                         "errors": 1,
                         "failures": 0,
                         "passed": 0,
+                        "skipped_by_compression": 0,
                     }
                 ],
             }
@@ -291,6 +315,11 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
                     "errors": errors,
                     "failures": failures,
                     "passed": passed,
+                    "skipped_by_compression": (
+                        _count_skipped_by_compression(stdout)
+                        if _test_context_compression_active()
+                        else 0
+                    ),
                 }
             ],
         }
@@ -306,6 +335,7 @@ def run_pytest_and_capture_output(test_file: str, extra_files: list[str] | None 
                     "errors": 1,
                     "failures": 0,
                     "passed": 0,
+                    "skipped_by_compression": 0,
                 }
             ],
         }

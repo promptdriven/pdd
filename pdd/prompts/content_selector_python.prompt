@@ -96,6 +96,16 @@ Deterministic content extraction from files based on line ranges, Python AST str
 - With selectors + `mode="interface"`: apply interface transformation only to AST nodes overlapping the selected spans. If no AST nodes overlap, fall back to returning the raw span content.
 - If `expand_dependencies=True`, apply expansion *before* interface mode transformation.
 
+% Context Compression Modes
+- `contracts` mode: Extract only contract-related elements from prompt or documentation files. This includes:
+  - Architecture metadata tags: `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`.
+  - Logical sections: `<responsibility>`, `<non_responsibilities>`, `<vocabulary>`, `<contract_rules>`, `<capabilities>`, `<waivers>`, `<coverage>`.
+  - Contract rules: Any numbered list item starting with `R\d+ -` (e.g., `R1 - Idempotency`).
+  - Vocabulary definitions: Any line starting with `- ` within a `<vocabulary>` block.
+  - Non-responsibilities: Any line starting with `- ` within a `<non_responsibilities>` block.
+  - Capabilities: Any line starting with `- MAY`, `- MUST`, or `- MUST NOT` within a `<capabilities>` block.
+- `test_interface` mode: use AST-based slicing to include only failing tests (identified by a comma-separated list of test names or IDs passed in the `PDD_FAILING_TESTS` environment variable or a separate metadata channel) and their necessary fixtures (functions decorated with @pytest.fixture). This mode is optimized for minimizing token usage when providing failing test context to an LLM.
+
 % Compression Mode (Python only)
 - `mode="compressed"`: optimized for dense few-shot examples.
 - Strip all docstrings (module, class, function) and their surrounding whitespace.

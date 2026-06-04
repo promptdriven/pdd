@@ -215,6 +215,30 @@ def _write_sync_evidence_manifest(
          "cloud-enabled install, also pass --local. Takes precedence over the "
          "PDD_MODEL_DEFAULT env var for this run only.",
 )
+@click.option(
+    "--compress-examples",
+    is_flag=True,
+    default=None,
+    help="Automatically apply mode=\"interface\" to example includes.",
+)
+@click.option(
+    "--compress-test-context",
+    is_flag=True,
+    default=None,
+    help="Automatically compress test context to failing tests only.",
+)
+@click.option(
+    "--context-compression",
+    type=click.Choice(["off", "test", "examples", "contracts", "all"]),
+    default=None,
+    help="Set context compression mode for this sync run.",
+)
+@click.option(
+    "--compression-fallback",
+    type=click.Choice(["full", "error"]),
+    default=None,
+    help="Behavior when context compression fails (default: full).",
+)
 @click.pass_context
 @track_cost
 def sync(
@@ -241,6 +265,10 @@ def sync(
     snapshot_context: bool,
     compress: bool,
     model: Optional[str] = None,
+    compress_examples: Optional[bool] = None,
+    compress_test_context: Optional[bool] = None,
+    context_compression: Optional[str] = None,
+    compression_fallback: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -249,6 +277,25 @@ def sync(
     'prompts/my_module_python.prompt'), a GitHub issue URL for agentic
     multi-module sync, or omitted for project-wide Tier 1 architecture sync.
     """
+    from ..config_resolution import merge_cli_compression_override
+
+    ctx.ensure_object(dict)
+    cli_compression: dict[str, object] = {}
+    if compress_examples is not None:
+        ctx.obj["compress_examples"] = compress_examples
+        cli_compression["compress_examples"] = compress_examples
+    if compress_test_context is not None:
+        ctx.obj["compress_test_context"] = compress_test_context
+        cli_compression["compress_test_context"] = compress_test_context
+    if context_compression is not None:
+        ctx.obj["context_compression"] = context_compression
+        cli_compression["context_compression"] = context_compression
+    if compression_fallback is not None:
+        ctx.obj["compression_fallback"] = compression_fallback
+        cli_compression["compression_fallback"] = compression_fallback
+    if cli_compression:
+        merge_cli_compression_override(cli_compression)
+
     # Honor an explicit per-run model override (CLI > env, issue #1269).
     # Set PDD_MODEL_DEFAULT: subprocess/agentic sync paths inherit the env and
     # read it at their own import, and the in-process llm_invoke path resolves

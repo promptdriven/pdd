@@ -2376,6 +2376,7 @@ def test_preprocess_pytest_include_real(tmp_path, monkeypatch) -> None:
 
 def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
     """If ContentSelector can't be imported, fall back to full file content with a warning."""
+    monkeypatch.delenv("PDD_COMPRESSION_FALLBACK", raising=False)
     monkeypatch.chdir(tmp_path)
     src = tmp_path / "module.py"
     full_content = "def foo():\n    return 42\n"
@@ -2392,6 +2393,7 @@ def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
 
 def test_include_select_fallback_on_selector_error(tmp_path, monkeypatch) -> None:
     """If ContentSelector raises, fall back to full file content with a warning."""
+    monkeypatch.delenv("PDD_COMPRESSION_FALLBACK", raising=False)
     monkeypatch.chdir(tmp_path)
     src = tmp_path / "module.py"
     full_content = "def foo():\n    return 42\n"
