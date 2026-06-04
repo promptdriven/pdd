@@ -347,35 +347,33 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     gate_allow: Tuple[str, ...],
 ) -> Optional[Tuple[str, float, str]]:
     """
-    Local evidence & contracts verifier, or agentic project health-check.
+    Prompt source-set health, local checks, or agentic project health-check.
 
     \b
-    Local evidence & contracts:
-      pdd checkup lint TARGET [OPTIONS]
+    Prompt source-set check:
+      pdd checkup prompt <prompt-file|prompt-dir|devunit> [OPTIONS]
+          Run a unified prompt-space health report (aggregates focused checks).
+
+    \b
+    Focused local checks:
+      pdd checkup lint <target> [OPTIONS]
           Lint prompts and user stories for quality and ambiguity.
-      pdd checkup contract check TARGET [OPTIONS]
+      pdd checkup contract check <target> [OPTIONS]
           Validate contract sections (<contract_rules>, <coverage>, waivers).
           Alias: pdd checkup contracts check
-      pdd checkup coverage [OPTIONS] TARGET
+      pdd checkup coverage [OPTIONS] <target>
           Build the rule-to-story/test coverage matrix.
-      pdd checkup gate [TARGET] [OPTIONS]
+      pdd checkup gate [<target>] [OPTIONS]
           Enforce waiver policy and evidence manifests.
-      pdd checkup snapshot PROMPT_FILE [OPTIONS]
+      pdd checkup snapshot <prompt-file> [OPTIONS]
           Verify nondeterministic prompt context snapshot policy.
-      pdd checkup drift <DEVUNIT> [OPTIONS]
+      pdd checkup drift <devunit> [OPTIONS]
           Check regeneration stability across repeated runs (uses LLM).
-      pdd checkup coach PROMPT [OPTIONS]
-          Schema-aware prompt coaching authoring loop. (Coming in a follow-up.)
       pdd checkup simplify [PATH] [OPTIONS]
           Claude Code /simplify candidate cleanup.
 
     \b
-    Mental model:
-      generate | sync | test | verify  →  action verbs (produce artifacts)
-      checkup                          →  verifier + coaching (inspect artifacts)
-
-    \b
-    Agentic issue / PR review:
+    Agentic issue / PR checkup:
       pdd checkup <issue-url>
           Run the full agentic health-check orchestrator from a GitHub issue.
       pdd checkup --pr <pr-url> [--issue <issue-url>]
@@ -387,7 +385,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "lint",
         "contract",
         "contracts",
-        "coach",
+        "prompt",
         "coverage",
         "drift",
         "gate",
@@ -549,11 +547,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             raise click.exceptions.Exit(exit_code)
         return None
 
-    if target == "coach":
+    if target == "prompt":
         click.echo(
-            "pdd checkup coach is not yet implemented. "
-            "It is planned as part of the checkup verifier + coaching stack "
-            "(follow-up issues #1379–#1381, epic #833)."
+            "pdd checkup prompt is not yet implemented. "
+            "The unified prompt-space health report is tracked in issue #1379 "
+            "(epic #833). Use focused commands for CI and debugging: "
+            "lint, contract check, coverage, gate, snapshot, drift."
         )
         ctx.exit(0)
         return None

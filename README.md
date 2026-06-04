@@ -59,9 +59,9 @@ For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waive
 
 For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
 
-For the `pdd checkup` verifier namespace (local CI checks: lint, contract, coverage, gate, snapshot, drift), see [docs/checkup_verifier.md](docs/checkup_verifier.md).
+For the default prompt-space health entry point (`pdd checkup prompt`), see [docs/checkup_prompt.md](docs/checkup_prompt.md).
 
-For prompt coaching — the incremental authoring loop against the contract schema (Mode B), see [docs/checkup_prompt_coaching.md](docs/checkup_prompt_coaching.md).
+For focused local verifier commands (lint, contract, coverage, gate, snapshot, drift), see [docs/checkup_verifier.md](docs/checkup_verifier.md).
 
 ## Installation
 

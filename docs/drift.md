@@ -51,5 +51,5 @@ pdd checkup drift <devunit> --max-cost 5.0
 
 ## See also
 
-- [docs/checkup_verifier.md](checkup_verifier.md) — all local verifier subcommands and CI recipe
-- [docs/checkup_prompt_coaching.md](checkup_prompt_coaching.md) — prompt coaching (Mode B)
+- [docs/checkup_prompt.md](checkup_prompt.md) — unified prompt-space health report
+- [docs/checkup_verifier.md](checkup_verifier.md) — focused local verifier subcommands and CI recipe

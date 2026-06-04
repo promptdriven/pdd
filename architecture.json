@@ -8405,7 +8405,7 @@
     }
   },
   {
-    "reason": "Registers pdd checkup as a dual-mode CLI: local verifier namespace (lint, contract check, coverage, gate, snapshot, drift, coach) and agentic project health-check / PR review from a GitHub issue.",
+    "reason": "Registers pdd checkup CLI: prompt source-set entry (prompt), focused local checks (lint, contract check, coverage, gate, snapshot, drift), and agentic project health-check / PR review from a GitHub issue.",
     "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
     "dependencies": [
       "agentic_checkup_python.prompt",
@@ -8426,7 +8426,7 @@
         "commands": [
           {
             "name": "checkup",
-            "description": "Local verifier namespace (lint, contract check, coverage, gate, snapshot, drift, coach) and agentic project health-check / PR review from a GitHub issue"
+            "description": "Prompt source-set health (prompt), focused local checks (lint, contract check, coverage, gate, snapshot, drift), and agentic project health-check / PR review from a GitHub issue"
           }
         ]
       }

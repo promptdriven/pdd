@@ -1,30 +1,28 @@
-# `pdd checkup` — Local Evidence & Contract Verifier
+# `pdd checkup` — Focused local verifier commands
 
-`pdd checkup` is a dual-mode command:
+`pdd checkup` exposes deterministic, fast local checks for prompt source-sets. These commands do not require an LLM (except `drift`, which regenerates to compare stability).
 
-- **Mode A — Local evidence & contracts (this document):** Deterministic, fast, no LLM required. Run in CI or locally to verify prompt quality, coverage, and drift.
-- **Mode B — Prompt coaching:** Interactive authoring loop against the contract schema. See [docs/checkup_prompt_coaching.md](checkup_prompt_coaching.md).
-- **Mode C — Agentic issue / PR review:** Runs the full checkup orchestrator against a GitHub issue or PR. See `pdd checkup --help` (agentic section).
+For the **default prompt-space experience**, use `pdd checkup prompt <target>` — a unified report that aggregates these focused checkers. See [docs/checkup_prompt.md](checkup_prompt.md). For **agentic GitHub issue/PR repair**, use `pdd checkup <issue-url>` or `pdd checkup --pr <pr-url>` (see `pdd checkup --help`).
 
 ## Mental model
 
-```
+```text
 generate | sync | test | verify  →  action verbs (produce artifacts)
-checkup                          →  verifier + coaching (inspect artifacts)
+checkup prompt                    →  default prompt-space health (aggregate)
+checkup lint | contract | …       →  focused deterministic checks (CI/debug)
+checkup <issue-url>               →  agentic repo repair
 ```
 
-## Local verifier subcommands
+## Focused verifier subcommands
 
 | Subcommand | What it checks | LLM? |
 |-----------|---------------|------|
-| `pdd checkup lint TARGET` | Prompt and user-story quality, vague terms, vocabulary | No (optional `--llm`) |
-| `pdd checkup contract check TARGET` | Contract section lint (`<contract_rules>`, `<coverage>`, waivers) | No |
-| `pdd checkup coverage TARGET` | Rule-to-story/test coverage matrix | No |
-| `pdd checkup gate [TARGET]` | Waiver policy gate, evidence manifest enforcement | No |
-| `pdd checkup snapshot PROMPT_FILE` | Nondeterministic prompt context policy | No |
-| `pdd checkup drift DEVUNIT` | Regeneration stability across repeated runs | Yes (regenerates) |
-
-`pdd checkup coach PROMPT` (prompt coaching, Mode B) is planned; see [docs/checkup_prompt_coaching.md](checkup_prompt_coaching.md).
+| `pdd checkup lint <target>` | Prompt and user-story quality, vague terms, vocabulary | No (optional `--llm`) |
+| `pdd checkup contract check <target>` | Contract section lint (`<contract_rules>`, `<coverage>`, waivers) | No |
+| `pdd checkup coverage <target>` | Rule-to-story/test coverage matrix | No |
+| `pdd checkup gate [<target>]` | Waiver policy gate, evidence manifest enforcement | No |
+| `pdd checkup snapshot <prompt-file>` | Nondeterministic prompt context policy | No |
+| `pdd checkup drift <devunit>` | Regeneration stability across repeated runs | Yes (regenerates) |
 
 ## Quick examples
 
@@ -84,9 +82,9 @@ pdd checkup gate prompts/
 
 ## Related documentation
 
+- [docs/checkup_prompt.md](checkup_prompt.md) — Unified `checkup prompt` entry point (aggregation model)
 - [docs/contract_check.md](contract_check.md) — Contract section lint reference
 - [docs/coverage_contracts.md](coverage_contracts.md) — Coverage matrix reference
 - [docs/drift.md](drift.md) — Regeneration stability reference
 - [docs/evidence_manifest.md](evidence_manifest.md) — Evidence manifests and gate
 - [docs/prompt_lint.md](prompt_lint.md) — Prompt lint reference
-- [docs/checkup_prompt_coaching.md](checkup_prompt_coaching.md) — Prompt coaching (Mode B)
