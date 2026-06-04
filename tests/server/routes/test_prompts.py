@@ -650,6 +650,8 @@ async def test_get_available_models(prompts_test_env):
             'input': 3.0,
             'output': 15.0,
             'coding_arena_elo': 1400,
+            'model_rank_score': 1000,
+            'model_rank_source': 'arena-elo-fallback',
             'max_reasoning_tokens': 0,
             'reasoning_type': 'none',
             'structured_output': True,
@@ -660,6 +662,8 @@ async def test_get_available_models(prompts_test_env):
             'input': 10.0,
             'output': 30.0,
             'coding_arena_elo': 1350,
+            'model_rank_score': 17000,
+            'model_rank_source': 'deepswe-solve-rate',
             'max_reasoning_tokens': 0,
             'reasoning_type': 'none',
             'structured_output': True,
@@ -670,9 +674,11 @@ async def test_get_available_models(prompts_test_env):
     response = await get_available_models()
 
     assert len(response.models) == 2
-    # Should be sorted by ELO descending
-    assert response.models[0].model == 'claude-sonnet-4-20250514'
-    assert response.models[0].elo == 1400
+    # Should be sorted by DeepSWE-first rank, while elo remains raw metadata.
+    assert response.models[0].model == 'gpt-4-turbo'
+    assert response.models[0].elo == 1350
+    assert response.models[0].model_rank_score == 17000
+    assert response.models[0].model_rank_source == 'deepswe-solve-rate'
     assert response.default_model == 'claude-sonnet-4-20250514'
 
 

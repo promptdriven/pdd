@@ -123,7 +123,7 @@ class TestIssue373Step5KeyErrorE2E:
         # Second pass: escape curly braces EXCEPT for the valid context keys
         # This is what the orchestrator should do - escape JSON but keep placeholders
         from pdd.preprocess import double_curly
-        fully_processed = double_curly(processed_template, exclude_keys=list(context.keys()))
+        fully_processed = double_curly(processed_template, exclude=list(context.keys()))
 
         try:
             formatted_prompt = fully_processed.format(**context)
@@ -184,7 +184,7 @@ class TestIssue373Step5KeyErrorE2E:
         # Now escape curly braces EXCEPT for valid placeholders
         # This is the key step the orchestrator is missing
         from pdd.preprocess import double_curly
-        escaped_template = double_curly(expanded_template, exclude_keys=list(context.keys()))
+        escaped_template = double_curly(expanded_template, exclude=list(context.keys()))
 
         # This should succeed without KeyError after proper preprocessing
         try:

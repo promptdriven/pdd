@@ -244,7 +244,7 @@ def _select_providers_to_keep(
     user's own additions.
 
     Rationale (issue #1202): `pdd --local` auto-selects across every provider in
-    the CSV by cost/ELO, so leaving several providers in the file silently
+    the CSV by cost/model_rank_score, so leaving several providers in the file silently
     routes a user who configured (say) a Gemini key to a higher-ranked or
     free device-login provider (e.g. GitHub Copilot). Curating the CSV down to
     the user's chosen provider(s) is the reliable fix — reordering rows does
@@ -283,19 +283,22 @@ def _select_providers_to_keep(
     # unit-test callers).
     available_set = set(available) if available is not None else set(providers)
 
-    def _best_elo(prov: str) -> float:
+    def _best_rank(prov: str) -> float:
         best = 0.0
         for r in rows:
             if (r.get("provider") or "").strip() == prov:
                 try:
-                    best = max(best, float(r.get("coding_arena_elo") or 0))
+                    best = max(
+                        best,
+                        float(r.get("model_rank_score") or r.get("coding_arena_elo") or 0),
+                    )
                 except (TypeError, ValueError):
                     pass
         return best
 
-    # First-time default is a SINGLE provider — the highest-ELO USABLE one — so
+    # First-time default is a SINGLE provider — the highest-ranked USABLE one — so
     # accepting it (Enter) yields an unambiguous, usable pin and `pdd --local`
-    # cannot cost/ELO-route across providers (issue #1202). Priority:
+    # cannot cost/rank-route across providers (issue #1202). Priority:
     #   1. available non-device (a real configured key wins over a free login);
     #   2. else available device-login (when a device login is all that's usable,
     #      it's the right default — better than a keyless stale provider);
@@ -304,7 +307,7 @@ def _select_providers_to_keep(
     _available_non_device = [p for p in non_device if p in available_set]
     _available_any = [p for p in providers if p in available_set]
     _default_pool = _available_non_device or _available_any or non_device or providers
-    single_default = [max(_default_pool, key=_best_elo)] if _default_pool else providers[:1]
+    single_default = [max(_default_pool, key=_best_rank)] if _default_pool else providers[:1]
     saved = _load_selected_providers()
     default = [p for p in providers if p in saved] if saved else list(single_default)
     # A stale/foreign saved selection (no overlap with the current providers)
@@ -966,7 +969,7 @@ def _step2_configure_models_and_pddrc(found_key_names: List[str]) -> Dict[str, i
     combined = existing + new_rows
     # Issue #1202: when several providers would end up in the CSV, ask which the
     # user actually wants `pdd --local` to use and curate down to those. Leaving
-    # every provider in the file lets cost/ELO auto-selection route to an
+    # every provider in the file lets cost/rank auto-selection route to an
     # unintended (often free device-login) provider.
     #
     # `curatable` = the PDD-managed (reference) providers PRESENT IN THE FINAL

@@ -59,6 +59,8 @@ class TestIssue319JsonBracesE2E:
         with patch("pdd.agentic_change.shutil.which") as mock_which, \
              patch("pdd.agentic_change.subprocess.run") as mock_subprocess, \
              patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_agentic_task, \
+             patch("pdd.agentic_change_orchestrator.run_pre_checkup_gate",
+                   return_value=(True, "pre_checkup_gate passed", 0.0)), \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_orch_subprocess, \
              patch("pdd.agentic_change.console"), \
              patch("pdd.agentic_change_orchestrator.console"):
@@ -209,7 +211,9 @@ Here's the config that causes it:
 
         This tests the specific scenario from Issue #319 where step outputs contain JSON.
         """
-        with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_agentic_task, \
+        with patch("pdd.agentic_change_orchestrator.run_pre_checkup_gate",
+                   return_value=(True, "pre_checkup_gate passed", 0.0)), \
+             patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_agentic_task, \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
              patch("pdd.agentic_change_orchestrator.console"):
 
@@ -385,7 +389,9 @@ class TestIssue319RegressionTests:
         1. template.format(**context) -> partial result with JSON
         2. partial_result.format(...) -> KeyError on JSON braces
         """
-        with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_agentic_task, \
+        with patch("pdd.agentic_change_orchestrator.run_pre_checkup_gate",
+                   return_value=(True, "pre_checkup_gate passed", 0.0)), \
+             patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_agentic_task, \
              patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_subprocess, \
              patch("pdd.agentic_change_orchestrator.console"):
 

@@ -122,7 +122,10 @@
       "required": ["path", "sha256"],
       "properties": {
         "path": {"type": "string"},
-        "sha256": {"type": "string"}
+        "sha256": {"type": "string"},
+        "source_sha256": {"type": "string"},
+        "compressed_sha256": {"type": "string"},
+        "estimated_tokens": {"type": "integer", "minimum": 0}
       }
     },
     "grounding": {
