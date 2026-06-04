@@ -3,7 +3,7 @@
 pdd/generate_model_catalog.py
 
 Regenerates pdd/data/llm_model.csv from LiteLLM's bundled model registry,
-enriched with agent-reviewed coding-arena scores from a checked-in manifest.
+enriched with agent-reviewed Arena and DeepSWE scores from checked-in manifests.
 
 Usage:
     python pdd/generate_model_catalog.py [--output PATH] [--score-manifest PATH]
@@ -13,8 +13,9 @@ The script pulls from litellm.model_cost (local data) and:
   - Skips deprecated, placeholder, and superseded preview entries
   - Converts per-token costs to per-million-token costs
   - Looks up provider display names and API key env var names
-  - Resolves ELO via the agentic score manifest, falling back to a curated
-    static table; skips models below ELO_CUTOFF
+  - Resolves raw Arena/static ELO plus a DeepSWE-first rank score; skips
+    non-DeepSWE fallback rows below ELO_CUTOFF while keeping reviewed
+    DeepSWE-ranked rows
   - Infers structured_output, reasoning_type, max_reasoning_tokens
   - Applies post-processing fixes (dated-variant dedup, Pareto filter)
 
@@ -35,7 +36,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
-# ELO cutoff — models below this score are excluded from the catalog.
+# ELO cutoff — non-DeepSWE fallback rows below this raw Arena/static score are
+# excluded from the catalog. Reviewed DeepSWE-ranked rows may survive even when
+# their raw Arena/static ELO is missing or below the cutoff.
 # ---------------------------------------------------------------------------
 ELO_CUTOFF = 1300
 MAX_COST_PER_MTOK = 100.0  # Sanity cap — drop rows with absurd pricing (LiteLLM bugs)
@@ -1297,6 +1300,16 @@ def _score_fields_for_model(
     return elo, rank_score, rank_source, elo_source
 
 
+def _survives_catalog_cutoff(elo: int, rank_source: str) -> bool:
+    """True when a row should survive the raw-ELO cutoff.
+
+    DeepSWE-ranked rows intentionally survive even with raw Arena/static ELO
+    below ``ELO_CUTOFF`` (or no Arena match at all). Arena/static fallback rows
+    keep the historical contract: raw ELO must clear the cutoff.
+    """
+    return rank_source == "deepswe-solve-rate" or elo >= ELO_CUTOFF
+
+
 def _add_score_fields(
     row: Dict[str, Any],
     arena_index: Dict[str, Dict[str, Any]],
@@ -1463,10 +1476,10 @@ def _local_runner_rows_from_existing_csv(
                 # Re-resolve ELO so static-fallback updates flow through.
                 elo, _src = _get_elo(model, arena_index, deepswe_index)
                 rank_score, rank_source = _get_rank_score(model, arena_index, deepswe_index)
-                # Apply the same ELO_CUTOFF that litellm-derived rows go
-                # through — a preserved row for an unknown model would
-                # otherwise survive at ELO=0 and bypass the cutoff filter.
-                if elo < ELO_CUTOFF and rank_score <= 0:
+                # Preserved rows follow the same contract as generated rows:
+                # DeepSWE-ranked rows may survive below the raw-ELO cutoff, but
+                # Arena/static fallback rows must still clear it.
+                if not _survives_catalog_cutoff(elo, rank_source):
                     continue
                 # Coerce numeric columns; tolerate missing/malformed values.
                 def _to_float(v: Any) -> float:
@@ -1517,7 +1530,7 @@ def _mandatory_rows_missing_from(
             continue
         seeded = dict(default_row)
         elo, src = _add_score_fields(seeded, arena_index, deepswe_index)
-        if elo < ELO_CUTOFF and int(seeded["model_rank_score"]) <= 0:
+        if not _survives_catalog_cutoff(elo, str(seeded["model_rank_source"])):
             continue
         missing.append(seeded)
         elo_source_counts[src.split(":", 1)[0]] += 1
@@ -1581,7 +1594,7 @@ def _merge_chatgpt_subscription_rows(
                 elo, rank_score, rank_source, _src = _score_fields_for_model(
                     seeded["model"], arena_index or {}, deepswe_index
                 )
-                if elo >= ELO_CUTOFF or rank_score > 0:
+                if _survives_catalog_cutoff(elo, rank_source):
                     seeded["coding_arena_elo"] = str(elo)
                     seeded["model_rank_score"] = str(rank_score)
                     seeded["model_rank_source"] = rank_source
@@ -1664,7 +1677,7 @@ def build_rows(
             model_id, arena_index, deepswe_index
         )
         elo_source_counts[elo_source.split(":", 1)[0]] += 1
-        if elo < ELO_CUTOFF and rank_score <= 0:
+        if not _survives_catalog_cutoff(elo, rank_source):
             continue
 
         # Convert per-token costs to per-million
@@ -1729,14 +1742,14 @@ def build_rows(
     #   2. Existing CSV at `existing_catalog` — picks up user-added rows
     #      (e.g. extra ollama models) on top of the defaults.
     # Each row's ELO is re-resolved so static-fallback updates flow
-    # through; rows below ELO_CUTOFF are dropped just like litellm-
-    # derived rows.
+    # through; non-DeepSWE fallback rows below ELO_CUTOFF are dropped
+    # just like litellm-derived rows.
     local_pool: List[dict] = []
     seen_local_ids: set = set()
     for default_row in _DEFAULT_LOCAL_RUNNER_ROWS:
         seeded = dict(default_row)
         elo, _src = _add_score_fields(seeded, arena_index, deepswe_index)
-        if elo < ELO_CUTOFF and int(seeded["model_rank_score"]) <= 0:
+        if not _survives_catalog_cutoff(elo, str(seeded["model_rank_source"])):
             continue
         local_pool.append(seeded)
         seen_local_ids.add(seeded["model"])
@@ -1940,6 +1953,17 @@ def build_rows(
     # the final sort, so the rows land under their "OpenAI ChatGPT" provider
     # block deterministically rather than appended after the last provider.
     rows = _merge_chatgpt_subscription_rows(rows, arena_index, deepswe_index)
+
+    # Defense in depth: regardless of source (generated, mandatory, preserved,
+    # or hand-managed), the committed catalog must not ship non-DeepSWE fallback
+    # rows below the raw-ELO cutoff.
+    rows = [
+        row for row in rows
+        if _survives_catalog_cutoff(
+            int(row.get("coding_arena_elo", 0) or 0),
+            str(row.get("model_rank_source", "")),
+        )
+    ]
 
     # Classify every emitted row (litellm-derived, seeded local-runner,
     # mandatory, user-preserved, and the merged ChatGPT rows alike) for the

@@ -163,6 +163,25 @@
       ]
     },
     {
+      "model": "mimo-v2.5-pro",
+      "source": "agent-reviewed:deepswe",
+      "source_url": "https://deepswe.lol/",
+      "raw_model_name": "mimo-v2.5-pro",
+      "leaderboard": "deepswe",
+      "category": "long-horizon-swe",
+      "leaderboard_publish_date": "2026-05-27",
+      "retrieved_at": "2026-06-03",
+      "rank": 8,
+      "solve_rate": 19.0,
+      "rating_lower": 15.0,
+      "rating_upper": 23.0,
+      "vote_count": 0,
+      "match_reason": "Current DeepSWE public leaderboard row: mimo-v2.5-pro ranks #8 at 19% +/- 4%. LiteLLM currently exposes the supported catalog route via OpenRouter.",
+      "aliases": [
+        "openrouter/xiaomi/mimo-v2.5-pro"
+      ]
+    },
+    {
       "model": "glm-5.1",
       "source": "agent-reviewed:deepswe",
       "source_url": "https://deepswe.lol/",
