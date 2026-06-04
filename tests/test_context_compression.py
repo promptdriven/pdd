@@ -112,6 +112,20 @@ def test_preprocess_auto_interface_mode_for_examples_dir(tmp_path: Path, monkeyp
     assert "..." in result
 
 
+def test_apply_compression_env_partial_compress_test_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Partial patches (e.g. fix_error_loop keyword) must set boolean env without mode."""
+    monkeypatch.delenv("PDD_CONTEXT_COMPRESSION", raising=False)
+    monkeypatch.delenv("PDD_COMPRESS_TEST_CONTEXT", raising=False)
+
+    apply_compression_env({"compress_test_context": True})
+
+    assert "PDD_CONTEXT_COMPRESSION" not in os.environ
+    assert os.environ["PDD_COMPRESS_TEST_CONTEXT"] == "1"
+    assert _test_context_compression_active()
+
+
 def test_apply_compression_env_off_unsets_context_compression(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -823,6 +837,9 @@ def test_fix_error_loop_compresses_unit_test_before_fix_call(
         return False, True, unit_test, code, "analysis", 0.0, "mock"
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_CONTEXT_COMPRESSION", raising=False)
+    monkeypatch.delenv("PDD_COMPRESS_TEST_CONTEXT", raising=False)
+    monkeypatch.delenv("PDD_COMPRESS_EXAMPLES", raising=False)
     with patch("pdd.fix_error_loop.run_pytest_on_file", return_value=(1, 0, 0, pytest_output)), patch(
         "pdd.fix_error_loop.fix_errors_from_unit_tests", side_effect=_fake_fix
     ):
@@ -873,6 +890,9 @@ def test_fix_error_loop_compression_fallback_error_aborts(
         return False, True, "", "", "analysis", 0.0, "mock"
 
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("PDD_CONTEXT_COMPRESSION", raising=False)
+    monkeypatch.delenv("PDD_COMPRESS_TEST_CONTEXT", raising=False)
+    monkeypatch.delenv("PDD_COMPRESS_EXAMPLES", raising=False)
     monkeypatch.setenv("PDD_COMPRESSION_FALLBACK", "error")
     clear_compression_fallback_events()
 

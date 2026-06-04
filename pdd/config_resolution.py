@@ -106,6 +106,7 @@ def apply_compression_env(config: Dict[str, Any]) -> None:
         else:
             os.environ["PDD_CONTEXT_COMPRESSION"] = str(config["context_compression"])
 
+    if not compression_off:
         if "compress_examples" in config:
             if config["compress_examples"]:
                 os.environ["PDD_COMPRESS_EXAMPLES"] = "1"
