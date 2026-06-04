@@ -74,6 +74,7 @@ from pdd.fix_error_loop import (
     run_pytest_on_file,
     format_log_for_output,
     _normalize_agentic_result,
+    _extract_failing_tests,
     escape_brackets
 )
 from pdd.fix_focus import FocusedInputs, FunctionSlice
@@ -1284,6 +1285,18 @@ def test_normalize_agentic_result():
     # 2-tuple
     res = _normalize_agentic_result((False, "fail"))
     assert res == (False, "fail", 0.0, "agentic-cli", [])
+
+
+def test_extract_failing_tests_parses_pytest_ids():
+    output = (
+        "FAILED tests/test_foo.py::test_bar - AssertionError\n"
+        "tests/test_other.py::test_baz FAILED\n"
+    )
+    assert _extract_failing_tests(output) == [
+        "tests/test_foo.py::test_bar",
+        "tests/test_other.py::test_baz",
+    ]
+
 
 # --- Unit Tests for cloud_fix_errors ---
 
