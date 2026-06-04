@@ -761,6 +761,7 @@ def apply_compressed_include_with_fallback(
     *,
     file_path: str,
     selectors: list[str] | str | None = None,
+    expand_dependencies: bool = False,
 ) -> str:
     """Apply compressed-mode include transform with interface/truncation fallback."""
     if not _is_python(file_path):
@@ -773,10 +774,22 @@ def apply_compressed_include_with_fallback(
         sel_list = []
     selector = ContentSelector()
     raw = content
-    compressed = selector.select(raw, sel_list, file_path=file_path, mode="compressed")
+    compressed = selector.select(
+        raw,
+        sel_list,
+        file_path=file_path,
+        mode="compressed",
+        expand_dependencies=expand_dependencies,
+    )
     if len(compressed) <= _COMPRESSED_MAX_CHARS:
         return compressed
-    iface = selector.select(raw, sel_list, file_path=file_path, mode="interface")
+    iface = selector.select(
+        raw,
+        sel_list,
+        file_path=file_path,
+        mode="interface",
+        expand_dependencies=expand_dependencies,
+    )
     patch_targets = discover_sibling_patch_targets(file_path)
     restored = augment_interface_with_patch_targets(iface, raw, patch_targets)
     if len(restored) <= _COMPRESSED_MAX_CHARS:

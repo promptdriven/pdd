@@ -449,6 +449,119 @@ def test_patch_object_ignores_test_local_class_without_import(tmp_path):
     assert "Service._private" not in symbols
 
 
+def test_preprocess_compress_expand_includes_dependencies(tmp_path):
+    """compress=True must honor expand=\"true\" on selective includes."""
+    module_path = tmp_path / "module.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            CONST = 42
+
+            def helper():
+                return CONST
+
+            def entry():
+                return helper()
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    old_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        prompt = '<include path="module.py" select="def:entry" expand="true" />'
+        result = preprocess(prompt, recursive=False, compress=True)
+        assert "def entry():" in result
+        assert "def helper():" in result
+        assert "CONST = 42" in result
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_preprocess_mode_compressed_expand_includes_dependencies(tmp_path):
+    """Explicit mode=\"compressed\" must honor expand=\"true\"."""
+    module_path = tmp_path / "module.py"
+    module_path.write_text(
+        textwrap.dedent(
+            """
+            CONST = 42
+
+            def helper():
+                return CONST
+
+            def entry():
+                return helper()
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    old_cwd = os.getcwd()
+    os.chdir(tmp_path)
+    try:
+        prompt = (
+            '<include path="module.py" select="def:entry" '
+            'mode="compressed" expand="true" />'
+        )
+        result = preprocess(prompt, recursive=False)
+        assert "def entry():" in result
+        assert "def helper():" in result
+        assert "CONST = 42" in result
+    finally:
+        os.chdir(old_cwd)
+
+
+def test_patch_target_typed_constant_protection(tmp_path):
+    """Patched typed constants (_SECRET: int = 1) are protected by the gate."""
+    project_dir = tmp_path / "pkg"
+    project_dir.mkdir()
+    (project_dir / "__init__.py").touch()
+
+    code_file = project_dir / "logic.py"
+    code_file.write_text(
+        textwrap.dedent(
+            """
+            _SECRET: int = 1
+
+            def public_func():
+                return _SECRET
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    test_dir = project_dir / "tests"
+    test_dir.mkdir()
+    (test_dir / "test_logic.py").write_text(
+        textwrap.dedent(
+            """
+            def test_logic(monkeypatch):
+                monkeypatch.setattr("pkg.logic._SECRET", 2)
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    existing_code = code_file.read_text(encoding="utf-8")
+    generated_code = textwrap.dedent(
+        """
+        def public_func():
+            return 1
+        """
+    )
+
+    with pytest.raises(PublicSurfaceRegressionError, match="_SECRET"):
+        _verify_public_surface_regression(
+            existing_code=existing_code,
+            generated_code=generated_code,
+            prompt_name="logic_python",
+            output_path=str(code_file),
+            language="python",
+            prompt_content="% Goal: Refactor logic.py",
+        )
+
+
 def test_patch_target_protection(tmp_path):
     """Verify _verify_public_surface_regression protects symbols referenced in tests."""
     project_dir = tmp_path / "my_project"

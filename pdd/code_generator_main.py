@@ -707,6 +707,17 @@ def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
     return state
 
 
+def _assign_target_matches(target: ast.AST, symbol: str) -> bool:
+    """Return True when *symbol* is bound by an assignment target subtree."""
+    if isinstance(target, ast.Name):
+        return target.id == symbol
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_assign_target_matches(elt, symbol) for elt in target.elts)
+    if isinstance(target, ast.Starred):
+        return _assign_target_matches(target.value, symbol)
+    return False
+
+
 def _symbol_exists_in_module(tree: ast.Module, symbol: str) -> bool:
     """Return True when *symbol* is defined in *tree* (supports dotted class paths)."""
     if "." not in symbol:
@@ -716,8 +727,11 @@ def _symbol_exists_in_module(tree: ast.Module, symbol: str) -> bool:
                     return True
             elif isinstance(node, ast.Assign):
                 for target in node.targets:
-                    if isinstance(target, ast.Name) and target.id == symbol:
+                    if _assign_target_matches(target, symbol):
                         return True
+            elif isinstance(node, ast.AnnAssign):
+                if node.value is not None and _assign_target_matches(node.target, symbol):
+                    return True
         return False
     cls_name, remainder = symbol.split(".", 1)
     cls_node = next(

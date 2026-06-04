@@ -364,6 +364,7 @@ def _compressed_include_with_fallback_or_raw(
     file_path: str,
     *,
     selectors: Optional[List[str]] = None,
+    expand_dependencies: bool = False,
 ) -> str:
     """Apply compressed include transform; return raw content when compression fails."""
     try:
@@ -373,6 +374,7 @@ def _compressed_include_with_fallback_or_raw(
             raw_content,
             file_path=file_path,
             selectors=selectors,
+            expand_dependencies=expand_dependencies,
         )
     except Exception as exc:
         import warnings
@@ -749,6 +751,7 @@ def process_include_tags(
                                     raw_include_content,
                                     full_path,
                                     selectors=selectors,
+                                    expand_dependencies=expand_dependencies,
                                 )
                             else:
                                 from pdd.content_selector import ContentSelector
