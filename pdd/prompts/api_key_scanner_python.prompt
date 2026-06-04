@@ -33,7 +33,7 @@ Discovers API keys needed by the user's configured models and reports their exis
 % Dependencies
 <llm_model_csv_schema>
 The user CSV at ~/.pdd/llm_model.csv has columns:
-provider,model,input,output,coding_arena_elo,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location
+provider,model,input,output,coding_arena_elo,model_rank_score,model_rank_source,base_url,api_key,max_reasoning_tokens,structured_output,reasoning_type,location,interactive_only
 Rows with empty api_key may not require a key.
 The api_key column may contain pipe-delimited values (e.g. `AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_REGION_NAME`) when a provider requires multiple keys.
 `GEMINI_API_KEY` and `GOOGLE_API_KEY` are aliases for Google Gemini direct-model rows.

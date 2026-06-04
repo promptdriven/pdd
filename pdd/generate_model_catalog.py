@@ -3,7 +3,7 @@
 pdd/generate_model_catalog.py
 
 Regenerates pdd/data/llm_model.csv from LiteLLM's bundled model registry,
-enriched with agent-reviewed coding-arena scores from a checked-in manifest.
+enriched with agent-reviewed Arena and DeepSWE scores from checked-in manifests.
 
 Usage:
     python pdd/generate_model_catalog.py [--output PATH] [--score-manifest PATH]
@@ -13,8 +13,9 @@ The script pulls from litellm.model_cost (local data) and:
   - Skips deprecated, placeholder, and superseded preview entries
   - Converts per-token costs to per-million-token costs
   - Looks up provider display names and API key env var names
-  - Resolves ELO via the agentic score manifest, falling back to a curated
-    static table; skips models below ELO_CUTOFF
+  - Resolves raw Arena/static ELO plus a DeepSWE-first rank score; skips
+    non-DeepSWE fallback rows below ELO_CUTOFF while keeping reviewed
+    DeepSWE-ranked rows
   - Infers structured_output, reasoning_type, max_reasoning_tokens
   - Applies post-processing fixes (dated-variant dedup, Pareto filter)
 
@@ -35,7 +36,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
-# ELO cutoff — models below this score are excluded from the catalog.
+# ELO cutoff — non-DeepSWE fallback rows below this raw Arena/static score are
+# excluded from the catalog. Reviewed DeepSWE-ranked rows may survive even when
+# their raw Arena/static ELO is missing or below the cutoff.
 # ---------------------------------------------------------------------------
 ELO_CUTOFF = 1300
 MAX_COST_PER_MTOK = 100.0  # Sanity cap — drop rows with absurd pricing (LiteLLM bugs)
@@ -53,9 +56,15 @@ AGENTIC_ELO_MANIFEST_SCHEMA_VERSION = 2
 ARENA_LEADERBOARD_POLICY = (
     "agent-reviewed manifest; each entry records its leaderboard/source"
 )
+
+# DeepSWE manifest — primary coding-task ranking source (SWE-bench solve rates).
+DEEPSWE_MANIFEST_PATH = Path(__file__).parent / "data" / "deepswe_manifest.json"
+DEEPSWE_MANIFEST_SCHEMA_VERSION = 2
+
 AGENTIC_REFRESH_ERROR = (
     "--refresh-elo is not a Python live-fetch path. Refresh scores agentically: "
-    "inspect the current Arena source rows, update pdd/data/arena_elo_manifest.json "
+    "inspect the current DeepSWE and Arena source rows, update "
+    "pdd/data/deepswe_manifest.json and pdd/data/arena_elo_manifest.json "
     "with provenance, then run the generator without --refresh-elo."
 )
 
@@ -353,9 +362,16 @@ _DATED_PREVIEW = re.compile(
 
 CSV_FIELDNAMES = [
     "provider", "model", "input", "output", "coding_arena_elo",
-    "base_url", "api_key", "max_reasoning_tokens", "structured_output",
-    "reasoning_type", "location", "interactive_only",
+    "model_rank_score", "model_rank_source", "base_url", "api_key",
+    "max_reasoning_tokens", "structured_output", "reasoning_type",
+    "location", "interactive_only",
 ]
+
+# DeepSWE is a solve-rate benchmark, not an ELO leaderboard.  Store its signal
+# separately in a primary ranking band (10000 + solve-rate basis points), and
+# leave Arena-only rows in the fallback band ordered by raw Arena ELO.  This
+# makes DeepSWE the source of truth without pretending its solve rate is ELO.
+DEEPSWE_RANK_BASE = 10000
 
 # Provider roots that require interactive human auth (device-flow OAuth) or a
 # running local server (localhost connect), and therefore hang in
@@ -901,6 +917,17 @@ def _coerce_elo(entry: Any) -> Optional[float]:
     return None
 
 
+def _coerce_solve_rate(entry: Any) -> Optional[float]:
+    """Return a DeepSWE solve rate percentage from a manifest entry."""
+    if not isinstance(entry, dict):
+        return None
+    for key in ("solve_rate", "rating"):
+        val = entry.get(key)
+        if isinstance(val, (int, float)):
+            return float(val)
+    return None
+
+
 def _validate_manifest_entry(entry: Any) -> bool:
     """Schema check for one agent-reviewed score manifest entry."""
     if not isinstance(entry, dict):
@@ -924,6 +951,49 @@ def _validate_manifest_entry(entry: Any) -> bool:
         return False
 
     optional_numeric = ["rank", "rating_lower", "rating_upper"]
+    if any(
+        entry.get(field) is not None
+        and not isinstance(entry.get(field), (int, float))
+        for field in optional_numeric
+    ):
+        return False
+
+    publish_date = entry.get("leaderboard_publish_date")
+    if publish_date is not None and not isinstance(publish_date, str):
+        return False
+
+    aliases = entry.get("aliases", [])
+    if aliases is not None and (
+        not isinstance(aliases, list)
+        or any(not isinstance(alias, str) for alias in aliases)
+    ):
+        return False
+
+    return True
+
+
+def _validate_deepswe_manifest_entry(entry: Any) -> bool:
+    """Schema check for one reviewed DeepSWE solve-rate manifest entry."""
+    if not isinstance(entry, dict):
+        return False
+
+    required_str = [
+        "model",
+        "source",
+        "source_url",
+        "raw_model_name",
+        "leaderboard",
+        "category",
+        "retrieved_at",
+        "match_reason",
+    ]
+    if any(not isinstance(entry.get(field), str) for field in required_str):
+        return False
+
+    if _coerce_solve_rate(entry) is None:
+        return False
+
+    optional_numeric = ["rank", "rating_lower", "rating_upper", "vote_count"]
     if any(
         entry.get(field) is not None
         and not isinstance(entry.get(field), (int, float))
@@ -1009,6 +1079,68 @@ def _parse_agentic_elo_manifest(payload: Any) -> Dict[str, Dict[str, Any]]:
     return index
 
 
+def _parse_deepswe_manifest(payload: Any) -> Dict[str, Dict[str, Any]]:
+    """Convert a checked-in DeepSWE solve-rate manifest into an alias index."""
+    if not isinstance(payload, dict):
+        return {}
+    if payload.get("schema_version") != DEEPSWE_MANIFEST_SCHEMA_VERSION:
+        return {}
+    entries = payload.get("scores")
+    if not isinstance(entries, list):
+        return {}
+
+    index: Dict[str, Dict[str, Any]] = {}
+    for entry in entries:
+        if not _validate_deepswe_manifest_entry(entry):
+            continue
+
+        solve_rate = _coerce_solve_rate(entry)
+        if solve_rate is None:
+            continue
+
+        aliases = [entry["model"]]
+        raw_aliases = entry.get("aliases", [])
+        if isinstance(raw_aliases, list):
+            aliases.extend(a for a in raw_aliases if isinstance(a, str))
+
+        votes_raw = entry.get("vote_count", 0)
+        votes = int(votes_raw) if isinstance(votes_raw, (int, float)) else 0
+        record = {
+            "solve_rate": float(solve_rate),
+            "votes": votes,
+            "raw_name": entry["raw_model_name"],
+            "source": entry["source"],
+            "source_url": entry["source_url"],
+            "reviewed_by": entry.get("reviewed_by", "agent"),
+            "leaderboard": entry["leaderboard"],
+            "category": entry["category"],
+            "leaderboard_publish_date": entry.get("leaderboard_publish_date"),
+            "retrieved_at": entry["retrieved_at"],
+            "rank": entry.get("rank"),
+            "rating_lower": entry.get("rating_lower"),
+            "rating_upper": entry.get("rating_upper"),
+            "match_reason": entry["match_reason"],
+        }
+
+        for alias in aliases:
+            norm = _normalize_model_name(alias)
+            if not norm:
+                continue
+            existing = index.get(norm)
+            if existing:
+                same_record = (
+                    existing.get("raw_name") == record["raw_name"]
+                    and existing.get("solve_rate") == record["solve_rate"]
+                    and existing.get("source") == record["source"]
+                )
+                if not same_record:
+                    return {}
+                continue
+            index[norm] = dict(record)
+
+    return index
+
+
 def _fetch_arena_elo(
     refresh: bool = False,
     manifest_path: Optional[Path] = None,
@@ -1049,26 +1181,71 @@ def _fetch_arena_elo(
     return index
 
 
+def _fetch_deepswe_elo(
+    refresh: bool = False,
+    manifest_path: Optional[Path] = None,
+) -> Dict[str, Dict[str, Any]]:
+    """Return agent-reviewed DeepSWE solve rates as a normalized index.
+
+    The historical function name is retained for call-site compatibility, but
+    returned records carry ``solve_rate`` rather than fake ELO. Live Python
+    refresh is intentionally unsupported — update pdd/data/deepswe_manifest.json
+    agentically instead.
+    """
+    path = Path(manifest_path) if manifest_path is not None else DEEPSWE_MANIFEST_PATH
+    if refresh:
+        raise RuntimeError(AGENTIC_REFRESH_ERROR)
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            payload = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(
+            f"  deepswe: manifest unavailable ({type(e).__name__}: {e}); "
+            "skipping deepswe tier",
+            file=sys.stderr,
+        )
+        return {}
+
+    index = _parse_deepswe_manifest(payload)
+    if not index:
+        print(
+            f"  deepswe: manifest invalid or empty at {path}; "
+            "skipping deepswe tier",
+            file=sys.stderr,
+        )
+        return {}
+
+    print(f"  deepswe: loaded {len(index)} reviewed aliases from {path}",
+          file=sys.stderr)
+    return index
+
+
 def _get_elo(
     model_id: str,
     arena_index: Optional[Dict[str, Dict[str, Any]]] = None,
+    deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Tuple[int, str]:
-    """Resolve ELO for a litellm model id.
+    """Resolve raw Arena/static ELO for a litellm model id.
 
     Lookup chain (stops at first non-zero hit):
-      1. Agent-reviewed manifest exact/alias match.
-      2. STATIC_ELO_FALLBACK exact match.
-      3. STATIC_ELO_FALLBACK longest-prefix match via _extract_base_model.
+      1. Arena reviewed manifest exact/alias match (arena-exact).
+      2. STATIC_ELO_FALLBACK exact match (static).
+      3. STATIC_ELO_FALLBACK longest-prefix match via _extract_base_model (static-prefix).
       4. (0, "none").
 
     Returns a tuple ``(elo, source)`` where ``source`` is one of
-    ``"arena-exact"``, ``"static"``, ``"static-prefix"``, ``"none"`` —
-    used for diagnostic logging.
+    ``"arena-exact"``, ``"static"``, ``"static-prefix"``, ``"none"`` — used for
+    diagnostic logging.  The ``deepswe_index`` parameter is ignored and kept for
+    backward-compatible test/call-site signatures; DeepSWE feeds
+    ``model_rank_score`` via :func:`_get_rank_score`.
     ELO is rounded to int to match the static table's domain.
     """
     arena_index = arena_index or {}
 
     norm = _normalize_model_name(model_id)
+
+    # 1. Arena reviewed manifest
     if norm and norm in arena_index:
         elo_val = _coerce_elo(arena_index[norm])
         if elo_val is not None:
@@ -1077,6 +1254,7 @@ def _get_elo(
         # raising. Manifest parsing should have rejected this, but _get_elo
         # can also be called directly with hand-built dicts.
 
+    # 3-4. Static fallback (local-runner roots, niche, not-yet-reviewed models)
     static = _static_elo(model_id)
     if static is not None:
         return static
@@ -1084,7 +1262,67 @@ def _get_elo(
     return 0, "none"
 
 
+def _get_rank_score(
+    model_id: str,
+    arena_index: Optional[Dict[str, Dict[str, Any]]] = None,
+    deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[int, str]:
+    """Resolve model selection rank score with DeepSWE as primary signal."""
+    deepswe_index = deepswe_index or {}
+    arena_index = arena_index or {}
+
+    norm = _normalize_model_name(model_id)
+    if norm and norm in deepswe_index:
+        solve_rate = _coerce_solve_rate(deepswe_index[norm])
+        if solve_rate is not None:
+            return DEEPSWE_RANK_BASE + int(round(float(solve_rate) * 100)), "deepswe-solve-rate"
+
+    if norm and norm in arena_index:
+        arena_val = _coerce_elo(arena_index[norm])
+        if arena_val is not None:
+            return int(round(arena_val)), "arena-elo-fallback"
+
+    elo, source = _get_elo(model_id, arena_index, deepswe_index)
+    return elo, source
+
+
 _LOCAL_PROVIDER_ROOTS = {"lm_studio", "ollama", "ollama_chat"}
+
+
+def _score_fields_for_model(
+    model_id: str,
+    arena_index: Dict[str, Dict[str, Any]],
+    deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[int, int, str, str]:
+    """Return ``(arena_elo, rank_score, rank_source, elo_source)``."""
+    elo, elo_source = _get_elo(model_id, arena_index, deepswe_index)
+    rank_score, rank_source = _get_rank_score(model_id, arena_index, deepswe_index)
+    return elo, rank_score, rank_source, elo_source
+
+
+def _survives_catalog_cutoff(elo: int, rank_source: str) -> bool:
+    """True when a row should survive the raw-ELO cutoff.
+
+    DeepSWE-ranked rows intentionally survive even with raw Arena/static ELO
+    below ``ELO_CUTOFF`` (or no Arena match at all). Arena/static fallback rows
+    keep the historical contract: raw ELO must clear the cutoff.
+    """
+    return rank_source == "deepswe-solve-rate" or elo >= ELO_CUTOFF
+
+
+def _add_score_fields(
+    row: Dict[str, Any],
+    arena_index: Dict[str, Dict[str, Any]],
+    deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> Tuple[int, str]:
+    """Populate ranking columns on a row and return ``(arena_elo, elo_source)``."""
+    elo, rank_score, rank_source, elo_source = _score_fields_for_model(
+        str(row["model"]), arena_index, deepswe_index
+    )
+    row["coding_arena_elo"] = elo
+    row["model_rank_score"] = rank_score
+    row["model_rank_source"] = rank_source
+    return elo, elo_source
 
 # Canonical local-runner catalog rows, seeded on every regen so that a
 # fresh ``--output PATH`` matches the bundled CSV instead of producing a
@@ -1206,6 +1444,7 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
 def _local_runner_rows_from_existing_csv(
     csv_path: Path,
     arena_index: Dict[str, Dict[str, Any]],
+    deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[dict]:
     """Re-import local-runner rows from a previously-written CSV.
 
@@ -1235,11 +1474,12 @@ def _local_runner_rows_from_existing_csv(
                 if root not in _LOCAL_PROVIDER_ROOTS:
                     continue
                 # Re-resolve ELO so static-fallback updates flow through.
-                elo, _src = _get_elo(model, arena_index)
-                # Apply the same ELO_CUTOFF that litellm-derived rows go
-                # through — a preserved row for an unknown model would
-                # otherwise survive at ELO=0 and bypass the cutoff filter.
-                if elo < ELO_CUTOFF:
+                elo, _src = _get_elo(model, arena_index, deepswe_index)
+                rank_score, rank_source = _get_rank_score(model, arena_index, deepswe_index)
+                # Preserved rows follow the same contract as generated rows:
+                # DeepSWE-ranked rows may survive below the raw-ELO cutoff, but
+                # Arena/static fallback rows must still clear it.
+                if not _survives_catalog_cutoff(elo, rank_source):
                     continue
                 # Coerce numeric columns; tolerate missing/malformed values.
                 def _to_float(v: Any) -> float:
@@ -1260,6 +1500,8 @@ def _local_runner_rows_from_existing_csv(
                     "input": _to_float(row.get("input")),
                     "output": _to_float(row.get("output")),
                     "coding_arena_elo": elo,
+                    "model_rank_score": rank_score,
+                    "model_rank_source": rank_source,
                     "base_url": row.get("base_url", "") or "",
                     "api_key": row.get("api_key", "") or "",
                     "max_reasoning_tokens": _to_int(row.get("max_reasoning_tokens", 0)),
@@ -1279,17 +1521,17 @@ def _mandatory_rows_missing_from(
     rows: List[dict],
     arena_index: Dict[str, Dict[str, Any]],
     elo_source_counts: Dict[str, int],
+    deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> List[dict]:
     existing_ids = {r["model"] for r in rows}
     missing: List[dict] = []
     for default_row in _MANDATORY_MODEL_ROWS:
         if default_row["model"] in existing_ids:
             continue
-        elo, src = _get_elo(default_row["model"], arena_index)
-        if elo < ELO_CUTOFF:
-            continue
         seeded = dict(default_row)
-        seeded["coding_arena_elo"] = elo
+        elo, src = _add_score_fields(seeded, arena_index, deepswe_index)
+        if not _survives_catalog_cutoff(elo, str(seeded["model_rank_source"])):
+            continue
         missing.append(seeded)
         elo_source_counts[src.split(":", 1)[0]] += 1
     return missing
@@ -1303,36 +1545,60 @@ def _mandatory_rows_missing_from(
 # API twins; empty api_key marks device-flow (codex login) auth, like the
 # github_copilot/ rows. Keep in sync with pdd/data/llm_model.csv.
 _CHATGPT_SUBSCRIPTION_ROWS: List[Dict[str, str]] = [
+    {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.5", "input": "0.0",
+     "output": "0.0", "coding_arena_elo": "1450", "model_rank_score": "17000",
+     "model_rank_source": "deepswe-solve-rate", "base_url": "", "api_key": "",
+     "max_reasoning_tokens": "0", "structured_output": "True",
+     "reasoning_type": "none", "location": ""},
     {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.4", "input": "0.0",
-     "output": "0.0", "coding_arena_elo": "1437", "base_url": "", "api_key": "",
+     "output": "0.0", "coding_arena_elo": "1437", "model_rank_score": "15600",
+     "model_rank_source": "deepswe-solve-rate", "base_url": "", "api_key": "",
      "max_reasoning_tokens": "0", "structured_output": "True",
      "reasoning_type": "none", "location": ""},
     {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.3-codex", "input": "0.0",
-     "output": "0.0", "coding_arena_elo": "1407", "base_url": "", "api_key": "",
+     "output": "0.0", "coding_arena_elo": "1407", "model_rank_score": "1407",
+     "model_rank_source": "static", "base_url": "", "api_key": "",
      "max_reasoning_tokens": "0", "structured_output": "True",
      "reasoning_type": "none", "location": ""},
     {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.2", "input": "0.0",
-     "output": "0.0", "coding_arena_elo": "1404", "base_url": "", "api_key": "",
+     "output": "0.0", "coding_arena_elo": "1404", "model_rank_score": "1404",
+     "model_rank_source": "static", "base_url": "", "api_key": "",
      "max_reasoning_tokens": "0", "structured_output": "True",
      "reasoning_type": "none", "location": ""},
     {"provider": "OpenAI ChatGPT", "model": "chatgpt/gpt-5.3-codex-spark",
-     "input": "0.0", "output": "0.0", "coding_arena_elo": "1400", "base_url": "",
+     "input": "0.0", "output": "0.0", "coding_arena_elo": "1400",
+     "model_rank_score": "1400", "model_rank_source": "static", "base_url": "",
      "api_key": "", "max_reasoning_tokens": "0", "structured_output": "True",
      "reasoning_type": "none", "location": ""},
 ]
 
 
-def _merge_chatgpt_subscription_rows(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+def _merge_chatgpt_subscription_rows(
+    rows: List[Dict[str, str]],
+    arena_index: Optional[Dict[str, Dict[str, Any]]] = None,
+    deepswe_index: Optional[Dict[str, Dict[str, Any]]] = None,
+) -> List[Dict[str, str]]:
     """Append the hand-managed ChatGPT subscription rows, model-keyed deduped.
 
     Mirrors the local-runner preserve path so a catalog regeneration never drops
-    the subscription fallback (issue #1269).
+    the subscription fallback (issue #1269). Re-resolves ELO from the reviewed
+    manifests/static fallback so subscription rows mirror their API twins under
+    the same DeepSWE -> Arena -> static policy as generated rows.
     """
     have = {r.get("model") for r in rows}
     merged = list(rows)
     for sub in _CHATGPT_SUBSCRIPTION_ROWS:
         if sub["model"] not in have:
-            merged.append(dict(sub))
+            seeded = dict(sub)
+            if arena_index is not None or deepswe_index is not None:
+                elo, rank_score, rank_source, _src = _score_fields_for_model(
+                    seeded["model"], arena_index or {}, deepswe_index
+                )
+                if _survives_catalog_cutoff(elo, rank_source):
+                    seeded["coding_arena_elo"] = str(elo)
+                    seeded["model_rank_score"] = str(rank_score)
+                    seeded["model_rank_source"] = rank_source
+            merged.append(seeded)
     return merged
 
 
@@ -1340,6 +1606,7 @@ def build_rows(
     refresh_elo: bool = False,
     existing_catalog: Optional[Path] = None,
     score_manifest: Optional[Path] = None,
+    deepswe_manifest: Optional[Path] = None,
 ) -> List[dict]:
     try:
         import litellm
@@ -1347,6 +1614,10 @@ def build_rows(
         print("ERROR: litellm is not installed. Run: pip install litellm", file=sys.stderr)
         sys.exit(1)
 
+    deepswe_index = _fetch_deepswe_elo(
+        refresh=refresh_elo,
+        manifest_path=deepswe_manifest,
+    )
     arena_index = _fetch_arena_elo(
         refresh=refresh_elo,
         manifest_path=score_manifest,
@@ -1401,10 +1672,12 @@ def build_rows(
         if root_provider in _SKIP_PROVIDER_ROOTS:
             continue
 
-        # ELO — skip models below cutoff or with no known score
-        elo, elo_source = _get_elo(model_id, arena_index)
+        # Arena ELO is kept raw; model_rank_score carries DeepSWE-first ranking.
+        elo, rank_score, rank_source, elo_source = _score_fields_for_model(
+            model_id, arena_index, deepswe_index
+        )
         elo_source_counts[elo_source.split(":", 1)[0]] += 1
-        if elo < ELO_CUTOFF:
+        if not _survives_catalog_cutoff(elo, rank_source):
             continue
 
         # Convert per-token costs to per-million
@@ -1445,6 +1718,8 @@ def build_rows(
             "input": input_cost,
             "output": output_cost,
             "coding_arena_elo": elo,
+            "model_rank_score": rank_score,
+            "model_rank_source": rank_source,
             "base_url": "",
             "api_key": api_key,
             "max_reasoning_tokens": max_reasoning_tokens,
@@ -1467,20 +1742,19 @@ def build_rows(
     #   2. Existing CSV at `existing_catalog` — picks up user-added rows
     #      (e.g. extra ollama models) on top of the defaults.
     # Each row's ELO is re-resolved so static-fallback updates flow
-    # through; rows below ELO_CUTOFF are dropped just like litellm-
-    # derived rows.
+    # through; non-DeepSWE fallback rows below ELO_CUTOFF are dropped
+    # just like litellm-derived rows.
     local_pool: List[dict] = []
     seen_local_ids: set = set()
     for default_row in _DEFAULT_LOCAL_RUNNER_ROWS:
-        elo, _src = _get_elo(default_row["model"], arena_index)
-        if elo < ELO_CUTOFF:
-            continue
         seeded = dict(default_row)
-        seeded["coding_arena_elo"] = elo
+        elo, _src = _add_score_fields(seeded, arena_index, deepswe_index)
+        if not _survives_catalog_cutoff(elo, str(seeded["model_rank_source"])):
+            continue
         local_pool.append(seeded)
         seen_local_ids.add(seeded["model"])
     if existing_catalog is not None:
-        for row in _local_runner_rows_from_existing_csv(existing_catalog, arena_index):
+        for row in _local_runner_rows_from_existing_csv(existing_catalog, arena_index, deepswe_index):
             if row["model"] in seen_local_ids:
                 continue  # default row already covers this model
             local_pool.append(row)
@@ -1637,15 +1911,17 @@ def build_rows(
             continue
         for candidate in group:
             c_elo = candidate["coding_arena_elo"]
+            c_rank = int(candidate.get("model_rank_score", c_elo))
             c_avg = (candidate["input"] + candidate["output"]) / 2
             dominated = False
             for other in group:
                 if other is candidate:
                     continue
                 o_elo = other["coding_arena_elo"]
+                o_rank = int(other.get("model_rank_score", o_elo))
                 o_avg = (other["input"] + other["output"]) / 2
-                if o_elo >= c_elo and o_avg <= c_avg:
-                    if o_elo > c_elo or o_avg < c_avg:
+                if o_rank >= c_rank and o_avg <= c_avg:
+                    if o_rank > c_rank or o_avg < c_avg:
                         dominated = True
                         break
             if dominated:
@@ -1656,7 +1932,7 @@ def build_rows(
     if pareto_removed:
         print(f"  Fix D: Removed {pareto_removed} Pareto-dominated model(s).")
 
-    mandatory_pool = _mandatory_rows_missing_from(rows, arena_index, elo_source_counts)
+    mandatory_pool = _mandatory_rows_missing_from(rows, arena_index, elo_source_counts, deepswe_index)
     if mandatory_pool:
         rows.extend(mandatory_pool)
         print(f"  Added {len(mandatory_pool)} mandatory PDD default model row(s).")
@@ -1676,7 +1952,18 @@ def build_rows(
     # (intentionally skipped during litellm-derived generation above) BEFORE
     # the final sort, so the rows land under their "OpenAI ChatGPT" provider
     # block deterministically rather than appended after the last provider.
-    rows = _merge_chatgpt_subscription_rows(rows)
+    rows = _merge_chatgpt_subscription_rows(rows, arena_index, deepswe_index)
+
+    # Defense in depth: regardless of source (generated, mandatory, preserved,
+    # or hand-managed), the committed catalog must not ship non-DeepSWE fallback
+    # rows below the raw-ELO cutoff.
+    rows = [
+        row for row in rows
+        if _survives_catalog_cutoff(
+            int(row.get("coding_arena_elo", 0) or 0),
+            str(row.get("model_rank_source", "")),
+        )
+    ]
 
     # Classify every emitted row (litellm-derived, seeded local-runner,
     # mandatory, user-preserved, and the merged ChatGPT rows alike) for the
@@ -1684,11 +1971,15 @@ def build_rows(
     for row in rows:
         row["interactive_only"] = _is_interactive_only(row["model"])
 
-    # Sort: provider ascending, then ELO descending within each provider
+    # Sort: provider ascending, then DeepSWE-weighted rank descending within each provider
     # int() coercion: litellm-derived rows carry int elo, but the hand-managed
     # ChatGPT subscription rows (merged just above) store it as a string — keep
     # the key total-orderable across both so the merge-before-sort holds.
-    rows.sort(key=lambda r: (r["provider"], -int(r["coding_arena_elo"]), r["model"]))
+    rows.sort(key=lambda r: (
+        r["provider"],
+        -int(r.get("model_rank_score", r["coding_arena_elo"])),
+        r["model"],
+    ))
     return rows
 
 
@@ -1718,6 +2009,15 @@ def main() -> None:
             f"(default: {AGENTIC_ELO_MANIFEST_PATH})"
         ),
     )
+    parser.add_argument(
+        "--deepswe-manifest",
+        type=Path,
+        default=None,
+        help=(
+            "Path to an agent-reviewed DeepSWE score manifest "
+            f"(default: {DEEPSWE_MANIFEST_PATH})"
+        ),
+    )
     args = parser.parse_args()
 
     output_path: Path = args.output
@@ -1732,6 +2032,7 @@ def main() -> None:
         refresh_elo=args.refresh_elo,
         existing_catalog=output_path if output_path.exists() else None,
         score_manifest=args.score_manifest,
+        deepswe_manifest=args.deepswe_manifest,
     )
     print(f"  Found {len(rows)} chat models across all providers.")
 

@@ -863,13 +863,13 @@ def test_eof_on_selection_uses_default(tmp_path, monkeypatch):
     monkeypatch.setattr("builtins.print", lambda *a, **k: None)
     rows = [
         {"provider": "Anthropic", "model": "claude", "api_key": "ANTHROPIC_API_KEY",
-         "coding_arena_elo": "1500"},
+         "coding_arena_elo": "1500", "model_rank_score": "15400"},
         {"provider": "OpenAI", "model": "gpt-4o", "api_key": "OPENAI_API_KEY",
-         "coding_arena_elo": "1400"},
+         "coding_arena_elo": "1400", "model_rank_score": "17000"},
     ]
     selected = setup_tool._select_providers_to_keep(rows, ["Anthropic", "OpenAI"])
-    # First-time default is a single provider (highest ELO) → unambiguous pin.
-    assert selected == ["Anthropic"]
+    # First-time default is a single provider (highest rank) → unambiguous pin.
+    assert selected == ["OpenAI"]
 
 
 def test_local_and_custom_rows_preserved_through_curation(tmp_path, monkeypatch):
@@ -1250,7 +1250,7 @@ def test_stale_saved_selection_does_not_empty_csv(tmp_path, monkeypatch):
         create_pddrc=True,
         sidecar_providers=["No Such Provider"],  # real stale sidecar
         # Stale selection ignored, 2 curatable → prompt fires; accept the default
-        # (highest-ELO non-device = Google Gemini), then confirm removal of Copilot.
+        # (highest-ranked non-device = Google Gemini), then confirm removal of Copilot.
         input_sequence=["", "", "", ""],
     )
     pdd_dir = tmp_path / "home" / ".pdd"

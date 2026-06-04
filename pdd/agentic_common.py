@@ -1931,10 +1931,12 @@ def _resolve_opencode_csv_fallback(
 ) -> Optional[str]:
     """Pick an OpenCode model from ``llm_model.csv`` using auth-aware filtering.
 
-    Walks the CSV rows in descending ELO order and returns the first row whose
-    ``api_key`` env vars are all set AND whose ``_translate_to_opencode_model``
-    output has a provider prefix in the configured-provider set. Returns
-    ``None`` when no row qualifies (caller surfaces an actionable error).
+    Walks the CSV rows in descending DeepSWE-first rank order and returns the
+    first row whose ``api_key`` env vars are all set AND whose
+    ``_translate_to_opencode_model`` output has a provider prefix in the
+    configured-provider set. Older/custom CSVs without ``model_rank_score``
+    fall back to raw ``coding_arena_elo``. Returns ``None`` when no row
+    qualifies (caller surfaces an actionable error).
     """
     src = env if env is not None else os.environ
     try:
@@ -1949,7 +1951,14 @@ def _resolve_opencode_csv_fallback(
         return None
 
     try:
-        sorted_df = df.sort_values("coding_arena_elo", ascending=False)
+        rank_df = df.copy()
+        if "model_rank_score" not in rank_df.columns:
+            rank_df["model_rank_score"] = rank_df["coding_arena_elo"]
+        else:
+            rank_df["model_rank_score"] = rank_df["model_rank_score"].fillna(
+                rank_df["coding_arena_elo"]
+            )
+        sorted_df = rank_df.sort_values("model_rank_score", ascending=False)
     except Exception:
         return None
 
