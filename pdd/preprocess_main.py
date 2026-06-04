@@ -47,6 +47,7 @@ def preprocess_main(
             command_options=command_options,
             context_override=ctx.obj.get('context')
         )
+        resolve_effective_config(ctx, resolved_config)
 
         # Load prompt file
         prompt = input_strings["prompt_file"]

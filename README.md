@@ -735,6 +735,10 @@ These options can be used with any command:
 - `report-core`: Report a bug by creating a GitHub issue with the core dump file.
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
+- `--compress-examples`: Automatically apply `mode="interface"` to example includes (legacy; prefer `--context-compression examples`).
+- `--compress-test-context`: Compress test includes to failing tests only (legacy; prefer `--context-compression test`).
+- `--context-compression {off,test,examples,contracts,all}`: Set context compression for this CLI invocation (default: `off`). Must appear **before** the subcommand (e.g. `pdd --context-compression test generate ...`). `sync` and `fix` also accept the same flags after their subcommand.
+- `--compression-fallback {full,error}`: When compression or slicing fails, use full content (`full`, default) or abort (`error`). Global placement is the same as `--context-compression`.
 
 ### Core Dump Debug Bundles
 
@@ -936,6 +940,10 @@ Options:
 - `--one-session / --no-one-session`: Run sync in a single agentic session instead of separate sessions for each step. Cannot be combined with `--skip-tests` or `--skip-verify`.
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
+- `--compress-examples`: Automatically apply `mode="interface"` to example files in the `<include>` graph for this sync operation.
+- `--compress-test-context`: Use AST-based slicing to include only failing tests and fixtures in the fix/test context.
+- `--context-compression {off,test,examples,contracts,all}`: Set a global compression mode for this sync operation (default: `off`). `test` and `examples` mirror the legacy flags; `contracts` extracts contract rules and metadata from prompts and documentation; `all` enables all compression modes.
+- `--compression-fallback {full,error}`: Strategy for when a file cannot be compressed (default: `full`).
 - `--durable`: Issue-sync only. Run each module in an isolated git worktree under `.pdd/worktrees/sync-issue-<N>-<module>/` and checkpoint successful module output to a dedicated durable branch worktree under `.pdd/worktrees/durable-issue-<N>/`. Default issue-sync behavior (shared parallel worktree) is unchanged unless this flag is passed.
 - `--durable-branch TEXT`: Durable mode only. Override the durable checkpoint branch name. Default is `sync/issue-<N>` derived from the GitHub issue. Refused if it resolves to `main`, `master`, or the repository default branch.
 - `--no-resume`: Durable mode only. Ignore existing `PDD-Sync-Checkpoint-V1` commit trailers on the durable branch and re-run every selected module. By default, durable sync reads checkpoint trailers (`PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>`) and skips modules already checkpointed for the same issue, which is what makes a cloud rerun safely resume completed work after a partial failure.
@@ -1180,6 +1188,7 @@ Options:
 - `--experimental-prd`: Explicitly opt in to experimental Incremental PRD Mode for PRD-like files (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`) or GitHub issue URLs. Requires `--incremental`.
 - `--unit-test FILENAME`: Path to a unit test file. If provided, automatic test discovery is disabled and only the content of this file is included in the prompt, instructing the model to generate code that passes the specified tests.
 - `--exclude-tests`: Do not automatically include test files found in the default tests directory.
+- Context compression: use global `--context-compression` / `--compression-fallback` before `generate` (see [Global Options](#global-options)); `generate` does not accept these flags after the subcommand.
 - `--snapshot-context`: Capture the expanded prompt and dynamic context outputs used for this generation. The run manifest is `.pdd/evidence/runs/<run_id>.json`; snapshot artifacts are in `.pdd/evidence/runs/<run_id>/`. This is recommended when a prompt uses `<shell>`, `<web>`, or `<include ... query="...">` for contract-relevant context.
 
 **Parameter Variables (-e/--env)**:
@@ -2011,6 +2020,7 @@ Options:
 - `--recursive`: Recursively preprocess all prompt files in the prompt file.
 - `--double`: Curly brackets will be doubled.
 - `--exclude`: List of keys to exclude from curly bracket doubling.
+- Context compression: use global `--context-compression` / `--compression-fallback` before `preprocess` (see [Global Options](#global-options)); `preprocess` does not accept these flags after the subcommand.
 - `--snapshot`: Write the expanded prompt plus a snapshot manifest for any dynamic context resolved during preprocessing. The manifest records hashes and artifact paths for captured `<shell>`, `<web>`, and semantic `query=` include outputs so a later replay can reconstruct the same prompt context.
 
 ```bash
@@ -2131,6 +2141,8 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
 - `--max-cycles INT`: Maximum number of outer loop cycles before giving up (default: 5).
 - `--resume/--no-resume`: Resume from saved state if available (default: `--resume`).
 - `--clean-restart`: Discard saved agentic E2E fix state and ignore sibling `pdd bug` analysis state before starting fresh. Implies `--no-resume`.
+- `--context-compression {off,test,examples,contracts,all}`: **Command-local** on `pdd fix` (and also available globally before the subcommand). Unlike `generate` and `preprocess`, `fix` accepts these flags after `fix` in the argv list.
+- `--compression-fallback {full,error}`: Same placement as `--context-compression` on `fix` (command-local or global before `fix`).
 - `--force`: Override the branch mismatch safety check. By default, the command aborts if the current git branch doesn't match the expected branch from the issue (to prevent accidentally modifying the wrong codebase).
 
 #### Manual Mode Options
@@ -2142,6 +2154,7 @@ pdd [GLOBAL OPTIONS] fix --manual [OPTIONS] PROMPT_FILE CODE_FILE UNIT_TEST_FILE
   - `--max-attempts INT`: Set the maximum number of fix attempts before giving up (default is 3).
   - `--budget FLOAT`: Set the maximum cost allowed for the fixing process (default is $5.0).
 - `--auto-submit`: Automatically submit the example if all unit tests pass during the fix loop.
+- `--context-compression` / `--compression-fallback`: Same **command-local** `fix` options as in Agentic E2E Fix Options above (not accepted after `generate` or `preprocess`).
 
 When the `--loop` option is used, the fix command will attempt to fix errors through multiple iterations. It will use the specified verification program to check if the code runs correctly after each fix attempt. The process will continue until either the errors are fixed, the maximum number of attempts is reached, or the budget is exhausted.
 
@@ -3886,6 +3899,8 @@ python pdd/generate_model_catalog.py --deepswe-manifest path/to/deepswe_manifest
 To refresh scores, use a PDD agent to inspect the current public DeepSWE and Arena sources, update `pdd/data/deepswe_manifest.json` and/or `pdd/data/arena_elo_manifest.json` with exact aliases, provenance, and match reasons, then run the command above. This keeps policy choices explicit in review instead of hidden in Python fetch logic. DeepSWE entries require a `match_reason` field documenting why the DeepSWE row (harness, effort level, date) maps to the catalog model.
 
 `--refresh-elo` is intentionally not a live Python fetch path. It exits with an instruction to perform the agentic manifest refresh of both manifests instead of silently producing a stale refresh.
+
+
 
 ## Patents
 
