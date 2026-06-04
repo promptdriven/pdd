@@ -1738,7 +1738,7 @@
           },
           {
             "name": "fix_verification_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[bool, str, str, int, float, str]",
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, compressed_context: Optional[Mapping[str, Any]] = None, agentic_fallback_events: Optional[list[dict[str, Any]]] = None) -> Tuple[bool, str, str, int, float, str]",
             "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
@@ -2598,7 +2598,7 @@
         "commands": [
           {
             "name": "fix_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, compressed_context: Mapping[str, Any] | None = None) -> Tuple[bool, str, str, int, float, str]",
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, compressed_context: Mapping[str, Any] | None = None, agentic_fallback_events: list[dict[str, Any]] | None = None) -> Tuple[bool, str, str, int, float, str]",
             "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]

@@ -6,7 +6,7 @@
   "cli": {
     "commands": [
       {"name": "run_program", "signature": "(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]", "returns": "Tuple[bool, str, str]"},
-      {"name": "fix_verification_main", "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[bool, str, str, int, float, str]", "returns": "Tuple[bool, str, str, int, float, str]"}
+      {"name": "fix_verification_main", "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, compressed_context: Optional[Mapping[str, Any]] = None, agentic_fallback_events: Optional[list[dict[str, Any]]] = None) -> Tuple[bool, str, str, int, float, str]", "returns": "Tuple[bool, str, str, int, float, str]"}
     ]
   }
 }
@@ -83,6 +83,7 @@ Inputs:
 - `strength` (Optional[float]): Model strength, overrides ctx.obj if provided
 - `temperature` (Optional[float]): Model temperature, overrides ctx.obj if provided
 - `compressed_context` (Optional[Mapping[str, Any]]): phase-aware compressed verify context from sync, including prompt/interface/contract/example evidence and recent repair output.
+- `agentic_fallback_events` (Optional[list[dict[str, Any]]]): optional mutable list from sync that records per-phase agentic fallback telemetry. Forward to `fix_verification_errors_loop` in loop mode when supplied.
 
 Outputs:
 - Tuple[bool, str, str, int, float, str]: (success, final_program, final_code, attempts, total_cost, model_name)
@@ -100,7 +101,7 @@ Outputs:
    - Determine success based on issues found and fixes proposed
 5. For loop mode:
    - Call `fix_verification_errors_loop` with paths, content, budget parameters, and `use_cloud` flag
-   - Forward `compressed_context` to the loop and include compression plus agentic-fallback metadata in logs/results consumed by sync
+   - Forward `compressed_context` and `agentic_fallback_events` to the loop and include compression plus agentic-fallback metadata in logs/results consumed by sync
    - Cloud hybrid mode is enabled by default: LLM fix calls go to cloud, program execution stays local
    - Pass `use_cloud=False` only if `ctx.obj.get('local')` is True (local execution preferred)
    - Auto-detect cloud availability via JWT token; if available and not forcing local, use cloud
