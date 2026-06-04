@@ -26,6 +26,8 @@ from .agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 from .checkup_review_loop import (
     ReviewLoopConfig,
     ReviewLoopContext,
+    clear_final_state,
+    load_final_state,
     parse_reviewers,
     parse_severity_list,
     parse_state_list,
@@ -304,6 +306,58 @@ def _truncate_issue_context(text: str, limit: int) -> str:
     return f"{header.rstrip()}{marker}{comments.rstrip()}{notice}"
 
 
+# Reviewer statuses that count as "this reviewer accepted the PR". The hard
+# not-clean states (failed/degraded/missing) must never satisfy the gate even
+# if a caller widens ``clean_reviewer_states``; the final gate uses the strict
+# "clean" sentinel to stay conservative (a false non-ship is recoverable by a
+# re-run; a false ship is not).
+_SHIP_REVIEWER_STATES = ("clean",)
+
+
+def _review_loop_ship_verdict(
+    final_state: Optional[Dict[str, Any]], *, has_issue: bool
+) -> bool:
+    """Derive a real ship/no-ship verdict from a review-loop ``final-state.json``.
+
+    ``run_checkup_review_loop`` returns ``success=True`` whenever it produces a
+    trustworthy report — even when findings remain — so the boolean alone is NOT
+    a ship gate (the rendered report carries the authoritative markers). The
+    canonical final gate (issue #1406) needs a true pass/fail, so this predicate
+    replicates the canonical ship markers against the persisted verdict:
+
+    - ``fresh_final_status == "clean"`` — the verifier's clean pass survived the
+      stale-head re-check ``_finalize`` performs (issue #1088). A head that
+      advanced after verification is downgraded to ``missing`` there, so this
+      field already encodes "the clean verdict matches the current remote head".
+    - the active reviewer's status is a hard ``clean`` (not failed/degraded/
+      missing/findings).
+    - no finding is still ``open``.
+    - when an issue is in scope, the PR is reported as issue-aligned.
+
+    Fails closed: a missing/unparsable state, or any unmet condition, returns
+    ``False``. A false non-ship is recoverable by re-running; a false ship is
+    not.
+    """
+    if not isinstance(final_state, dict):
+        return False
+    if final_state.get("fresh_final_status") != "clean":
+        return False
+    reviewer_status = final_state.get("reviewer_status")
+    active = final_state.get("active_reviewer")
+    if not isinstance(reviewer_status, dict) or not active:
+        return False
+    if reviewer_status.get(active) not in _SHIP_REVIEWER_STATES:
+        return False
+    findings = final_state.get("findings")
+    if isinstance(findings, list) and any(
+        isinstance(f, dict) and f.get("status") == "open" for f in findings
+    ):
+        return False
+    if has_issue and str(final_state.get("issue_aligned")).lower() != "true":
+        return False
+    return True
+
+
 def run_agentic_checkup(
     issue_url: Optional[str] = None,
     *,
@@ -316,6 +370,7 @@ def run_agentic_checkup(
     pr_url: Optional[str] = None,
     test_scope: str = "full",
     review_loop: bool = False,
+    final_gate: bool = False,
     review_only: bool = False,
     reviewers: str = "codex,claude",
     reviewer: Optional[str] = None,
@@ -356,6 +411,14 @@ def run_agentic_checkup(
             is based on the PR's head branch.
         review_loop: When true in PR mode, run the primary-reviewer/fixer
             loop instead of the legacy single-pass checkup path.
+        final_gate: When true in PR mode (requires an issue), run the canonical
+            two-layer final gate (issue #1406): Layer 1 is the PR-scoped checkup
+            orchestrator (no new PR), Layer 2 is the primary-reviewer/fixer
+            review loop on the resulting PR head. Unlike ``review_loop`` — whose
+            success only means "trustworthy report produced" — the returned
+            ``success`` is a real ship verdict derived from the review-loop's
+            current-run ``final-state.json``. A Layer 1 failure short-circuits
+            before Layer 2; either layer's failure fails the gate.
         review_only: When true with ``review_loop``, run only the primary
             reviewer first pass and do not invoke the fixer or push changes.
         reviewer_fallback: Optional secondary reviewer role to try once when
@@ -468,34 +531,34 @@ def run_agentic_checkup(
     if not quiet:
         console.print("[bold]Running agentic checkup...[/bold]")
 
-    if review_loop:
-        if (
-            not has_issue
-            or pr_url is None
-            or pr_owner is None
-            or pr_repo is None
-            or pr_number is None
-        ):
-            # Review-loop is issue-coupled; review-loop-without-issue is a
-            # deferred follow-up (#1292).
-            return False, "--review-loop requires --pr and --issue.", 0.0, ""
-        loop_issue_content = _truncate_issue_context(raw_full_content, 60000)
-        loop_architecture = _truncate_context(raw_arch_json_str, 40000)
+    # Layer 2 (review-loop) runner, shared by ``--review-loop`` (Layer 2 only)
+    # and the canonical ``--final-gate`` (Layer 1 then Layer 2). Defined as a
+    # closure so it captures the already-fetched issue/PR context instead of
+    # re-threading the full config surface. ``pr_content`` is fetched lazily by
+    # default, but the final gate passes a pre-Layer-1 snapshot so Layer 2 does
+    # not ingest Layer 1's own freshly-posted checkup report.
+    def _run_review_loop_layer(
+        pr_content: Optional[str] = None,
+    ) -> Tuple[bool, str, float, str]:
         loop_context = ReviewLoopContext(
             issue_url=issue_url,
-            issue_content=loop_issue_content,
+            issue_content=_truncate_issue_context(raw_full_content, 60000),
             repo_owner=owner,
             repo_name=repo,
             issue_number=issue_number,
             issue_title=raw_title,
-            architecture_json=loop_architecture,
+            architecture_json=_truncate_context(raw_arch_json_str, 40000),
             pddrc_content=raw_pddrc_content,
             pr_url=pr_url,
             pr_owner=pr_owner,
             pr_repo=pr_repo,
             pr_number=pr_number,
             project_root=project_root,
-            pr_content=_fetch_pr_context(pr_owner, pr_repo, pr_number),
+            pr_content=(
+                pr_content
+                if pr_content is not None
+                else _fetch_pr_context(pr_owner, pr_repo, pr_number)
+            ),
         )
         loop_config = ReviewLoopConfig(
             reviewers=parse_reviewers(reviewers),
@@ -528,7 +591,34 @@ def run_agentic_checkup(
             use_github_state=use_github_state,
         )
 
-    # 5. Invoke orchestrator
+    pr_context_ready = (
+        has_issue
+        and pr_url is not None
+        and pr_owner is not None
+        and pr_repo is not None
+        and pr_number is not None
+    )
+
+    if final_gate and not pr_context_ready:
+        # The final gate is the two-layer PR-readiness path; it is issue-coupled
+        # and PR-scoped, so it never runs in plain issue mode.
+        return False, "--final-gate requires --pr and --issue.", 0.0, ""
+
+    if review_loop and not final_gate:
+        if not pr_context_ready:
+            # Review-loop is issue-coupled; review-loop-without-issue is a
+            # deferred follow-up (#1292).
+            return False, "--review-loop requires --pr and --issue.", 0.0, ""
+        return _run_review_loop_layer()
+
+    # For the final gate, snapshot PR context BEFORE Layer 1 so Layer 2 reviews
+    # the PR's human context without ingesting Layer 1's own posted report.
+    final_gate_pr_content: Optional[str] = None
+    if final_gate:
+        final_gate_pr_content = _fetch_pr_context(pr_owner, pr_repo, pr_number)
+
+    # 5. Invoke orchestrator (Layer 1 of the final gate; the only layer for a
+    #    plain checkup run).
     try:
         orch_success, orch_message, orch_cost, orch_model = run_agentic_checkup_orchestrator(
             issue_url=effective_issue_url,
@@ -561,10 +651,42 @@ def run_agentic_checkup(
         return False, msg, 0.0, ""
 
     if not orch_success:
+        # Layer 1 failure short-circuits the final gate before Layer 2 runs.
         return False, orch_message, orch_cost, orch_model
 
+    if final_gate:
+        # Layer 2: the maintainer-style reviewer/fixer loop on the (possibly
+        # Layer-1-pushed) PR head. Clear any stale verdict first so the
+        # post-run read reflects THIS run only (a role/setup error returns
+        # before ``_finalize`` writes a fresh one, which then reads as
+        # fail-closed). ``issue_number`` is the PR number when no issue was
+        # given, but the final gate always has an issue (validated above).
+        clear_final_state(project_root, issue_number, pr_number)
+        if not quiet:
+            console.print(
+                "[bold]Final gate Layer 1 (PR checkup) passed; running "
+                "Layer 2 (review-loop)...[/bold]"
+            )
+        loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
+            pr_content=final_gate_pr_content
+        )
+        ship = _review_loop_ship_verdict(
+            load_final_state(project_root, issue_number, pr_number),
+            has_issue=has_issue,
+        )
+        total_cost = orch_cost + loop_cost
+        message = (
+            "Final gate: Layer 1 (PR checkup) passed; "
+            f"Layer 2 (review-loop): {loop_message}"
+        )
+        if not ship and loop_success:
+            # The loop produced a trustworthy report but the verdict is not
+            # shippable; surface that distinctly from a loop that errored.
+            message += " — verdict: not shippable (findings remain or "
+            message += "verification is unverified)."
+        return ship, message, total_cost, (loop_model or orch_model)
+
     # 6. Parse JSON report from step 7 output
-    step7_output = ""
     # The orchestrator returns "Checkup complete" only after enforcing Step 7's
     # structured verdict. In PR mode it owns the final report comment after a
     # successful push/reverify, so callers can trust the return tuple.

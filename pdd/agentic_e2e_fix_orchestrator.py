@@ -1639,6 +1639,36 @@ def _read_checkup_worktree_head_sha(cwd: Path, pr_number: int) -> str:
     return rev.stdout.strip()
 
 
+def _read_review_loop_verified_head_sha(
+    cwd: Path, issue_number: int, pr_number: int
+) -> str:
+    """Read the head SHA the final gate's Layer 2 (review-loop) verified+pushed.
+
+    The canonical final gate (issue #1406) runs Layer 1 (the PR-mode checkup
+    orchestrator, which pushes from ``.pdd/worktrees/checkup-pr-{N}/``) and then
+    Layer 2 (the review-loop, which pushes from its OWN worktree and records the
+    verified head in ``.pdd/checkup-review-loop/issue-{I}-pr-{N}/final-state.json``).
+
+    When Layer 2 pushes a fix, the remote PR head advances to the review-loop's
+    verified head, NOT the legacy checkup worktree head. Treating that as an
+    external push (the pre-#1406 single-layer assumption) would falsely fail the
+    gate, so the post-checkup head-provenance check accepts this SHA as "ours"
+    too. ``run_agentic_checkup`` clears the prior ``final-state.json`` before
+    Layer 2, so a value here reflects the current gate run.
+
+    Returns the verified head SHA, or empty string when no review-loop verdict
+    is available (Layer 2 not run, or it errored before finalizing).
+    """
+    try:
+        from .checkup_review_loop import load_final_state  # pylint: disable=import-outside-toplevel
+        final_state = load_final_state(cwd, issue_number, pr_number)
+    except Exception:  # noqa: BLE001 — best-effort; empty means "can't compare"
+        return ""
+    if not isinstance(final_state, dict):
+        return ""
+    return str(final_state.get("verified_head_sha", "") or "")
+
+
 def _run_final_checkup_on_pr(
     *,
     issue_url: str,
@@ -1686,6 +1716,7 @@ def _run_final_checkup_on_pr(
         use_github_state=use_github_state,
         reasoning_time=reasoning_time,
         pr_url=pr_url,
+        final_gate=True,
         cwd=cwd,
     )
 
@@ -1726,31 +1757,43 @@ def _run_final_checkup_on_pr(
     # Round-5 finding: the PR head can advance externally during the
     # final checkup (maintainer push, another bot, etc.). Treating EVERY
     # SHA delta as a checkup push would re-validate CI on code that
-    # Step 7 never saw, green-lighting an unverified head. The checkup
-    # worktree's HEAD is the authoritative "last verified/pushed" SHA;
-    # if it differs from the remote PR head, an external push raced us.
+    # no reviewer saw, green-lighting an unverified head.
+    #
+    # The final gate (issue #1406) has TWO authoritative "last verified/pushed"
+    # heads: Layer 1's checkup worktree HEAD and Layer 2's review-loop verified
+    # head (the review-loop pushes from its own worktree, so a Layer-2 fix
+    # advances the remote head past the Layer-1 worktree). The remote head is
+    # "ours" — and safe to CI-revalidate — when it matches EITHER. If it matches
+    # neither, an external push raced us and we must fail closed.
     checkup_worktree_head_sha = _read_checkup_worktree_head_sha(cwd, pr_number)
-    if not checkup_worktree_head_sha:
+    review_loop_head_sha = _read_review_loop_verified_head_sha(
+        cwd, issue_number, pr_number
+    )
+    verified_heads = {
+        sha for sha in (checkup_worktree_head_sha, review_loop_head_sha) if sha
+    }
+    if not verified_heads:
         return (
             False,
             (
-                "Final checkup completed but the checkup worktree HEAD SHA "
-                "was unavailable; cannot prove the PR remote head matches "
-                "what was verified. Failing closed to avoid green-lighting "
-                "an unverified head."
+                "Final gate completed but neither the checkup worktree HEAD "
+                "SHA nor the review-loop verified head was available; cannot "
+                "prove the PR remote head matches what was verified. Failing "
+                "closed to avoid green-lighting an unverified head."
             ),
             checkup_cost,
             checkup_model,
         )
-    if checkup_worktree_head_sha != post_checkup_head_sha:
+    if post_checkup_head_sha not in verified_heads:
+        verified_preview = ", ".join(sorted(sha[:8] for sha in verified_heads))
         return (
             False,
             (
-                f"PR head advanced to {post_checkup_head_sha[:8]} during "
-                f"final checkup but the checkup worktree last verified "
-                f"{checkup_worktree_head_sha[:8]}. External push during "
-                f"checkup detected — re-run pdd-issue so the new head is "
-                f"verified by Step 7 before CI re-validation."
+                f"PR head advanced to {post_checkup_head_sha[:8]} during the "
+                f"final gate but the gate last verified {verified_preview}. "
+                f"External push during the final gate detected — re-run "
+                f"pdd-issue so the new head is verified before CI "
+                f"re-validation."
             ),
             checkup_cost,
             checkup_model,
