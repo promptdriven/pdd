@@ -42,6 +42,7 @@ from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .pytest_output import run_pytest_and_capture_output
 from .ci_validation import _find_open_pr_number, run_ci_validation_loop
+from .pre_checkup_gate import run_pre_checkup_gate
 
 # Constants
 STEP_NAMES = {
@@ -72,7 +73,7 @@ STEP_DESCRIPTIONS = {
     11: "Code cleanup",
 }
 
-# Per-step timeouts for the 11-step agentic e2e fix workflow
+# Per-step timeouts for the 12-step agentic e2e fix workflow
 E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Run unit tests from issue, pdd fix failures
     2: 240.0,   # Run e2e tests, check completion (early exit)
@@ -2061,7 +2062,7 @@ def run_agentic_e2e_fix_orchestrator(
     clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrator for the 11-step agentic e2e fix workflow.
+    Orchestrator for the 12-step agentic e2e fix workflow.
     
     Returns:
         Tuple[bool, str, float, str, List[str]]: 
@@ -3471,6 +3472,58 @@ def run_agentic_e2e_fix_orchestrator(
                     "No CI checks detected",
                 }:
                     final_message = ci_message
+
+                try:
+                    gate_success, gate_message, gate_cost = run_pre_checkup_gate(
+                        worktree=cwd,
+                        changed_files=changed_files,
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        quiet=quiet,
+                        timeout_per_check=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
+                    )
+                except Exception as _exc:  # pylint: disable=broad-except
+                    gate_success = False
+                    gate_message = f"pre_checkup_gate blocked; phase=infrastructure error: {_exc}"
+                    gate_cost = 0.0
+                total_cost += gate_cost
+                if not gate_success:
+                    return False, gate_message, total_cost, model_used, changed_files
+
+                # Issue #1293 (FM2): the gate's drift-sync phase may have healed
+                # the prompt/example to match the fixed code (pdd update / pdd
+                # example). Those edits live only in this local worktree, but
+                # _run_final_checkup_on_pr reviews the PR head in its OWN
+                # checkout (.pdd/worktrees/checkup-pr-N) — so without committing
+                # and pushing them now, checkup would review a tree whose prompts
+                # are out of sync with the code, and the heal would be orphaned.
+                # Reuse _commit_and_push: it stages workflow-changed files vs the
+                # initial snapshot and filters .pdd/** (so the prompt/example
+                # sync lands while .pdd/meta fingerprint finalization stays with
+                # the post-merge sync, per the PR plan). It is a safe no-op
+                # (returns success) when the gate healed nothing.
+                gate_sync_ok, gate_sync_message = _commit_and_push(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    issue_title=issue_title,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    initial_file_hashes=initial_file_hashes,
+                    quiet=quiet,
+                )
+                if not gate_sync_ok:
+                    # A failed push leaves the PR head out of sync with the
+                    # gate's heal; fail closed rather than have checkup review a
+                    # stale tree.
+                    return (
+                        False,
+                        f"pre_checkup_gate drift-sync push failed: {gate_sync_message}",
+                        total_cost,
+                        model_used,
+                        changed_files,
+                    )
+                changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
 
                 checkup_success, checkup_message, checkup_cost, checkup_model = (
                     _run_final_checkup_on_pr(

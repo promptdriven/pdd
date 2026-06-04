@@ -1503,6 +1503,18 @@ def sync_all_prompts_to_architecture(
             skipped_count += 1
             continue
 
+        # Scope gate: when only_files is provided, restrict the update pass to
+        # those prompts too (not just the registration pre-pass above). Without
+        # this, in-workflow callers that pass a narrow scope (e.g. the pre-checkup
+        # gate passing the prompts the workflow actually touched) would still
+        # re-sync and rewrite EVERY module's architecture.json entry, silently
+        # sweeping unrelated repo-wide drift into the file the caller commits.
+        # only_files is None for standalone/root cleanup runs, which preserves the
+        # full-scan behavior.
+        if only_files is not None and filename not in only_files:
+            skipped_count += 1
+            continue
+
         # Update from prompt
         result = update_architecture_from_prompt(
             filename,
