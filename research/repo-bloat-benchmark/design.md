@@ -213,8 +213,8 @@ To reduce single-codebase bias, the 3 scenarios should not all be trivial varian
 
 Field notes:
 
-- `target_files` + `allowed_edit_globs` define the ground truth for `wrong_file_edit_rate`. They live only in `scenario.json` (out-of-tree) and are **not** given to the agent.
-- Reading a distractor is **not** forbidden — it is exactly the irrelevant read we measure (`irrelevant_file_read_ratio`), classified post-hoc against the manifest ([§6.2](#62-how-we-capture-it-defense-in-depth)), not via any in-repo path. Editing a distractor is a wrong-file edit (outside `allowed_edit_globs`), captured by `wrong_file_edit_rate`.
+- `target_files` + `allowed_edit_globs` define the ground truth for non-distractor edits in `wrong_file_edit_rate`. They live only in `scenario.json` (out-of-tree) and are **not** given to the agent.
+- Reading a distractor is **not** forbidden — it is exactly the irrelevant read we measure (`irrelevant_file_read_ratio`), classified post-hoc against the manifest ([§6.2](#62-how-we-capture-it-defense-in-depth)), not via any in-repo path. Editing a distractor is always a wrong-file edit, captured by `wrong_file_edit_rate`, even when its interleaved `destination_path` would otherwise match a broad `allowed_edit_globs` pattern.
 - `forbidden_paths` is reserved for the hidden tree only — a defense-in-depth assertion; since the hidden tree is never mounted, any `forbidden_file_reads`/`forbidden_file_edits` count > 0 indicates an isolation bug, not agent behavior.
 - `base_repo_sha256` and `hidden_verifier.sha256` are tree hashes that the harness checks before each run (freeze enforcement).
 - `mounted_into_agent_sandbox: false` is asserted by the harness; a run aborts if the hidden tree is ever visible to the agent.
@@ -340,7 +340,7 @@ For every run, segmented at the **first edit** boundary (the issue's key cut poi
 **Targeting quality:**
 
 - `irrelevant_file_read_ratio` = distractor reads / total file reads (distractor set resolved post-hoc from the manifest, not from any in-repo marker)
-- `wrong_file_edit_rate` = edits outside `target_files` ∪ allowed scope (includes edits to interleaved distractor paths)
+- `wrong_file_edit_rate` = edits outside `target_files` ∪ allowed scope, with manifest distractor `destination_path`s classified as wrong-file before applying `allowed_edit_globs`
 - `forbidden_file_reads`, `forbidden_file_edits` = reads/edits of the hidden tree only; expected to be 0 (non-zero ⇒ isolation bug)
 
 **Outcome:**
@@ -365,9 +365,9 @@ The **first-edit boundary** is determined by the first write event that lands in
 
 **Post-hoc classification (where the secret label key is applied).** The agent's sandbox carries no distractor/target labels ([§2](#2-design-principles), [§3.3](#33-determinism-and-isolation-guarantees)). Classification happens **after** the run, in the analysis step, never during it:
 
-1. Load the run's manifest (out-of-tree) → the authoritative set of distractor `destination_path`s — plus the scenario's `target_files` and `allowed_edit_globs`.
+1. Load the run's manifest (out-of-tree) → the authoritative set of distractor `destination_path`s — plus the scenario's `target_files` and `allowed_edit_globs`. The classifier resolves `allowed_edit_globs` against the base repo's file set, not the materialized distractor-augmented tree, so broad globs cannot silently whitelist newly placed distractors.
 2. For each read in the FS-tap log, tag it `target` / `base-non-target` / `distractor` by matching its path against those sets → `irrelevant_file_read_ratio` (and the per-tier breakdown).
-3. For each path in the `upperdir` edit set, tag it `in-scope` / `wrong-file` (incl. distractor) / `forbidden` → `wrong_file_edit_rate`, `forbidden_file_edits`.
+3. For each path in the `upperdir` edit set, classify in this precedence order: hidden/forbidden path ⇒ `forbidden`; manifest `destination_path` ⇒ `wrong-file`; exact `target_files` match ⇒ `in-scope`; base-repo path matching `allowed_edit_globs` ⇒ `in-scope`; everything else ⇒ `wrong-file`. This makes interleaved same-package distractor edits wrong-file edits even when they sit under paths like `src/pkg/**`.
 
 Because the manifest is consulted only here — by the scorer, on logs, after the agent has finished — knowing the answer key cannot influence the agent. If a future arm were ever found to expose any label to the agent, that run is void.
 

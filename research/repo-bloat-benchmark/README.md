@@ -44,11 +44,13 @@ research/repo-bloat-benchmark/
 | Pilot agent + model | **Codex CLI (GPT)** |
 | Base repo source | **Hand-authored minimal repos** |
 | Filesystem tap | **Linux container + OverlayFS (edits) + FUSE passthrough, byte-extent reads** |
-| Seeds per cell | **5** (→ 60 runs) |
+| Replicates per `(scenario, size)` | **5** (`trial_index`; seed-pinned only if Codex exposes a supported seed → 60 runs) |
 | Per-run timeout | **30 min** |
 
 Still to confirm (does not block scenario authoring): exact Codex model id +
-reasoning effort, and whether Codex shells out for reads/search.
+reasoning effort, whether Codex exposes a supported seed, whether its
+transcript exposes per-request `usage` for token metrics, and whether Codex
+shells out for reads/search.
 
 ## Ground rules (see design §2)
 
