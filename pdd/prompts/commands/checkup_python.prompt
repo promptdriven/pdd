@@ -5,7 +5,8 @@
   "type": "command",
   "command": {
     "commands": [
-      {"name": "checkup", "description": "Prompt source-set health (prompt), focused local checks (lint, contract check, coverage, gate, snapshot, drift), and agentic project health-check / PR review from a GitHub issue"}
+      {"name": "checkup", "description": "Prompt source-set health (prompt), focused local checks (lint, contract check, coverage, gate, snapshot, drift), and agentic project health-check / PR review from a GitHub issue"},
+      {"name": "checkup prompt", "description": "Unified prompt-space source-set health (Check → Explain → Apply)"}
     ]
   }
 }
@@ -74,7 +75,7 @@
   - For `target in {"contract", "contracts"}`, delegate remaining args to `contracts_group.main(...)`, enabling `pdd checkup contract check`.
   - For `target == "coverage"`, delegate remaining args to `coverage_cmd.main(...)`, enabling deterministic `pdd checkup coverage`; contract-rule analysis is implied and no `--contracts` flag is required.
   - For `target == "gate"`, delegate remaining args to `gate_cmd.main(...)` with `prog_name="pdd checkup gate"`; do not register a top-level `pdd gate` command.
-  - For `target == "prompt"`: print a message indicating `pdd checkup prompt` is not yet implemented (unified report in #1379); call `ctx.exit(0)`. Add `"prompt"` to the set of reserved targets recognised by the `show_help` guard so `pdd checkup prompt -h` renders the placeholder text rather than the parent help.
+  - For `target == "prompt"`, delegate remaining args to `checkup_prompt_cmd.main(...)` with `prog_name="pdd checkup prompt"`. Add `"prompt"` to the help-exclusion set. When `target == "prompt"` and remaining args are empty, render `checkup_prompt_cmd` help. Help text must not contain the string "coach".
   - For a non-utility target, reject any remaining unknown arguments.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.

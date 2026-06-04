@@ -299,6 +299,55 @@ def test_checkup_pr_without_issue_invalid_pr_url_rejected() -> None:
 # ---------------------------------------------------------------------------
 
 
+
+# ---------------------------------------------------------------------------
+# Issue #1411: checkup prompt subcommand dispatch
+# ---------------------------------------------------------------------------
+
+
+def test_checkup_prompt_help_exits_zero() -> None:
+    """pdd checkup prompt --help renders checkup_prompt_cmd options and exits 0."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        checkup,
+        ["prompt", "--help"],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "--explain" in result.output
+    assert "--interactive" in result.output
+    assert "--apply" in result.output
+
+
+def test_checkup_prompt_help_does_not_contain_coach() -> None:
+    """checkup prompt help text must not contain the word 'coach' (spec requirement)."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        checkup,
+        ["prompt", "--help"],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "coach" not in result.output.lower()
+
+
+def test_checkup_prompt_apply_requires_interactive_via_dispatch() -> None:
+    """Delegated ``pdd checkup prompt`` enforces --apply requires --interactive."""
+    runner = CliRunner()
+
+    result = runner.invoke(
+        checkup,
+        ["prompt", "payment_api_python.prompt", "--apply"],
+        obj={"quiet": True, "verbose": False},
+    )
+
+    assert result.exit_code == 2
+    assert "--apply requires --interactive" in result.output
+
 @pytest.mark.e2e
 @pytest.mark.real
 def test_checkup_pr_without_issue_real() -> None:

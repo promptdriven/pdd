@@ -19,7 +19,14 @@ from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .gate import gate_cmd
 from .drift import drift_cmd
+from .checkup_prompt import checkup_prompt_cmd
 from .prompt import prompt_lint
+
+
+def _exit_if_subcommand_returned_code(result: object) -> None:
+    """Raise Click Exit only when a delegated subcommand returned a non-zero int."""
+    if isinstance(result, int) and result:
+        raise click.exceptions.Exit(result)
 
 
 @click.command(
@@ -548,13 +555,27 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "prompt":
-        click.echo(
-            "pdd checkup prompt is not yet implemented. "
-            "The unified prompt-space health report is tracked in issue #1379 "
-            "(epic #833). Use focused commands for CI and debugging: "
-            "lint, contract check, coverage, gate, snapshot, drift."
+        prompt_args = list(ctx.args)
+        if strict:
+            prompt_args.insert(0, "--strict")
+        if not prompt_args or show_help:
+            click.echo(
+                checkup_prompt_cmd.get_help(
+                    click.Context(checkup_prompt_cmd, info_name="pdd checkup prompt")
+                )
+            )
+            return None
+        if show_help:
+            prompt_args.append("--help")
+        result = checkup_prompt_cmd.main(
+            args=prompt_args,
+            prog_name="pdd checkup prompt",
+            standalone_mode=False,
+            obj=ctx.obj,
         )
-        ctx.exit(0)
+        if show_help:
+            ctx.exit()
+        _exit_if_subcommand_returned_code(result)
         return None
 
     if ctx.args:

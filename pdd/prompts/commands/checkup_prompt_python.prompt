@@ -1,0 +1,44 @@
+<pdd-reason>Thin CLI wrapper for the unified prompt-space source-set health check (pdd checkup prompt).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "checkup_prompt_cmd", "description": "Unified prompt-space source-set health: Check → Explain → Apply"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>checkup_prompt_main_python.prompt</pdd-dependency>
+
+% Write `pdd/commands/checkup_prompt.py`, the Click wrapper for `pdd checkup prompt <target>`.
+
+<include>context/python_preamble.prompt</include>
+
+% Requirements
+- Provide the Click command reached via `pdd checkup prompt TARGET`.
+- Required positional argument `target` (str): the prompt file or module name to check.
+- Options:
+  - `--explain` (flag, default off): read-only LLM advisory on deterministic finding IDs; non-fatal and does not change exit code.
+  - `--interactive` (flag, default off): enable interactive human-approval flow; must be combined with `--apply`.
+  - `--apply` (flag, default off): enable the write path; must be combined with `--interactive`.
+- Authority model (enforced before delegating to the orchestrator):
+  - `--apply` without `--interactive`: raise `click.UsageError` with a message mentioning `--apply requires --interactive`.
+  - `--interactive` in a non-TTY context (`not sys.stdin.isatty()`): raise `click.UsageError` with a message mentioning `--interactive requires a TTY`.
+- Pass `quiet` and `verbose` from `ctx.obj` to `run_checkup_prompt`.
+- Render:
+  - `Status: Success|Failed`
+  - `Message: {message}`
+  - `Cost: ${cost:.4f}`
+  - `Model: {model}` (suppress when model is empty, `"unknown"`, or `"N/A"`, case-insensitive)
+- Exit nonzero on failure; re-raise `click.Abort` and `click.exceptions.Exit`; all other exceptions call `handle_error` and return `None`.
+
+% Dependencies
+<pdd.checkup_prompt_main>
+<include>context/checkup_prompt_main_example.py</include>
+</pdd.checkup_prompt_main>
+
+% Code output
+- Code: `pdd/commands/checkup_prompt.py`

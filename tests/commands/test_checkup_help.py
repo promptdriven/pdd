@@ -44,12 +44,13 @@ def test_checkup_help_does_not_advertise_coach() -> None:
     assert "coach" not in result.output.lower()
 
 
-def test_checkup_prompt_stub_exits_zero() -> None:
+def test_checkup_prompt_without_target_shows_subcommand_help() -> None:
+    """Empty ``pdd checkup prompt`` renders subcommand help (runnable entry point)."""
     runner = CliRunner()
-    result = runner.invoke(checkup, ["prompt", "prompts/foo_python.prompt"])
-    assert result.exit_code == 0
-    assert "not yet implemented" in result.output
-    assert "#1379" in result.output
+    result = runner.invoke(checkup, ["prompt"])
+    assert result.exit_code == 0, result.output
+    assert "--explain" in result.output
+    assert "not yet implemented" not in result.output
 
 
 def test_checkup_lint_unchanged_backward_compat(tmp_path) -> None:
