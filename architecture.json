@@ -7380,7 +7380,10 @@
             "signature": "(issue_url: Optional[str] = None, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, final_gate: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
-              "None"
+              "Fetches the GitHub issue (when provided) and PR context via gh api",
+              "Dispatches to the checkup orchestrator and/or the PR review-loop; both may commit and push generated fixes to the PR head branch and post report comments to the issue/PR (suppressed when use_github_state is False)",
+              "For final_gate, clears then re-reads the review-loop final-state.json under .pdd/checkup-review-loop/ to derive the ship verdict",
+              "Posts an error comment on the source issue if the legacy orchestrator raises"
             ]
           },
           {
