@@ -169,7 +169,7 @@ def fix_errors_from_unit_tests(
             fix_errors_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=['unit_test', 'code', 'errors', 'prompt', 'failure_classification']
+            exclude=['unit_test', 'code', 'errors', 'prompt', 'failure_classification']
         )
 
         fc_text = (
@@ -214,7 +214,7 @@ def fix_errors_from_unit_tests(
             extract_fix_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=['unit_test', 'code', 'unit_test_fix']
+            exclude=['unit_test', 'code', 'unit_test_fix']
         )
 
         # Step 6: Run second prompt through llm_invoke with fixed strength

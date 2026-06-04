@@ -195,7 +195,7 @@ class IncludeQueryExtractor:
             template,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=["file_content", "query"],
+            exclude=["file_content", "query"],
         )
 
         response = llm_invoke(

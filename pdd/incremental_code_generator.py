@@ -73,7 +73,7 @@ def incremental_code_generator(
                 diff_analyzer_template,
                 recursive=False,
                 double_curly_brackets=True,
-                exclude_keys=["ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE"]
+                exclude=["ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE"]
             )
 
         if verbose:
@@ -123,7 +123,7 @@ def incremental_code_generator(
                     patcher_template,
                     recursive=False,
                     double_curly_brackets=True,
-                    exclude_keys=["ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE", "CHANGE_DESCRIPTION"]
+                    exclude=["ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE", "CHANGE_DESCRIPTION"]
                 )
 
             if verbose:

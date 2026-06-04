@@ -613,7 +613,7 @@ def _ask_llm_for_patch(
         template,
         recursive=False,
         double_curly_brackets=True,
-        exclude_keys=[
+        exclude=[
             "PRD_SOURCE",
             "PRD_DIFF",
             "CURRENT_ARCHITECTURE",
