@@ -9,6 +9,7 @@ fixes them — one step per LLM call for reliability.
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
@@ -352,15 +353,20 @@ def _review_loop_ship_verdict(
     if reviewer_status.get(active) not in _SHIP_REVIEWER_STATES:
         return False
     # The canonical ``_write_final_state`` ALWAYS serializes ``findings`` as a
-    # list of dicts (``ReviewFinding.to_dict()``). A missing/non-list value, or
-    # any non-dict entry, means the verdict file is malformed or not from a real
-    # run — fail closed rather than treat the absence of an ``open`` row as "no
-    # findings". An ``open`` finding also blocks the ship.
+    # list of dicts (``ReviewFinding.to_dict()``) whose ``status`` is a non-empty
+    # string ("open" while unresolved, "fixed" once resolved). The canonical
+    # ship gate blocks on any ``open`` row, so we mirror that; a non-list value,
+    # a non-dict entry, or a missing/non-string/empty ``status`` means the
+    # verdict file is malformed or not from a real run — fail closed rather than
+    # treat the absence of an ``open`` row as "no findings".
     findings = final_state.get("findings")
     if not isinstance(findings, list):
         return False
     for finding in findings:
-        if not isinstance(finding, dict) or finding.get("status") == "open":
+        if not isinstance(finding, dict):
+            return False
+        status = finding.get("status")
+        if not isinstance(status, str) or not status or status == "open":
             return False
     if has_issue and str(final_state.get("issue_aligned")).lower() != "true":
         return False
@@ -648,10 +654,10 @@ def run_agentic_checkup(
         budget_errors = []
         if max_review_rounds < 1:
             budget_errors.append("max_review_rounds must be >= 1")
-        if max_review_cost <= 0:
-            budget_errors.append("max_review_cost must be > 0")
-        if max_review_minutes <= 0:
-            budget_errors.append("max_review_minutes must be > 0")
+        if not math.isfinite(max_review_cost) or max_review_cost <= 0:
+            budget_errors.append("max_review_cost must be a finite value > 0")
+        if not math.isfinite(max_review_minutes) or max_review_minutes <= 0:
+            budget_errors.append("max_review_minutes must be a finite value > 0")
         if budget_errors:
             return (
                 False,
@@ -718,6 +724,22 @@ def run_agentic_checkup(
         # fail-closed). ``issue_number`` is the PR number when no issue was
         # given, but the final gate always has an issue (validated above).
         clear_final_state(project_root, issue_number, pr_number)
+        if load_final_state(project_root, issue_number, pr_number) is not None:
+            # ``clear_final_state`` swallows a non-fatal unlink error; if a stale
+            # verdict still survives, a Layer 2 that exits before finalizing
+            # (e.g. a role error) would let us read the PRIOR run's clean verdict
+            # as this run's. Fail closed rather than risk a false ship.
+            return (
+                False,
+                (
+                    "Final gate could not clear the stale review-loop verdict at "
+                    ".pdd/checkup-review-loop/; refusing to run Layer 2 to avoid "
+                    "trusting a prior run's verdict. Remove the artifact and "
+                    "re-run."
+                ),
+                orch_cost,
+                orch_model,
+            )
         if not quiet:
             console.print(
                 "[bold]Final gate Layer 1 (PR checkup) passed; running "

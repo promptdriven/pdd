@@ -144,6 +144,19 @@ class TestShipVerdictPredicate:
         state["active_reviewer"] = ["codex"]
         assert _review_loop_ship_verdict(state, has_issue=True) is False
 
+    def test_missing_finding_status_fails_closed(self) -> None:
+        # A finding dict with no/empty/non-string status is a malformed verdict.
+        for bad in ({"severity": "low"}, {"status": ""}, {"status": 7}):
+            state = _clean_final_state()
+            state["findings"] = [bad]
+            assert _review_loop_ship_verdict(state, has_issue=True) is False, bad
+
+    def test_resolved_finding_ships(self) -> None:
+        # A clean verdict whose findings are all resolved ("fixed") still ships.
+        state = _clean_final_state()
+        state["findings"] = [{"status": "fixed"}]
+        assert _review_loop_ship_verdict(state, has_issue=True) is True
+
 
 # ---------------------------------------------------------------------------
 # Library: two-layer dispatch, ordering, propagation, verdict
@@ -318,6 +331,68 @@ class TestFinalGateLibrary:
         assert success is False
         assert "review budget invalid" in msg
         orch_mock.assert_not_called()
+        loop_mock.assert_not_called()
+
+    def test_non_finite_budget_rejected_at_library_boundary(self, tmp_path: Path) -> None:
+        """NaN/inf budgets bypass a bare ``<= 0`` check; the library must reject
+        them before Layer 1 runs."""
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator"
+        ) as orch_mock:
+            success, msg, _cost, _model = run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                use_github_state=False,
+                pr_url=PR_URL,
+                final_gate=True,
+                max_review_cost=float("inf"),
+            )
+        assert success is False
+        assert "review budget invalid" in msg
+        orch_mock.assert_not_called()
+
+    def test_unclearable_stale_verdict_fails_closed(self, tmp_path: Path) -> None:
+        """If a stale clean final-state.json cannot be cleared, the gate must
+        fail closed BEFORE running Layer 2 — never trust a prior run's verdict."""
+        _write_final_state(
+            tmp_path, issue_number=2, pr_number=1, payload=_clean_final_state()
+        )
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._fetch_pr_context", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=(True, "checkup ok", 1.0, "model"),
+        ), patch(
+            # Simulate a clear that fails to remove the stale artifact.
+            "pdd.agentic_checkup.clear_final_state",
+        ), patch(
+            "pdd.agentic_checkup.run_checkup_review_loop"
+        ) as loop_mock:
+            success, msg, _cost, _model = run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                use_github_state=False,
+                pr_url=PR_URL,
+                final_gate=True,
+            )
+        assert success is False
+        assert "could not clear" in msg.lower()
         loop_mock.assert_not_called()
 
     def test_final_gate_requires_issue(self, tmp_path: Path) -> None:

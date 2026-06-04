@@ -2,6 +2,7 @@
 Checkup command — GitHub issue-driven project health check, or local diagnostics.
 """
 # pylint: disable=unknown-option-value
+import math
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -657,14 +658,18 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--max-review-rounds must be >= 1.",
             param_hint="'--max-review-rounds'",
         )
-    if (review_loop or final_gate) and max_review_cost <= 0:
+    if (review_loop or final_gate) and (
+        not math.isfinite(max_review_cost) or max_review_cost <= 0
+    ):
         raise click.BadParameter(
-            "--max-review-cost must be > 0.",
+            "--max-review-cost must be a finite value > 0.",
             param_hint="'--max-review-cost'",
         )
-    if (review_loop or final_gate) and max_review_minutes <= 0:
+    if (review_loop or final_gate) and (
+        not math.isfinite(max_review_minutes) or max_review_minutes <= 0
+    ):
         raise click.BadParameter(
-            "--max-review-minutes must be > 0.",
+            "--max-review-minutes must be a finite value > 0.",
             param_hint="'--max-review-minutes'",
         )
     if pr_mode:
