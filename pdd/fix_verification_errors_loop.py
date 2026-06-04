@@ -139,6 +139,24 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
+def _record_agentic_verify_fallback_event(
+    agentic_fallback_events: Optional[list[dict[str, Any]]],
+    *,
+    success: bool,
+    detail: str,
+) -> None:
+    """Append verify-phase agentic fallback telemetry when a list is provided."""
+    if agentic_fallback_events is not None:
+        agentic_fallback_events.append(
+            {
+                "phase": "verify",
+                "attempted": True,
+                "used": success,
+                "detail": detail,
+            }
+        )
+
+
 def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None, deadline=None):
     """
     Call (possibly monkeypatched) run_agentic_verify and normalize its return.
@@ -331,6 +349,15 @@ def fix_verification_errors_loop(
                     final_code = f.read()
             except Exception:
                 pass
+            _record_agentic_verify_fallback_event(
+                agentic_fallback_events,
+                success=success,
+                detail=(
+                    "agentic verify fallback succeeded (non-Python, no verify command)"
+                    if success
+                    else "agentic verify fallback failed (non-Python, no verify command)"
+                ),
+            )
             return {
                 "success": success,
                 "final_program": final_program,
@@ -377,6 +404,15 @@ def fix_verification_errors_loop(
                 final_code = f.read()
         except Exception:
             pass
+        _record_agentic_verify_fallback_event(
+            agentic_fallback_events,
+            success=success,
+            detail=(
+                "agentic verify fallback succeeded (non-Python, after verify command)"
+                if success
+                else "agentic verify fallback failed (non-Python, after verify command)"
+            ),
+        )
         return {
             "success": success,
             "final_program": final_program,
@@ -1295,19 +1331,15 @@ def fix_verification_errors_loop(
                 console.print(f"[yellow]Warning: Could not read files after successful agentic fix: {rich_escape(str(e))}[/yellow]")
         else:
             console.print("[bold red]Agentic fallback failed.[/bold red]")
-        if agentic_fallback_events is not None:
-            agentic_fallback_events.append(
-                {
-                    "phase": "verify",
-                    "attempted": True,
-                    "used": agent_success,
-                    "detail": (
-                        "agentic verify fallback succeeded"
-                        if agent_success
-                        else "agentic verify fallback failed"
-                    ),
-                }
-            )
+        _record_agentic_verify_fallback_event(
+            agentic_fallback_events,
+            success=agent_success,
+            detail=(
+                "agentic verify fallback succeeded"
+                if agent_success
+                else "agentic verify fallback failed"
+            ),
+        )
 
     return {
         "success": overall_success,
