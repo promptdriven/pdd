@@ -8408,12 +8408,13 @@
   },
   {
     "reason": "Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.",
-    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, prompt subcommand (checkup prompt <target>), and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
+    "description": "Defines the checkup Click command including lint dispatch, pdd checkup prompt <target> dispatch, validate-arch-includes, and agentic checkup integration.",
     "dependencies": [
       "agentic_checkup_python.prompt",
-      "commands/prompt_python.prompt",
+      "commands/checkup_prompt_python.prompt",
       "commands/contracts_python.prompt",
-      "commands/gate_python.prompt"
+      "commands/gate_python.prompt",
+      "commands/prompt_python.prompt"
     ],
     "priority": 236,
     "filename": "commands/checkup_python.prompt",
@@ -8432,7 +8433,7 @@
           },
           {
             "name": "checkup prompt",
-            "description": "Check a prompt file for issues (--explain, --interactive, --apply); stub raises NotImplementedError"
+            "description": "Run agentic health checkup, local diagnostics including lint, or unified prompt-space source-set health (checkup prompt)"
           }
         ]
       }
@@ -10207,6 +10208,62 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Thin CLI wrapper for unified prompt-space source-set health.",
+    "description": "Defines checkup_prompt_cmd for pdd checkup prompt TARGET with --explain, --interactive, and --apply.",
+    "dependencies": [
+      "checkup_prompt_main_python.prompt"
+    ],
+    "priority": 236.1,
+    "filename": "commands/checkup_prompt_python.prompt",
+    "filepath": "pdd/commands/checkup_prompt.py",
+    "tags": [
+      "command",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "checkup_prompt_cmd",
+            "description": "Unified prompt-space source-set health: Check \u2192 Explain \u2192 Apply"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13700,
+      "y": 2400
+    }
+  },
+  {
+    "reason": "Orchestrates Check \u2192 Explain \u2192 Apply for prompt source sets.",
+    "description": "Aggregates lint, contract, coverage, gate, and contract IR; optional explain and human-approved apply.",
+    "dependencies": [],
+    "priority": 236.05,
+    "filename": "checkup_prompt_main_python.prompt",
+    "filepath": "pdd/checkup_prompt_main.py",
+    "tags": [
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_checkup_prompt",
+            "signature": "(target: str, *, explain: bool, interactive: bool, apply: bool, quiet: bool, verbose: bool) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13700,
+      "y": 2800
     }
   }
 ]

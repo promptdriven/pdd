@@ -19,19 +19,8 @@ from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .drift import drift_cmd
 from .gate import gate_cmd
+from .checkup_prompt import checkup_prompt_cmd
 from .prompt import prompt_lint
-
-
-@click.command()
-@click.argument("target", required=True)
-@click.option("--explain", is_flag=True, help="Show detailed reasoning.")
-@click.option("--interactive", "interactive", is_flag=True, help="Interactive review.")
-@click.option("--apply", "apply_suggestions", is_flag=True, help="Auto-apply suggestions.")
-def checkup_prompt_cmd(target: str, explain: bool, interactive: bool, apply_suggestions: bool) -> None:
-    """Check a prompt file for issues."""
-    if interactive and apply_suggestions:
-        raise click.UsageError("Mutually exclusive flags: --interactive and --apply cannot be used together.")
-    raise NotImplementedError("Stub checkup prompt command.")
 
 
 @click.command(
@@ -376,8 +365,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:
       pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
-    Prompt checks:
-      pdd checkup prompt TARGET [OPTIONS]  →  Check a prompt file for issues.
+    Unified prompt-space health:
+      pdd checkup prompt TARGET [OPTIONS]  →  source-set report (Check → Explain → Apply; see --help).
     Contract checks:
       pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
     Contract coverage:
@@ -471,6 +460,13 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     if target == "prompt":
         prompt_args = list(ctx.args)
+        if not prompt_args or show_help:
+            click.echo(
+                checkup_prompt_cmd.get_help(
+                    click.Context(checkup_prompt_cmd, info_name="pdd checkup prompt")
+                )
+            )
+            return None
         if show_help:
             prompt_args.append("--help")
         exit_code = checkup_prompt_cmd.main(

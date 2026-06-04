@@ -1,0 +1,30 @@
+% Suggest human-approved patches for prompt source-set findings.
+
+You may only propose edits to the primary `.prompt` file or `user_stories/story__*.md` files.
+Do NOT modify generated code under `src/`, `pdd/`, or `tests/`.
+
+<prompt_path>{prompt_path}</prompt_path>
+
+<findings>
+{findings_json}
+</findings>
+
+<prompt_content>
+{prompt_content}
+</prompt_content>
+
+Return JSON only. Each patch must include the full new file content:
+
+```json
+{
+  "patches": [
+    {
+      "path": "relative/path/to/file.prompt",
+      "reason": "why this change helps",
+      "new_content": "full file text after the edit"
+    }
+  ]
+}
+```
+
+If no safe patch is warranted, return `"patches": []`.

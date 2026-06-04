@@ -334,32 +334,18 @@ def test_checkup_prompt_help_does_not_contain_coach() -> None:
     assert "coach" not in result.output.lower()
 
 
-def test_checkup_prompt_stub_raises_not_implemented() -> None:
-    """pdd checkup prompt <target> body raises NotImplementedError (stub)."""
+def test_checkup_prompt_apply_requires_interactive_via_dispatch() -> None:
+    """Delegated ``pdd checkup prompt`` enforces --apply requires --interactive."""
     runner = CliRunner()
 
     result = runner.invoke(
         checkup,
-        ["prompt", "some_prompt.prompt"],
-        obj={"quiet": True, "verbose": False},
-    )
-
-    assert result.exit_code != 0
-    assert isinstance(result.exception, NotImplementedError)
-
-
-def test_checkup_prompt_interactive_and_apply_mutually_exclusive() -> None:
-    """--interactive and --apply cannot be used together."""
-    runner = CliRunner()
-
-    result = runner.invoke(
-        checkup,
-        ["prompt", "some_prompt.prompt", "--interactive", "--apply"],
+        ["prompt", "payment_api_python.prompt", "--apply"],
         obj={"quiet": True, "verbose": False},
     )
 
     assert result.exit_code == 2
-    assert "Mutually exclusive" in result.output or "--interactive" in result.output
+    assert "--apply requires --interactive" in result.output
 
 
 @pytest.mark.e2e
