@@ -2522,12 +2522,6 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
-def _single_env_var_present(name: str) -> bool:
-    """Return whether an environment variable is present with a non-blank value."""
-    value = os.getenv(name)
-    return bool(value and str(value).strip())
-
-
 def _clean_optional_scalar(value: Any) -> Optional[str]:
     """Return a stripped string for a scalar value, treating blank/NaN as missing."""
     try:
@@ -2542,32 +2536,8 @@ def _clean_optional_scalar(value: Any) -> Optional[str]:
 
 
 def _interactive_credential_acquisition_allowed() -> bool:
-    """Whether candidate selection may rely on later interactive credential setup."""
+    """Whether API-key setup may prompt interactively in this process."""
     return not (_env_truthy("PDD_FORCE") or _is_cloud_runtime())
-
-
-def _chatgpt_subscription_credential_available() -> bool:
-    """Return whether ChatGPT subscription auth is fully usable right now."""
-    try:
-        from pdd.codex_subscription import bridge_codex_auth_for_litellm
-        return bridge_codex_auth_for_litellm()
-    except Exception as exc:  # pragma: no cover - best effort probe
-        logger.debug(
-            "ChatGPT credential probe skipped (%s): %s",
-            type(exc).__name__,
-            exc,
-        )
-        return False
-
-
-def _github_copilot_credential_available() -> bool:
-    """Return whether GitHub Copilot device-flow auth is staged for litellm."""
-    token_dir = Path(os.environ.get(
-        "GITHUB_COPILOT_TOKEN_DIR",
-        str(Path.home() / ".config" / "litellm" / "github_copilot"),
-    ))
-    api_key_file = os.environ.get("GITHUB_COPILOT_API_KEY_FILE", "api-key.json")
-    return (token_dir / api_key_file).exists()
 
 
 def _vertex_project_value() -> Optional[str]:
@@ -2589,70 +2559,6 @@ def _vertex_location_value(model_info: Dict[str, Any]) -> Optional[str]:
         if value:
             return value
     return None
-
-
-def _vertex_credentials_available(model_info: Dict[str, Any]) -> bool:
-    """Return whether Vertex AI can authenticate in the current process."""
-    if not _vertex_project_value() or not _vertex_location_value(model_info):
-        return False
-    # Match the existing llm_invoke behavior: a configured project/location is
-    # enough to allow ADC-backed Vertex auth even without an explicit key file.
-    return True
-
-
-def _model_credentials_available(model_info: Dict[str, Any]) -> bool:
-    """Return whether a model can run with credentials already available now.
-
-    In local interactive use we preserve the historical single-key prompt path,
-    so a missing simple API key can still be considered selectable. In force /
-    cloud contexts we require credentials to already exist.
-    """
-    from pdd.provider_manager import parse_api_key_vars, resolve_api_key_from_env
-
-    api_key_field = str(model_info.get("api_key", "") or "")
-    model_name = str(model_info.get("model", "") or "")
-    prompt_allowed = _interactive_credential_acquisition_allowed()
-
-    if not api_key_field.strip() or api_key_field == "EXISTING_KEY":
-        if model_name.startswith("chatgpt/"):
-            return _chatgpt_subscription_credential_available() or prompt_allowed
-        if model_name.startswith("github_copilot/"):
-            return _github_copilot_credential_available()
-        return True
-
-    env_vars = parse_api_key_vars(api_key_field)
-    if not env_vars:
-        return True
-
-    if len(env_vars) > 1:
-        missing = []
-        for env_name in env_vars:
-            if env_name == "GOOGLE_APPLICATION_CREDENTIALS":
-                if not (_single_env_var_present("GOOGLE_APPLICATION_CREDENTIALS") or _single_env_var_present("VERTEX_CREDENTIALS")):
-                    missing.append(env_name)
-                continue
-            if not _single_env_var_present(env_name):
-                missing.append(env_name)
-        if "GOOGLE_APPLICATION_CREDENTIALS" in env_vars:
-            if _vertex_project_value() and _vertex_location_value(model_info):
-                remaining = [
-                    v for v in missing
-                    if v not in ("GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "VERTEXAI_LOCATION")
-                ]
-                if not remaining:
-                    return True
-        return False
-
-    key_name = env_vars[0]
-    key_value, _resolved_name = resolve_api_key_from_env(
-        key_name,
-        include_llm_invoke_aliases=True,
-    )
-    if key_value:
-        return True
-    if key_name == "VERTEX_CREDENTIALS":
-        return _vertex_credentials_available(model_info)
-    return prompt_allowed
 
 
 def _select_model_candidates(
@@ -2702,28 +2608,12 @@ def _select_model_candidates(
         keep_mask = ~is_interactive | (available_df['model'] == base_model_name)
         available_df = available_df[keep_mask]
 
-    # In force/cloud contexts only rank models whose credentials are already
-    # usable in this exact process. This prevents noisy cross-provider fallback
-    # into rows that are guaranteed to fail later in _ensure_api_key.
-    if _env_truthy("PDD_FORCE") or _is_cloud_runtime():
-        credential_ready = available_df.apply(
-            lambda row: _model_credentials_available(row.to_dict()),
-            axis=1,
-        )
-        available_df = available_df[credential_ready].copy()
-
     # --- Check if the initial DataFrame itself was empty ---
     if model_df.empty:
         raise ValueError("Loaded model data is empty. Check CSV file.")
 
     # --- Check if filtering resulted in empty (might indicate all models had NaN api_key) ---
     if available_df.empty:
-        if _env_truthy("PDD_FORCE") or _is_cloud_runtime():
-            raise ValueError(
-                "No models remain after credential filtering. Configure auth for at least one "
-                "candidate model in this process (for example Vertex ADC/project, a provider "
-                "API key, or ChatGPT/Codex subscription auth)."
-            )
         # This case is less likely if notna() is the only filter, but good to check.
         logger.warning("No models found after filtering for non-NaN api_key. Check CSV 'api_key' column.")
         # Decide if this should be a hard error or allow proceeding if logic permits
@@ -2764,9 +2654,8 @@ def _select_model_candidates(
         if not alt_resolved:
             # Try finding base model in the *original* df in case it was filtered out
             original_base = model_df[model_df['model'] == base_model_name]
-            if not original_base.empty and not (_env_truthy("PDD_FORCE") or _is_cloud_runtime()):
-                # Interactive local runs keep the historical loud error when the
-                # configured base model exists but is not actually usable.
+            if not original_base.empty:
+                # Base exists but may be misconfigured (e.g., missing API key). Keep erroring loudly.
                 raise ValueError(
                     f"Base model '{base_model_name}' found in CSV but requires API key '{original_base.iloc[0]['api_key']}' which might be missing or invalid configuration."
                 )
