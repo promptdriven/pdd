@@ -390,7 +390,7 @@ def _run_explain_advisory(
         )
         response_text = str(result.get("result", ""))
         cost = float(result.get("cost", 0.0) or 0.0)
-        model = str(result.get("model", "") or "")
+        model = str(result.get("model_name") or result.get("model") or "")
 
         json_match = re.search(
             r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL
@@ -476,7 +476,7 @@ def _suggest_apply_patches(
         )
         response_text = str(result.get("result", ""))
         cost = float(result.get("cost", 0.0) or 0.0)
-        model = str(result.get("model", "") or "")
+        model = str(result.get("model_name") or result.get("model") or "")
 
         json_match = re.search(
             r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL

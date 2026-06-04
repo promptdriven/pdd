@@ -62,3 +62,19 @@ def test_gate_json_includes_advisory_key_when_review_explain() -> None:
     payload = __import__("json").loads(result.output)
     assert "advisory" in payload
     assert payload["advisory"]["status"] == "ok"
+
+
+def test_gate_json_omits_advisory_when_review_off() -> None:
+    runner = CliRunner()
+    with patch("pdd.commands.gate.run_gate_policy") as gate:
+        from pdd.gate_main import GateResult
+
+        gate.return_value = GateResult(passed=True, manifests_checked=0)
+        result = runner.invoke(
+            gate_cmd,
+            ["--json", "--skip-waivers", "--skip-evidence"],
+            obj={"quiet": True, "local": True},
+        )
+    assert result.exit_code == 0, result.output
+    payload = __import__("json").loads(result.output)
+    assert "advisory" not in payload

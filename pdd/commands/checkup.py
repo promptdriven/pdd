@@ -23,6 +23,12 @@ from .checkup_prompt import checkup_prompt_cmd
 from .prompt import prompt_lint
 
 
+def _exit_if_subcommand_returned_code(result: object) -> None:
+    """Raise Click Exit only when a delegated subcommand returned a non-zero int."""
+    if isinstance(result, int) and result:
+        raise click.exceptions.Exit(result)
+
+
 @click.command(
     "checkup",
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
@@ -460,6 +466,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     if target == "prompt":
         prompt_args = list(ctx.args)
+        if strict:
+            prompt_args.insert(0, "--strict")
         if not prompt_args or show_help:
             click.echo(
                 checkup_prompt_cmd.get_help(
@@ -469,7 +477,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             return None
         if show_help:
             prompt_args.append("--help")
-        exit_code = checkup_prompt_cmd.main(
+        result = checkup_prompt_cmd.main(
             args=prompt_args,
             prog_name="pdd checkup prompt",
             standalone_mode=False,
@@ -477,8 +485,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         )
         if show_help:
             ctx.exit()
-        if exit_code:
-            raise click.exceptions.Exit(exit_code)
+        _exit_if_subcommand_returned_code(result)
         return None
 
     if target == "snapshot":

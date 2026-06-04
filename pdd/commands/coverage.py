@@ -237,7 +237,8 @@ def coverage_cmd(
         ctx_obj=ctx.obj,
     )
     if as_json:
-        output["advisory"] = report_as_dict(advisory)
+        if review == "explain":
+            output["advisory"] = report_as_dict(advisory)
         print(json.dumps(output, indent=2))
     else:
         if not results:

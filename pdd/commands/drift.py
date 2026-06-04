@@ -96,7 +96,8 @@ def drift_cmd(
         ctx_obj=ctx.obj,
     )
     if as_json:
-        payload["advisory"] = report_as_dict(advisory)
+        if review == "explain":
+            payload["advisory"] = report_as_dict(advisory)
         click.echo(json.dumps(payload, indent=2))
     else:
         click.echo(f"PDD Drift Report: {report.devunit}\n")

@@ -141,6 +141,27 @@ class TestRunCheckupPrompt:
         )
         assert fail_success == without_explain
 
+    def test_explain_reports_model_name_from_llm_invoke(self) -> None:
+        report = build_prompt_source_set_report(PAYMENT_PROMPT, project_root=REPO_ROOT)
+        template = "path={prompt_path}\nfindings={findings_json}\n"
+        with patch(
+            "pdd.checkup_prompt_main.Path.is_file",
+            return_value=True,
+        ), patch(
+            "pdd.checkup_prompt_main.Path.read_text",
+            return_value=template,
+        ), patch(
+            "pdd.llm_invoke.llm_invoke",
+            return_value={
+                "result": '{"advisories": []}',
+                "cost": 0.01,
+                "model_name": "test-model-v2",
+            },
+        ):
+            _, cost, model = _run_explain_advisory(report, quiet=True, use_cloud=False)
+        assert cost == 0.01
+        assert model == "test-model-v2"
+
 
 class TestAuthorityModel:
     def test_apply_requires_interactive(self) -> None:
@@ -193,6 +214,42 @@ class TestCheckupDispatch:
         assert result.exit_code in {0, 1}
         assert "Status:" in result.output
         assert "Prompt source-set check" in result.output
+
+    def test_checkup_prompt_dispatch_success_exits_zero(self) -> None:
+        """@track_cost success tuple must not be treated as a non-zero exit code."""
+        runner = CliRunner()
+        with patch(
+            "pdd.commands.checkup_prompt.run_checkup_prompt",
+            return_value=(True, "Prompt source-set check passed.", 0.0, "test-model"),
+        ):
+            result = runner.invoke(
+                checkup,
+                ["prompt", str(PAYMENT_PROMPT)],
+                obj={"quiet": True},
+            )
+        assert result.exit_code == 0, result.output
+
+    def test_checkup_prompt_strict_forwarded(self) -> None:
+        runner = CliRunner()
+        with patch("pdd.commands.checkup_prompt.run_checkup_prompt") as run_prompt:
+            run_prompt.return_value = (True, "ok", 0.0, "")
+            runner.invoke(
+                checkup,
+                ["--strict", "prompt", str(PAYMENT_PROMPT)],
+                obj={"quiet": True},
+            )
+        assert run_prompt.call_args.kwargs["strict"] is True
+
+    def test_checkup_prompt_unknown_target_usage_error(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            ["prompt", "no_such_module_xyz"],
+            obj={"quiet": True},
+        )
+        assert result.exit_code == 2
+        assert "Could not resolve" in result.output
+        assert "handle_error() missing" not in result.output
 
 
 class TestApplyGuards:

@@ -287,8 +287,9 @@ def gate_cmd(  # pylint: disable=too-many-arguments,too-many-locals
             "exit_code": exit_code,
             "evidence": evidence_result.as_dict(),
             "waivers": waiver_result.as_dict(),
-            "advisory": report_as_dict(advisory),
         }
+        if review == "explain":
+            payload["advisory"] = report_as_dict(advisory)
         if hasattr(evidence_result, "manifests_checked"):
             payload["manifests_checked"] = evidence_result.manifests_checked
         click.echo(json.dumps(payload, indent=2))

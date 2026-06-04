@@ -15,7 +15,7 @@ def review_option(func: Callable) -> Callable:
         show_default=True,
         help=(
             "Advisory LLM pass after deterministic checks (read-only; "
-            "does not change exit code). Use 'explain' for coaching hints."
+            "does not change exit code). Use 'explain' for LLM commentary."
         ),
     )(func)
 

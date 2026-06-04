@@ -12,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from pdd.cli import cli
+from pdd.checkup_advisory import CheckupReport
 from pdd.commands.checkup import checkup
 from pdd.prompt_lint import run_llm_ambiguity_pass
 
@@ -33,6 +34,7 @@ def test_checkup_lint_help_exposes_methodology() -> None:
     assert "Lint prompts and user stories for quality and ambiguity" in result.output
     assert "--stories" in result.output
     assert "--llm" in result.output
+    assert "coach" not in result.output.lower()
 
 
 def test_checkup_help_remains_available_with_lint_alias() -> None:
@@ -89,7 +91,7 @@ def test_checkup_lint_llm_never_writes_without_explicit_apply(
         args.append("--json")
     args.append(str(prompt))
 
-    with patch("pdd.commands.prompt.run_llm_ambiguity_pass", return_value=[]):
+    with patch("pdd.checkup_advisory.run_advisory_explain", return_value=CheckupReport(status="ok", findings=[])):
         result = CliRunner().invoke(checkup, args, obj={"quiet": True})
 
     assert result.exit_code == 1
@@ -97,26 +99,29 @@ def test_checkup_lint_llm_never_writes_without_explicit_apply(
 
 
 def test_checkup_lint_default_does_not_run_llm() -> None:
-    with patch("pdd.commands.prompt.run_llm_ambiguity_pass") as llm_pass:
+    with patch("pdd.checkup_advisory.run_advisory_explain") as advisory_pass:
         result = CliRunner().invoke(
             cli,
             ["--quiet", "checkup", "lint", str(FIXTURES / "clean.prompt")],
         )
 
     assert result.exit_code == 0
-    llm_pass.assert_not_called()
+    advisory_pass.assert_not_called()
 
 
 def test_checkup_lint_llm_runs_advisory_pass() -> None:
     """The --llm flag enables the advisory cloud/local ambiguity review."""
-    with patch("pdd.commands.prompt.run_llm_ambiguity_pass", return_value=[]) as llm_pass:
+    with patch(
+        "pdd.checkup_advisory.run_advisory_explain",
+        return_value=CheckupReport(status="ok", findings=[]),
+    ) as advisory_pass:
         result = CliRunner().invoke(
             cli,
             ["--quiet", "checkup", "lint", "--llm", str(FIXTURES / "clean.prompt")],
         )
 
     assert result.exit_code == 0
-    llm_pass.assert_called_once()
+    advisory_pass.assert_called_once()
 
 
 def test_llm_ambiguity_pass_treats_directives_as_inert_text(tmp_path: Path) -> None:

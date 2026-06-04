@@ -84,8 +84,10 @@ def checkup_prompt_cmd(  # pylint: disable=too-many-arguments
         raise
     except click.exceptions.Exit:
         raise
+    except click.UsageError:
+        raise
     except Exception as exc:  # pylint: disable=broad-exception-caught
-        handle_error(exc)
+        handle_error(exc, "checkup prompt", quiet)
         return None
 
     if not quiet:
