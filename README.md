@@ -3769,6 +3769,8 @@ python -m pdd.ci_drift_heal \
 - `--budget-cap FLOAT`: Maximum dollar amount for LLM healing calls
 - `--skip-ci`: Add `[skip ci]` to commit message (prevents CI re-trigger)
 
+**PR-scope guard**: In PR auto-heal mode (no `--skip-ci`), the heal preserves the narrow scope of a fix PR and never escalates it into coverage-driven `test_extend`. The script exports `PDD_DISABLE_TEST_EXTEND=1` into both its own environment (suppressing `test_extend` during in-process drift detection) and the `pdd sync` subprocess env (suppressing internal escalation at execution time), so a coverage gap resolves to a no-op rather than appending unrelated generated tests. Narrow `update`/`example`/`auto-deps` fixes still apply. The guard is inactive in push-to-main mode (`--skip-ci`), where module-wide coverage expansion via `test_extend` remains valid.
+
 **Key Insight**: This workflow automates the Code-to-Prompt Update pattern for CI, ensuring prompts stay in sync with code changes without manual intervention.
 
 ### Critical Dependencies
@@ -3802,6 +3804,8 @@ collaborator check before Cloud Build is dispatched.
 There is no push-to-main trigger. Drift on `main` is healed by the next PR that touches the affected modules.
 
 **Loop prevention**: Auto-heal commits start with `chore: auto-heal …`; the Cloud Build step short-circuits when the triggering commit subject matches that prefix, so the heal cannot retrigger itself.
+
+**Scope preservation**: Because PR heals always run without `--skip-ci` (the established PR-vs-push-to-main discriminator; `--diff-base` is required in both modes and cannot distinguish them), they are scope-preserving — only narrow prompt/code/example/meta drift fixes are auto-committed. Coverage-driven `test_extend` is suppressed (via `PDD_DISABLE_TEST_EXTEND=1` at both detection and execution time), so a narrow fix PR is never re-bloated with unrelated generated test blocks.
 
 **Metadata Finalization**: The auto-heal `update` path invokes the same `run_metadata_sync` orchestrator as `pdd update --sync-metadata` and preflight drift-heal, so prompt tags, architecture entries, run reports, and fingerprint state are always reconciled together. **Any stage reporting `failed`** blocks the auto-heal checkpoint commit so a PR cannot land a half-synced state; `skipped` is permitted for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) and does not block — matching the contract documented in the CI Drift Detection section above.
 
