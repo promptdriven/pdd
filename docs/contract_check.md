@@ -120,6 +120,8 @@ JSON mode suppresses unrelated CLI noise on stdout (auto-update banners, etc.).
 - **Architecture alignment:** `pdd checkup --validate-arch-includes`.
 - **Contract coverage:** `pdd checkup coverage`.
 - **Waiver policy gate:** `pdd checkup gate` (see below).
+- **Unified prompt-space report:** `pdd checkup prompt` — see [docs/checkup_prompt.md](checkup_prompt.md).
+- **All focused local verifier subcommands:** see [docs/checkup_verifier.md](checkup_verifier.md).
 
 ## Waiver policy gate (`pdd checkup gate`)
 

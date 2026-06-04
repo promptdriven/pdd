@@ -53,3 +53,8 @@ pdd checkup drift <devunit> --review explain   # advisory LLM summary appended
 ## Advisory LLM layer (`--review explain`)
 
 Pass `--review explain` to append a read-only LLM advisory pass after the deterministic stability checks. Exit codes are unchanged. JSON output gains an additive `"advisory": {"status": ..., "findings": [...]}` field as a top-level sibling key in the report object.
+
+## See also
+
+- [docs/checkup_prompt.md](checkup_prompt.md) — unified prompt-space health report
+- [docs/checkup_verifier.md](checkup_verifier.md) — focused local verifier subcommands and CI recipe

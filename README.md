@@ -58,6 +58,11 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
 For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
+
+For the default prompt-space health entry point (`pdd checkup prompt`), see [docs/checkup_prompt.md](docs/checkup_prompt.md).
+
+For focused local verifier commands (lint, contract, coverage, gate, snapshot, drift), see [docs/checkup_verifier.md](docs/checkup_verifier.md).
+
 ## Installation
 
 ### Prerequisites for macOS

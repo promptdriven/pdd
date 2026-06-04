@@ -39,7 +39,9 @@ def test_checkup_help_remains_available_with_lint_alias() -> None:
     result = CliRunner().invoke(cli, ["--quiet", "checkup", "--help"])
 
     assert result.exit_code == 0
-    assert "Run agentic health checkup" in result.output
+    assert "checkup prompt" in result.output
+    assert "checkup lint" in result.output
+    assert "Agentic issue / PR checkup" in result.output
     assert "--review-loop" in result.output
 
 
