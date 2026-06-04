@@ -51,6 +51,7 @@ from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
+from pdd.pre_checkup_gate import run_pre_checkup_gate
 
 # Initialize console for rich output
 console = Console()
@@ -2388,6 +2389,69 @@ def run_agentic_change_orchestrator(
                 if not quiet: console.print(f"[yellow]Warning: Could not generate sync order: {e}[/yellow]")
 
     context["sync_order_script"] = sync_order_script; context["sync_order_list"] = sync_order_list
+
+    if worktree_path:
+        gate_worktree = worktree_path
+    else:
+        gate_worktree = Path(current_work_dir)
+    if changed_files:
+        try:
+            gate_success, gate_message, gate_cost = run_pre_checkup_gate(
+                worktree=gate_worktree,
+                changed_files=changed_files,
+                base_ref=None,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                quiet=quiet,
+                timeout_per_check=CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder,
+            )
+        except Exception as _exc:  # pylint: disable=broad-except
+            gate_success = False
+            gate_message = f"pre_checkup_gate blocked; phase=infrastructure error: {_exc}"
+            gate_cost = 0.0
+        total_cost += gate_cost
+        state["total_cost"] = total_cost
+        if not gate_success:
+            # Issue #1293: block before checkup. Do NOT create the PR when the
+            # gate finds mechanical breakage or unhealable drift ("block: don't
+            # hand off to checkup until green"; the change/feature path must run
+            # the gate too). The gate already applies the strict/non-strict
+            # distinction internally (per pre_checkup_gate R7: in default mode a
+            # non-fatal drift-sync residual is reported but does NOT flip
+            # gate_success, while build/smoke failures and fatal drift always
+            # do), so the caller hard-blocks whenever gate_success is False — it
+            # must NOT re-check PDD_STRICT_DOC_SYNC and downgrade a real failure
+            # to an advisory MANUAL_REVIEW note that still ships a broken PR.
+            state["step_outputs"]["12.5"] = f"FAILED: {gate_message}"
+            save_workflow_state(
+                cwd, issue_number, "change", state, state_dir,
+                repo_owner, repo_name, use_github_state, github_comment_id,
+                dedupe=effective_clean_restart,
+            )
+            return (
+                False,
+                f"Stopped at step 12.5: {gate_message}",
+                total_cost, model_used, changed_files,
+            )
+        # Issue #1293/#1243: the gate's drift-sync runs run_metadata_sync, which
+        # writes prompt+code-only fingerprints (example/test hashes are null).
+        # Step 13's `git add -A` would otherwise commit those degraded
+        # fingerprints into the PR, arming the #1243 null-hash auto-heal loop.
+        # Restore tracked .pdd/meta so .pdd/meta fingerprint finalization is
+        # deferred to the post-merge sync (#1317) — matching the fix path, which
+        # filters .pdd/** from its commit. The gate's prompt / example /
+        # architecture sync is committed normally (only .pdd/meta is reverted).
+        try:
+            subprocess.run(
+                ["git", "checkout", "--", ".pdd/meta"],
+                cwd=gate_worktree,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:  # pylint: disable=broad-except
+            pass
 
     # Identify test files for affected modules (#377 Bug B)
     impacted_tests: List[str] = []

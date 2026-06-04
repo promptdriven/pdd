@@ -5922,7 +5922,8 @@
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt",
-      "git_porcelain_python.prompt"
+      "git_porcelain_python.prompt",
+      "pre_checkup_gate_python.prompt"
     ],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
@@ -6301,12 +6302,13 @@
     }
   },
   {
-    "reason": "Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and cleanup.",
+    "reason": "Orchestrates the 12-step agentic E2E fix workflow including post-push CI validation, code cleanup, and a final PR-mode checkup gate that re-validates CI when it pushes additional fixes.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and final full PR-mode checkup.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
       "agentic_checkup_python.prompt",
-      "ci_validation_python.prompt"
+      "ci_validation_python.prompt",
+      "pre_checkup_gate_python.prompt"
     ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
@@ -10164,6 +10166,38 @@
           {
             "name": "replay",
             "description": "Reconstruct and audit expanded prompt context from a snapshot run artifact"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Single blocking pre-checkup gate that drift-syncs and build/smoke-verifies a PR before handing off to checkup --pr.",
+    "description": "A blocking pre-checkup quality gate invoked by both the change/feature and fix/bug e2e orchestrators immediately before `pdd checkup --pr`. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block the handoff. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "dependencies": [
+      "checkup_gates_python.prompt",
+      "ci_drift_heal_python.prompt",
+      "metadata_sync_python.prompt",
+      "architecture_sync_python.prompt",
+      "operation_log_python.prompt"
+    ],
+    "priority": 218,
+    "filename": "pre_checkup_gate_python.prompt",
+    "filepath": "pdd/pre_checkup_gate.py",
+    "tags": [
+      "checkup",
+      "ci",
+      "gates",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_pre_checkup_gate",
+            "signature": "(worktree: Path, changed_files: Sequence[str], *, base_ref: Optional[str] = None, repo_owner: str = '', repo_name: str = '', issue_number: Optional[int] = None, strict: Optional[bool] = None, quiet: bool = False, timeout_per_check: float = 300.0) -> Tuple[bool, str, float]",
+            "returns": "Tuple[bool, str, float]"
           }
         ]
       }
