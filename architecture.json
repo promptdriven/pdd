@@ -2483,7 +2483,7 @@
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False)",
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False, compress_test_context=False, context_compression=None, compression_fallback=None)",
             "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
@@ -2595,7 +2595,7 @@
         "commands": [
           {
             "name": "fix_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True) -> Tuple[bool, str, str, int, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, compress_test_context: bool = False, context_compression: str | None = None, compression_fallback: str | None = None) -> Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -9086,7 +9086,7 @@
         "functions": [
           {
             "name": "cli",
-            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps)",
+            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps, compress_examples, compress_test_context, context_compression, compression_fallback)",
             "returns": "None"
           },
           {
