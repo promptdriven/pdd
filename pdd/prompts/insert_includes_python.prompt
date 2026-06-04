@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "insert_includes", "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)", "returns": "Tuple[str, str, float, str]"}
+      {"name": "insert_includes", "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True, compress: bool = False)", "returns": "Tuple[str, str, float, str]"}
     ]
   }
 }
@@ -28,14 +28,14 @@ PDD prompt files contain `<include>file.py</include>` tags to bring in dependenc
 It calls `auto_include` to analyze the prompt and get back a string of directives — `<update>` blocks (which modify existing `<include>` tags already in the prompt, e.g. adding `select` or `query` attributes) and `<new>` blocks (which are new `<include>` tags to add). Updates are applied deterministically by matching file paths. New includes are placed into the prompt by an LLM that understands where they should go.
 
 % Requirements
-1. Function: `insert_includes(input_prompt, directory_path, csv_filename, prompt_filename=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False, progress_callback=None, include_docs=False, max_workers=1, dedup=True) -> Tuple[str, str, float, str]`
+1. Function: `insert_includes(input_prompt, directory_path, csv_filename, prompt_filename=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False, progress_callback=None, include_docs=False, max_workers=1, dedup=True, compress=False) -> Tuple[str, str, float, str]`
    - Returns `(output_prompt, csv_output, total_cost, model_name)`
 2. Load prompt template `insert_includes_LLM` via `load_prompt_template`; raise `ValueError` if not found
 3. Preprocess the template to escape curly braces, but keep `{actual_prompt_to_update}` and `{actual_dependencies_to_insert}` unescaped — these are the two placeholders the template expects to be filled later
 4. Read the CSV file from `csv_filename`; if it doesn't exist, create it with header row `full_path,file_summary,key_exports,dependencies,content_hash`
 5. Call `auto_include` to get `(include_directives, csv_output, total_cost, model_name)`
    - Pass `csv_filename` as the `csv_path` argument so summarize_directory writes incremental results to disk
-   - Pass through `prompt_filename`, `progress_callback`, `include_docs`, `max_workers`, and LLM params
+   - Pass through `prompt_filename`, `progress_callback`, `include_docs`, `max_workers`, `compress`, and LLM params
 
 % Applying Updates (deterministic, no LLM call)
 6. `<update>` blocks modify existing `<include>` tags already in the prompt (e.g., adding `select` or `query` attributes)

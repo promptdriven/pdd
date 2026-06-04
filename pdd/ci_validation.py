@@ -493,7 +493,7 @@ def _render_step_template(step_template: str, context: Dict[str, Any]) -> str:
         step_template,
         recursive=True,
         double_curly_brackets=True,
-        exclude_keys=list(context.keys()),
+        exclude=list(context.keys()),
     )
     rendered = rendered.replace("{{", "{").replace("}}", "}")
     return substitute_template_variables(rendered, context)

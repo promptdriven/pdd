@@ -447,7 +447,7 @@ class TestCLIPipelineE2E:
 
         def mock_code_generator(prompt, language, strength, temperature=0.0,
                                 time=None, verbose=False, preprocess_prompt=True,
-                                output_schema=None):
+                                output_schema=None, **kwargs):
             """Capture output_schema and return mock architecture JSON."""
             captured_schema["schema"] = output_schema
             return (mock_architecture_json, 0.001, "mock-model")
@@ -532,7 +532,7 @@ class TestCLIPipelineE2E:
 
         def mock_code_generator(prompt, language, strength, temperature=0.0,
                                 time=None, verbose=False, preprocess_prompt=True,
-                                output_schema=None):
+                                output_schema=None, **kwargs):
             """Capture the prompt and return mock JSON."""
             captured_prompt["prompt"] = prompt
             return (mock_json, 0.001, "mock-model")

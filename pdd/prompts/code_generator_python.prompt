@@ -1,3 +1,16 @@
+<pdd-reason>Core code generation logic that orchestrates preprocessing, LLM invocation, unfinished detection/continuation, and post-processing.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "code_generator", "signature": "(prompt: str, language: str, strength: float = 1.0, temperature: float = 0.0, time: float | None = None, verbose: bool = False, preprocess_prompt: bool = True, output_schema: dict | None = None, compress: bool = False)", "returns": "Tuple[str, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a python function, "code_generator", that will compile a prompt into a code file.
 
 <include>../context/python_preamble.prompt</include>
@@ -12,6 +25,7 @@
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
         'preprocess_prompt' - A boolean that indicates whether to preprocess the prompt. Default is True.
         'output_schema' - An optional dict (JSON schema) to enforce structured output. Default is None.
+        'compress' - A boolean that indicates whether to enable deterministic AST-based compression during preprocessing. Default is False.
     Outputs:
         'runnable_code' - A string that is runnable code
         'total_cost' - A float that is the total cost of all LLM calls within this function (initial generation, unfinished check, continuation if used, and postprocess)
@@ -46,7 +60,7 @@
     </internal_modules>
 
 % This program will do the following:
-    Step 1. Conditionally preprocess the raw prompt using the preprocess function from the preprocess module based on the value of 'preprocess_prompt'. If 'preprocess_prompt' is True, preprocess the prompt; otherwise, use the raw prompt directly. When preprocessing, it is acceptable to enable options such as double_curly_brackets=True and recursive=False to preserve placeholders and avoid over-expansion.
+    Step 1. Conditionally preprocess the raw prompt using the preprocess function from the preprocess module based on the value of 'preprocess_prompt'. If 'preprocess_prompt' is True, preprocess the prompt; otherwise, use the raw prompt directly. When preprocessing, it is acceptable to enable options such as double_curly_brackets=True, recursive=False, and compress=compress to preserve placeholders and avoid over-expansion.
 
     Step 2. Generate the initial response as follows:
         - If the prompt contains embedded data URLs (e.g., 'data:image/...;base64,...'), split the prompt into alternating text and image parts (preserving order) and call llm_invoke with messages=[{role: 'user', content: [{type: 'image_url', image_url: {url: ...}}, {type: 'text', text: ...}, ...]}] and the provided strength, temperature, time, verbose, output_schema, and language.
