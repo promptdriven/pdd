@@ -253,7 +253,7 @@ def test_no_preprocess_prompt(mock_preprocess, mock_load_template, mock_llm_invo
 @patch("pdd.incremental_code_generator.llm_invoke")
 @patch("pdd.incremental_code_generator.load_prompt_template")
 @patch("pdd.incremental_code_generator.preprocess")
-def test_preprocess_called_with_correct_exclude_keys(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
+def test_preprocess_called_with_correct_exclude(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
     """Preprocessing should exclude the correct input parameter keys."""
     mock_load_template.return_value = "raw_template"
     mock_preprocess.return_value = "processed_template"
@@ -266,11 +266,11 @@ def test_preprocess_called_with_correct_exclude_keys(mock_preprocess, mock_load_
 
     # First preprocess call: diff_analyzer excludes ORIGINAL_PROMPT, NEW_PROMPT, EXISTING_CODE
     diff_call = mock_preprocess.call_args_list[0]
-    assert set(diff_call.kwargs.get("exclude_keys", diff_call[1].get("exclude_keys", []))) == {"ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE"}
+    assert set(diff_call.kwargs.get("exclude", diff_call[1].get("exclude", []))) == {"ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE"}
 
     # Second preprocess call: code_patcher excludes ORIGINAL_PROMPT, NEW_PROMPT, EXISTING_CODE, CHANGE_DESCRIPTION
     patch_call = mock_preprocess.call_args_list[1]
-    assert set(patch_call.kwargs.get("exclude_keys", patch_call[1].get("exclude_keys", []))) == {"ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE", "CHANGE_DESCRIPTION"}
+    assert set(patch_call.kwargs.get("exclude", patch_call[1].get("exclude", []))) == {"ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE", "CHANGE_DESCRIPTION"}
 
 
 # --- Error Handling Tests ---

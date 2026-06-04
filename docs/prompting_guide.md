@@ -1136,7 +1136,15 @@ Selectors are composable: `select="lines:1-5,def:main,def:helper"`. If a selecto
 <include mode="interface">src/billing/service.py</include>
 ```
 
-**Attribute priority:** `select=` always wins over `query=` (deterministic, no LLM cost). `mode="interface"` is applied to the result of `select=`.
+**Compressed mode** (`mode="compressed"`, Python only) produces dense implementation snippets optimized for few-shot examples (grounding). It strips docstrings and logic-external comments while preserving all executable code.
+
+```xml
+<include mode="compressed">src/core/utils.py</include>
+```
+
+Use `mode="compressed"` when you need implementation details (unlike `mode="interface"`) but want to save tokens by removing documentation. This mode reduces line counts by 20-40% for typical modules. PDD handles token budget management automatically: if a compressed include exceeds 30,000 tokens, it falls back to `mode="interface"` (preserving sibling-test `patch()` targets), then to a truncated full copy if still over budget.
+
+**Attribute priority:** `select=` always wins over `query=` (deterministic, no LLM cost). `mode="interface"` and `mode="compressed"` are applied to the result of `select=`.
 
 ### Interfaces for Contracts, Examples for Usage
 

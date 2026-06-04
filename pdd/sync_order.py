@@ -85,7 +85,7 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
 
         # Self-closing form: extract the ``path="..."`` attribute value.
         self_closing_matches = re.findall(
-            r'<include\s+([^>]*?)\s*/>', content, re.DOTALL
+            r'<include\s+([^>]*?)\s*/>', content
         )
         for attrs in self_closing_matches:
             path_match = re.search(
@@ -97,8 +97,7 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
                     includes.add(stripped)
 
         many_matches = re.findall(
-            r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>',
-            content, re.DOTALL,
+            r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', content, re.DOTALL
         )
         for m in many_matches:
             # Mirror pdd.preprocess.process_include_many_tags: split on
@@ -523,13 +522,16 @@ _DOC_EXTENSIONS = {".md", ".rst", ".txt"}
 
 def _is_document_include(include_path: str) -> bool:
     """True if the include path refers to a documentation file (.md/.rst/.txt)
-    and not a prompt, code, or example file."""
+    and not a prompt or code file. Note that documentation files can
+    legitimately contain '_example' in their name (e.g. usage_example.md)."""
     lowered = include_path.lower()
     if lowered.endswith(".prompt"):
         return False
-    if "_example." in lowered:
+    # Only exclude _example if it's NOT a documentation extension
+    is_doc = any(lowered.endswith(ext) for ext in _DOC_EXTENSIONS)
+    if "_example." in lowered and not is_doc:
         return False
-    return any(lowered.endswith(ext) for ext in _DOC_EXTENSIONS)
+    return is_doc
 
 
 def discover_associated_documents(

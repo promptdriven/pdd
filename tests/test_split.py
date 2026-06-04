@@ -112,7 +112,7 @@ def test_correct_preprocessing_calls(mock_dependencies):
     # Check first preprocess call (split_prompt)
     assert preprocess_calls[0].kwargs['double_curly_brackets'] == True
     assert preprocess_calls[0].kwargs['recursive'] == False
-    assert 'exclude_keys' in preprocess_calls[0].kwargs
+    assert 'exclude' in preprocess_calls[0].kwargs
     
     # Check second preprocess call (extract_prompt)
     assert preprocess_calls[1].kwargs['double_curly_brackets'] == False

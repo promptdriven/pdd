@@ -38,7 +38,7 @@ cannot accidentally satisfy a check:
 * This module references ``promptdriven/pdd_cloud#1462`` and
   ``promptdriven/pdd_cloud#1463`` in its docstring so the failure mode is
   preserved for future readers (criterion D).
-* ``architecture.json`` records the orchestrator as an 11-step workflow and
+* ``architecture.json`` records the orchestrator as a 12-step workflow and
   the prompt's ``<pdd-interface>`` declares the
   ``force_with_lease_on_non_fast_forward`` parameter so prompt metadata stays
   in sync (criterion E).
@@ -451,17 +451,17 @@ class TestIncidentReferencePresent:
 
 
 class TestArchitectureMetadataSanityCheck:
-    """Criterion E: architecture.json reflects the 11-step workflow and the
+    """Criterion E: architecture.json reflects the 12-step workflow and the
     prompt's ``<pdd-interface>`` matches architecture.json's signatures."""
 
-    def test_orchestrator_architecture_reason_mentions_11_step_workflow(self):
-        """architecture.json's orchestrator entry must describe the 11-step workflow."""
+    def test_orchestrator_architecture_reason_mentions_12_step_workflow(self):
+        """architecture.json's orchestrator entry must describe the 12-step workflow."""
         entry = _get_orchestrator_architecture_entry()
 
         # The "reason" field is what was updated in this PR.
         reason = entry.get("reason", "")
-        assert "11-step" in reason, (
-            "architecture.json orchestrator entry 'reason' must reference the 11-step workflow; "
+        assert "12-step" in reason, (
+            "architecture.json orchestrator entry 'reason' must reference the 12-step workflow; "
             f"got: {reason!r}"
         )
 

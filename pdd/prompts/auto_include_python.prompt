@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "auto_include", "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)", "returns": "Tuple[str, str, float, str]"}
+      {"name": "auto_include", "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None, compress: bool = False)", "returns": "Tuple[str, str, float, str]"}
     ]
   }
 }
@@ -26,8 +26,9 @@ Write the `pdd/auto_include.py` module.
 PDD prompt files use `<include>file.py</include>` tags to pull in dependency files as context for code generation. This module automatically discovers which dependency files from a directory should be included in a given prompt. It summarizes all candidate files, asks an LLM which ones the prompt needs (and whether to extract specific parts via `select` or `query` attributes), then produces a list of `<new>` directives (files to add) and `<update>` directives (existing includes to annotate with selectors). The output is consumed by the downstream `insert_includes` module which places the directives into the prompt.
 
 % Requirements
-1. Function: `auto_include(input_prompt, directory_path, csv_file=None, prompt_filename=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False, progress_callback=None, include_docs=False, max_workers=1, csv_path=None) -> Tuple[str, str, float, str]`
+1. Function: `auto_include(input_prompt, directory_path, csv_file=None, prompt_filename=None, strength=DEFAULT_STRENGTH, temperature=0.0, time=DEFAULT_TIME, verbose=False, progress_callback=None, include_docs=False, max_workers=1, csv_path=None, compress=False) -> Tuple[str, str, float, str]`
    - Returns `(include_directives, csv_output, total_cost, model_name)`
+   - `compress`: when True, generated `<include>` tags for Python files SHOULD include the `mode="compressed"` attribute (unless an explicit `mode` is already present).
 2. Validate inputs: `strength` and `temperature` must be between 0 and 1; raise `ValueError` if not
 3. Load prompt template `auto_include_LLM` via `load_prompt_template`; raise `ValueError` if not found
 4. Run `summarize_directory` to scan files and produce `csv_output`

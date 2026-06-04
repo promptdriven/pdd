@@ -3048,6 +3048,7 @@ def code_generator_main(
     exclude_tests: bool = False,
     language: Optional[str] = None,
     output_from_config: bool = False,
+    compress: bool = False,
     snapshot_context: bool = False,
 ) -> Tuple[str, bool, float, str]:
     """
@@ -3698,9 +3699,24 @@ def code_generator_main(
                 # include warning against real intent (see #1354 codex pass-3).
                 from .preprocess import compute_user_intent_paths as _cuip
                 _cloud_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
-                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[], snapshot_recorder=snapshot_recorder)
+                processed_prompt_for_cloud = pdd_preprocess(
+                    prompt_content,
+                    recursive=True,
+                    double_curly_brackets=False,
+                    exclude_keys=[],
+                    compress=compress,
+                    snapshot_recorder=snapshot_recorder,
+                )
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
-                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_cloud_intent, snapshot_recorder=snapshot_recorder)
+                processed_prompt_for_cloud = pdd_preprocess(
+                    processed_prompt_for_cloud,
+                    recursive=False,
+                    double_curly_brackets=True,
+                    exclude_keys=[],
+                    compress=compress,
+                    _user_intent_paths=_cloud_intent,
+                    snapshot_recorder=snapshot_recorder,
+                )
                 snapshot_expanded_prompt = processed_prompt_for_cloud
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
 
@@ -3728,6 +3744,7 @@ def code_generator_main(
                         "strength": strength,
                         "temperature": temperature,
                         "verbose": verbose,
+                        "compress": compress,
                     }
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
@@ -3872,9 +3889,24 @@ def code_generator_main(
                 # against real intent (see #1354 codex pass-3).
                 from .preprocess import compute_user_intent_paths as _cuip
                 _local_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
-                local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[], snapshot_recorder=snapshot_recorder)
+                local_prompt = pdd_preprocess(
+                    prompt_content,
+                    recursive=True,
+                    double_curly_brackets=False,
+                    exclude_keys=[],
+                    compress=compress,
+                    snapshot_recorder=snapshot_recorder,
+                )
                 local_prompt = _expand_vars(local_prompt, env_vars)
-                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_local_intent, snapshot_recorder=snapshot_recorder)
+                local_prompt = pdd_preprocess(
+                    local_prompt,
+                    recursive=False,
+                    double_curly_brackets=True,
+                    exclude_keys=[],
+                    compress=compress,
+                    _user_intent_paths=_local_intent,
+                    snapshot_recorder=snapshot_recorder,
+                )
                 snapshot_expanded_prompt = local_prompt
                 if snapshot_recorder:
                     snapshot_recorder.record_grounding_unavailable("local_generation")
@@ -3893,6 +3925,7 @@ def code_generator_main(
                     verbose=verbose,
                     preprocess_prompt=False,
                     output_schema=output_schema,
+                    compress=compress,
                 )
                 was_incremental_operation = False
                 if verbose:
