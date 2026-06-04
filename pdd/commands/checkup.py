@@ -17,9 +17,16 @@ from .checkup_simplify import checkup_simplify
 from .checkup_snapshot import checkup_snapshot
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
-from .gate import gate_cmd
 from .drift import drift_cmd
+from .gate import gate_cmd
+from .checkup_prompt import checkup_prompt_cmd
 from .prompt import prompt_lint
+
+
+def _exit_if_subcommand_returned_code(result: object) -> None:
+    """Raise Click Exit only when a delegated subcommand returned a non-zero int."""
+    if isinstance(result, int) and result:
+        raise click.exceptions.Exit(result)
 
 
 @click.command(
@@ -347,37 +354,35 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     gate_allow: Tuple[str, ...],
 ) -> Optional[Tuple[str, float, str]]:
     """
-    Prompt source-set health, local checks, or agentic project health-check.
+    Run agentic health checkup from a GitHub issue, or local diagnostics.
 
     \b
-    Prompt source-set check:
-      pdd checkup prompt <prompt-file|prompt-dir|devunit> [OPTIONS]
-          Run a unified prompt-space health report (aggregates focused checks).
-
-    \b
-    Focused local checks:
-      pdd checkup lint <target> [OPTIONS]
-          Lint prompts and user stories for quality and ambiguity.
-      pdd checkup contract check <target> [OPTIONS]
-          Validate contract sections (<contract_rules>, <coverage>, waivers).
-          Alias: pdd checkup contracts check
-      pdd checkup coverage [OPTIONS] <target>
-          Build the rule-to-story/test coverage matrix.
-      pdd checkup gate [<target>] [OPTIONS]
-          Enforce waiver policy and evidence manifests.
-      pdd checkup snapshot <prompt-file> [OPTIONS]
-          Verify nondeterministic prompt context snapshot policy.
-      pdd checkup drift <devunit> [OPTIONS]
-          Check regeneration stability across repeated runs (uses LLM).
+    GitHub mode (default): TARGET is an issue URL.
+    PR mode: pass --pr <pr-url> to run the full checkup against an existing
+             PR. With no --issue the PR is reviewed on its own merits;
+             add --issue <issue-url> to also verify the PR resolves that
+             issue. Unless --no-fix is set, the fix/verify loop runs against
+             the PR worktree and any eligible generated fixes are committed
+             and pushed back to the PR head ref. Step 8 (create PR) is
+             skipped — no second PR is opened.
+    Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
+    architecture.json entries against module prompt <include> tags.
+    Simplify (Claude Code /simplify, requires --apply):
       pdd checkup simplify [PATH] [OPTIONS]
-          Claude Code /simplify candidate cleanup.
-
-    \b
-    Agentic issue / PR checkup:
-      pdd checkup <issue-url>
-          Run the full agentic health-check orchestrator from a GitHub issue.
-      pdd checkup --pr <pr-url> [--issue <issue-url>]
-          Run the full checkup against an existing pull request.
+    Prompt lint:
+      pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
+    Unified prompt-space health:
+      pdd checkup prompt TARGET [OPTIONS]  →  source-set report (Check → Explain → Apply; see --help).
+    Contract checks:
+      pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
+    Contract coverage:
+      pdd checkup coverage [OPTIONS] TARGET
+    Snapshot policy (nondeterministic prompt context):
+      pdd checkup snapshot PROMPT_FILE [OPTIONS]
+    Evidence and waiver gate:
+      pdd checkup gate [TARGET] [OPTIONS]  →  evidence manifests and waiver policy.
+    Regeneration drift:
+      pdd checkup drift <DEVUNIT> [OPTIONS]
     """
     ctx.ensure_object(dict)
 
@@ -385,12 +390,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "lint",
         "contract",
         "contracts",
-        "prompt",
         "coverage",
         "drift",
         "gate",
         "simplify",
         "snapshot",
+        "prompt",
     }:
         click.echo(ctx.command.get_help(ctx))
         return None
@@ -457,6 +462,30 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             ctx.exit()
         if exit_code:
             raise click.exceptions.Exit(exit_code)
+        return None
+
+    if target == "prompt":
+        prompt_args = list(ctx.args)
+        if strict:
+            prompt_args.insert(0, "--strict")
+        if not prompt_args or show_help:
+            click.echo(
+                checkup_prompt_cmd.get_help(
+                    click.Context(checkup_prompt_cmd, info_name="pdd checkup prompt")
+                )
+            )
+            return None
+        if show_help:
+            prompt_args.append("--help")
+        result = checkup_prompt_cmd.main(
+            args=prompt_args,
+            prog_name="pdd checkup prompt",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if show_help:
+            ctx.exit()
+        _exit_if_subcommand_returned_code(result)
         return None
 
     if target == "snapshot":
@@ -545,16 +574,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         )
         if exit_code:
             raise click.exceptions.Exit(exit_code)
-        return None
-
-    if target == "prompt":
-        click.echo(
-            "pdd checkup prompt is not yet implemented. "
-            "The unified prompt-space health report is tracked in issue #1379 "
-            "(epic #833). Use focused commands for CI and debugging: "
-            "lint, contract check, coverage, gate, snapshot, drift."
-        )
-        ctx.exit(0)
         return None
 
     if ctx.args:

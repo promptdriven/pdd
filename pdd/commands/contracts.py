@@ -7,9 +7,11 @@ from typing import Optional
 
 import click
 
+from ..checkup_advisory import advisory_for_review, final_exit_code, report_as_dict
 from ..contract_check import ContractResult, check_directory, check_prompt, check_stories
 from ..contract_ir import parse_prompt_contracts
 from ..waiver_policy import summarize_waivers
+from .checkup_review_options import review_option
 
 
 def _exit_code(results: list[ContractResult], *, strict: bool) -> int:
@@ -41,7 +43,11 @@ def contracts_cli() -> None:
     default=None,
     help="Scan a user-story directory for rule references.",
 )
+@review_option
+@click.pass_context
 def contracts_check(
+    ctx: click.Context,
+    review: str,
     target: str,
     as_json: bool,
     strict: bool,
@@ -65,12 +71,23 @@ def contracts_check(
         ir = parse_prompt_contracts(result.path)
         waiver_rows_by_path[str(result.path)] = summarize_waivers(ir.waivers, ir.known_rule_ids)
 
+    payload: list[dict[str, object]] = []
+    for result in results:
+        row = result.as_dict()
+        row["waivers"] = waiver_rows_by_path.get(str(result.path), [])
+        payload.append(row)
+    advisory = advisory_for_review(
+        review,
+        payload,
+        command="pdd checkup contract check",
+        ctx_obj=ctx.obj,
+    )
     if as_json:
-        payload: list[dict[str, object]] = []
-        for result in results:
-            row = result.as_dict()
-            row["waivers"] = waiver_rows_by_path.get(str(result.path), [])
-            payload.append(row)
+        if review == "explain":
+            payload = [
+                {**row, "advisory": report_as_dict(advisory)}
+                for row in payload
+            ]
         click.echo(json.dumps(payload, indent=2))
     else:
         for result in results:
@@ -91,4 +108,6 @@ def contracts_check(
             for issue in result.issues:
                 click.echo(f"  {issue.level.upper()} {issue.code}: {issue.message}")
 
-    raise click.exceptions.Exit(_exit_code(results, strict=strict))
+    raise click.exceptions.Exit(
+        final_exit_code(_exit_code(results, strict=strict), advisory)
+    )

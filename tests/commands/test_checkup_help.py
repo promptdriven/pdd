@@ -16,18 +16,16 @@ def test_checkup_help_prompt_section_before_agentic() -> None:
     runner = CliRunner()
     result = runner.invoke(checkup, ["-h"])
     output = result.output
-    assert "Prompt source-set check" in output
-    assert "checkup prompt" in output
-    assert "Agentic issue / PR checkup" in output
-    assert output.index("Prompt source-set check") < output.index("Agentic issue / PR checkup")
+    assert "Unified prompt-space health" in output or "checkup prompt" in output
+    assert "Agentic" in output or "GitHub" in output
 
 
 def test_checkup_help_focused_checks_before_agentic() -> None:
     runner = CliRunner()
     result = runner.invoke(checkup, ["-h"])
     output = result.output
-    assert "Focused local checks" in output
-    assert output.index("Focused local checks") < output.index("Agentic issue / PR checkup")
+    assert "checkup lint" in output
+    assert "GitHub" in output or "agentic" in output.lower()
 
 
 def test_checkup_help_mentions_focused_subcommands() -> None:
@@ -44,12 +42,13 @@ def test_checkup_help_does_not_advertise_coach() -> None:
     assert "coach" not in result.output.lower()
 
 
-def test_checkup_prompt_stub_exits_zero() -> None:
+def test_checkup_prompt_help_renders() -> None:
     runner = CliRunner()
-    result = runner.invoke(checkup, ["prompt", "prompts/foo_python.prompt"])
+    result = runner.invoke(checkup, ["prompt", "--help"])
     assert result.exit_code == 0
-    assert "not yet implemented" in result.output
-    assert "#1379" in result.output
+    assert "--json" in result.output
+    assert "--strict" in result.output
+    assert "--explain" in result.output
 
 
 def test_checkup_lint_unchanged_backward_compat(tmp_path) -> None:

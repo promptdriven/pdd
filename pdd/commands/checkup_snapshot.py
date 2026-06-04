@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from ..context_snapshot_policy import check_snapshot_policy
+from .checkup_review_options import reject_review_on_snapshot, review_option
 
 
 @click.command("snapshot")
@@ -20,8 +21,15 @@ from ..context_snapshot_policy import check_snapshot_policy
     help="Project root containing .pdd/evidence.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable results.")
-def checkup_snapshot(prompt_file: Path, project_root: Path, as_json: bool) -> None:
+@review_option
+def checkup_snapshot(
+    review: str,
+    prompt_file: Path,
+    project_root: Path,
+    as_json: bool,
+) -> None:
     """Fail when a prompt uses nondeterministic tags without a replayable snapshot."""
+    reject_review_on_snapshot(review)
 
     passed, message = check_snapshot_policy(prompt_file, project_root)
     payload = {

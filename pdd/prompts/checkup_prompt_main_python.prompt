@@ -1,0 +1,79 @@
+<pdd-reason>Orchestrates the three-stage unified prompt-space source-set health check (Check → Explain → Apply).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_checkup_prompt",
+        "signature": "(target: str, *, explain: bool, interactive: bool, apply: bool, quiet: bool, verbose: bool) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>checkup_prompt_explain_LLM.prompt</pdd-dependency>
+<pdd-dependency>checkup_prompt_apply_LLM.prompt</pdd-dependency>
+
+% Write `pdd/checkup_prompt_main.py`, the core orchestrator for `pdd checkup prompt`.
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Provide the three-stage orchestration for `pdd checkup prompt <target>` — the unified
+prompt-space source-set health check. Deterministic checks decide pass/fail. The LLM
+advisory is optional and non-fatal. The apply path requires explicit human approval and
+never writes files directly.
+
+% Authority model
+
+```
+Deterministic checks decide pass/fail.
+--explain is optional and non-fatal; cannot change exit code.
+--interactive --apply is the only write path; LLM never writes files directly.
+```
+
+% Requirements
+
+### Stage 1 — Deterministic report (always runs)
+1. Resolve `target` to a prompt file path. Accept a bare module name (e.g., `refund_payment`), a prompt filename (e.g., `refund_payment_python.prompt`), or a relative/absolute path. Raise `click.UsageError` with a clear message when the target cannot be resolved.
+2. Aggregate the following deterministic sub-engines in order (same engines as focused `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, `pdd checkup gate`, and `pdd checkup snapshot`):
+   - `scan_prompt` from `prompt_lint` (prompt/story lint findings)
+   - `check_prompt` from `contract_check` (contract-section lint; equivalent to `pdd checkup contract check`)
+   - `build_coverage` (rule-to-story/test coverage matrix)
+   - `run_gate_policy` (evidence-manifest and waiver-policy gate)
+   - `check_snapshot_policy` from `context_snapshot_policy` (replayable snapshot for nondeterministic tags)
+   - `parse_prompt_contracts` (contract-IR extraction: rules, vocabulary, coverage, waivers, capabilities)
+3. Produce a structured `PromptSourceSetReport` dataclass with: `prompt_path`, `project_root`, `findings` (list of `SourceSetFinding` with stable `finding_id`, `engine`, `level`, `message`, …), optional `lint`, `coverage`, `gate`, `contract_ir`, `contract_passed`, and `passed`/`error_count`/`warn_count` properties.
+4. Print a human-readable unified report: findings by engine, coverage gaps, gate status, and recommended next steps.
+5. Return `(pass, summary, cost, model)` where `pass` is `True` when all deterministic checks pass.
+
+### Stage 2 — LLM advisory (runs only when `explain=True`)
+6. Run a bounded, read-only LLM pass over the finding IDs from Stage 1 only.
+7. The advisory MUST NOT invent new hard failures. It MUST NOT change the boolean success value returned from Stage 1.
+8. Print advisory text keyed to each finding ID. Mark it clearly as advisory (e.g., prefix `[explain]`).
+9. Any LLM error in this stage is non-fatal: log a warning and continue to the return value from Stage 1.
+10. Cost and model from the advisory call are accumulated into the return tuple.
+
+### Stage 3 — Human-approved apply (runs only when `interactive=True` and `apply=True`)
+11. Present each suggested patch (to `.prompt` files and `user_stories/story__*.md` files ONLY) to the user interactively one at a time, showing a unified diff.
+12. For each patch, prompt the user: `Apply this patch? [y/N]`. Apply only on explicit `y`/`Y`.
+13. LLM MUST NOT write files directly. The orchestrator writes files only after human approval.
+14. After all approved patches are applied, re-run Stage 1 as a postflight check and report the updated outcome.
+15. MUST NOT write to `src/`, `pdd/`, or any generated-code path. Only `.prompt` files and `user_stories/story__*.md` are eligible write targets.
+
+### Non-goals
+16. MUST NOT create or invoke a `pdd checkup coach` subcommand.
+17. MUST NOT nest focused checkers as `pdd checkup prompt lint` / `pdd checkup prompt gate`.
+18. MUST NOT auto-apply patches without human approval.
+19. MUST NOT modify generated code files or policy-on-code paths.
+
+% Inputs / Outputs
+- Input: `target` (str), `explain` (bool), `interactive` (bool), `apply` (bool), `quiet` (bool), `verbose` (bool).
+- Output: `Tuple[bool, str, float, str]` — `(success, message, total_cost_usd, model_name)`.
+
+% Code output
+- Code: `pdd/checkup_prompt_main.py`

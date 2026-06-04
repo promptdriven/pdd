@@ -1,0 +1,21 @@
+% Read-only advisory for deterministic checkup command output.
+
+Command: {command}
+
+Deterministic results (do not invent new hard failures):
+<payload>
+{payload_json}
+</payload>
+
+Respond with JSON only:
+
+```json
+{
+  "status": "ok",
+  "findings": [
+    {"severity": "warn", "area": "contract_rules", "message": "...", "evidence": "..."}
+  ]
+}
+```
+
+Use status "warned" when findings is non-empty. Do not change pass/fail semantics.

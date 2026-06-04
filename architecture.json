@@ -8407,13 +8407,14 @@
     }
   },
   {
-    "reason": "Registers pdd checkup CLI: prompt source-set entry (prompt), focused local checks (lint, contract check, coverage, gate, snapshot, drift), and agentic project health-check / PR review from a GitHub issue.",
-    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
+    "reason": "Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.",
+    "description": "Defines the checkup Click command including lint dispatch, pdd checkup prompt <target> dispatch, validate-arch-includes, and agentic checkup integration.",
     "dependencies": [
       "agentic_checkup_python.prompt",
-      "commands/prompt_python.prompt",
+      "commands/checkup_prompt_python.prompt",
       "commands/contracts_python.prompt",
-      "commands/gate_python.prompt"
+      "commands/gate_python.prompt",
+      "commands/prompt_python.prompt"
     ],
     "priority": 236,
     "filename": "commands/checkup_python.prompt",
@@ -8428,7 +8429,11 @@
         "commands": [
           {
             "name": "checkup",
-            "description": "Prompt source-set health (prompt), focused local checks (lint, contract check, coverage, gate, snapshot, drift), and agentic project health-check / PR review from a GitHub issue"
+            "description": "Run agentic health checkup or local diagnostics including lint, coverage, gate, and prompt checks"
+          },
+          {
+            "name": "checkup prompt",
+            "description": "Run agentic health checkup, local diagnostics including lint, or unified prompt-space source-set health (checkup prompt)"
           }
         ]
       }
@@ -8480,12 +8485,10 @@
     }
   },
   {
-    "reason": "Exposes deterministic prompt and user-story ambiguity linting with an explicitly opted-in advisory LLM pass.",
+    "reason": "Shared Click implementation for pdd checkup lint (not a top-level pdd prompt command).",
     "description": "Defines the prompt_lint Click command invoked via pdd checkup lint dispatch. Supports deterministic scan, --stories, --json, --strict, and opt-in --llm advisory review. Read-only: never writes prompt or story files.",
     "dependencies": [
-      "prompt_lint_python.prompt",
-      "checkup_advisory_python.prompt",
-      "commands/checkup_review_options_python.prompt"
+      "prompt_lint_python.prompt"
     ],
     "priority": 238,
     "filename": "commands/prompt_python.prompt",
@@ -8501,7 +8504,7 @@
         "functions": [
           {
             "name": "prompt_lint",
-            "description": "Lint prompts and user stories; exposed as pdd checkup lint with --review off|explain advisory pass"
+            "description": "Lint prompts and user stories; exposed as pdd checkup lint"
           }
         ]
       }
@@ -9605,12 +9608,10 @@
     }
   },
   {
-    "reason": "Defines the pdd contracts check CLI group for deterministic contract checks with an optional advisory LLM pass.",
+    "reason": "Exposes deterministic contract checks via Click CLI.",
     "description": "Implements `pdd contracts check` for running contract_check over files/directories with optional JSON output.",
     "dependencies": [
-      "contract_check_python.prompt",
-      "checkup_advisory_python.prompt",
-      "commands/checkup_review_options_python.prompt"
+      "contract_check_python.prompt"
     ],
     "priority": 241,
     "filename": "commands/contracts_python.prompt",
@@ -9624,12 +9625,7 @@
     "interface": {
       "type": "module",
       "module": {
-        "functions": [
-          {
-            "name": "contracts",
-            "description": "Click group exposing pdd contracts check with --review off|explain advisory pass"
-          }
-        ]
+        "functions": []
       }
     },
     "position": {
@@ -9837,12 +9833,10 @@
     }
   },
   {
-    "reason": "Exposes evidence policy enforcement under the checkup command group with an optional advisory LLM pass.",
+    "reason": "Checkup-scoped CLI for evidence policy gate (no top-level pdd gate).",
     "description": "Dispatches `pdd checkup gate` to `run_gate_policy` with JSON and YAML policy options.",
     "dependencies": [
-      "gate_python.prompt",
-      "checkup_advisory_python.prompt",
-      "commands/checkup_review_options_python.prompt"
+      "gate_python.prompt"
     ],
     "priority": 242,
     "filename": "commands/gate_python.prompt",
@@ -9856,12 +9850,7 @@
     "interface": {
       "type": "module",
       "module": {
-        "functions": [
-          {
-            "name": "gate_cmd",
-            "description": "Evaluate evidence policy gate via pdd checkup gate with optional advisory LLM pass"
-          }
-        ]
+        "functions": []
       }
     }
   },
@@ -10190,161 +10179,8 @@
     }
   },
   {
-    "reason": "Lightweight read-only advisory dataclasses and exit-code invariant for checkup subcommands.",
-    "description": "Provides CheckupFinding, CheckupReport, SKIPPED_REPORT, failed_report(), final_exit_code(), and report_as_dict(). Enforces deterministic-first exit code invariant: LLM advisory results never alter exit codes.",
-    "dependencies": [],
-    "priority": 237,
-    "filename": "checkup_advisory_python.prompt",
-    "filepath": "pdd/checkup_advisory.py",
-    "tags": [
-      "checkup",
-      "advisory",
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "final_exit_code",
-            "signature": "(deterministic: int, report: CheckupReport) -> int",
-            "returns": "int"
-          },
-          {
-            "name": "failed_report",
-            "signature": "(message: str) -> CheckupReport",
-            "returns": "CheckupReport"
-          },
-          {
-            "name": "report_as_dict",
-            "signature": "(report: CheckupReport) -> dict",
-            "returns": "dict"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Shared Click decorator and snapshot-rejection helper for the --review off|explain advisory layer.",
-    "description": "Exports review_option() Click decorator and reject_review_on_snapshot() for all checkup subcommands. Stubs reserved write-layer options (--interactive, --apply, --dry-run) as hidden/not-yet-implemented.",
-    "dependencies": [
-      "checkup_advisory_python.prompt"
-    ],
-    "priority": 237.5,
-    "filename": "commands/checkup_review_options_python.prompt",
-    "filepath": "pdd/commands/checkup_review_options.py",
-    "tags": [
-      "checkup",
-      "advisory",
-      "commands",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "review_option",
-            "signature": "(func)",
-            "returns": "Callable"
-          },
-          {
-            "name": "reject_review_on_snapshot",
-            "signature": "(review: str) -> None",
-            "returns": "None"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Exposes deterministic contract coverage matrix with an optional advisory LLM pass.",
-    "description": "Implements pdd checkup coverage Click command. Builds deterministic coverage matrix from prompt files and user stories; optionally appends read-only advisory LLM pass when --review explain is set.",
-    "dependencies": [
-      "coverage_contracts_python.prompt",
-      "checkup_advisory_python.prompt",
-      "commands/checkup_review_options_python.prompt"
-    ],
-    "priority": 239,
-    "filename": "commands/coverage_python.prompt",
-    "filepath": "pdd/commands/coverage.py",
-    "tags": [
-      "checkup",
-      "coverage",
-      "commands",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "coverage_cmd",
-            "description": "Check contract coverage via pdd checkup coverage with optional advisory LLM pass"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Exposes regeneration stability checks with an optional advisory LLM pass.",
-    "description": "Implements pdd checkup drift Click command. Checks regeneration stability for a PDD dev unit; optionally appends read-only advisory LLM pass when --review explain is set.",
-    "dependencies": [
-      "checkup_advisory_python.prompt",
-      "commands/checkup_review_options_python.prompt"
-    ],
-    "priority": 239.5,
-    "filename": "commands/drift_python.prompt",
-    "filepath": "pdd/commands/drift.py",
-    "tags": [
-      "checkup",
-      "drift",
-      "commands",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "drift",
-            "description": "Check regeneration stability via pdd checkup drift with optional advisory LLM pass"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "Enforces snapshot policy for nondeterministic prompts and explicitly rejects --review.",
-    "description": "Implements pdd checkup snapshot Click command. Enforces snapshot policy for nondeterministic prompts; raises UsageError when --review is passed (advisory passes not supported for snapshot).",
-    "dependencies": [
-      "commands/checkup_review_options_python.prompt"
-    ],
-    "priority": 240,
-    "filename": "commands/checkup_snapshot_python.prompt",
-    "filepath": "pdd/commands/checkup_snapshot.py",
-    "tags": [
-      "checkup",
-      "snapshot",
-      "commands",
-      "python"
-    ],
-    "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {
-            "name": "snapshot",
-            "description": "Enforce snapshot policy via pdd checkup snapshot; rejects --review flag"
-          }
-        ]
-      }
-    }
-  },
-  {
     "reason": "Single blocking pre-checkup gate that drift-syncs and build/smoke-verifies a PR before handing off to checkup --pr.",
-    "description": "A blocking pre-checkup quality gate invoked by both the change/feature and fix/bug e2e orchestrators immediately before `pdd checkup --pr`. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block the handoff. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "description": "A blocking pre-checkup quality gate invoked by both the change/feature and fix/bug e2e orchestrators immediately before `pdd checkup --pr`. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block the handoff. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it \u2014 the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate \u2014 so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
     "dependencies": [
       "checkup_gates_python.prompt",
       "ci_drift_heal_python.prompt",
@@ -10372,6 +10208,105 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Thin CLI wrapper for unified prompt-space source-set health.",
+    "description": "Defines checkup_prompt_cmd for pdd checkup prompt TARGET with --explain, --interactive, and --apply.",
+    "dependencies": [
+      "checkup_prompt_main_python.prompt"
+    ],
+    "priority": 236.1,
+    "filename": "commands/checkup_prompt_python.prompt",
+    "filepath": "pdd/commands/checkup_prompt.py",
+    "tags": [
+      "command",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "checkup_prompt_cmd",
+            "description": "Unified prompt-space source-set health: Check \u2192 Explain \u2192 Apply"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13700,
+      "y": 2400
+    }
+  },
+  {
+    "reason": "Orchestrates Check \u2192 Explain \u2192 Apply for prompt source sets.",
+    "description": "Aggregates lint, contract, coverage, gate, snapshot policy, and contract IR; optional explain and human-approved apply.",
+    "dependencies": [],
+    "priority": 236.05,
+    "filename": "checkup_prompt_main_python.prompt",
+    "filepath": "pdd/checkup_prompt_main.py",
+    "tags": [
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_checkup_prompt",
+            "signature": "(target: str, *, explain: bool, interactive: bool, apply: bool, quiet: bool, verbose: bool) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13700,
+      "y": 2800
+    }
+  },
+  {
+    "reason": "Shared read-only advisory dataclasses and exit-code invariant for pdd checkup --review explain.",
+    "description": "Provides CheckupReport, final_exit_code, and advisory_for_review without altering deterministic exits.",
+    "dependencies": [],
+    "priority": 236.06,
+    "filename": "checkup_advisory_python.prompt",
+    "filepath": "pdd/checkup_advisory.py",
+    "tags": [
+      "checkup",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "final_exit_code",
+            "signature": "(deterministic: int, report: CheckupReport) -> int",
+            "returns": "int"
+          },
+          {
+            "name": "failed_report",
+            "signature": "(message: str) -> CheckupReport",
+            "returns": "CheckupReport"
+          },
+          {
+            "name": "report_as_dict",
+            "signature": "(report: CheckupReport) -> dict",
+            "returns": "dict"
+          },
+          {
+            "name": "advisory_for_review",
+            "signature": "(review: str, payload: Any, *, command: str, ctx_obj: Optional[dict]) -> CheckupReport",
+            "returns": "CheckupReport"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13700,
+      "y": 3200
     }
   }
 ]
