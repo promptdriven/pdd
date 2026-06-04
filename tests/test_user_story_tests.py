@@ -825,16 +825,16 @@ def test_generate_user_story_context_audit_story_protects_per_source_attribution
     assert "\"type\": \"cli\"" not in story_text
 
 
-def test_run_user_story_tests_fails_for_harmful_context_audit_prompt_change(tmp_path):
-    """A generated story must fail validation when the prompt drifts from
-    per-source attribution to aggregate-only totals."""
+def test_run_user_story_tests_passes_then_fails_for_harmful_context_audit_prompt_change(tmp_path):
+    """Show the same story passing the original prompt and failing after a
+    harmful aggregate-only prompt mutation."""
     prompts_dir = tmp_path / "prompts"
     stories_dir = tmp_path / "user_stories"
     prompts_dir.mkdir()
     stories_dir.mkdir()
 
     prompt_one = prompts_dir / "context_audit_python.prompt"
-    prompt_one.write_text(_CONTEXT_AUDIT_PROMPT_AGGREGATE_ONLY, encoding="utf-8")
+    prompt_one.write_text(_CONTEXT_AUDIT_PROMPT_BASE, encoding="utf-8")
     story = stories_dir / "story__context_audit.md"
     story.write_text(
         "<!-- pdd-story-prompts: context_audit_python.prompt -->\n\n"
@@ -852,34 +852,62 @@ def test_run_user_story_tests_fails_for_harmful_context_audit_prompt_change(tmp_
         }
     ]
     captured_prompt_inputs = []
+    detect_trace = []
 
     def fake_detect(prompt_paths, story_content, *_args, **_kwargs):
         captured_prompt_inputs.append(prompt_paths)
         prompt_text = Path(prompt_paths[0]).read_text(encoding="utf-8")
-        assert "Report only aggregate token totals" in prompt_text
         assert "per-source token attribution" in story_content
         assert "Aggregate-only token totals are not sufficient" in story_content
-        return harmful_changes, 0.2, "gpt-test"
+        if "Attribute tokens per source segment" in prompt_text:
+            detect_trace.append("PASS: original prompt still requires per-source attribution")
+            return [], 0.1, "gpt-test"
+        if "Report only aggregate token totals" in prompt_text:
+            detect_trace.append("FAIL: mutated prompt reports aggregate-only totals")
+            return harmful_changes, 0.2, "gpt-test"
+        raise AssertionError("test fixture prompt must be original or aggregate-only mutation")
 
     with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
-        passed, results, cost, model = run_user_story_tests(
+        baseline_passed, baseline_results, baseline_cost, baseline_model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+            quiet=True,
+            fail_fast=True,
+        )
+        prompt_one.write_text(_CONTEXT_AUDIT_PROMPT_AGGREGATE_ONLY, encoding="utf-8")
+        mutated_passed, mutated_results, mutated_cost, mutated_model = run_user_story_tests(
             prompts_dir=str(prompts_dir),
             stories_dir=str(stories_dir),
             quiet=True,
             fail_fast=True,
         )
 
-    assert passed is False
-    assert results == [
+    assert baseline_passed is True
+    assert baseline_results == [
+        {
+            "story": str(story),
+            "passed": True,
+            "changes": [],
+        }
+    ]
+    assert baseline_cost == pytest.approx(0.1)
+    assert baseline_model == "gpt-test"
+
+    assert mutated_passed is False
+    assert mutated_results == [
         {
             "story": str(story),
             "passed": False,
             "changes": harmful_changes,
         }
     ]
-    assert captured_prompt_inputs == [[str(prompt_one)]]
-    assert cost == pytest.approx(0.2)
-    assert model == "gpt-test"
+    assert captured_prompt_inputs == [[str(prompt_one)], [str(prompt_one)]]
+    assert detect_trace == [
+        "PASS: original prompt still requires per-source attribution",
+        "FAIL: mutated prompt reports aggregate-only totals",
+    ]
+    assert mutated_cost == pytest.approx(0.2)
+    assert mutated_model == "gpt-test"
 
 
 def test_generate_user_story_fails_when_llm_errors(tmp_path):
