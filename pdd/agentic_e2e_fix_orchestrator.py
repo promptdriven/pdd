@@ -1800,10 +1800,15 @@ def _run_final_checkup_on_pr(
         )
 
     if not quiet:
+        verified_by = (
+            "Layer-1 checkup worktree"
+            if post_checkup_head_sha == checkup_worktree_head_sha
+            else "Layer-2 review-loop"
+        )
         console.print(
-            f"[yellow]Final checkup pushed to PR head "
+            f"[yellow]Final gate pushed to PR head "
             f"({pre_checkup_head_sha[:8]}->{post_checkup_head_sha[:8]}, "
-            f"verified by checkup worktree); re-validating CI on new "
+            f"verified by {verified_by}); re-validating CI on new "
             f"head...[/yellow]"
         )
 
