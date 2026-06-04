@@ -2092,6 +2092,96 @@ def test_step9_worktree_fallback_filters_prompt_files(tmp_path):
     assert "notes.txt" not in files
 
 
+def test_resume_to_step9_rehydrates_direct_edit_candidates_for_fallback(
+    mock_dependencies, temp_cwd
+):
+    """
+    On resume after cached Step 6/8, Step 9 may omit DIRECT_EDITS/FILES_*
+    markers and rely on worktree fallback. The fallback must still receive
+    direct-edit candidates parsed from cached Step 6 output.
+    """
+    mocks = mock_dependencies
+
+    step6_output = """
+## Step 6: Dev Units Identified
+
+**Status:** No Dev Units Found
+
+### Direct Edit Candidates (No Prompt)
+| File | Edit Type | Description |
+|------|-----------|-------------|
+| `lib/agent-api/auth.ts` | logic fix | Remove allowlist gate |
+"""
+    existing_state = {
+        "last_completed_step": 8,
+        "step_outputs": {
+            **{str(i): f"out{i}" for i in range(1, 9)},
+            "6": step6_output,
+            "8": "**Status:** No Changes Required",
+        },
+        "worktree_path": str(temp_cwd),
+        "total_cost": 0.5,
+        "model_used": "gpt-4",
+    }
+    mocks["load_state"].return_value = (existing_state, None)
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "Applied the scoped authentication change.",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step10":
+            return (True, "Architecture updated.", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (
+                True,
+                "PR Created: https://github.com/owner/repo/pull/607",
+                0.1,
+                "gpt-4",
+            )
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    observed_candidates = []
+
+    def fake_detect(worktree_path, direct_edit_candidates=None):
+        observed_candidates.extend(direct_edit_candidates or [])
+        return ["lib/agent-api/auth.ts"]
+
+    mocks["run"].side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator._preflight_drift_heal",
+        return_value=([], [], []),
+    ), patch(
+        "pdd.agentic_change_orchestrator._detect_worktree_changes",
+        side_effect=fake_detect,
+    ):
+        success, msg, _, _, files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=607,
+            issue_author="me",
+            issue_title="Direct edit resume",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True
+    assert "lib/agent-api/auth.ts" in files
+    assert observed_candidates == ["lib/agent-api/auth.ts"], (
+        "Step 9 fallback must receive direct-edit candidates rehydrated from "
+        f"cached Step 6 output; got {observed_candidates!r}. msg={msg!r}"
+    )
+
+
 def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
     """
     When step 9 fails (no files from either regex or worktree fallback),
