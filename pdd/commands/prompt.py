@@ -9,7 +9,7 @@ from typing import Optional
 import click
 
 from ..checkup_advisory import advisory_for_review, final_exit_code, report_as_dict
-from ..prompt_lint import LintResult, run_llm_ambiguity_pass, scan_prompt, scan_stories
+from ..prompt_lint import LintResult, scan_prompt, scan_stories
 from .checkup_review_options import review_option
 
 

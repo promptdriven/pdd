@@ -17,6 +17,7 @@ from pdd.checkup_prompt_main import (
     _is_eligible_write_path,
     _run_explain_advisory,
 )
+from pdd.context_snapshot_policy import check_snapshot_policy
 from pdd.commands.checkup import checkup
 from pdd.commands.checkup_prompt import checkup_prompt_cmd
 
@@ -56,6 +57,29 @@ class TestDeterministicReport:
             f for f in report.findings if f.engine == "lint" and f.level == "error"
         ]
         assert not lint_errors
+
+    def test_build_report_includes_snapshot_engine(self, tmp_path: Path) -> None:
+        prompt = tmp_path / "prompts" / "risky.prompt"
+        prompt.parent.mkdir(parents=True)
+        prompt.write_text("<shell>date</shell>\n", encoding="utf-8")
+        standalone_passed, _ = check_snapshot_policy(prompt, tmp_path)
+        assert standalone_passed is False
+
+        report = build_prompt_source_set_report(prompt, project_root=tmp_path)
+        snapshot_findings = [f for f in report.findings if f.engine == "snapshot"]
+        assert len(snapshot_findings) == 1
+        assert snapshot_findings[0].level == "error"
+        assert snapshot_findings[0].code == "snapshot_policy"
+        assert not report.passed
+
+    def test_static_prompt_has_no_snapshot_findings(self, tmp_path: Path) -> None:
+        prompt = tmp_path / "static.prompt"
+        prompt.write_text("<pdd-reason>ok</pdd-reason>\n", encoding="utf-8")
+        standalone_passed, _ = check_snapshot_policy(prompt, tmp_path)
+        assert standalone_passed is True
+
+        report = build_prompt_source_set_report(prompt, project_root=tmp_path)
+        assert not [f for f in report.findings if f.engine == "snapshot"]
 
 
 class TestRunCheckupPrompt:

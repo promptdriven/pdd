@@ -10241,7 +10241,7 @@
   },
   {
     "reason": "Orchestrates Check \u2192 Explain \u2192 Apply for prompt source sets.",
-    "description": "Aggregates lint, contract, coverage, gate, and contract IR; optional explain and human-approved apply.",
+    "description": "Aggregates lint, contract, coverage, gate, snapshot policy, and contract IR; optional explain and human-approved apply.",
     "dependencies": [],
     "priority": 236.05,
     "filename": "checkup_prompt_main_python.prompt",
@@ -10264,6 +10264,49 @@
     "position": {
       "x": 13700,
       "y": 2800
+    }
+  },
+  {
+    "reason": "Shared read-only advisory dataclasses and exit-code invariant for pdd checkup --review explain.",
+    "description": "Provides CheckupReport, final_exit_code, and advisory_for_review without altering deterministic exits.",
+    "dependencies": [],
+    "priority": 236.06,
+    "filename": "checkup_advisory_python.prompt",
+    "filepath": "pdd/checkup_advisory.py",
+    "tags": [
+      "checkup",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "final_exit_code",
+            "signature": "(deterministic: int, report: CheckupReport) -> int",
+            "returns": "int"
+          },
+          {
+            "name": "failed_report",
+            "signature": "(message: str) -> CheckupReport",
+            "returns": "CheckupReport"
+          },
+          {
+            "name": "report_as_dict",
+            "signature": "(report: CheckupReport) -> dict",
+            "returns": "dict"
+          },
+          {
+            "name": "advisory_for_review",
+            "signature": "(review: str, payload: Any, *, command: str, ctx_obj: Optional[dict]) -> CheckupReport",
+            "returns": "CheckupReport"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13700,
+      "y": 3200
     }
   }
 ]

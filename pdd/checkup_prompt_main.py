@@ -1,7 +1,7 @@
 """
 Unified prompt-space source-set health orchestrator for ``pdd checkup prompt``.
 
-Stage 1 aggregates deterministic engines (lint, contract, coverage, gate, IR).
+Stage 1 aggregates deterministic engines (lint, contract, coverage, gate, snapshot, IR).
 Stage 2 optional read-only LLM advisory (--explain). Stage 3 human-approved apply.
 """
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import Any, Optional
 
 import click
 
+from .context_snapshot_policy import check_snapshot_policy
 from .contract_check import check_prompt
 from .contract_ir import PromptContractIR, parse_prompt_contracts
 from .coverage_contracts import (
@@ -94,6 +95,11 @@ class PromptSourceSetReport:
                 steps.append("Run `pdd checkup coverage` and add stories/tests or waivers.")
         if self.gate and not self.gate.passed:
             steps.append("Run `pdd checkup gate` and address evidence/waiver policy failures.")
+        if any(finding.engine == "snapshot" for finding in self.findings):
+            steps.append(
+                "Run `pdd checkup snapshot` and capture replayable evidence "
+                "(e.g. re-run with --snapshot or --snapshot-context)."
+            )
         if not steps:
             steps.append("Source set looks healthy; generate or sync when ready.")
         return steps
@@ -267,6 +273,19 @@ def build_prompt_source_set_report(
             )
         )
 
+    snapshot_passed, snapshot_message = check_snapshot_policy(prompt_path, root)
+    if not snapshot_passed:
+        report.findings.append(
+            SourceSetFinding(
+                finding_id=_finding_id("snapshot", prompt_path, 0, "snapshot_policy"),
+                engine="snapshot",
+                level="error",
+                message=snapshot_message,
+                path=prompt_path,
+                code="snapshot_policy",
+            )
+        )
+
     try:
         report.contract_ir = parse_prompt_contracts(prompt_path)
     except OSError as exc:
@@ -295,7 +314,7 @@ def render_prompt_source_set_report(
     for finding in report.findings:
         by_engine.setdefault(finding.engine, []).append(finding)
 
-    for engine in ("lint", "contract", "coverage", "gate"):
+    for engine in ("lint", "contract", "coverage", "gate", "snapshot"):
         items = by_engine.get(engine, [])
         if not items and engine == "coverage" and report.coverage:
             if not report.coverage.has_contract_rules:

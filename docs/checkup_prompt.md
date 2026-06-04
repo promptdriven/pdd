@@ -49,6 +49,7 @@ Deterministic checks decide pass/fail.
 | `pdd checkup contract check` | Contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`) |
 | `pdd checkup coverage` | Rule-to-story/test coverage matrix |
 | `pdd checkup gate` | Evidence-manifest and waiver-policy enforcement |
+| `pdd checkup snapshot` | Nondeterministic tags (`<shell>`, etc.) require replayable `.pdd/evidence` snapshots |
 | Contract IR | Structured extraction of `contract_rules`, `vocabulary`, `coverage`, `waivers`, `capabilities` |
 
 Focused checkers remain available top-level for CI and deep debugging:
