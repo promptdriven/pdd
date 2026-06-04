@@ -8,14 +8,14 @@ from rich.panel import Panel
 
 console = Console()
 
-def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: List[str] = None) -> str:
+def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool = True, exclude: List[str] = None) -> str:
     """
     Preprocess the given prompt by handling includes, specific tags, and doubling curly brackets.
 
     :param prompt: The input text to preprocess.
     :param recursive: Whether to recursively preprocess included content.
     :param double_curly_brackets: Whether to double curly brackets in the text.
-    :param exclude_keys: List of keys to exclude from curly bracket doubling.
+    :param exclude: List of keys to exclude from curly bracket doubling.
     :return: The preprocessed text.
     """
     console.print(Panel("Starting preprocessing", style="bold green"))
@@ -28,7 +28,7 @@ def preprocess(prompt: str, recursive: bool = False, double_curly_brackets: bool
 
     # Double curly brackets if needed
     if double_curly_brackets:
-        prompt = double_curly(prompt, exclude_keys)
+        prompt = double_curly(prompt, exclude)
 
     console.print(Panel("Preprocessing complete", style="bold green"))
     return prompt
@@ -116,18 +116,18 @@ def get_file_path(file_name: str) -> str:
     return os.path.join(pdd_path, file_name)
 
 
-def double_curly(text: str, exclude_keys: List[str] = None) -> str:
+def double_curly(text: str, exclude: List[str] = None) -> str:
     """
     Double the curly brackets in the text, excluding specified keys.
     Supports nested curly brackets and handles all code blocks uniformly.
 
     :param text: The input text with single curly brackets.
-    :param exclude_keys: List of keys to exclude from doubling.
+    :param exclude: List of keys to exclude from doubling.
     :return: The text with doubled curly brackets.
     """
     console.print("Doubling curly brackets")
-    if exclude_keys is None:
-        exclude_keys = []
+    if exclude is None:
+        exclude = []
 
     # console.print(f"Before doubling:\n{text}")
 
@@ -162,7 +162,7 @@ def double_curly(text: str, exclude_keys: List[str] = None) -> str:
             temp_part = part
 
             # Step 1: Protect excluded keys by replacing {exclude_key} with placeholders
-            for key in exclude_keys:
+            for key in exclude:
                 pattern_excl = r'\{' + re.escape(key) + r'\}'
                 placeholder_excl = f"{placeholder_prefix_excl}{placeholder_counter}{placeholder_suffix}"
                 temp_part = re.sub(pattern_excl, placeholder_excl, temp_part)

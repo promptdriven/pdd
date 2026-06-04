@@ -40,6 +40,16 @@ from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _pa
 # Fixtures
 # -----------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def mock_pre_checkup_gate_default():
+    """Keep existing change-orchestrator tests focused unless they override the gate."""
+    with patch(
+        "pdd.agentic_change_orchestrator.run_pre_checkup_gate",
+        return_value=(True, "pre_checkup_gate passed", 0.0),
+    ):
+        yield
+
+
 @pytest.fixture
 def temp_cwd(tmp_path):
     """Returns a temporary directory path to use as cwd."""
@@ -206,6 +216,60 @@ def test_step13_prompt_includes_manual_review_lines(mock_dependencies, temp_cwd)
     s13_prompt = step13_calls[0].kwargs["instruction"]
     assert "MANUAL_REVIEW: docs/api.md" in s13_prompt
     assert "schema diverged" in s13_prompt
+
+
+def test_step12_5_gate_failure_blocks_pr_creation(mock_dependencies, temp_cwd, monkeypatch):
+    """Issue #1293: a failed pre-checkup gate hard-blocks before Step 13 in
+    default (non-strict) mode — the change/feature PR must NOT be created with
+    mechanical breakage ("block: don't hand off to checkup until green").
+    Earlier behavior flag-and-continued in default mode; that is removed, so
+    Step 13 (PR creation) must never run when the gate fails."""
+    # Prove the block is unconditional: explicitly NOT in strict mode.
+    monkeypatch.delenv("PDD_STRICT_DOC_SYNC", raising=False)
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_template_loader = mocks["template_loader"]
+
+    def template_side_effect(name):
+        if name == "agentic_change_step13_create_pr_LLM":
+            return "PR template manual review: {manual_review_lines}"
+        return "Mocked Prompt Template"
+
+    mock_template_loader.side_effect = template_side_effect
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (True, "FILES_MODIFIED: pdd/foo.py", 0.5, "gpt-4")
+        if label == "step10":
+            return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (True, "PR Created: https://github.com/owner/repo/pull/9", 0.2, "gpt-4")
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    mock_run.side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator.run_pre_checkup_gate",
+        return_value=(False, "phase=build-smoke failures: py-compile failed", 0.0),
+    ):
+        success, message, _, _, _ = run_agentic_change_orchestrator(
+            issue_url="http://url", issue_content="Fix bug", repo_owner="owner",
+            repo_name="repo", issue_number=4242, issue_author="me",
+            issue_title="Gate blocking", cwd=temp_cwd, verbose=False,
+        )
+
+    assert success is False
+    assert "Stopped at step 12.5" in message
+    assert "py-compile failed" in message
+    # Step 13 (PR creation) must never run when the gate blocks.
+    step13_calls = [
+        c for c in mock_run.call_args_list
+        if c.kwargs.get("label") == "step13"
+    ]
+    assert step13_calls == []
 
 
 def test_step13_surfaces_step10_associated_docs_conflicts(mock_dependencies, temp_cwd):
@@ -2026,6 +2090,96 @@ def test_step9_worktree_fallback_filters_prompt_files(tmp_path):
     assert "random.py" not in files
     assert ".agentic_prompt_abc12345.txt" not in files
     assert "notes.txt" not in files
+
+
+def test_resume_to_step9_rehydrates_direct_edit_candidates_for_fallback(
+    mock_dependencies, temp_cwd
+):
+    """
+    On resume after cached Step 6/8, Step 9 may omit DIRECT_EDITS/FILES_*
+    markers and rely on worktree fallback. The fallback must still receive
+    direct-edit candidates parsed from cached Step 6 output.
+    """
+    mocks = mock_dependencies
+
+    step6_output = """
+## Step 6: Dev Units Identified
+
+**Status:** No Dev Units Found
+
+### Direct Edit Candidates (No Prompt)
+| File | Edit Type | Description |
+|------|-----------|-------------|
+| `lib/agent-api/auth.ts` | logic fix | Remove allowlist gate |
+"""
+    existing_state = {
+        "last_completed_step": 8,
+        "step_outputs": {
+            **{str(i): f"out{i}" for i in range(1, 9)},
+            "6": step6_output,
+            "8": "**Status:** No Changes Required",
+        },
+        "worktree_path": str(temp_cwd),
+        "total_cost": 0.5,
+        "model_used": "gpt-4",
+    }
+    mocks["load_state"].return_value = (existing_state, None)
+
+    def side_effect_run(**kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "Applied the scoped authentication change.",
+                0.1,
+                "gpt-4",
+            )
+        if label == "step10":
+            return (True, "Architecture updated.", 0.1, "gpt-4")
+        if label.startswith("step11"):
+            return (True, "No Issues Found", 0.1, "gpt-4")
+        if label == "step13":
+            return (
+                True,
+                "PR Created: https://github.com/owner/repo/pull/607",
+                0.1,
+                "gpt-4",
+            )
+        return (True, f"Output for {label}", 0.1, "gpt-4")
+
+    observed_candidates = []
+
+    def fake_detect(worktree_path, direct_edit_candidates=None):
+        observed_candidates.extend(direct_edit_candidates or [])
+        return ["lib/agent-api/auth.ts"]
+
+    mocks["run"].side_effect = side_effect_run
+
+    with patch(
+        "pdd.agentic_change_orchestrator._preflight_drift_heal",
+        return_value=([], [], []),
+    ), patch(
+        "pdd.agentic_change_orchestrator._detect_worktree_changes",
+        side_effect=fake_detect,
+    ):
+        success, msg, _, _, files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=607,
+            issue_author="me",
+            issue_title="Direct edit resume",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is True
+    assert "lib/agent-api/auth.ts" in files
+    assert observed_candidates == ["lib/agent-api/auth.ts"], (
+        "Step 9 fallback must receive direct-edit candidates rehydrated from "
+        f"cached Step 6 output; got {observed_candidates!r}. msg={msg!r}"
+    )
 
 
 def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):

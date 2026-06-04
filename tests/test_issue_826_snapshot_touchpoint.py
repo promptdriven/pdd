@@ -232,6 +232,8 @@ def test_test_plan_generate_snapshot_context_evidence_and_replay_cli(
         unit_test_file=None,
         exclude_tests=False,
         snapshot_context=False,
+        compress=False,
+        **kwargs,
     ):
         prompt_path = Path(prompt_file)
         if not prompt_path.is_absolute():

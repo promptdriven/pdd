@@ -84,7 +84,9 @@ class ModelInfo(BaseModel):
     provider: str = Field(..., description="Model provider (e.g., OpenAI, Anthropic)")
     input_cost: float = Field(..., description="Input cost per million tokens (USD)")
     output_cost: float = Field(..., description="Output cost per million tokens (USD)")
-    elo: int = Field(..., description="Coding arena ELO rating")
+    elo: int = Field(..., description="Raw coding arena/static ELO rating")
+    model_rank_score: int = Field(..., description="DeepSWE-first model ranking score")
+    model_rank_source: str = Field("legacy-coding-arena-elo", description="Source of model_rank_score")
     context_limit: Optional[int] = Field(None, description="Maximum context window size in tokens (None if unknown)")
     max_thinking_tokens: int = Field(0, description="Maximum thinking/reasoning tokens (0 if not supported)")
     reasoning_type: str = Field("none", description="Reasoning type: none, effort, budget, or adaptive")
@@ -468,7 +470,7 @@ async def get_available_models():
     - Context limits
     - Thinking/reasoning token capacity
     - Pricing (input/output cost per million tokens)
-    - ELO ratings
+    - Raw ELO ratings and DeepSWE-first rank scores
     """
     try:
         # Import here to avoid circular imports
@@ -490,14 +492,17 @@ async def get_available_models():
                 input_cost=float(row.get('input', 0)),
                 output_cost=float(row.get('output', 0)),
                 elo=int(row.get('coding_arena_elo', 0)),
+                model_rank_score=int(row.get('model_rank_score', row.get('coding_arena_elo', 0))),
+                model_rank_source=str(row.get('model_rank_source', 'legacy-coding-arena-elo')),
                 context_limit=get_context_limit(model_name),
                 max_thinking_tokens=int(row.get('max_reasoning_tokens', 0)),
                 reasoning_type=str(row.get('reasoning_type', 'none')),
                 structured_output=bool(row.get('structured_output', True)),
             ))
 
-        # Sort by ELO descending (best models first)
-        models.sort(key=lambda m: m.elo, reverse=True)
+        # Sort by DeepSWE-first rank score descending (best models first).
+        # ``elo`` remains raw Arena/static metadata for compatibility.
+        models.sort(key=lambda m: m.model_rank_score, reverse=True)
 
         return ModelsResponse(
             models=models,

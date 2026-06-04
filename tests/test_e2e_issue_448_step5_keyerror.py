@@ -10,7 +10,7 @@ When a template includes docs/prompting_guide.md (which contains JSON like {"url
 and includes ARE expanded, the JSON curly braces cause KeyError during format().
 
 The architecture orchestrator correctly handles this by calling:
-    preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=...)
+    preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=...)
 
 The change orchestrator is missing this preprocessing step.
 
@@ -84,7 +84,7 @@ class TestIssue448Step5KeyErrorE2E:
             prompt_template,
             recursive=True,
             double_curly_brackets=False,  # BUG: Should be True
-            exclude_keys=[]
+            exclude=[]
         )
 
         # Verify the processed template contains the JSON that causes the bug
@@ -130,12 +130,12 @@ class TestIssue448Step5KeyErrorE2E:
         assert prompt_template is not None
 
         # Preprocess correctly - this is what the fix should do
-        exclude_keys = list(context.keys())
+        exclude = list(context.keys())
         processed_template = preprocess(
             prompt_template,
             recursive=True,
             double_curly_brackets=True,  # CORRECT: Escapes literal braces
-            exclude_keys=exclude_keys
+            exclude=exclude
         )
 
         # This should NOT raise KeyError
@@ -182,9 +182,9 @@ class TestIssue448Step5KeyErrorE2E:
                 "The fix requires:\n"
                 "  1. Add: from pdd.preprocess import preprocess\n"
                 "  2. Before format(), add:\n"
-                "     exclude_keys = list(context.keys())\n"
+                "     exclude = list(context.keys())\n"
                 "     prompt_template = preprocess(prompt_template, recursive=True, "
-                "double_curly_brackets=True, exclude_keys=exclude_keys)\n\n"
+                "double_curly_brackets=True, exclude=exclude)\n\n"
                 "See agentic_architecture_orchestrator.py:299-302 for the correct pattern."
             )
 
@@ -208,7 +208,7 @@ class TestIssue448CompareOrchestrators:
             "Architecture orchestrator should import preprocess"
         assert "double_curly_brackets=True" in source, \
             "Architecture orchestrator should use double_curly_brackets=True"
-        assert "exclude_keys" in source, \
+        assert "exclude" in source, \
             "Architecture orchestrator should exclude context keys from escaping"
 
     def test_change_orchestrator_should_match_architecture_pattern(self):
@@ -234,7 +234,7 @@ class TestIssue448CompareOrchestrators:
                 "the same preprocessing pattern as agentic_architecture_orchestrator.py.\n\n"
                 "The change orchestrator needs to add:\n"
                 "  preprocess(prompt_template, recursive=True, double_curly_brackets=True, "
-                "exclude_keys=exclude_keys)\n\n"
+                "exclude=exclude)\n\n"
                 "before calling prompt_template.format(**context)"
             )
 

@@ -51,6 +51,7 @@ from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
+from pdd.pre_checkup_gate import run_pre_checkup_gate
 
 # Initialize console for rich output
 console = Console()
@@ -1633,6 +1634,16 @@ def run_agentic_change_orchestrator(
     for s_num, s_out in step_outputs.items():
         context[f"step{s_num}_output"] = s_out
 
+    cached_step6_output = str(context.get("step6_output", ""))
+    if (
+        last_completed_step >= 6
+        and cached_step6_output
+        and not cached_step6_output.startswith("FAILED:")
+    ):
+        context["direct_edit_candidates"] = _parse_direct_edit_candidates(
+            cached_step6_output
+        )
+
     changed_files = []
     
     if "step9_output" in context:
@@ -1931,8 +1942,8 @@ def run_agentic_change_orchestrator(
 
         # Preprocess to expand <include> tags and escape curly braces
         # Exclude context keys from escaping so they can be substituted
-        exclude_keys = list(context.keys())
-        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        exclude = list(context.keys())
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=exclude)
 
         formatted_prompt = substitute_template_variables(prompt_template, context)
 
@@ -2264,8 +2275,8 @@ def run_agentic_change_orchestrator(
             context["review_iteration"] = review_iteration
             context["previous_fixes"] = previous_fixes
             # Preprocess to escape curly braces in included content
-            exclude_keys = list(context.keys())
-            s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+            exclude = list(context.keys())
+            s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude=exclude)
             s11_prompt = substitute_template_variables(s11_template, context)
             timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
             s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
@@ -2301,8 +2312,8 @@ def run_agentic_change_orchestrator(
             s12_template = load_prompt_template("agentic_change_step12_fix_issues_LLM")
             context["step11_output"] = s11_output
             # Preprocess to escape curly braces in included content
-            exclude_keys = list(context.keys())
-            s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+            exclude = list(context.keys())
+            s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude=exclude)
             s12_prompt = substitute_template_variables(s12_template, context)
             timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
             s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
@@ -2379,6 +2390,69 @@ def run_agentic_change_orchestrator(
 
     context["sync_order_script"] = sync_order_script; context["sync_order_list"] = sync_order_list
 
+    if worktree_path:
+        gate_worktree = worktree_path
+    else:
+        gate_worktree = Path(current_work_dir)
+    if changed_files:
+        try:
+            gate_success, gate_message, gate_cost = run_pre_checkup_gate(
+                worktree=gate_worktree,
+                changed_files=changed_files,
+                base_ref=None,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                quiet=quiet,
+                timeout_per_check=CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder,
+            )
+        except Exception as _exc:  # pylint: disable=broad-except
+            gate_success = False
+            gate_message = f"pre_checkup_gate blocked; phase=infrastructure error: {_exc}"
+            gate_cost = 0.0
+        total_cost += gate_cost
+        state["total_cost"] = total_cost
+        if not gate_success:
+            # Issue #1293: block before checkup. Do NOT create the PR when the
+            # gate finds mechanical breakage or unhealable drift ("block: don't
+            # hand off to checkup until green"; the change/feature path must run
+            # the gate too). The gate already applies the strict/non-strict
+            # distinction internally (per pre_checkup_gate R7: in default mode a
+            # non-fatal drift-sync residual is reported but does NOT flip
+            # gate_success, while build/smoke failures and fatal drift always
+            # do), so the caller hard-blocks whenever gate_success is False — it
+            # must NOT re-check PDD_STRICT_DOC_SYNC and downgrade a real failure
+            # to an advisory MANUAL_REVIEW note that still ships a broken PR.
+            state["step_outputs"]["12.5"] = f"FAILED: {gate_message}"
+            save_workflow_state(
+                cwd, issue_number, "change", state, state_dir,
+                repo_owner, repo_name, use_github_state, github_comment_id,
+                dedupe=effective_clean_restart,
+            )
+            return (
+                False,
+                f"Stopped at step 12.5: {gate_message}",
+                total_cost, model_used, changed_files,
+            )
+        # Issue #1293/#1243: the gate's drift-sync runs run_metadata_sync, which
+        # writes prompt+code-only fingerprints (example/test hashes are null).
+        # Step 13's `git add -A` would otherwise commit those degraded
+        # fingerprints into the PR, arming the #1243 null-hash auto-heal loop.
+        # Restore tracked .pdd/meta so .pdd/meta fingerprint finalization is
+        # deferred to the post-merge sync (#1317) — matching the fix path, which
+        # filters .pdd/** from its commit. The gate's prompt / example /
+        # architecture sync is committed normally (only .pdd/meta is reverted).
+        try:
+            subprocess.run(
+                ["git", "checkout", "--", ".pdd/meta"],
+                cwd=gate_worktree,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:  # pylint: disable=broad-except
+            pass
+
     # Identify test files for affected modules (#377 Bug B)
     impacted_tests: List[str] = []
     test_dir_name = pddrc_context.get("test_dir", "tests/").rstrip("/")
@@ -2434,8 +2508,8 @@ def run_agentic_change_orchestrator(
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
         # Preprocess to escape curly braces in included content
-        exclude_keys = list(context.keys())
-        s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        exclude = list(context.keys())
+        s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude=exclude)
         s13_prompt = substitute_template_variables(s13_template, context)
         timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
         s13_success, s13_output, s13_cost, s13_model = run_agentic_task(

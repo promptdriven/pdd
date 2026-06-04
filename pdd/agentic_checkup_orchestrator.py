@@ -1905,12 +1905,12 @@ def _run_single_step(
     if not prompt_template:
         return None  # Signals missing template — caller returns error.
 
-    exclude_keys = list(context.keys())
+    exclude = list(context.keys())
     prompt_template = preprocess(
         prompt_template,
         recursive=True,
         double_curly_brackets=True,
-        exclude_keys=exclude_keys,
+        exclude=exclude,
     )
 
     formatted_prompt = substitute_template_variables(prompt_template, context)

@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "auto_deps_main", "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, _skip_finalization: bool = False)", "returns": "Tuple[str, float, str]"}
+      {"name": "auto_deps_main", "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, compress: bool = False, _skip_finalization: bool = False)", "returns": "Tuple[str, float, str]"}
     ]
   }
 }
@@ -34,6 +34,7 @@
     - `include_docs` (`bool`): Flag to include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Default False.
     - `no_dedup` (`bool`): Flag to disable redundant inline content removal. Default False.
     - `concurrency` (`int`): Number of parallel workers for file summarization. Default 1.
+    - `compress` (`bool`): Flag to use AST-based compression for Python includes. Default False.
     - `_skip_finalization` (`bool`): Internal flag — when True, return immediately after the success console output without writing a fingerprint or clearing any run report. Default False. `pdd sync` sets this to True because sync owns canonical metadata bookkeeping itself (see the sync NOTE in the Behavior section). Leading underscore signals this is not part of the public CLI surface.
 
     Outputs:
@@ -63,7 +64,7 @@
         • `time_budget = ctx.obj.get('time', DEFAULT_TIME)`
       Compute verbosity as `verbose = not ctx.obj.get('quiet', False)` and pass to downstream calls.
     - Call `insert_includes` as:
-        • `insert_includes(input_prompt=input_strings["prompt_file"], directory_path=directory_path, csv_filename=csv_path, prompt_filename=prompt_file, strength=strength, temperature=temperature, time=time_budget, verbose=verbose, progress_callback=progress_callback, include_docs=include_docs, dedup=(not no_dedup), max_workers=concurrency)`
+        • `insert_includes(input_prompt=input_strings["prompt_file"], directory_path=directory_path, csv_filename=csv_path, prompt_filename=prompt_file, strength=strength, temperature=temperature, time=time_budget, verbose=verbose, progress_callback=progress_callback, include_docs=include_docs, dedup=(not no_dedup), max_workers=concurrency, compress=compress)`
       Capture `(modified_prompt, csv_output, total_cost, model_name)`.
     - Save outputs:
         • Before writing a `.prompt` output, call `sanitize_prompt_output(modified_prompt, output_file_paths["output"])` so missing or invalid selected `<include>` tags are cleaned instead of persisted for a later `pdd sync` failure.
