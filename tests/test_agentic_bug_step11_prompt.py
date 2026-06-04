@@ -548,12 +548,12 @@ def _format_step11_prompt(prompt_template: str, context: Dict[str, str]) -> str:
     """
     from pdd.preprocess import preprocess
 
-    exclude_keys = list(context.keys())
+    exclude = list(context.keys())
     processed = preprocess(
         prompt_template,
         recursive=True,
         double_curly_brackets=True,
-        exclude_keys=exclude_keys,
+        exclude=exclude,
     )
 
     processed = processed.replace("{{", "{").replace("}}", "}")
@@ -845,7 +845,7 @@ class TestStep11AuthAnalysisGuidance:
             step11_prompt_content,
             recursive=True,
             double_curly_brackets=True,
-            exclude_keys=context_keys,
+            exclude=context_keys,
         )
         rendered = processed.replace("{{", "{").replace("}}", "}")
         rendered_lower = rendered.lower()

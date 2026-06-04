@@ -230,7 +230,7 @@ class TestReq1LoadAndPreprocess:
             "raw template",
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=["actual_prompt_to_update", "actual_dependencies_to_insert"],
+            exclude=["actual_prompt_to_update", "actual_dependencies_to_insert"],
         )
 
 
@@ -1188,7 +1188,7 @@ class TestInsertIncludesPromptTemplateIsInert:
                 template,
                 recursive=False,
                 double_curly_brackets=True,
-                exclude_keys=[
+                exclude=[
                     "actual_prompt_to_update",
                     "actual_dependencies_to_insert",
                 ],

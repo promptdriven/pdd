@@ -5,21 +5,9 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "write_evidence_manifest", "signature": "(*, command: str, grounding: Optional[Dict[str, Any]] = None, ...) -> Path", "returns": "Path"},
-      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> dict", "returns": "dict"},
+      {"name": "write_evidence_manifest", "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False) -> Path", "returns": "Path"},
+      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False)", "returns": "Mapping[str, str]"},
       {"name": "resolve_generate_output_paths", "signature": "(prompt_file, *, output=None, ...) -> list[str]", "returns": "list[str]"}
-    ]
-  }
-}
-</pdd-interface>
-
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {"name": "write_evidence_manifest", "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None) -> Path", "returns": "Path"},
-      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False)", "returns": "Mapping[str, str]"}
     ]
   }
 }
@@ -34,6 +22,7 @@
 % Requirements
 - Implement `write_evidence_manifest(...)` writing schema v2 JSON under `.pdd/evidence/` (see schema-version requirement below).
 - Hash prompt, outputs, and recursively resolved local includes for `context.includes` and `expanded_sha256`.
+- Deterministic Evidence: For compressed includes, record both the original `source_sha256` and the post-compression `compressed_sha256` in the manifest. Include an `estimated_tokens` field for each compressed block (calculated as `ceil(len(content)/4)`).
 - Add optional schema fields for `context_snapshot`: `enabled`, `manifest_path`, `expanded_prompt_path`, `expanded_sha256`, `uses_nondeterministic_context`, `dynamic_tags`, `redaction_applied`, and per-artifact hashes.
 - Distinguish deterministic include provenance in `context.includes` from durable dynamic snapshot artifacts in `context_snapshot.artifacts`.
 - When snapshot mode is enabled, link prompt/code/test hashes in the evidence manifest to the snapshot run manifest so replay can audit the exact expanded prompt context that produced those hashes.

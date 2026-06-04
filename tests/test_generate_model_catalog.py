@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import subprocess
 import sys
@@ -40,6 +41,39 @@ def _manifest(scores):
         "policy": {"summary": "test"},
         "scores": expanded,
     }
+
+
+def _deepswe_manifest(scores):
+    expanded = []
+    for score in scores:
+        solve_rate = score.get("solve_rate", score.get("rating", 20.0))
+        entry = {
+            "source_url": "https://example.test/deepswe",
+            "raw_model_name": score.get("raw_model_name", score.get("model", "test-model")),
+            "leaderboard": "deepswe",
+            "category": "long-horizon-swe",
+            "leaderboard_publish_date": "2026-05-27",
+            "retrieved_at": "2026-06-03",
+            "rank": score.get("rank", 1),
+            "solve_rate": solve_rate,
+            "rating_lower": score.get("rating_lower", solve_rate - 4.0),
+            "rating_upper": score.get("rating_upper", solve_rate + 4.0),
+            "vote_count": score.get("vote_count", 0),
+            "match_reason": "test reviewed DeepSWE alias",
+        }
+        entry.update(score)
+        expanded.append(entry)
+    return {
+        "schema_version": gmc.DEEPSWE_MANIFEST_SCHEMA_VERSION,
+        "policy": {"summary": "test"},
+        "scores": expanded,
+    }
+
+
+def _read_catalog_rows():
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
+    with csv_path.open(newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
 
 
 def test_module_exports_agentic_manifest_surface():
@@ -274,6 +308,10 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
     monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {
         "gpt-5": {"elo": 1393.0, "votes": 0, "raw_name": "gpt-5"},
         "gpt-5-2": {"elo": 1404.0, "votes": 0, "raw_name": "gpt-5.2"},
+        "gpt-5-4": {"elo": 1437.0, "votes": 0, "raw_name": "gpt-5.4"},
+    })
+    monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {
+        "gpt-5-4": {"solve_rate": 56.0, "votes": 0, "raw_name": "gpt-5.4"},
     })
 
     rows = gmc.build_rows()
@@ -284,13 +322,19 @@ def test_build_rows_does_not_generate_chatgpt_from_model_cost(monkeypatch):
     # ...but the curated subscription family IS preserved (provider "OpenAI ChatGPT")
     chatgpt_rows = {r["model"] for r in rows if r["model"].startswith("chatgpt/")}
     assert chatgpt_rows == {
-        "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
+        "chatgpt/gpt-5.5", "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
         "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
     }
     assert all(
         r["provider"] == "OpenAI ChatGPT"
         for r in rows if r["model"].startswith("chatgpt/")
     )
+    by_model = {r["model"]: r for r in rows if r["model"].startswith("chatgpt/")}
+    assert by_model["chatgpt/gpt-5.4"]["coding_arena_elo"] == "1437"
+    assert by_model["chatgpt/gpt-5.4"]["model_rank_score"] == "15600"
+    assert by_model["chatgpt/gpt-5.2"]["coding_arena_elo"] == "1404"
+    # No reviewed/static source yet, so the hand-managed fallback survives.
+    assert by_model["chatgpt/gpt-5.3-codex-spark"]["coding_arena_elo"] == "1400"
 
 
 def test_build_rows_accepts_custom_score_manifest(tmp_path, monkeypatch):
@@ -313,6 +357,9 @@ def test_build_rows_accepts_custom_score_manifest(tmp_path, monkeypatch):
     }
     fake_litellm = type("L", (), {"model_cost": fake_cost})
     monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    # Disable deepswe so the custom arena manifest wins over static fallback
+    # without interference from the real deepswe_manifest.json.
+    monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {})
 
     rows = gmc.build_rows(score_manifest=manifest)
 
@@ -331,6 +378,8 @@ def test_local_runner_default_survives_when_score_known(monkeypatch):
 def test_csv_fieldnames_include_interactive_only():
     # The column must be present (and last) so DictWriter emits it for every row.
     assert "interactive_only" in gmc.CSV_FIELDNAMES
+    assert "model_rank_score" in gmc.CSV_FIELDNAMES
+    assert "model_rank_source" in gmc.CSV_FIELDNAMES
     assert gmc.CSV_FIELDNAMES[-1] == "interactive_only"
 
 
@@ -413,23 +462,25 @@ def test_build_rows_includes_vertex_gemini_flash_ci_default(monkeypatch):
 
 def test_committed_csv_has_curated_chatgpt_subscription_rows():
     """The committed CSV carries the hand-managed ChatGPT subscription family
-    (issue #1269): 4 chatgpt/ rows under provider "OpenAI ChatGPT", empty api_key
+    (issue #1269): 5 chatgpt/ rows under provider "OpenAI ChatGPT", empty api_key
     (device-flow / codex login). They must NOT be the OPENAI_API_KEY-billed rows."""
     csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     text = csv_path.read_text(encoding="utf-8")
 
     for model in (
-        "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
+        "chatgpt/gpt-5.5", "chatgpt/gpt-5.4", "chatgpt/gpt-5.3-codex",
         "chatgpt/gpt-5.2", "chatgpt/gpt-5.3-codex-spark",
     ):
         assert f"OpenAI ChatGPT,{model},0.0,0.0," in text, model
+    assert "OpenAI ChatGPT,chatgpt/gpt-5.5,0.0,0.0,1450,17000,deepswe-solve-rate," in text
+    assert "OpenAI ChatGPT,chatgpt/gpt-5.4,0.0,0.0,1437,15600,deepswe-solve-rate," in text
     # subscription rows carry NO API key (device-flow / codex login). The cloud
     # deploy guard only rejects literal OPENAI_API_KEY rows; these chatgpt/ rows
     # are not those.
     for line in text.splitlines():
         if line.startswith("OpenAI ChatGPT,chatgpt/"):
             fields = line.split(",")
-            assert fields[6] == "", f"chatgpt row must have empty api_key: {line!r}"
+            assert fields[8] == "", f"chatgpt row must have empty api_key: {line!r}"
 
 
 def test_committed_csv_includes_vertex_gemini_flash_ci_default():
@@ -674,28 +725,31 @@ def test_committed_csv_includes_vertex_gemini_3_5_flash_ga_default():
     Gemini Flash row so PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash resolves
     directly instead of surrogating onto an unrelated first-row provider.
 
-    Pin the EXACT 12-column row (format + ELO 1442 + interactive_only=False)
-    and its ELO-sorted position (between the 1456 customtools row and the 1440
-    glm row) so a regeneration that emitted a malformed/mis-sorted row would
-    fail here, not silently dirty the committed catalog."""
+    Pin the EXACT 14-column row (format + raw ELO 1442 +
+    DeepSWE-derived rank score 12800 + interactive_only=False)
+    and its rank-sorted position (after the bare Vertex alias with the same
+    rank and before the next lower DeepSWE-ranked Vertex model) so a
+    regeneration that emitted a malformed or mis-sorted row would fail here,
+    not silently dirty the committed catalog."""
     csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
     lines = csv_path.read_text(encoding="utf-8").splitlines()
 
     exact_row = (
-        "Google Vertex AI,vertex_ai/gemini-3.5-flash,1.5,9.0,1442,,"
+        "Google Vertex AI,vertex_ai/gemini-3.5-flash,1.5,9.0,1442,12800,"
+        "deepswe-solve-rate,,"
         "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
         "0,True,effort,global,False"
     )
     assert exact_row in lines, "GA Vertex Gemini Flash row missing or malformed"
 
-    # ELO-descending order within the Google Vertex AI block: 1442 sits between
-    # the 1456 customtools row and the 1440 glm row.
+    # Rank-descending order within the Google Vertex AI block: DeepSWE rank
+    # 12800 sits after the bare alias and before the 11800 GLM row.
     idx = lines.index(exact_row)
     assert lines[idx - 1].startswith(
-        "Google Vertex AI,gemini-3.1-pro-preview-customtools,"
+        "Google Vertex AI,gemini-3.5-flash,"
     )
     assert lines[idx + 1].startswith(
-        "Google Vertex AI,vertex_ai/zai-org/glm-4.7-maas,"
+        "Google Vertex AI,vertex_ai/zai-org/glm-5-maas,"
     )
 
 
@@ -724,3 +778,292 @@ def test_prod_cloud_default_models_present_in_catalog():
         f"cloud default model(s) missing from bundled llm_model.csv: {missing}. "
         "Add the exact row (see issue #1364) before the cloud default advances."
     )
+
+
+# ==============================================================================
+# DeepSWE manifest — four-tier ELO resolution (issue #1375)
+#
+# Score resolution order:
+#   1. deepswe-exact — DeepSWE SWE-bench manifest (primary coding-task ranking)
+#   2. arena-exact   — Arena leaderboard manifest (fallback for non-DeepSWE models)
+#   3. static        — STATIC_ELO_FALLBACK exact key
+#   4. static-prefix — STATIC_ELO_FALLBACK canonical-prefix match
+# ==============================================================================
+
+
+def test_module_exports_deepswe_surface():
+    """DEEPSWE_MANIFEST_PATH, DEEPSWE_MANIFEST_SCHEMA_VERSION, and
+    _fetch_deepswe_elo must be importable from the module."""
+    required = [
+        "DEEPSWE_MANIFEST_PATH",
+        "DEEPSWE_MANIFEST_SCHEMA_VERSION",
+        "_fetch_deepswe_elo",
+    ]
+    missing = [name for name in required if not hasattr(gmc, name)]
+    assert not missing
+
+
+def test_deepswe_manifest_file_is_checked_in_and_loadable():
+    """pdd/data/deepswe_manifest.json must exist and load correctly."""
+    assert gmc.DEEPSWE_MANIFEST_PATH.exists()
+    index = gmc._fetch_deepswe_elo()
+    assert index
+    # The current manifest has GPT-5.5 as the top-ranked model.
+    assert "gpt-5-5" in index
+    assert index["gpt-5-5"]["solve_rate"] == 70.0
+
+
+def test_deepswe_rank_score_wins_over_arena_when_both_have_model():
+    """DeepSWE must drive model_rank_score without overwriting raw Arena ELO."""
+    deepswe = {
+        "claude-opus-4-6": {
+            "solve_rate": 32.0,
+            "votes": 0,
+            "raw_name": "claude-opus-4-6",
+        }
+    }
+    arena = {
+        "claude-opus-4-6": {
+            "elo": 1400.0,
+            "votes": 0,
+            "raw_name": "claude-opus-4-6",
+        }
+    }
+    elo, source = gmc._get_elo("claude-opus-4-6", arena, deepswe)
+    rank, rank_source = gmc._get_rank_score("claude-opus-4-6", arena, deepswe)
+    assert source == "arena-exact"
+    assert elo == 1400
+    assert rank_source == "deepswe-solve-rate"
+    assert rank == gmc.DEEPSWE_RANK_BASE + 3200
+
+
+def test_arena_used_when_deepswe_lacks_model():
+    """When a model is absent from DeepSWE, Arena score is the fallback rank."""
+    deepswe: dict = {}
+    arena = {
+        "arena-only-model": {
+            "elo": 1420.0,
+            "votes": 0,
+            "raw_name": "arena-only-model",
+        }
+    }
+    elo, source = gmc._get_elo("arena-only-model", arena, deepswe)
+    rank, rank_source = gmc._get_rank_score("arena-only-model", arena, deepswe)
+    assert source == "arena-exact"
+    assert elo == 1420
+    assert rank_source == "arena-elo-fallback"
+    assert rank == 1420
+
+
+def test_static_fallback_when_neither_deepswe_nor_arena_has_model():
+    """When neither manifest has the model, static fallback is used."""
+    elo, source = gmc._get_elo("gpt-4.1", {}, {})
+    assert source == "static"
+    assert elo == gmc.STATIC_ELO_FALLBACK["gpt-4.1"]
+
+
+def test_fetch_deepswe_elo_rejects_python_refresh(tmp_path):
+    """_fetch_deepswe_elo(refresh=True) must raise RuntimeError."""
+    manifest = tmp_path / "deepswe.json"
+    manifest.write_text(json.dumps({
+        "schema_version": gmc.DEEPSWE_MANIFEST_SCHEMA_VERSION,
+        "policy": {"summary": "test"},
+        "scores": [],
+    }), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="not a Python live-fetch path"):
+        gmc._fetch_deepswe_elo(refresh=True, manifest_path=manifest)
+
+
+def test_fetch_deepswe_elo_missing_manifest_gracefully_falls_back(tmp_path):
+    """A missing DeepSWE manifest path returns {} without crashing."""
+    missing = tmp_path / "missing_deepswe.json"
+    assert gmc._fetch_deepswe_elo(manifest_path=missing) == {}
+
+
+def test_parse_deepswe_manifest_rejects_conflicting_aliases():
+    """Two DeepSWE entries sharing a normalized alias must cause the entire
+    parse to return {}, just like the Arena manifest parser does."""
+    payload = _deepswe_manifest([
+        {
+            "model": "model-alpha",
+            "solve_rate": 20.0,
+            "source": "agent-reviewed:deepswe",
+            "raw_model_name": "model-alpha",
+            "aliases": ["shared-alias"],
+        },
+        {
+            "model": "model-beta",
+            "solve_rate": 18.0,
+            "source": "agent-reviewed:deepswe",
+            "raw_model_name": "model-beta",
+            "aliases": ["shared-alias"],
+        },
+    ])
+    assert gmc._parse_deepswe_manifest(payload) == {}
+
+
+def test_build_rows_keeps_deepswe_rows_below_raw_cutoff_but_drops_fallback_rows(monkeypatch):
+    fake_litellm = type("L", (), {"model_cost": {
+        "openrouter/xiaomi/mimo-v2.5-pro": {
+            "mode": "chat",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 3e-6,
+            "litellm_provider": "openrouter",
+            "supports_function_calling": True,
+            "supports_response_schema": True,
+            "supports_reasoning": True,
+        },
+        "perplexity/google/gemini-2.5-pro": {
+            "mode": "chat",
+            "input_cost_per_token": 5e-6,
+            "output_cost_per_token": 15e-6,
+            "litellm_provider": "perplexity",
+            "supports_function_calling": True,
+        },
+    }})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {})
+    monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {
+        gmc._normalize_model_name("openrouter/xiaomi/mimo-v2.5-pro"): {
+            "solve_rate": 19.0,
+            "votes": 0,
+            "raw_name": "mimo-v2.5-pro",
+            "source": "agent-reviewed:deepswe",
+        }
+    })
+
+    rows = gmc.build_rows()
+    by_model = {r["model"]: r for r in rows}
+
+    mimo = by_model.get("openrouter/xiaomi/mimo-v2.5-pro")
+    assert mimo is not None, "DeepSWE-ranked rows must survive even when raw ELO is below cutoff"
+    assert mimo["coding_arena_elo"] == 0
+    assert mimo["model_rank_score"] == gmc.DEEPSWE_RANK_BASE + 1900
+    assert mimo["model_rank_source"] == "deepswe-solve-rate"
+    assert "perplexity/google/gemini-2.5-pro" not in by_model, (
+        "Arena/static fallback rows below ELO_CUTOFF must still be excluded"
+    )
+
+
+def test_committed_csv_has_no_non_deepswe_rows_below_cutoff():
+    offenders = []
+    for row in _read_catalog_rows():
+        if row["model_rank_source"] == "deepswe-solve-rate":
+            continue
+        if int(row["coding_arena_elo"]) < gmc.ELO_CUTOFF:
+            offenders.append(
+                (row["provider"], row["model"], row["coding_arena_elo"], row["model_rank_source"])
+            )
+    assert not offenders, (
+        "Committed llm_model.csv still contains non-DeepSWE fallback rows below "
+        f"ELO_CUTOFF={gmc.ELO_CUTOFF}: {offenders}"
+    )
+
+
+def test_committed_csv_includes_mimo_v25_pro_deepswe_row():
+    row = next((r for r in _read_catalog_rows() if r["model"] == "openrouter/xiaomi/mimo-v2.5-pro"), None)
+    assert row is not None, "Committed llm_model.csv is missing the reviewed mimo-v2.5-pro row"
+    assert row["provider"] == "OpenRouter"
+    assert row["coding_arena_elo"] == "0"
+    assert row["model_rank_score"] == "11900"
+    assert row["model_rank_source"] == "deepswe-solve-rate"
+
+
+def test_deepswe_manifest_covers_current_public_rows_with_supported_catalog_routes():
+    """Pin the current public DeepSWE rows that PDD can actually route today.
+
+    If DeepSWE adds/removes supported models, update this list and
+    pdd/data/deepswe_manifest.json together.
+    """
+    index = gmc._fetch_deepswe_elo()
+    supported_public_rows = {
+        "gpt-5.5 xhigh": [
+            "openai/gpt-5.5",
+            "azure/gpt-5.5",
+            "chatgpt/gpt-5.5",
+        ],
+        "gpt-5.4 xhigh": [
+            "openai/gpt-5.4",
+            "azure/gpt-5.4",
+            "chatgpt/gpt-5.4",
+        ],
+        "claude-opus-4.7 max": [
+            "anthropic.claude-opus-4-7",
+            "vertex_ai/claude-opus-4-7",
+            "openrouter/anthropic/claude-opus-4.7",
+            "perplexity/anthropic/claude-opus-4-7",
+            "azure_ai/claude-opus-4-7",
+        ],
+        "claude-sonnet-4.6 high": [
+            "anthropic.claude-sonnet-4-6",
+            "vertex_ai/claude-sonnet-4-6",
+            "openrouter/anthropic/claude-sonnet-4.6",
+        ],
+        "gemini-3.5-flash medium": [
+            "vertex_ai/gemini-3.5-flash",
+            "gemini/gemini-3.5-flash",
+        ],
+        "gpt-5.4-mini xhigh": [
+            "openai/gpt-5.4-mini",
+            "azure/gpt-5.4-mini",
+        ],
+        "kimi-k2.6": [
+            "moonshot/kimi-k2.6",
+            "fireworks_ai/accounts/fireworks/models/kimi-k2p6",
+        ],
+        "mimo-v2.5-pro": [
+            "openrouter/xiaomi/mimo-v2.5-pro",
+        ],
+        "glm-5.1": [
+            "glm-5p1",
+            "fireworks_ai/accounts/fireworks/models/glm-5p1",
+            "vertex_ai/zai-org/glm-5-maas",
+            "openrouter/z-ai/glm-5",
+            "zai/glm-5",
+        ],
+        "gemini-3.1-pro": [
+            "gemini-3.1-pro-preview",
+            "vertex_ai/gemini-3.1-pro-preview",
+            "openrouter/google/gemini-3.1-pro-preview",
+            "gemini/gemini-3.1-pro-preview",
+            "gemini-3.1-pro-customtools",
+            "gemini/gemini-3.1-pro-preview-customtools",
+        ],
+        "gemini-3-flash": [
+            "vertex_ai/gemini-3-flash-preview",
+            "gemini/gemini-3-flash-preview",
+            "perplexity/google/gemini-3-flash-preview",
+        ],
+    }
+    missing = []
+    for public_name, aliases in supported_public_rows.items():
+        if not any(gmc._normalize_model_name(alias) in index for alias in aliases):
+            missing.append((public_name, aliases))
+    assert not missing, (
+        "DeepSWE manifest is missing reviewed coverage for current public rows "
+        f"with supported catalog routes: {missing}"
+    )
+
+
+def test_cli_refresh_elo_mentions_both_manifests(tmp_path):
+    """--refresh-elo error message must name both manifest files so maintainers
+    know to update both pdd/data/deepswe_manifest.json and arena_elo_manifest.json."""
+    output = tmp_path / "llm_model.csv"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(_ROOT / "pdd" / "generate_model_catalog.py"),
+            "--refresh-elo",
+            "--output",
+            str(output),
+        ],
+        cwd=_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "deepswe_manifest.json" in result.stderr
+    assert "arena_elo_manifest.json" in result.stderr
