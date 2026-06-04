@@ -123,6 +123,7 @@ def insert_includes(
     include_docs: bool = False,
     max_workers: int = 1,
     dedup: bool = True,
+    compress: bool = False,
 ) -> Tuple[str, str, float, str]:
     """
     Determine needed dependencies and insert them into a prompt.
@@ -145,6 +146,8 @@ def insert_includes(
             summarization. Defaults to 1. Passed through to auto_include.
         dedup (bool, optional): Whether to remove redundant inline content after
             inserting includes. Defaults to True.
+        compress (bool, optional): When True, tag new Python includes with
+            ``mode="compressed"``. Defaults to False.
 
     Returns:
         Tuple[str, str, float, str]: Tuple containing:
@@ -163,7 +166,7 @@ def insert_includes(
             insert_includes_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=["actual_prompt_to_update", "actual_dependencies_to_insert"]
+            exclude=["actual_prompt_to_update", "actual_dependencies_to_insert"]
         )
 
         if verbose:
@@ -193,6 +196,7 @@ def insert_includes(
             csv_path=csv_filename,
             include_docs=include_docs,
             max_workers=max_workers,
+            compress=compress,
         )
 
         if verbose:

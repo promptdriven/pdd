@@ -1463,7 +1463,7 @@ def context_generator(python_filename: str, output_filename: str, force: bool = 
         'prompt' - A string that is the prompt to preprocess
         'recursive' - A boolean that is True if the program needs to recursively process the includes in the prompt and False if it does not need to recursively process the prompt. Default is True.
         'double_curly_brackets' - A boolean that is True if the curly brackets need to be doubled and False if they do not need to be doubled. Default is True.
-        'exclude_keys' - An optional list of strings that are excluded from the curly bracket doubling.
+        'exclude' - An optional list of strings that are excluded from the curly bracket doubling.
     Output: returns a string that is the preprocessed prompt, with any leading or trailing whitespace removed.
 
 % Here are the XML-like tags to preprocess, other tags will remain unmodified:
@@ -1475,7 +1475,7 @@ def context_generator(python_filename: str, output_filename: str, force: bool = 
     1. Will check to see if the file has any angle brackets in triple backticks. If so, it will read the included file indicated in the angle brackets and replace the angle brackets with the content of the included file. This will be done recursively until there are no more angle brackets in triple backticks. The program will then remove the angle brackets but leave the contents in the triple backticks.
     2. The XML 'include' mentioned above.
 
-% If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does and the string in the curly brackets are not in the exclude_keys list, it will check to see if the curly brackets are already doubled before doubling the curly brackets.
+% If double_curly_brackets is True, the program will check to see if the file has any single curly brackets and if it does and the string in the curly brackets are not in the exclude list, it will check to see if the curly brackets are already doubled before doubling the curly brackets.
 
 % The program should resolve file paths using the PDD_PATH environment variable. Implement a function 'get_file_path' that takes a file name and returns the full path using this environment variable.
 

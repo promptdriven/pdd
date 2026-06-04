@@ -294,8 +294,8 @@ class TestIssue468NotABugEarlyExitE2E:
             "step2_output": "Step 2 output",
         }
 
-        exclude_keys = list(context.keys())
-        processed = preprocess(template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        exclude = list(context.keys())
+        processed = preprocess(template, recursive=True, double_curly_brackets=True, exclude=exclude)
 
         try:
             formatted = processed.format(**context)

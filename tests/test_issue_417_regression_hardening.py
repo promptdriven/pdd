@@ -168,7 +168,7 @@ def test_full_pipeline_preprocess_then_parse_then_format(tmp_path):
         f"<include>{included}</include>\nRender {{module_name}}",
         recursive=False,
         double_curly_brackets=True,
-        exclude_keys=["module_name"],
+        exclude=["module_name"],
     )
     tags_before_format = parse_prompt_tags(processed)
     formatted = processed.format(module_name="orders")

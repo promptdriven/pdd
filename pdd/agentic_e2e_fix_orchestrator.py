@@ -2800,8 +2800,8 @@ def run_agentic_e2e_fix_orchestrator(
                     context["next_cycle"] = current_cycle + 1
 
                 # Preprocess to escape curly braces in included content
-                exclude_keys = list(context.keys())
-                prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+                exclude = list(context.keys())
+                prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=exclude)
                 # Safe substitution (Issue #549): un-double template braces first, then substitute.
                 prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
                 formatted_prompt = prompt_template
