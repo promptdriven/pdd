@@ -2096,7 +2096,7 @@ class TestFormatStringInjection:
 
 class TestTemplatePreprocessing:
     def test_preprocess_called_with_correct_args(self, mock_dependencies, default_args):
-        """preprocess should be called with double_curly_brackets=True and exclude_keys."""
+        """preprocess should be called with double_curly_brackets=True and exclude."""
         mock_run, mock_load, _, _ = mock_dependencies
         mock_load.return_value = "Template for {issue_url}"
 
@@ -2110,7 +2110,7 @@ class TestTemplatePreprocessing:
 
             call_kwargs = mock_preprocess.call_args[1]
             assert call_kwargs.get("double_curly_brackets") is True
-            assert "issue_url" in call_kwargs.get("exclude_keys", [])
+            assert "issue_url" in call_kwargs.get("exclude", [])
             assert call_kwargs.get("recursive") is True
 
 
@@ -4543,7 +4543,7 @@ class TestIssue1215Round3Step6PromptFailureSignalSlot:
                     worktree_prompt,
                     recursive=True,
                     double_curly_brackets=True,
-                    exclude_keys=list(context.keys()),
+                    exclude=list(context.keys()),
                 )
                 captured_prompts.append(pre.format_map(context))
                 return (True, "FILES_MODIFIED: pdd/main.py", 0.1, "model")

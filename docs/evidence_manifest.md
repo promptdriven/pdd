@@ -65,7 +65,7 @@ Schema version 2 records:
 
 - command, timestamp, PDD version, model, temperature, and reported cost
 - prompt and generated-output SHA-256 hashes when their paths are available
-- deterministic local include hashes found directly in the prompt
+- deterministic local include hashes found directly in the prompt; for `mode="compressed"` includes, both `source_sha256` and `compressed_sha256` are recorded along with `estimated_tokens`
 - contract coverage status when the prompt has contract rules
 - available validation outcomes and references to existing logs
 - `generation.grounding` provenance (added in schema v2; see "Grounding

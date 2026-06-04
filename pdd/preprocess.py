@@ -225,7 +225,20 @@ def compute_user_intent_paths(text: str) -> set:
     return paths
 
 
-def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_brackets: bool = True, exclude_keys: Optional[List[str]] = None, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None, snapshot_recorder: Optional[Any] = None) -> str:
+def preprocess(
+    prompt: Union[str, Any],
+    recursive: bool = False,
+    double_curly_brackets: bool = True,
+    exclude_keys: Optional[List[str]] = None,
+    compress: bool = False,
+    _seen: Optional[set] = None,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
+    exclude: Optional[List[str]] = None,
+) -> str:
+    if exclude_keys is None:
+        exclude_keys = exclude
     try:
         # Some tests patch template loading to return mock objects with .format().
         # In that case preprocessing is not applicable; return as string.
@@ -242,13 +255,29 @@ def preprocess(prompt: Union[str, Any], recursive: bool = False, double_curly_br
         if _failed is None:
             _failed = []
         _DEBUG_EVENTS.clear()
-        _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys})")
+        _dbg(f"Start preprocess(recursive={recursive}, double_curly={double_curly_brackets}, exclude_keys={exclude_keys}, compress={compress})")
         _dbg(f"Initial length: {len(prompt)} characters")
         if not _is_quiet_mode():
             console.print(Panel("Starting prompt preprocessing", style="bold blue"))
-        prompt = process_backtick_includes(prompt, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths, snapshot_recorder=snapshot_recorder)
+        prompt = process_backtick_includes(
+            prompt,
+            recursive,
+            compress=compress,
+            _seen=_seen,
+            _failed=_failed,
+            _user_intent_paths=_user_intent_paths,
+            snapshot_recorder=snapshot_recorder,
+        )
         _dbg("After backtick includes processed")
-        prompt = process_xml_tags(prompt, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths, snapshot_recorder=snapshot_recorder)
+        prompt = process_xml_tags(
+            prompt,
+            recursive,
+            compress=compress,
+            _seen=_seen,
+            _failed=_failed,
+            _user_intent_paths=_user_intent_paths,
+            snapshot_recorder=snapshot_recorder,
+        )
         _dbg("After XML-like tags processed")
         if double_curly_brackets:
             prompt = double_curly(prompt, exclude_keys)
@@ -329,11 +358,43 @@ def get_file_path(file_name: str) -> str:
         return os.path.join("./", file_name)
     return str(resolved)
 
+
+def _compressed_include_with_fallback_or_raw(
+    raw_content: str,
+    file_path: str,
+    *,
+    selectors: Optional[List[str]] = None,
+) -> str:
+    """Apply compressed include transform; return raw content when compression fails."""
+    try:
+        from pdd.content_selector import apply_compressed_include_with_fallback
+
+        return apply_compressed_include_with_fallback(
+            raw_content,
+            file_path=file_path,
+            selectors=selectors,
+        )
+    except Exception as exc:
+        import warnings
+
+        warnings.warn(
+            f"Compression failed for {file_path}: {exc}. Including full file content.",
+            stacklevel=2,
+        )
+        console.print(
+            f"[yellow]Warning: compression failed for {file_path}: {exc}. "
+            f"Including full file content.[/yellow]"
+        )
+        return raw_content
+
+
 def _process_nested_includes(
     content: str,
     _seen: set,
     _failed: Optional[List[str]],
     _user_intent_paths: Optional[set],
+    *,
+    compress: bool = False,
     snapshot_recorder: Optional[Any] = None,
 ) -> str:
     """Resolve include syntax from included content while preserving the include stack."""
@@ -341,6 +402,7 @@ def _process_nested_includes(
     content = process_backtick_includes(
         content,
         recursive=False,
+        compress=compress,
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
@@ -349,6 +411,7 @@ def _process_nested_includes(
     content = process_include_tags(
         content,
         recursive=False,
+        compress=compress,
         _seen=_seen,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
@@ -357,13 +420,22 @@ def _process_nested_includes(
     content = process_include_many_tags(
         content,
         recursive=False,
+        compress=compress,
         _failed=_failed,
         _user_intent_paths=nested_user_intent_paths,
         snapshot_recorder=snapshot_recorder,
     )
     return content
 
-def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None, snapshot_recorder: Optional[Any] = None) -> str:
+def process_backtick_includes(
+    text: str,
+    recursive: bool,
+    compress: bool = False,
+    _seen: Optional[set] = None,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
+) -> str:
     if _seen is None:
         _seen = set()
     # More specific pattern that doesn't match nested > characters
@@ -384,6 +456,7 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
                         content,
                         recursive=True,
                         double_curly_brackets=False,
+                        compress=compress,
                         _seen=child_seen,
                         _failed=_failed,
                         _user_intent_paths=_user_intent_paths,
@@ -395,6 +468,7 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
                         _seen=child_seen,
                         _failed=_failed,
                         _user_intent_paths=_user_intent_paths,
+                        compress=compress,
                         snapshot_recorder=snapshot_recorder,
                     )
                 if snapshot_recorder is not None:
@@ -453,7 +527,15 @@ def process_backtick_includes(text: str, recursive: bool, _seen: Optional[set] =
         iterations += 1
     return current_text
 
-def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None, snapshot_recorder: Optional[Any] = None) -> str:
+def process_xml_tags(
+    text: str,
+    recursive: bool,
+    compress: bool = False,
+    _seen: Optional[set] = None,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
+) -> str:
     if _seen is None:
         _seen = set()
     # If the caller supplied an explicit user-intent set, use it directly
@@ -474,8 +556,23 @@ def process_xml_tags(text: str, recursive: bool, _seen: Optional[set] = None, _f
     else:
         user_intent_many_paths = None
     text = process_pdd_tags(text)
-    text = process_include_tags(text, recursive, _seen=_seen, _failed=_failed, _user_intent_paths=_user_intent_paths, snapshot_recorder=snapshot_recorder)
-    text = process_include_many_tags(text, recursive, _failed=_failed, _user_intent_paths=user_intent_many_paths, snapshot_recorder=snapshot_recorder)
+    text = process_include_tags(
+        text,
+        recursive,
+        compress=compress,
+        _seen=_seen,
+        _failed=_failed,
+        _user_intent_paths=_user_intent_paths,
+        snapshot_recorder=snapshot_recorder,
+    )
+    text = process_include_many_tags(
+        text,
+        recursive,
+        compress=compress,
+        _failed=_failed,
+        _user_intent_paths=user_intent_many_paths,
+        snapshot_recorder=snapshot_recorder,
+    )
     text = process_shell_tags(text, recursive, snapshot_recorder=snapshot_recorder)
     text = process_web_tags(text, recursive, snapshot_recorder=snapshot_recorder)
     return text
@@ -493,7 +590,15 @@ def _parse_attrs(attr_str: str) -> dict:
         attrs["optional"] = "true"
     return attrs
 
-def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None, _failed: Optional[List[str]] = None, _user_intent_paths: Optional[set] = None, snapshot_recorder: Optional[Any] = None) -> str:
+def process_include_tags(
+    text: str,
+    recursive: bool,
+    compress: bool = False,
+    _seen: Optional[set] = None,
+    _failed: Optional[List[str]] = None,
+    _user_intent_paths: Optional[set] = None,
+    snapshot_recorder: Optional[Any] = None,
+) -> str:
     if _seen is None:
         _seen = set()
     # Support both <include>path</include> and <include path="path" attrs... />
@@ -613,7 +718,10 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                     # Apply selectors if any
                     selectors_str = attrs.get('select')
                     lines_str = attrs.get('lines')
-                    mode = attrs.get('mode', 'full')
+                    # Default mode to "compressed" if compress=True and no explicit mode
+                    mode = attrs.get('mode')
+                    if not mode:
+                        mode = "compressed" if compress else "full"
 
                     if selectors_str or lines_str or mode != 'full':
                         selectors = []
@@ -622,16 +730,24 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                             selectors.extend(parse_selectors_string(selectors_str))
                         if lines_str:
                             selectors.append(f"lines:{lines_str}")
-                        
+
                         try:
-                            from pdd.content_selector import ContentSelector
-                            selector = ContentSelector()
-                            content = selector.select(
-                                content=content,
-                                selectors=selectors,
-                                file_path=full_path,
-                                mode=mode,
-                            )
+                            raw_include_content = content
+                            if mode == "compressed":
+                                content = _compressed_include_with_fallback_or_raw(
+                                    raw_include_content,
+                                    full_path,
+                                    selectors=selectors,
+                                )
+                            else:
+                                from pdd.content_selector import ContentSelector
+                                selector = ContentSelector()
+                                content = selector.select(
+                                    content=raw_include_content,
+                                    selectors=selectors,
+                                    file_path=full_path,
+                                    mode=mode,
+                                )
                         except ImportError:
                             # Fall back to query if originally present, otherwise full file
                             fallback_query = attrs.get('query')
@@ -699,6 +815,7 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                             content,
                             recursive=True,
                             double_curly_brackets=False,
+                            compress=compress,
                             _seen=child_seen,
                             _failed=_failed,
                             _user_intent_paths=_user_intent_paths,
@@ -711,6 +828,7 @@ def process_include_tags(text: str, recursive: bool, _seen: Optional[set] = None
                             _seen=child_seen,
                             _failed=_failed,
                             _user_intent_paths=_user_intent_paths,
+                            compress=compress,
                             snapshot_recorder=snapshot_recorder,
                         )
                     if snapshot_recorder is not None:
@@ -1016,6 +1134,7 @@ def process_web_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any
 def process_include_many_tags(
     text: str,
     recursive: bool,
+    compress: bool = False,
     _failed: Optional[List[str]] = None,
     _user_intent_paths: Optional[set] = None,
     snapshot_recorder: Optional[Any] = None,
@@ -1055,7 +1174,15 @@ def process_include_many_tags(
                 full_path = get_file_path(p)
                 console.print(f"Including (many): [cyan]{full_path}[/cyan]")
                 with open(full_path, 'r', encoding='utf-8') as fh:
-                    content = fh.read()
+                    raw_content = fh.read()
+                    content = (
+                        _compressed_include_with_fallback_or_raw(
+                            raw_content,
+                            full_path,
+                        )
+                        if compress
+                        else raw_content
+                    )
                     contents.append(content)
                 if snapshot_recorder is not None:
                     snapshot_recorder.record_include(source_path=full_path, content=content)
@@ -1089,9 +1216,13 @@ def process_include_many_tags(
         return replace_many(match)
     return re.sub(pattern, replace_many_with_spans, text, flags=re.DOTALL)
 
-def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
+def double_curly(
+    text: str,
+    exclude_keys: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None,
+) -> str:
     if exclude_keys is None:
-        exclude_keys = []
+        exclude_keys = exclude if exclude is not None else []
     
     if not _is_quiet_mode():
         console.print("Doubling curly brackets...")

@@ -1,11 +1,11 @@
-<pdd-reason>Regenerate pdd/data/llm_model.csv from LiteLLM metadata with agent-reviewed Arena scores, pricing overrides, and provider-scoped filtering.</pdd-reason>
+<pdd-reason>Regenerate pdd/data/llm_model.csv from LiteLLM metadata with agent-reviewed DeepSWE-first rank scores, raw Arena ELO metadata, pricing overrides, and provider-scoped filtering.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "build_rows", "signature": "(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None) -> List[dict]", "returns": "List[dict]"},
+      {"name": "build_rows", "signature": "(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None, deepswe_manifest: Optional[Path] = None) -> List[dict]", "returns": "List[dict]"},
       {"name": "main", "signature": "() -> None", "returns": "None"}
     ]
   }
@@ -16,49 +16,59 @@
 
 % Role
 Create a deterministic CLI that rebuilds `pdd/data/llm_model.csv` from local
-`litellm.model_cost` metadata and a checked-in, agent-reviewed Arena score
-manifest. Python must validate and apply reviewed score data; it must not make
-leaderboard policy decisions, scrape the web, download parquet files, or fuzzy
-match model identities at runtime.
+`litellm.model_cost` metadata and two checked-in, agent-reviewed score manifests:
+`pdd/data/deepswe_manifest.json` (primary coding-task ranking) and
+`pdd/data/arena_elo_manifest.json` (Arena fallback). Python must validate and
+apply reviewed score data; it must not make leaderboard policy decisions, scrape
+the web, download parquet files, or fuzzy match model identities at runtime.
 
 % Requirements
 1. Use stdlib + `litellm` only as hard dependencies. Define:
    - `ELO_CUTOFF = 1300`
    - `MAX_COST_PER_MTOK = 100.0`
-   - `CSV_FIELDNAMES = ["provider","model","input","output","coding_arena_elo","base_url","api_key","max_reasoning_tokens","structured_output","reasoning_type","location","interactive_only"]`
+   - `CSV_FIELDNAMES = ["provider","model","input","output","coding_arena_elo","model_rank_score","model_rank_source","base_url","api_key","max_reasoning_tokens","structured_output","reasoning_type","location","interactive_only"]`
+   - `DEEPSWE_RANK_BASE = 10000`. DeepSWE is a solve-rate benchmark, not an ELO source. Store DeepSWE in `model_rank_score = DEEPSWE_RANK_BASE + round(solve_rate_percent * 100)`, while `coding_arena_elo` stays raw Arena/static metadata.
    - `_INTERACTIVE_ONLY_PROVIDERS = {"github_copilot", "lm_studio", "ollama", "chatgpt"}` — provider roots that require interactive human auth/connect (device-flow OAuth, a ChatGPT subscription / `codex login` token, or a local server) and therefore hang in non-interactive contexts (Cloud Run, CI, library import). This includes the hand-managed `chatgpt/*` subscription rows, which carry an empty api_key and rely on device-flow auth.
    - `AGENTIC_ELO_MANIFEST_PATH = Path(__file__).parent / "data" / "arena_elo_manifest.json"`
    - `AGENTIC_ELO_MANIFEST_SCHEMA_VERSION = 2`
+   - `DEEPSWE_MANIFEST_PATH = Path(__file__).parent / "data" / "deepswe_manifest.json"`
+   - `DEEPSWE_MANIFEST_SCHEMA_VERSION = 2`
    - `ARENA_LEADERBOARD_POLICY` describing the reviewed-manifest policy.
+   - `AGENTIC_REFRESH_ERROR` message must instruct maintainers to update **both** `arena_elo_manifest.json` and `deepswe_manifest.json`.
 2. Keep curated constants:
    - `STATIC_ELO_FALLBACK` as an offline/local/niche fallback, not the primary score source.
    - `PRICE_OVERRIDES` for exact model-id pricing fixes in $/M tokens.
    - `PROVIDERS` for supported LiteLLM provider display names and API key env specs.
-   - Do not GENERATE ChatGPT subscription rows from `litellm.model_cost` (the `chatgpt/*` IDs are not curatable there, so `chatgpt` stays in `_SKIP_PROVIDER_ROOTS`), but DO PRESERVE the hand-managed ChatGPT subscription family so a catalog refresh never drops it (issue #1269): keep a `_CHATGPT_SUBSCRIPTION_ROWS` constant (provider `OpenAI ChatGPT`, empty `api_key` = device-flow/codex-login auth, flat 0.0 cost, ELOs mirroring each model's API twin) and a `_merge_chatgpt_subscription_rows(rows)` helper (model-keyed dedupe) that `build_rows` applies before returning — the same survival mechanism used for local-runner rows.
-   - Preserve PDD's own routing-default rows that `litellm.model_cost` may not carry yet, so a catalog refresh never drops a production default (issues #1136 / #1364): keep a small `_MANDATORY_MODEL_ROWS` compatibility-shim list — notably `Google Vertex AI, vertex_ai/gemini-3.5-flash` (1.5/9.0, the cloud `LLM_INVOKE_DEFAULT_MODEL`) plus the Vertex/Bedrock Opus relay rows — and seed any of them missing from the litellm-derived rows via `_mandatory_rows_missing_from(rows, arena_index, elo_source_counts)`, resolving ELO through `_get_elo`/`STATIC_ELO_FALLBACK` (add the model's id to `STATIC_ELO_FALLBACK` so it clears `ELO_CUTOFF`) and emitting the standard `interactive_only` classification like every other row. These are compatibility shims for PDD's own model routing, not a second model catalog — keep the list small.
-3. Agentic score manifest:
+   - Do not GENERATE ChatGPT subscription rows from `litellm.model_cost` (the `chatgpt/*` IDs are not curatable there, so `chatgpt` stays in `_SKIP_PROVIDER_ROOTS`), but DO PRESERVE the hand-managed ChatGPT subscription family so a catalog refresh never drops it (issue #1269): keep a `_CHATGPT_SUBSCRIPTION_ROWS` constant (provider `OpenAI ChatGPT`, empty `api_key` = device-flow/codex-login auth, flat 0.0 cost, hardcoded raw ELO/rank fallbacks only) and a `_merge_chatgpt_subscription_rows(rows, arena_index=None, deepswe_index=None)` helper (model-keyed dedupe) that re-resolves each subscription row's raw ELO through `_get_elo()` and primary rank through `_get_rank_score()` before appending it so those rows mirror their API twins under the same DeepSWE-first rank policy. `build_rows` applies the helper before returning — the same survival mechanism used for local-runner rows.
+   - Preserve PDD's own routing-default rows that `litellm.model_cost` may not carry yet, so a catalog refresh never drops a production default (issues #1136 / #1364): keep a small `_MANDATORY_MODEL_ROWS` compatibility-shim list — notably `Google Vertex AI, vertex_ai/gemini-3.5-flash` (1.5/9.0, the cloud `LLM_INVOKE_DEFAULT_MODEL`) plus the Vertex/Bedrock Opus relay rows — and seed any of them missing from the litellm-derived rows via `_mandatory_rows_missing_from(rows, arena_index, deepswe_index, elo_source_counts)`, resolving raw ELO through `_get_elo`/`STATIC_ELO_FALLBACK`, resolving rank through `_get_rank_score`, and emitting the standard `interactive_only` classification like every other row. These are compatibility shims for PDD's own model routing, not a second model catalog — keep the list small.
+3. Agentic score manifests (Arena and DeepSWE):
    - The manifest schema is a JSON object with `schema_version`, `policy`, and `scores`.
-   - Each score entry must include auditable provenance: `model: str`, `elo: int|float`, `source: str`, `source_url: str`, `raw_model_name: str`, `leaderboard: str`, `category: str`, `leaderboard_publish_date: str|null`, `retrieved_at: str`, `rank: int|null`, `rating: int|float`, `rating_lower: int|float|null`, `rating_upper: int|float|null`, `vote_count: int|float`, and `match_reason: str`; optional `aliases: list[str]` and `reviewed_by` may be present.
+   - Arena score entries must include auditable provenance: `model: str`, `elo: int|float`, `source: str`, `source_url: str`, `raw_model_name: str`, `leaderboard: str`, `category: str`, `leaderboard_publish_date: str|null`, `retrieved_at: str`, `rank: int|null`, `rating: int|float`, `rating_lower: int|float|null`, `rating_upper: int|float|null`, `vote_count: int|float`, and `match_reason: str`; optional `aliases: list[str]` and `reviewed_by` may be present.
+   - DeepSWE score entries use `solve_rate: int|float` instead of `elo`. They carry the same provenance fields, but generation converts solve rate only into `model_rank_score`; it must never write a fake DeepSWE ELO into `coding_arena_elo`.
    - `_parse_agentic_elo_manifest(payload) -> dict[str, dict]` validates the manifest and returns `{normalized_alias: {"elo": float, "votes": int, "raw_name": str, "source": str, ...}}`; conflicting normalized aliases from different source rows invalidate the manifest.
    - `_fetch_arena_elo(refresh: bool = False, manifest_path: Optional[Path] = None) -> dict[str, dict]` is retained for compatibility but loads only the manifest. `refresh=True` must raise with an agentic-refresh instruction instead of pretending to refresh.
-   - Missing/malformed manifests return `{}` and generation must continue with `STATIC_ELO_FALLBACK`.
-   - Runtime fuzzy matching is disabled; all non-exact Arena/LiteLLM identity decisions must be recorded as explicit aliases by the agent in the manifest.
-4. ELO resolution helpers:
+   - `_fetch_deepswe_elo(refresh: bool = False, manifest_path: Optional[Path] = None) -> dict[str, dict]` keeps its historical name for compatibility but loads DeepSWE solve-rate entries via `_parse_deepswe_manifest()`. DeepSWE-specific semantics: `leaderboard` must equal `"deepswe"`, the `solve_rate` field holds the raw solve-rate percentage (0–100 scale), and every entry MUST include a non-empty `match_reason` explaining why the DeepSWE row maps to this catalog model (e.g., harness, effort level, date). `refresh=True` must raise with the same agentic-refresh instruction as `_fetch_arena_elo`.
+   - Missing/malformed manifests return `{}` and generation must continue with lower-priority sources or `STATIC_ELO_FALLBACK`.
+   - Runtime fuzzy matching is disabled; all non-exact Arena/DeepSWE/LiteLLM identity decisions must be recorded as explicit aliases by the agent in the manifest.
+4. Score resolution helpers:
    - `_normalize_model_name(name: str) -> str`: lowercase, strip known provider/org/region path prefixes, strip vendor dot prefixes, strip dates and non-identity lifecycle suffixes (`-preview`, `-latest`, `-experimental`), remove harness-only parentheticals such as `(codex-harness)`, preserve semantic parentheticals such as `(thinking-minimal)`, preserve reasoning-effort suffixes (`-high/-medium/-low/-minimal`), normalize compact aliases like `glm-4p7` to `glm-4-7`, and collapse separators.
    - `_extract_base_model(model_id)`: conservative canonicalization by stripping provider/region/vendor/org/version routing noise, then longest-prefix match against `STATIC_ELO_FALLBACK` keys with safe remainders only.
-   - `_get_elo(model_id, arena_index)`: resolution chain, returning the first non-zero hit: exact reviewed manifest alias, `STATIC_ELO_FALLBACK` exact, `STATIC_ELO_FALLBACK` canonical-prefix, legacy exact alias hook, then 0.
+   - `_get_elo(model_id, arena_index, deepswe_index=None)`: raw ELO chain only, returning the first non-zero hit: (1) `arena-exact` — exact normalized alias match in `arena_index`; (2) `static` — exact key in `STATIC_ELO_FALLBACK`; (3) `static-prefix` — `STATIC_ELO_FALLBACK` canonical-prefix match; then 0. `deepswe_index` defaults to `None` for backward-compatible signatures but is ignored.
+   - `_get_rank_score(model_id, arena_index, deepswe_index=None)`: primary model ranking chain, returning DeepSWE solve-rate band first (`deepswe-solve-rate`, `10000 + round(solve_rate_percent * 100)`), then raw Arena ELO as `arena-elo-fallback`, then static/static-prefix, then 0.
    - `_get_provider_root`, `_has_region`.
    - `_infer_reasoning_type`: `"none"` if no reasoning support; `"budget"` for roots `anthropic`/`azure_ai`, EXCEPT direct-Anthropic-provider Opus models in the adaptive allowlist (`claude-opus-4-7`, `claude-opus-4-8`) which return `"adaptive"` (Opus 4.7+ removed the legacy `thinking.type="enabled"` budget shape and 400 on it); otherwise `"effort"`. Azure AI / Bedrock / Vertex Claude relays stay on `budget`/`effort`.
    - `_infer_max_reasoning_tokens`: `128000` for reasoning-capable `anthropic`/`azure_ai`, but `16000` for the adaptive-allowlist Opus models; else `0`.
    - `_is_deprecated`, `_is_placeholder`, and `_is_superseded_preview`.
-5. `build_rows(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None)`:
+5. `build_rows(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None, deepswe_manifest: Optional[Path] = None)`:
    - Lazy-import `litellm`; on ImportError print install hint to stderr and exit 1.
-   - Load the agentic manifest once through `_fetch_arena_elo(refresh=refresh_elo, manifest_path=score_manifest)`.
+   - Load both agentic manifests once: `arena_index` via `_fetch_arena_elo(refresh=refresh_elo, manifest_path=score_manifest)` and `deepswe_index` via `_fetch_deepswe_elo(refresh=refresh_elo, manifest_path=deepswe_manifest)`.
+   - Pass `deepswe_index` to all `_get_rank_score` call sites, including helpers for mandatory rows, local-runner rows, and ChatGPT subscription rows. Pass `arena_index` to `_get_elo` for raw ELO metadata.
    - Iterate `litellm.model_cost.items()`; keep only `mode in ("chat", "responses")`.
    - Skip deprecated, placeholders, fast/us routing variants, superseded dated previews, non-text output modalities, and providers in `_SKIP_PROVIDER_ROOTS` (currently `chatgpt`).
-   - Drop rows with ELO below cutoff.
+   - Drop rows whose raw ELO and rank score are both below cutoff/zero as appropriate; DeepSWE-ranked rows survive through `model_rank_score` even when raw Arena ELO is absent.
    - Convert token costs to per-million (round 6), then apply exact `PRICE_OVERRIDES`.
    - Resolve provider display/api key via `PROVIDERS`; fallback to root provider; final fallback `(litellm_provider.replace("_"," ").title(), f"{ROOT}_API_KEY")`.
+   - Emit both `coding_arena_elo` (raw Arena/static) and `model_rank_score`/`model_rank_source` (DeepSWE-first rank).
    - Infer `structured_output`, `reasoning_type`, `max_reasoning_tokens`, `location`, and `base_url`.
    - Emit `interactive_only`: `True` when the row's provider root (`_get_provider_root`) is in `_INTERACTIVE_ONLY_PROVIDERS`, else `False`. Apply this to every emitted row, including the seeded/preserved local-runner rows from `_DEFAULT_LOCAL_RUNNER_ROWS` and an existing catalog.
    - Seed canonical local-runner rows from `_DEFAULT_LOCAL_RUNNER_ROWS` and preserve additional user local-runner rows from an existing catalog, re-resolving ELO and applying the same cutoff.
@@ -67,10 +77,11 @@ match model identities at runtime.
    - Fix A: dedupe by `(provider_display, canonical_base_model)`, falling back to `_normalize_model_name(row["model"])` for manifest-only models.
    - Remove rows where input or output exceeds `MAX_COST_PER_MTOK`.
    - Fix D: per-provider Pareto filter; skip all-zero-cost providers.
-   - Final sort: provider asc, ELO desc, model asc.
+   - Final sort: provider asc, `model_rank_score` desc, model asc.
 7. Logging/output:
    - Print concise diagnostics for manifest load/fallback, skipped previews, Fix C/A/D removals, sanity removals, ELO source breakdown, and overall post-processing reduction.
-   - `main()` exposes `--output/-o`, `--refresh-elo`, and `--score-manifest PATH`. `--refresh-elo` must exit non-zero with the agentic-refresh instruction, because Python live fetching is intentionally unsupported.
+   - `main()` exposes `--output/-o`, `--refresh-elo`, `--score-manifest PATH`, and `--deepswe-manifest PATH`. `--refresh-elo` must exit non-zero with the agentic-refresh instruction (mentioning both manifests), because Python live fetching is intentionally unsupported.
+   - The raw-ELO diagnostic breakdown must report counts for source labels emitted by `_get_elo`: `arena-exact`, `static`, `static-prefix`, and `none`. DeepSWE provenance is visible per row in `model_rank_source`.
    - Write CSV with LF line endings via `csv.DictWriter(..., lineterminator="\n")`, then print output path and provider counts.
 
 % Deliverables

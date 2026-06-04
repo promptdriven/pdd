@@ -3,7 +3,7 @@
 Validates the <output_json_example> block in code_patcher_LLM.prompt through
 the same runtime preprocessing that incremental_code_generator applies:
 
-    preprocess(prompt, double_curly_brackets=True, exclude_keys=...)
+    preprocess(prompt, double_curly_brackets=True, exclude=...)
 
 After preprocessing, double_curly() protects multiline {{...}} blocks with
 __ALREADY_DOUBLED__...__END_ALREADY__ sentinels. This test restores those
@@ -24,7 +24,7 @@ _PROMPT_PATH = (
     / "code_patcher_LLM.prompt"
 )
 
-# Same exclude_keys used in incremental_code_generator.py:122-126
+# Same exclude used in incremental_code_generator.py:122-126
 _EXCLUDE_KEYS = ["ORIGINAL_PROMPT", "NEW_PROMPT", "EXISTING_CODE", "CHANGE_DESCRIPTION"]
 
 _BLOCK_RE = re.compile(
@@ -42,7 +42,7 @@ def test_code_patcher_output_json_example_parses_after_preprocessing() -> None:
 
     Reproduces the preprocessing from incremental_code_generator.py:
     1. Read code_patcher_LLM.prompt
-    2. preprocess(..., double_curly_brackets=True, exclude_keys=_EXCLUDE_KEYS)
+    2. preprocess(..., double_curly_brackets=True, exclude=_EXCLUDE_KEYS)
     3. Restore sentinels to braces, then unescape {{ -> { / }} -> }
     4. json.loads the result
     """
@@ -51,7 +51,7 @@ def test_code_patcher_output_json_example_parses_after_preprocessing() -> None:
         raw,
         recursive=False,
         double_curly_brackets=True,
-        exclude_keys=_EXCLUDE_KEYS,
+        exclude=_EXCLUDE_KEYS,
     )
 
     match = _BLOCK_RE.search(preprocessed)

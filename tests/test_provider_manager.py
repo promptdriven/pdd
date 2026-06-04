@@ -17,6 +17,7 @@ import pytest
 from pdd.provider_manager import (
     CSV_FIELDNAMES,
     COMPLEX_AUTH_PROVIDERS,
+    _write_csv_atomic,
     _save_key_to_api_env,
     _setup_complex_provider,
     add_custom_provider,
@@ -115,6 +116,29 @@ def _read_user_csv(temp_home):
         return []
     with open(csv_path, "r", encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
+
+
+def test_write_csv_atomic_preserves_interactive_only(tmp_path):
+    """Provider-manager rewrites must not re-enable device/local rows."""
+    csv_path = tmp_path / "llm_model.csv"
+
+    _write_csv_atomic(csv_path, [
+        {
+            "provider": "OpenAI ChatGPT",
+            "model": "chatgpt/gpt-5.5",
+            "input": "0.0",
+            "output": "0.0",
+            "coding_arena_elo": "1450",
+            "model_rank_score": "17000",
+            "model_rank_source": "deepswe-solve-rate",
+            "api_key": "",
+            "interactive_only": "True",
+        }
+    ])
+
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8", newline="")))
+    assert "interactive_only" in rows[0]
+    assert rows[0]["interactive_only"] == "True"
 
 
 # ---------------------------------------------------------------------------

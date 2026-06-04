@@ -1,3 +1,14 @@
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "code_generator_main", "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str] = None, original_prompt_file_path: Optional[str] = None, force_incremental_flag: bool = False, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, compress: bool = False)", "returns": "Tuple[str, bool, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-reason>Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.</pdd-reason>
 
 <pdd-interface>
@@ -47,6 +58,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     - Support both Cloud execution (via `requests` to a PDD API) and Local execution (via a local generator function).
     - Implement fallback logic: if Cloud fails (except for 402/401/403/400 errors), automatically retry using the local provider.
     - Support `PDD_CLOUD_ONLY` and `PDD_NO_LOCAL_FALLBACK` environment flags.
+    - Pass `compress` parameter to the local `code_generator` or the Cloud API.
     - Add an opt-in keyword argument `snapshot_context: bool = False` for standard generation paths. When true, initialize a context snapshot recorder before preprocessing, record preprocessing artifacts before invoking cloud/local generation, then finalize the snapshot after generation and output write so output hashes and model/provider metadata are included. Include snapshot metadata in the returned/evidence context without changing default behavior when false.
     - Snapshot artifacts must record selected grounding/few-shot examples when the cloud/local generation path exposes them. If selected examples are unavailable, record an explicit `unavailable` reason rather than omitting the field.
     - Evidence/context-map output must include the snapshot manifest path, dynamic tag detection, expanded prompt hash, output code hash, and model/provider metadata when snapshot mode is enabled.
@@ -145,7 +157,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     <include>pdd/core/cloud.py</include>
 </cloud_config>
 <architecture_sync>
-    <include select="pattern:^ParamSpec\s*=,def:_verify_architecture_conformance,def:_verify_architecture_json_conformance,def:_verify_pdd_interface_signatures,def:_extract_pdd_interface_signatures,def:_parse_declared_param_names,def:_collect_actual_param_names,def:_parse_declared_param_specs,def:_collect_actual_param_specs,def:_ast_args_to_specs,def:_find_target_function,def:_collect_python_symbols,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:_run_discovery,def:_should_wire_generated_exports">pdd/code_generator_main.py</include>
+    <include select="pattern:^ParamSpec\s*=,def:code_generator_main,def:_verify_architecture_conformance,def:_verify_architecture_json_conformance,def:_verify_pdd_interface_signatures,def:_extract_pdd_interface_signatures,def:_parse_declared_param_names,def:_collect_actual_param_names,def:_parse_declared_param_specs,def:_collect_actual_param_specs,def:_ast_args_to_specs,def:_find_target_function,def:_collect_python_symbols,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:_run_discovery,def:_should_wire_generated_exports">pdd/code_generator_main.py</include>
 </architecture_sync>
 <env_detector>
     <include>pdd/python_env_detector.py</include>
