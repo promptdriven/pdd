@@ -140,6 +140,7 @@ def test_auto_deps_normal_operation(
         include_docs=False,
         dedup=True,
         max_workers=1,
+        compress=False,
     )
 
     assert modified_prompt == "Modified prompt with includes"

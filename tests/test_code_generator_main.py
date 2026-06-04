@@ -171,7 +171,7 @@ def mock_construct_paths_fixture(monkeypatch):
 @pytest.fixture
 def mock_pdd_preprocess_fixture(monkeypatch):
     # Default mock returns the input unchanged to allow tests to assert substitution behavior when needed
-    def passthrough(prompt_text, recursive=False, double_curly_brackets=True, exclude_keys=None, **kwargs):
+    def passthrough(prompt_text, recursive=False, double_curly_brackets=True, exclude=None, **kwargs):
         return prompt_text
     mock = MagicMock(side_effect=passthrough)
     monkeypatch.setattr("pdd.code_generator_main.pdd_preprocess", mock)
@@ -528,7 +528,8 @@ def test_full_gen_cloud_success(
             "language": "python",
             "strength": mock_ctx.obj['strength'],
             "temperature": mock_ctx.obj['temperature'],
-            "verbose": mock_ctx.obj['verbose']
+            "verbose": mock_ctx.obj['verbose'],
+            "compress": False,
         },
         headers={"Authorization": "Bearer test_jwt_token", "Content-Type": "application/json"},
         timeout=get_cloud_request_timeout()

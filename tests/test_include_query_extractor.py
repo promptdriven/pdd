@@ -117,7 +117,7 @@ class TestLLMInteractionPattern:
             "RAW_TEMPLATE",
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=["file_content", "query"],
+            exclude=["file_content", "query"],
         )
 
     def test_calls_llm_with_strong_strength(self, temp_project, mock_llm, monkeypatch):

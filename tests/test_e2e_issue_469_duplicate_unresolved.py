@@ -123,12 +123,12 @@ class TestIssue469DuplicateUnresolvedE2E:
             "repo_name": "repo",
             "issue_number": 469,
         }
-        exclude_keys = list(context.keys())
+        exclude = list(context.keys())
         processed = preprocess(
             template,
             recursive=True,
             double_curly_brackets=True,
-            exclude_keys=exclude_keys,
+            exclude=exclude,
         )
 
         # Format (same as orchestrator does at line 412)
@@ -376,12 +376,12 @@ class TestIssue469AllPromptPipelinesE2E:
             f"Failed to load prompt: {config['template_name']}"
         )
 
-        exclude_keys = list(config["context"].keys())
+        exclude = list(config["context"].keys())
         processed = preprocess(
             template,
             recursive=True,
             double_curly_brackets=True,
-            exclude_keys=exclude_keys,
+            exclude=exclude,
         )
         formatted = processed.format(**config["context"])
 
@@ -420,12 +420,12 @@ class TestIssue469AllPromptPipelinesE2E:
         template = load_prompt_template(config["template_name"])
         assert template is not None
 
-        exclude_keys = list(config["context"].keys())
+        exclude = list(config["context"].keys())
         processed = preprocess(
             template,
             recursive=True,
             double_curly_brackets=True,
-            exclude_keys=exclude_keys,
+            exclude=exclude,
         )
         formatted = processed.format(**config["context"])
 

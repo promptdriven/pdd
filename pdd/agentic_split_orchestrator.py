@@ -1513,7 +1513,7 @@ def run_agentic_split_orchestrator(
 
             processed = preprocess(
                 prompt_template, recursive=True,
-                double_curly_brackets=True, exclude_keys=list(context.keys()),
+                double_curly_brackets=True, exclude=list(context.keys()),
             )
             formatted_prompt = substitute_template_variables(processed, context)
 
@@ -1772,7 +1772,7 @@ def run_agentic_split_orchestrator(
                                 preprocess(
                                     prompt_template, recursive=True,
                                     double_curly_brackets=True,
-                                    exclude_keys=list(context.keys()),
+                                    exclude=list(context.keys()),
                                 ),
                                 context,
                             )
@@ -1932,7 +1932,7 @@ def run_agentic_split_orchestrator(
                     processed = preprocess(
                         p_template, recursive=True,
                         double_curly_brackets=True,
-                        exclude_keys=list(context.keys()),
+                        exclude=list(context.keys()),
                     )
                     formatted_prompt = substitute_template_variables(
                         processed, context
@@ -2197,7 +2197,7 @@ def run_agentic_split_orchestrator(
                         )
                     processed = preprocess(
                         prompt_template, recursive=True,
-                        double_curly_brackets=True, exclude_keys=list(context.keys()),
+                        double_curly_brackets=True, exclude=list(context.keys()),
                     )
                     formatted_prompt = substitute_template_variables(processed, context)
                     success, output, step_cost, step_model = run_agentic_task(
@@ -2273,7 +2273,7 @@ def run_agentic_split_orchestrator(
                         processed_retry = preprocess(
                             retry_prompt_template, recursive=True,
                             double_curly_brackets=True,
-                            exclude_keys=list(context.keys()),
+                            exclude=list(context.keys()),
                         )
                         retry_prompt = substitute_template_variables(
                             processed_retry,
@@ -2415,7 +2415,7 @@ def run_agentic_split_orchestrator(
                         repair_template,
                         recursive=True,
                         double_curly_brackets=True,
-                        exclude_keys=list(context.keys()),
+                        exclude=list(context.keys()),
                     )
                     repair_prompt = substitute_template_variables(
                         processed_repair,
@@ -2590,7 +2590,7 @@ def run_agentic_split_orchestrator(
                     break
                 processed = preprocess(
                     prompt_template, recursive=True,
-                    double_curly_brackets=True, exclude_keys=list(context.keys()),
+                    double_curly_brackets=True, exclude=list(context.keys()),
                 )
                 formatted_prompt = substitute_template_variables(processed, context)
                 success, output, step_cost, step_model = run_agentic_task(
@@ -3030,7 +3030,7 @@ def run_agentic_split_orchestrator(
                 processed = preprocess(
                     p_template, recursive=True,
                     double_curly_brackets=True,
-                    exclude_keys=list(context.keys()),
+                    exclude=list(context.keys()),
                 )
                 formatted_prompt = substitute_template_variables(
                     processed, context
@@ -3124,7 +3124,7 @@ def run_agentic_split_orchestrator(
                     processed = preprocess(
                         p_template, recursive=True,
                         double_curly_brackets=True,
-                        exclude_keys=list(context.keys()),
+                        exclude=list(context.keys()),
                     )
                     formatted_prompt = substitute_template_variables(
                         processed, context

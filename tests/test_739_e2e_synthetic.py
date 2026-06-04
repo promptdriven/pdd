@@ -108,6 +108,14 @@ def _make_orchestrator_patches(worktree: Path):
                        return_value=(worktree, None)),
         "preflight": patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
                            return_value=([], [], [])),
+        # The change orchestrator runs the pre-checkup gate (real subprocess
+        # build/smoke + drift-sync) at Step 12.5. These synthetic tests drive
+        # the orchestrator with mocked LLM/git state, so the gate must be mocked
+        # too — otherwise it executes against the fake tree and (with MagicMock
+        # internals leaking into its message join) fails closed, blocking the
+        # workflow. Matches the gate-mock pattern in test_agentic_change_orchestrator.
+        "gate": patch("pdd.agentic_change_orchestrator.run_pre_checkup_gate",
+                      return_value=(True, "pre_checkup_gate passed", 0.0)),
     }
 
 

@@ -55,7 +55,7 @@ def detect_change(
             detect_change_prompt,
             recursive=False,
             double_curly_brackets=True,
-            exclude_keys=["PROMPT_LIST", "CHANGE_DESCRIPTION"]
+            exclude=["PROMPT_LIST", "CHANGE_DESCRIPTION"]
         )
 
         # Step 2: Create prompt list and process change description

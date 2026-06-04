@@ -128,7 +128,7 @@ def create_base_df(data=None, columns_override=None):
     if 'structured_output' in df.columns:
         # Keep as object to hold True, False, pd.NA. Script handles 'True'/'False' string conversion.
         df['structured_output'] = df['structured_output'].astype('object')
-    for col in ['coding_arena_elo', 'max_reasoning_tokens']:
+    for col in ['coding_arena_elo', 'model_rank_score', 'max_reasoning_tokens']:
          if col in df.columns:
              df[col] = pd.to_numeric(df[col], errors='coerce')
 
@@ -286,6 +286,34 @@ def test_load_csv_missing_columns(mocker, temp_csv_path, capsys_rich):
     assert isinstance(called_df, pd.DataFrame)
     assert all(col in called_df.columns for col in EXPECTED_COLUMNS)
     assert list(called_df.columns) == EXPECTED_COLUMNS
+
+
+def test_load_csv_schema_update_preserves_rank_and_interactive_columns(mocker, temp_csv_path):
+    initial_csv = (
+        "provider,model,input,output,model_rank_score,model_rank_source,location,interactive_only\n"
+        "OpenAI,gpt-test,1.0,2.0,17000,deepswe-solve-rate,global,1\n"
+        "OpenAI,gpt-other,1.0,2.0,1400,arena-elo-fallback,,0\n"
+    )
+    temp_csv_path.write_text(initial_csv)
+    df_from_csv = pd.read_csv(io.StringIO(initial_csv))
+
+    mocker.patch("pandas.read_csv", return_value=df_from_csv)
+    mocker.patch("litellm.model_cost", {})
+    mocker.patch("litellm.supports_response_schema", return_value=False)
+    mock_df_to_csv = mocker.patch("pandas.DataFrame.to_csv", autospec=True)
+
+    update_model_data(str(temp_csv_path))
+
+    mock_df_to_csv.assert_called_once()
+    called_df = mock_df_to_csv.call_args.args[0]
+    assert list(called_df.columns) == EXPECTED_COLUMNS
+    row = called_df.iloc[0]
+    assert row["model_rank_score"] == 17000
+    assert row["model_rank_source"] == "deepswe-solve-rate"
+    assert row["location"] == "global"
+    assert row["interactive_only"] is True
+    assert called_df.iloc[1]["interactive_only"] is False
+
 
 def test_load_csv_with_placeholders_as_na(mocker, temp_csv_path, capsys_rich):
     mock_df_data = [

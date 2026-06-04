@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from contextlib import contextmanager
@@ -173,30 +174,134 @@ def _existing_file_records(
     return records
 
 
-def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[str, str]]:
+def _include_tag_requests_compression(
+    attrs: Mapping[str, str],
+    include_path: Path,
+    *,
+    global_compress: bool,
+) -> bool:
+    """True when an include tag should be treated as compressed for evidence."""
+    mode = (attrs.get("mode") or "").strip().lower()
+    if mode == "compressed":
+        return True
+    if mode in ("full", "interface"):
+        return False
+    if global_compress and include_path.suffix.lower() == ".py":
+        return True
+    return False
+
+
+def _include_uses_compressed_mode(
+    parent_content: str,
+    include_path: Path,
+    parent_file: Path,
+    project_root: Path,
+    *,
+    global_compress: bool = False,
+) -> bool:
+    """True when *parent_content* references *include_path* with compression active."""
+    parent_text = parent_content
+    code_spans = _extract_code_spans(parent_text)
+    for match in _INCLUDE_BODY_RE.finditer(parent_text):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            continue
+        attrs = _parse_attrs(match.group(1) or "")
+        body = (match.group(2) or "").strip()
+        path_value = (attrs.get("path") or body).strip()
+        if not path_value:
+            continue
+        resolved = _resolve_include_path(path_value, parent_file, project_root)
+        if resolved.resolve() != include_path.resolve():
+            continue
+        if _include_tag_requests_compression(
+            attrs, include_path, global_compress=global_compress
+        ):
+            return True
+    for match in _INCLUDE_SELF_CLOSING_RE.finditer(parent_text):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            continue
+        attrs = _parse_attrs(match.group(1) or "")
+        path_value = (attrs.get("path") or "").strip()
+        if not path_value:
+            continue
+        resolved = _resolve_include_path(path_value, parent_file, project_root)
+        if resolved.resolve() != include_path.resolve():
+            continue
+        if _include_tag_requests_compression(
+            attrs, include_path, global_compress=global_compress
+        ):
+            return True
+    return False
+
+
+def _compressed_include_evidence_text(source_text: str, include_path: Path) -> str:
+    """Compressed bytes for evidence metadata (matches preprocess compression)."""
+    from pdd.content_selector import apply_compressed_include_with_fallback
+
+    return apply_compressed_include_with_fallback(
+        source_text,
+        file_path=str(include_path),
+    )
+
+
+def _prompt_include_records(
+    prompt_path: Path,
+    project_root: Path,
+    *,
+    global_compress: bool = False,
+) -> list[dict[str, Any]]:
     """Collect hashes for reachable local includes using production include grammar."""
-    records: list[dict[str, str]] = []
+    records: list[dict[str, Any]] = []
     seen: set[Path] = set()
 
     def walk(file_path: Path) -> None:
+        try:
+            parent_content = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            parent_content = ""
         for raw_include in sorted(_include_paths_for_file(file_path)):
             include_path = _resolve_include_path(raw_include, file_path, project_root)
             if include_path in seen or not include_path.is_file():
                 continue
             seen.add(include_path)
-            records.append(
-                {
-                    "path": _display_path(include_path, project_root),
-                    "sha256": _sha256_file(include_path),
-                }
-            )
+            source_hash = _sha256_file(include_path)
+            record: dict[str, Any] = {
+                "path": _display_path(include_path, project_root),
+                "sha256": source_hash,
+            }
+            if _include_uses_compressed_mode(
+                parent_content,
+                include_path,
+                file_path,
+                project_root,
+                global_compress=global_compress,
+            ):
+                try:
+                    source_text = include_path.read_text(encoding="utf-8")
+                    compressed_text = _compressed_include_evidence_text(
+                        source_text,
+                        include_path,
+                    )
+                    record["source_sha256"] = source_hash
+                    record["compressed_sha256"] = _sha256_bytes(
+                        compressed_text.encode("utf-8")
+                    )
+                    record["estimated_tokens"] = math.ceil(len(compressed_text) / 4)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    record["source_sha256"] = source_hash
+            records.append(record)
             walk(include_path)
 
     walk(prompt_path)
     return records
 
 
-def _preprocessed_expanded_sha256(content: str, project_root: Path) -> Optional[str]:
+def _preprocessed_expanded_sha256(
+    content: str,
+    project_root: Path,
+    *,
+    compress: bool = False,
+) -> Optional[str]:
     """Hash of prompt text after the same deterministic include expansion as generation."""
     if _has_active_tag(_UNSUPPORTED_EXPANSION_RE, content) or _has_active_tag(
         _NONDETERMINISTIC_TAG_RE, content
@@ -204,13 +309,23 @@ def _preprocessed_expanded_sha256(content: str, project_root: Path) -> Optional[
         return None
     try:
         with _project_cwd(project_root):
-            expanded = preprocess(content, recursive=True, double_curly_brackets=False)
+            expanded = preprocess(
+                content,
+                recursive=True,
+                double_curly_brackets=False,
+                compress=compress,
+            )
     except Exception:  # pylint: disable=broad-exception-caught
         return None
     return _sha256_bytes(expanded.encode("utf-8"))
 
 
-def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dict[str, Any]:
+def _prompt_record(
+    prompt_file: Optional[str | Path],
+    project_root: Path,
+    *,
+    compress: bool = False,
+) -> dict[str, Any]:
     if not prompt_file:
         return {
             "path": None,
@@ -233,7 +348,9 @@ def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dic
     return {
         "path": _display_path(path, project_root),
         "sha256": _sha256_bytes(content.encode("utf-8")),
-        "expanded_sha256": _preprocessed_expanded_sha256(content, project_root),
+        "expanded_sha256": _preprocessed_expanded_sha256(
+            content, project_root, compress=compress
+        ),
         "uses_nondeterministic_tags": nondeterministic,
     }
 
@@ -552,6 +669,7 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     reviewed: bool = False,
     compression: Optional[Mapping[str, Any]] = None,
     agentic_fallback: Optional[Mapping[str, Any]] = None,
+    compress: bool = False,
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
     root = Path(project_root or Path.cwd()).resolve()
@@ -562,7 +680,7 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         candidates = direct or fallback
         if len(candidates) == 1:
             prompt_file = candidates[0]
-    prompt = _prompt_record(prompt_file, root)
+    prompt = _prompt_record(prompt_file, root, compress=compress)
     prompt_path = None
     if prompt_file:
         prompt_path = Path(prompt_file)
@@ -614,7 +732,11 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         },
         "prompt": prompt,
         "context": {
-            "includes": _prompt_include_records(prompt_path, root) if prompt_path else [],
+            "includes": (
+                _prompt_include_records(prompt_path, root, global_compress=compress)
+                if prompt_path
+                else []
+            ),
             "web_snapshots": web_snapshots,
             "shell_snapshots": shell_snapshots,
             "query_snapshots": query_snapshots,
