@@ -5,8 +5,8 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "cloud_fix_errors", "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None, compressed_context=None)", "returns": "Tuple[bool, bool, str, str, str, float, str]"},
-      {"name": "fix_error_loop", "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False, compressed_context=None)", "returns": "Tuple[bool, str, str, int, float, str]"}
+      {"name": "cloud_fix_errors", "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)", "returns": "Tuple[bool, bool, str, str, str, float, str]"},
+      {"name": "fix_error_loop", "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False, compress_test_context=False, context_compression=None, compression_fallback=None, compressed_context=None, agentic_fallback_events=None)", "returns": "Tuple[bool, str, str, int, float, str]"}
     ]
   }
 }
@@ -53,6 +53,7 @@ The module supports both local and cloud execution modes:
 
 13. **Failure classification & failure-aware retries:** Import from `pdd.failure_classification`: `FailureKind`, `classify_failure`, `extract_failure_signature`, `failure_classification_hint`, `format_signature_hint` (or equivalent names matching `failure_classification_python.prompt`). After each test/verification run that still fails:
     - Classify the captured output with `classify_failure(...)`.
+    - **Compression for Test Context**: If `PDD_COMPRESS_TEST_CONTEXT=1` or global `PDD_CONTEXT_COMPRESSION` includes `test` or `all`, use AST-based slicing to include only failing tests and their necessary fixtures from the test context (failing tests only). To enable downstream `preprocess` and `ContentSelector` calls to identify the relevant tests, `fix_error_loop` MUST set the `PDD_FAILING_TESTS` environment variable to a comma-separated list of the failing test names/IDs before invoking the fix function. This is passed to the LLM as part of the error report or by modifying the included test files in the prompt.
     - **Timeouts before syntax:** classification must treat timeout/flaky patterns (e.g. `"timed out"`) as `timeout_flaky` before classifying as `syntax_import`, so log noise does not mis-route.
     - **Syntax / import (`FailureKind.syntax_import`):** After **at least one** completed fix attempt, if `extract_failure_signature` matches the previous iteration’s signature (unchanged failure pattern), **stop early** and print a **yellow** console hint (via `format_signature_hint` / `failure_classification_hint`) that imports, environment, or missing files may need manual fixes—not more blind LLM iterations.
     - **Timeout / flaky (`FailureKind.timeout_flaky`):** Track **consecutive** iterations without improvement; when **≥ 2**, **stop early** with the timeout/flaky message (isolate tests, increase timeout, manual investigation).
@@ -115,6 +116,9 @@ def fix_error_loop(
     test_files: list[str] | None = None,
     failure_aware_retries: bool = True,
     no_local_fallback: bool = False,
+    compress_test_context: bool = False,
+    context_compression: str | None = None,
+    compression_fallback: str | None = None,
 ) -> tuple[bool, str, str, int, float, str]:
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
@@ -129,6 +133,9 @@ def fix_error_loop(
             runs up to max_attempts (subject to budget) without those early exits.
         no_local_fallback: When True, cloud failures raise instead of falling back to local LLM.
             Only meaningful when use_cloud=True. Default is False.
+        compress_test_context: When True, use AST-based slicing for failing tests.
+        context_compression: Global compression mode override.
+        compression_fallback: Strategy for when a file cannot be compressed.
     """
 ```
 

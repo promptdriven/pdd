@@ -1,11 +1,11 @@
-<pdd-reason>CLI wrapper for unit-test repair with loop mode, cloud/local execution, and compressed repair context.</pdd-reason>
+<pdd-reason>CLI wrapper for unit-test repair with loop mode, cloud/local execution, compressed repair context, AST test-context compression, and optional auto-submit.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "cli",
   "cli": {
     "commands": [
-      {"name": "fix_main", "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, compressed_context: Mapping[str, Any] | None = None, agentic_fallback_events: list[dict[str, Any]] | None = None) -> Tuple[bool, str, str, int, float, str]", "returns": "Tuple[bool, str, str, int, float, str]"}
+      {"name": "fix_main", "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, compress_test_context: bool | None = None, context_compression: str | None = None, compression_fallback: str | None = None, compressed_context: Mapping[str, Any] | None = None, agentic_fallback_events: list[dict[str, Any]] | None = None) -> Tuple[bool, str, str, int, float, str]", "returns": "Tuple[bool, str, str, int, float, str]"}
     ]
   }
 }
@@ -57,6 +57,9 @@
 - `protect_tests` (`bool`, default `False`)
 - `test_files` (`list[str] | None`)
 - `failure_aware_retries` (`bool`, default `True`)
+- `compress_test_context` (`bool | None`, default `None`)
+- `context_compression` (`str | None`, default `None`)
+- `compression_fallback` (`str | None`, default `None`)
 - `compressed_context` (`Mapping[str, Any] | None`, default `None`): optional sync-provided repair context containing failing tests/errors, relevant contract rules, prompt interface, and selected prior repair evidence.
 - `agentic_fallback_events` (`list[dict[str, Any]] | None`, default `None`): optional mutable list from sync that records per-phase agentic fallback telemetry (`phase`, `attempted`, `used`, `detail`). Forward to `fix_error_loop` in loop mode when supplied.
 
@@ -87,7 +90,7 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - Also read `time`, `verbose`, and `local` behavior from `ctx.obj`.
 
 4. Execution strategy:
-   - Loop mode always calls `fix_error_loop` with the original required file-path arguments positionally, then uses keyword arguments for every optional loop parameter so signature drift cannot misroute values: `prompt=input_strings["prompt_file"]`, `verification_program=verification_program`, `strength=strength`, `temperature=temperature`, `time=time`, `max_attempts=max_attempts`, `budget=budget`, `error_log_file=output_file_paths.get("output_results")`, `verbose=verbose`, `agentic_fallback=agentic_fallback`, `protect_tests=protect_tests`, `use_cloud=use_cloud`, `test_files=test_files`, `failure_aware_retries=failure_aware_retries`, `no_local_fallback=cloud_only`, `compressed_context=compressed_context`, and `agentic_fallback_events=agentic_fallback_events` when sync supplies it.
+   - Loop mode always calls `fix_error_loop` with the original required file-path arguments positionally, then uses keyword arguments for every optional loop parameter so signature drift cannot misroute values: `prompt=input_strings["prompt_file"]`, `verification_program=verification_program`, `strength=strength`, `temperature=temperature`, `time=time`, `max_attempts=max_attempts`, `budget=budget`, `error_log_file=output_file_paths.get("output_results")`, `verbose=verbose`, `agentic_fallback=agentic_fallback`, `protect_tests=protect_tests`, `use_cloud=use_cloud`, `test_files=test_files`, `failure_aware_retries=failure_aware_retries`, `no_local_fallback=cloud_only`, `compress_test_context=compress_test_context`, `context_compression=context_compression`, `compression_fallback=compression_fallback`, `compressed_context=compressed_context`, and `agentic_fallback_events=agentic_fallback_events` when sync supplies it.
    - Loop mode is hybrid by default: local test execution, but `use_cloud=True` for LLM calls unless local execution is explicitly forced. `PDD_CLOUD_ONLY` / `PDD_NO_LOCAL_FALLBACK` still keep cloud LLM calls enabled in loop mode.
    - Single-pass mode is cloud-first unless local execution is forced or `CloudConfig.is_running_in_cloud()` says the process is already running inside the cloud worker environment.
    - Respect `PDD_CLOUD_ONLY` / `PDD_NO_LOCAL_FALLBACK` so cloud failures do not silently fall back to local execution when fallback is disabled. Pass `no_local_fallback=cloud_only` to `fix_error_loop`; it stops the loop and logs an error instead of attempting a local LLM call when fallback is forbidden.

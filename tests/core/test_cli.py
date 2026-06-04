@@ -232,6 +232,10 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['local'] is False
     assert ctx.obj['review_examples'] is False
     assert 'grounding_review_decisions' not in ctx.obj
+    assert ctx.obj.get('compress_examples') is None
+    assert ctx.obj.get('compress_test_context') is None
+    assert ctx.obj.get('context_compression') is None
+    assert ctx.obj.get('compression_fallback') is None
     assert ctx.obj['time'] == DEFAULT_TIME
     mock_auto_update.assert_called_once_with()
 
@@ -274,6 +278,110 @@ def test_cli_global_options_explicit(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['grounding_review_decisions'] == []
     assert ctx.obj['time'] == 0.7
     mock_auto_update.assert_called_once_with()
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.cli.construct_paths')
+def test_cli_context_compression_flags(mock_construct, mock_main, mock_auto_update, runner, create_dummy_files):
+    """Global compression flags populate ctx.obj and export env vars."""
+    files = create_dummy_files("test.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    @cli_command.command()
+    @click.argument('prompt_file')
+    @click.pass_context
+    def generate(ctx, prompt_file):
+        mock_main(ctx=ctx)
+
+    result = runner.invoke(cli_command, [
+        "--compress-examples",
+        "--compress-test-context",
+        "--context-compression", "all",
+        "--compression-fallback", "error",
+        "generate", str(files["test.prompt"]),
+    ])
+    assert result.exit_code == 0
+    ctx = mock_main.call_args.kwargs.get('ctx')
+    assert ctx.obj['compress_examples'] is True
+    assert ctx.obj['compress_test_context'] is True
+    assert ctx.obj['context_compression'] == "all"
+    assert ctx.obj['compression_fallback'] == "error"
+    assert os.environ.get("PDD_COMPRESS_EXAMPLES") == "1"
+    assert os.environ.get("PDD_COMPRESS_TEST_CONTEXT") == "1"
+    assert os.environ.get("PDD_CONTEXT_COMPRESSION") == "all"
+    assert os.environ.get("PDD_COMPRESSION_FALLBACK") == "error"
+    for key in (
+        "PDD_COMPRESS_EXAMPLES",
+        "PDD_COMPRESS_TEST_CONTEXT",
+        "PDD_CONTEXT_COMPRESSION",
+        "PDD_COMPRESSION_FALLBACK",
+    ):
+        os.environ.pop(key, None)
+
+
+def test_generate_rejects_subcommand_local_context_compression(runner):
+    """Compression flags are global; they must appear before the subcommand."""
+    import pdd.cli
+
+    result = runner.invoke(
+        pdd.cli.cli,
+        ["generate", "--context-compression", "all", "--help"],
+        env={"PDD_AUTO_UPDATE": "false"},
+    )
+    assert result.exit_code == 2
+
+
+def test_preprocess_rejects_subcommand_local_context_compression(runner):
+    import pdd.cli
+
+    result = runner.invoke(
+        pdd.cli.cli,
+        ["preprocess", "--context-compression", "all", "--help"],
+        env={"PDD_AUTO_UPDATE": "false"},
+    )
+    assert result.exit_code == 2
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.generate.code_generator_main')
+@patch('pdd.cli.construct_paths')
+def test_cli_context_compression_off_clears_env(
+    mock_construct, mock_main, mock_auto_update, runner, create_dummy_files, monkeypatch
+):
+    monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "examples")
+    files = create_dummy_files("test.prompt")
+    mock_main.return_value = ('code', False, 0.0, 'model')
+
+    @cli_command.command()
+    @click.argument('prompt_file')
+    @click.pass_context
+    def generate(ctx, prompt_file):
+        mock_main(ctx=ctx)
+
+    result = runner.invoke(
+        cli_command,
+        ["--context-compression", "off", "generate", str(files["test.prompt"])],
+    )
+    assert result.exit_code == 0
+    assert "PDD_CONTEXT_COMPRESSION" not in os.environ
+    assert "PDD_COMPRESS_EXAMPLES" not in os.environ
+    assert "PDD_COMPRESS_TEST_CONTEXT" not in os.environ
+
+
+@patch('pdd.core.cli.auto_update')
+def test_process_commands_includes_compression_summary(mock_auto_update):
+    import pdd.compression_reporting as cr
+
+    cr.clear_compression_fallback_events()
+    os.environ["PDD_CONTEXT_COMPRESSION"] = "examples"
+    try:
+        lines = _capture_summary(['generate'], [('ok', 0.01, 'model-x')])
+        assert "Context compression active" in "\n".join(lines)
+    finally:
+        os.environ.pop("PDD_CONTEXT_COMPRESSION", None)
+        cr.clear_compression_fallback_events()
+
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')

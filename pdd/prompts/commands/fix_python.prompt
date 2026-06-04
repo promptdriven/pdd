@@ -36,12 +36,12 @@
     3) Manual mode (`--manual` or other args):
        Loop Mode (`--loop`): `unit_test_files = args[2:]`, `error_file = None`.
        Non-Loop Mode: `unit_test_files = args[2:-1]`, `error_file = args[-1]`.
-       Iterate over `unit_test_files`, calling `fix_main(..., protect_tests=protect_tests)` for each.
+       Iterate over `unit_test_files`, calling `fix_main(..., protect_tests=protect_tests, compress_test_context=compress_test_context, context_compression=context_compression, compression_fallback=compression_fallback)` for each.
        Result: `{"success": all_success, "fixed_unit_test": (first fixed), "fixed_unit_tests": (all fixed), "fixed_code": ..., "attempts": ..., "message": ...}`.
   - **Console Output**: Use `Console(file=sys.stdout)` for compatibility. Print bold green/red success/failure messages for each mode.
   - **Options**:
     - Agentic: `--timeout-adder`, `--max-cycles`, `--resume/--no-resume` (T), `--clean-restart` (sets agentic `resume=False` and is only valid with GitHub issue URLs; reject arbitrary HTTP/GitHub non-issue URLs), `--force`, `--no-github-state` (sets `use_github_state=False`), `--ci-retries INT` (default 3), `--skip-ci` (default False).
-    - Manual: `--output-test`, `--output-code`, `--output-results`, `--loop`, `--verification-program`, `--max-attempts` (3), `--budget` (5.0), `--auto-submit`, `--agentic-fallback/--no-agentic-fallback` (T).
+    - Manual: `--output-test`, `--output-code`, `--output-results`, `--loop`, `--verification-program`, `--max-attempts` (3), `--budget` (5.0), `--auto-submit`, `--agentic-fallback/--no-agentic-fallback` (T), `--compress-test-context`, `--context-compression` (choice), `--compression-fallback` (choice).
     - Both: `--protect-tests/--no-protect-tests` (F).
   - **Technical Details**:
     - Decorate with `@log_operation(operation="fix", clears_run_report=True)` and `@track_cost`.

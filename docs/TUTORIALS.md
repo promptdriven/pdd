@@ -532,3 +532,29 @@ If the workflow stops (e.g., PRD needs clarification):
 - Include tech stack preferences explicitly (e.g., "FastAPI + PostgreSQL" vs. leaving it ambiguous)
 - Review the generated `architecture.json` before generating individual module prompts
 - The `context_urls` field in each module entry provides documentation links for code generation
+
+---
+
+## Advanced Sync and Context Compression
+
+For large-scale projects, `pdd sync` supports advanced options to manage context window size and optimize costs.
+
+### Context Compression
+
+When working with complex dependency graphs, you can enable automated compression to reduce the token count of included files while maintaining their behavioral integrity:
+
+- **`--compress-examples`**: Automatically applies `mode="interface"` to example files.
+- **`--compress-test-context`**: Slices test context to include only what's necessary for fixing failures.
+- **`--context-compression contracts`**: Extracts contract rules and architecture metadata from prompt and documentation files.
+- **`--context-compression all`**: Enables all available compression modes.
+
+These flags are particularly useful when you encounter "context window exceeded" errors or want to reduce the cost of large synchronization operations.
+
+### Example: Advanced Sync
+
+```bash
+# Sync with full compression and a higher budget
+# Global flags must precede the subcommand, or use sync-local options:
+pdd --context-compression all --force sync --budget 15.0 my_complex_module
+# pdd sync --context-compression all --force --budget 15.0 my_complex_module
+```

@@ -3343,7 +3343,30 @@ def sync_orchestration(
                                     _fix_pre_code = pdd_files['code'].read_text(encoding="utf-8")
                                 except OSError:
                                     _fix_pre_code = ""
-                                result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=output_test_for_fix, output_code=str(pdd_files['code']), output_results=f"{basename.replace('/', '_')}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], auto_submit=(not local), strength=strength, temperature=temperature, test_files=test_files_for_fix, compressed_context=_phase_compressed_context('fix'), agentic_fallback_events=agentic_fallback_events)
+                                _ctx_obj = ctx.obj if ctx and ctx.obj else {}
+                                result = fix_main(
+                                    ctx,
+                                    prompt_file=str(pdd_files['prompt']),
+                                    code_file=str(pdd_files['code']),
+                                    unit_test_file=unit_test_file_for_fix,
+                                    error_file=str(error_file_path),
+                                    output_test=output_test_for_fix,
+                                    output_code=str(pdd_files['code']),
+                                    output_results=f"{basename.replace('/', '_')}_fix_results.log",
+                                    loop=True,
+                                    verification_program=str(pdd_files['example']),
+                                    max_attempts=effective_max_attempts,
+                                    budget=budget - current_cost_ref[0],
+                                    auto_submit=(not local),
+                                    strength=strength,
+                                    temperature=temperature,
+                                    test_files=test_files_for_fix,
+                                    compress_test_context=bool(_ctx_obj.get("compress_test_context")),
+                                    context_compression=_ctx_obj.get("context_compression"),
+                                    compression_fallback=_ctx_obj.get("compression_fallback"),
+                                    compressed_context=_phase_compressed_context('fix'),
+                                    agentic_fallback_events=agentic_fallback_events,
+                                )
                                 _fix_surface_exc = _verify_code_surface_after_write(
                                     code_path=pdd_files['code'],
                                     pre_code=_fix_pre_code,

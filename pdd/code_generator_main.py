@@ -20,6 +20,7 @@ from rich.text import Text
 
 # Relative imports for PDD package structure
 from . import DEFAULT_STRENGTH, DEFAULT_TIME, EXTRACTION_STRENGTH # Assuming these are in __init__.py
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
@@ -3158,6 +3159,7 @@ def code_generator_main(
             context_override=ctx.obj.get('context'),
             confirm_callback=cli_params.get('confirm_callback')
         )
+        resolve_effective_config(ctx, resolved_config)
         # Determine final output path: if user passed a directory, use resolved file path
         resolved_output = output_file_paths.get("output")
         if output is None:
