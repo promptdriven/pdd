@@ -132,6 +132,18 @@ class TestShipVerdictPredicate:
         state["findings"] = None
         assert _review_loop_ship_verdict(state, has_issue=True) is False
 
+    def test_non_dict_finding_entry_fails_closed(self) -> None:
+        # A list of non-dict entries is a corrupted verdict, not "no findings".
+        state = _clean_final_state()
+        state["findings"] = ["oops"]
+        assert _review_loop_ship_verdict(state, has_issue=True) is False
+
+    def test_non_string_active_reviewer_fails_closed(self) -> None:
+        # Must fail closed, not raise TypeError on the unhashable dict lookup.
+        state = _clean_final_state()
+        state["active_reviewer"] = ["codex"]
+        assert _review_loop_ship_verdict(state, has_issue=True) is False
+
 
 # ---------------------------------------------------------------------------
 # Library: two-layer dispatch, ordering, propagation, verdict
@@ -277,6 +289,36 @@ class TestFinalGateLibrary:
             assert "--final-gate cannot be combined" in msg
             orch_mock.assert_not_called()
             loop_mock.assert_not_called()
+
+    def test_rejects_invalid_review_budget_at_library_boundary(self, tmp_path: Path) -> None:
+        """A direct caller passing an invalid Layer-2 budget must be rejected
+        BEFORE Layer 1 spends cost / mutates the PR — not run a gate that dies
+        via a runtime cap."""
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator"
+        ) as orch_mock, patch(
+            "pdd.agentic_checkup.run_checkup_review_loop"
+        ) as loop_mock:
+            success, msg, _cost, _model = run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                use_github_state=False,
+                pr_url=PR_URL,
+                final_gate=True,
+                max_review_rounds=0,
+            )
+        assert success is False
+        assert "review budget invalid" in msg
+        orch_mock.assert_not_called()
+        loop_mock.assert_not_called()
 
     def test_final_gate_requires_issue(self, tmp_path: Path) -> None:
         with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(

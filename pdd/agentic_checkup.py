@@ -344,19 +344,24 @@ def _review_loop_ship_verdict(
         return False
     reviewer_status = final_state.get("reviewer_status")
     active = final_state.get("active_reviewer")
-    if not isinstance(reviewer_status, dict) or not active:
+    # ``active_reviewer`` must be a real string key; a non-string (or empty)
+    # value is a malformed verdict — fail closed instead of raising on the
+    # unhashable ``dict.get`` lookup below.
+    if not isinstance(reviewer_status, dict) or not isinstance(active, str) or not active:
         return False
     if reviewer_status.get(active) not in _SHIP_REVIEWER_STATES:
         return False
     # The canonical ``_write_final_state`` ALWAYS serializes ``findings`` as a
-    # list, so a missing or non-list value means the verdict file is malformed
-    # or not from a real run — fail closed rather than treat the absence of an
-    # open-finding row as "no findings".
+    # list of dicts (``ReviewFinding.to_dict()``). A missing/non-list value, or
+    # any non-dict entry, means the verdict file is malformed or not from a real
+    # run — fail closed rather than treat the absence of an ``open`` row as "no
+    # findings". An ``open`` finding also blocks the ship.
     findings = final_state.get("findings")
     if not isinstance(findings, list):
         return False
-    if any(isinstance(f, dict) and f.get("status") == "open" for f in findings):
-        return False
+    for finding in findings:
+        if not isinstance(finding, dict) or finding.get("status") == "open":
+            return False
     if has_issue and str(final_state.get("issue_aligned")).lower() != "true":
         return False
     return True
@@ -633,6 +638,24 @@ def run_agentic_checkup(
                     f"{', '.join(conflicts)}; the gate owns the fix/review steps "
                     "and runs the review-loop as Layer 2."
                 ),
+                0.0,
+                "",
+            )
+        # The gate runs the review loop as Layer 2, so its budget knobs must be
+        # valid BEFORE Layer 1 spends cost / mutates the PR — otherwise a direct
+        # caller could push Layer-1 fixes and then have Layer 2 die via a runtime
+        # cap (e.g. "Max review rounds reached: 0"). Mirror the CLI's checks.
+        budget_errors = []
+        if max_review_rounds < 1:
+            budget_errors.append("max_review_rounds must be >= 1")
+        if max_review_cost <= 0:
+            budget_errors.append("max_review_cost must be > 0")
+        if max_review_minutes <= 0:
+            budget_errors.append("max_review_minutes must be > 0")
+        if budget_errors:
+            return (
+                False,
+                f"--final-gate review budget invalid: {'; '.join(budget_errors)}.",
                 0.0,
                 "",
             )
