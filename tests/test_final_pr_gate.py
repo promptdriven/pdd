@@ -272,7 +272,13 @@ class TestFinalGateLibrary:
         """run_agentic_checkup is the real contract boundary (e2e/pdd_cloud call
         it directly), so final_gate must reject gate-owned-knob conflicts there
         too — not only at the CLI — instead of silently running a weaker gate."""
-        for conflict in ({"no_fix": True}, {"review_only": True}, {"review_loop": True}):
+        for conflict in (
+            {"no_fix": True},
+            {"review_only": True},
+            {"review_loop": True},
+            {"enable_gates": False},
+            {"test_scope": "targeted"},
+        ):
             with patch(
                 "pdd.agentic_checkup._check_gh_cli", return_value=True
             ), patch(
@@ -493,6 +499,35 @@ class TestFinalGateCli:
         )
         assert result.exit_code == 2
         assert "--final-gate" in result.output
+
+    def test_rejects_no_gates(self) -> None:
+        """--no-gates disables the deterministic gates; the canonical ship
+        verdict must not run LLM-only."""
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            ["--pr", PR_URL, "--issue", ISSUE_URL, "--final-gate", "--no-gates"],
+            obj={"quiet": True, "verbose": False},
+        )
+        assert result.exit_code == 2
+        assert "--no-gates" in result.output
+
+    def test_rejects_targeted_test_scope(self) -> None:
+        """Targeted scope skips the full suite; the final-readiness verdict must
+        run the full suite."""
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr", PR_URL,
+                "--issue", ISSUE_URL,
+                "--final-gate",
+                "--test-scope", "targeted",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+        assert result.exit_code == 2
+        assert "full test scope" in result.output
 
     def test_rejects_nonpositive_review_budget(self) -> None:
         """The gate runs the review loop as Layer 2, so its budget knobs must be

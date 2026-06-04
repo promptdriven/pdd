@@ -499,6 +499,7 @@ _pdd_checkup() {
     '--pr[Target PR number or URL]:pr:' \
     '--issue[Target issue number or URL]:issue:' \
     '--review-loop[Enable PR review loop]' \
+    '--final-gate[Canonical final PR gate: PR checkup then review-loop (needs --pr and --issue)]' \
     '--review-only[Run reviewer only, no fixer]' \
     '--reviewers[Comma-separated reviewer roles]:reviewers:' \
     '--reviewer[Primary reviewer role]:reviewer:' \

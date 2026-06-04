@@ -635,6 +635,19 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 "--final-gate.",
                 param_hint="'--final-gate'",
             )
+        if no_gates:
+            raise click.BadParameter(
+                "--final-gate cannot be combined with --no-gates; the canonical "
+                "ship verdict requires the deterministic local gates, otherwise "
+                "an LLM-only review could pass over a failing gate.",
+                param_hint="'--final-gate'",
+            )
+        if test_scope != "full":
+            raise click.BadParameter(
+                "--final-gate requires full test scope; --test-scope targeted "
+                "would return a ship verdict without running the full suite.",
+                param_hint="'--final-gate'",
+            )
     if review_loop and start_step is not None:
         raise click.BadParameter(
             "--start-step applies to the legacy checkup workflow, not --review-loop.",

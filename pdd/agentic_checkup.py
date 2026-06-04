@@ -624,8 +624,9 @@ def run_agentic_checkup(
         # real contract boundary (the e2e/pdd-issue path and pdd_cloud call it
         # directly). Enforce the same gate-owned-knobs rule here so a direct
         # caller cannot run a non-canonical "final gate" — e.g. Layer 1
-        # inheriting ``no_fix`` or a resume override — and silently get a
-        # weaker verdict than the gate promises.
+        # inheriting ``no_fix`` or a resume override, Layer 2 running with the
+        # deterministic gates disabled, or Layer 1 skipping the full suite — and
+        # silently get a weaker verdict than the canonical gate promises.
         conflicts = [
             name
             for name, set_ in (
@@ -633,6 +634,8 @@ def run_agentic_checkup(
                 ("review_only", review_only),
                 ("review_loop", review_loop),
                 ("start_step_override", start_step_override is not None),
+                ("enable_gates=False (--no-gates)", not enable_gates),
+                ("test_scope!=full (--test-scope targeted)", test_scope != "full"),
             )
             if set_
         ]
@@ -641,7 +644,8 @@ def run_agentic_checkup(
                 False,
                 (
                     "--final-gate cannot be combined with: "
-                    f"{', '.join(conflicts)}; the gate owns the fix/review steps "
+                    f"{', '.join(conflicts)}; the gate owns the fix/review steps, "
+                    "requires the deterministic gates and the full test suite, "
                     "and runs the review-loop as Layer 2."
                 ),
                 0.0,
