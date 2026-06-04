@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "preprocess", "signature": "(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, _seen=None, _failed=None, _user_intent_paths=None, snapshot_recorder=None)", "returns": "str"},
+      {"name": "preprocess", "signature": "(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, compress=False, _seen=None, _failed=None, _user_intent_paths=None, snapshot_recorder=None)", "returns": "str"},
       {"name": "get_file_path", "signature": "(file_name)", "returns": "str"}
     ]
   }
@@ -26,8 +26,9 @@ Write the `pdd/preprocess.py` module.
 Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<include>`, `<include-many>`, `<shell>`, `<web>`) and optionally escaping curly braces. Supports recursive include resolution, selective extraction, semantic LLM queries, and code block protection.
 
 % Requirements
-1. Function: `preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, _seen=None, snapshot_recorder=None) -> str`
+1. Function: `preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, compress=False, _seen=None, snapshot_recorder=None) -> str`
    - `_seen`: set of resolved real paths for circular include detection, passed to child calls
+   - `compress`: when True, `<include>` tags (that don't specify a `mode`) default to `mode="compressed"` for supported files (Python).
    - `snapshot_recorder`: optional context snapshot recorder object; default `None` preserves the existing return value and behavior
    - Returns the preprocessed prompt string; preserve leading/trailing whitespace
    - If `prompt` is not a string, return `str(prompt)`; if empty, print error and return `""`
@@ -38,9 +39,10 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
    - Also supports self-closing syntax: `<include path="..." />`
    - Also supports `lines` attribute shorthand: `<include lines="1-10">file</include>`
    - Parse attributes with `key="value"` or `key='value'` syntax
-6. `<include select="..." mode="...">file</include>` — delegate to `ContentSelector.select()`. `mode` defaults to `"full"`; `"interface"` extracts signatures only.
+6. `<include select="..." mode="...">file</include>` — delegate to `ContentSelector.select()`. `mode` defaults to `"full"` (or `"compressed"` if `compress=True`); `"interface"` extracts signatures only.
    - On failure (import error or selector error), log warning and fall back to full file content
    - If `query=` was also present, try query extraction before falling back to full file
+   - AST-based Compression Fallback: If `mode="compressed"` (explicitly or via `compress=True`) and the resulting content exceeds 30,000 tokens (estimated at 120,000 characters), fall back to `mode="interface"` for that file. Log a yellow warning naming the file and the token count.
 7. `<include query="...">file</include>` — delegate to `IncludeQueryExtractor.extract()`. Deferred when `recursive=True` (leave tag intact). On import error or exception, return inline error message in brackets (e.g., `[Error: pdd.include_query_extractor not found...]`).
 8. When both `select=` and `query=` present, keep `select=` and discard `query=`; fall back to `query=` only if `select=` fails
 9. Image includes (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px and convert to base64 data URL. GIF first frame converted to static image. HEIC converted to JPEG (requires `pillow_heif`).
@@ -48,7 +50,8 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 11. `<shell>cmd</shell>` — execute command string in a shell, replace with stdout. Timeout controlled by `PDD_SHELL_TIMEOUT` env var (default 30s). On non-zero exit, insert error message with exit code and combined stdout/stderr. On timeout, insert timeout message. Deferred when `recursive=True`.
 12. `<web>url</web>` — fetch via Firecrawl (requires `FIRECRAWL_API_KEY`), replace with markdown content. Cache responses via `firecrawl_cache`. Use a hard 30s client-side timeout to prevent hanging. Handle missing API key, import error, empty response, timeout, and scrape failure with inline error messages. Deferred when `recursive=True`.
 13. Backtick includes: ``` `<path>` ``` → ```{file contents}```. Same recursive/missing-file behavior as XML includes.
-14. Snapshot capture:
+14. **Circular Import Protection**: `IncludeQueryExtractor` MUST be imported lazily inside the function that uses it, not at the module level.
+15. Snapshot capture:
    - Thread `snapshot_recorder` through all top-level and child preprocessing calls without changing the default return value.
    - Record deterministic include inputs and content hashes for XML includes, backtick includes, and include-many inputs that are actually resolved.
    - When snapshot capture is enabled, record shell command, stdout, stderr, exit status, timeout metadata, resolved replacement text, and whether redaction was applied.
@@ -102,7 +105,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 % Curly Brace Handling (when double_curly_brackets=True)
 - Double single braces: `{var}` → `{{var}}`
 - Preserve already-doubled: `{{var}}` stays `{{var}}`
-- Skip excluded keys: `{key}` in `exclude_keys` stays `{key}` (exact match only — `{exclude_suffix}` is NOT skipped)
+- Skip excluded keys: `{key}` in `exclude` stays `{key}` (exact match only — `{exclude_suffix}` is NOT skipped)
 - `${IDENT}` placeholders → `${{IDENT}}` to prevent PromptTemplate errors
 - Handle unbalanced braces gracefully without crashing
 - Code blocks in specific languages (JSON, JavaScript, TypeScript, Python) should also have their braces doubled

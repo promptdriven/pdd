@@ -5,7 +5,8 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "IncludeQueryExtractor.extract", "signature": "(file_path: str, query: str)", "returns": "str"}
+      {"name": "IncludeQueryExtractor.extract", "signature": "(file_path: str, query: str)", "returns": "str"},
+      {"name": "compute_cache_key", "signature": "(file_path: str, query: str)", "returns": "str"}
     ]
   }
 }

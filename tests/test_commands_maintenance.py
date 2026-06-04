@@ -61,6 +61,27 @@ def test_sync_returns_tuple_on_success(mock_sync_main, mock_auto_update, runner)
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.maintenance.sync_main')
+def test_sync_compress_flag_forwarded_to_sync_main(
+    mock_sync_main, mock_auto_update, runner, tmp_path, monkeypatch
+):
+    """``pdd sync --compress`` forwards compress=True to sync_main (#876)."""
+    mock_sync_main.return_value = ({}, 0.0, '')
+    monkeypatch.chdir(tmp_path)
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "demo_python.prompt").write_text("% demo\n", encoding="utf-8")
+
+    result = runner.invoke(
+        cli.cli,
+        ["--quiet", "sync", "demo", "--compress", "--skip-verify", "--skip-tests"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert mock_sync_main.call_args.kwargs["compress"] is True
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.sync_main')
 @patch('pdd.commands.maintenance.run_agentic_sync')
 @patch('pdd.commands.maintenance.run_global_sync')
 def test_sync_without_basename_dispatches_global_sync(

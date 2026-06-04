@@ -13,6 +13,7 @@ import json
 import re
 import textwrap
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from rich.console import Console
@@ -375,6 +376,180 @@ def _full_interface(content: str, source_lines: list[str]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Compression mode (Python only)
+# ---------------------------------------------------------------------------
+
+_COMPRESSED_MAX_CHARS = 120_000  # ~30k tokens at 4 chars/token
+_PATCH_TARGET_RE = re.compile(r"""patch\s*\(\s*['"]([^'"]+)['"]""")
+
+
+def _is_test_file_path(file_path: str | None) -> bool:
+    if not file_path:
+        return False
+    name = Path(file_path).name
+    return name.startswith("test_") or name.endswith("_test.py")
+
+
+class _DocstringStripper(ast.NodeTransformer):
+    """Remove module/class/function docstrings while preserving executable nodes."""
+
+    @staticmethod
+    def _strip_leading_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(getattr(body[0].value, "value", None), str)
+        ):
+            return body[1:]
+        return body
+
+    @staticmethod
+    def _ensure_executable_body(body: list[ast.stmt]) -> list[ast.stmt]:
+        """Docstring-only bodies must become valid Python (``pass``)."""
+        if not body:
+            return [ast.Pass()]
+        return body
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> ast.FunctionDef:
+        node = self.generic_visit(node)
+        node.body = self._ensure_executable_body(
+            self._strip_leading_docstring(node.body)
+        )
+        return node
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> ast.AsyncFunctionDef:
+        node = self.generic_visit(node)
+        node.body = self._ensure_executable_body(
+            self._strip_leading_docstring(node.body)
+        )
+        return node
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> ast.ClassDef:
+        node = self.generic_visit(node)
+        node.body = self._ensure_executable_body(
+            self._strip_leading_docstring(node.body)
+        )
+        return node
+
+    def visit_Module(self, node: ast.Module) -> ast.Module:
+        node = self.generic_visit(node)
+        node.body = self._strip_leading_docstring(node.body)
+        return node
+
+
+def _strip_standalone_comment_lines(text: str) -> str:
+    """Drop comment-only lines; keep end-of-line comments on code lines."""
+    kept: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#") and not line.lstrip().startswith("# type:"):
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def _full_compressed(content: str, *, file_path: str | None) -> str:
+    """Deterministic few-shot compression: strip docstrings and comment-only lines."""
+    tree = ast.parse(content)
+    tree = _DocstringStripper().visit(tree)
+    ast.fix_missing_locations(tree)
+    compressed = ast.unparse(tree)
+    compressed = _strip_standalone_comment_lines(compressed)
+    ast.parse(compressed)
+    return compressed
+
+
+def _compressed_from_spans(
+    content: str,
+    source_lines: list[str],
+    spans: list[_Span],
+    *,
+    file_path: str | None,
+) -> str:
+    """Apply compression to span-selected Python source."""
+    raw = _extract_spans(source_lines, spans)
+    return _full_compressed(raw, file_path=file_path)
+
+
+def _sibling_test_paths(module_path: Path) -> list[Path]:
+    """Candidate sibling test files for a Python module (issue #876)."""
+    stem = module_path.stem
+    candidates = [
+        module_path.parent / f"test_{stem}.py",
+        module_path.parent / f"{stem}_test.py",
+        module_path.parent / "tests" / f"test_{stem}.py",
+    ]
+    if module_path.parent.name != "tests":
+        candidates.append(module_path.parent.parent / "tests" / f"test_{stem}.py")
+    return [path for path in candidates if path.is_file()]
+
+
+def discover_sibling_patch_targets(file_path: str | Path) -> set[str]:
+    """Names patched on this module in sibling tests (e.g. ``fetch_data``)."""
+    path = Path(file_path)
+    if _is_test_file_path(str(path)):
+        return set()
+    module_name = path.stem
+    targets: set[str] = set()
+    for test_path in _sibling_test_paths(path):
+        try:
+            text = test_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for match in _PATCH_TARGET_RE.finditer(text):
+            target = match.group(1)
+            symbol = _patch_symbol_for_module(target, module_name)
+            if symbol:
+                targets.add(symbol)
+    return targets
+
+
+def _patch_symbol_for_module(target: str, module_stem: str) -> Optional[str]:
+    """Return the patched symbol when *target* refers to module *module_stem*."""
+    if target == module_stem:
+        return None
+    parts = target.split(".")
+    if not parts:
+        return None
+    if parts[0] == module_stem and len(parts) > 1:
+        return parts[1].split(".")[0]
+    for idx in range(len(parts) - 1):
+        if parts[idx] == module_stem:
+            return parts[idx + 1].split(".")[0]
+    return None
+
+
+def _extract_named_definitions(content: str, names: set[str]) -> list[str]:
+    """Return full source spans for top-level functions named in *names*."""
+    if not names:
+        return []
+    tree = ast.parse(content)
+    lines = _splitlines(content)
+    chunks: list[str] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in names:
+            chunks.append("\n".join(lines[node.lineno - 1 : node.end_lineno]))
+    return chunks
+
+
+def augment_interface_with_patch_targets(
+    interface_text: str,
+    full_content: str,
+    targets: set[str],
+) -> str:
+    """Re-append full definitions for sibling ``patch()`` targets missing from interface."""
+    if not targets:
+        return interface_text
+    extras: list[str] = []
+    for chunk in _extract_named_definitions(full_content, targets):
+        if chunk and chunk not in interface_text:
+            extras.append(chunk)
+    if not extras:
+        return interface_text
+    return interface_text.rstrip() + "\n\n" + "\n\n".join(extras) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # Markdown section selector
 # ---------------------------------------------------------------------------
 
@@ -581,6 +756,34 @@ def _resolve_path(content: str, value: str, file_path: str | None) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 
+def apply_compressed_include_with_fallback(
+    content: str,
+    *,
+    file_path: str,
+    selectors: list[str] | str | None = None,
+) -> str:
+    """Apply compressed-mode include transform with interface/truncation fallback."""
+    if not _is_python(file_path):
+        return content
+    if isinstance(selectors, str):
+        sel_list = parse_selectors_string(selectors)
+    elif selectors:
+        sel_list = [s.strip() for s in selectors if s.strip()]
+    else:
+        sel_list = []
+    selector = ContentSelector()
+    raw = content
+    compressed = selector.select(raw, sel_list, file_path=file_path, mode="compressed")
+    if len(compressed) <= _COMPRESSED_MAX_CHARS:
+        return compressed
+    iface = selector.select(raw, sel_list, file_path=file_path, mode="interface")
+    patch_targets = discover_sibling_patch_targets(file_path)
+    restored = augment_interface_with_patch_targets(iface, raw, patch_targets)
+    if len(restored) <= _COMPRESSED_MAX_CHARS:
+        return restored
+    return raw[:_COMPRESSED_MAX_CHARS]
+
+
 class ContentSelector:
     """Precise content extraction from file content."""
 
@@ -611,6 +814,8 @@ class ContentSelector:
             ``"full"`` (default) returns the selected content verbatim.
             ``"interface"`` (Python only) returns signatures, docstrings,
             and type hints with bodies replaced by ``...``.
+            ``"compressed"`` (Python only) strips docstrings and comment-only
+            lines while preserving executable logic.
         expand_dependencies:
             When ``True`` (Python only), expand the selection to include
             local symbol dependencies and unittest/mock patch targets.
@@ -631,6 +836,15 @@ class ContentSelector:
             source_lines = _splitlines(content)
             try:
                 return _full_interface(content, source_lines)
+            except SyntaxError as exc:
+                _report_error(f"Failed to parse Python source: {exc}", file_path)
+                raise SelectorError(f"Python parse error: {exc}") from exc
+
+        if not selectors and mode == "compressed":
+            if not _is_python(file_path):
+                return content
+            try:
+                return _full_compressed(content, file_path=file_path)
             except SyntaxError as exc:
                 _report_error(f"Failed to parse Python source: {exc}", file_path)
                 raise SelectorError(f"Python parse error: {exc}") from exc
@@ -754,13 +968,29 @@ class ContentSelector:
 
         # Span-based content
         if all_spans:
-            # Interface mode post-processing for AST selectors
+            # Interface/compressed mode post-processing for AST selectors
             if mode == "interface" and is_python and tree is not None:
                 parts.append(_interface_from_spans(content, source_lines, tree, all_spans))
+            elif mode == "compressed" and is_python:
+                parts.append(
+                    _compressed_from_spans(
+                        content, source_lines, all_spans, file_path=file_path
+                    )
+                )
             else:
                 parts.append(_extract_spans(source_lines, all_spans))
 
-        # Path-based content
+        # Path-based content (pytest:/contract:/path: selectors)
+        if path_results and mode == "compressed" and is_python:
+            compressed_paths: list[str] = []
+            for chunk in path_results:
+                try:
+                    compressed_paths.append(
+                        _full_compressed(chunk, file_path=file_path)
+                    )
+                except SyntaxError:
+                    compressed_paths.append(chunk)
+            path_results = compressed_paths
         parts.extend(path_results)
 
         if not parts:

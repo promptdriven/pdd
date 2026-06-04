@@ -162,6 +162,14 @@ class TestE2EIssue902ExponentialBackoff:
         call_count = [0]
 
         def subprocess_side_effect(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args", [])
+            if cmd and cmd[0] == "gh":
+                resp = MagicMock()
+                resp.returncode = 0
+                resp.stdout = "[]"
+                resp.stderr = ""
+                return resp
+
             call_count[0] += 1
             # First 3 calls fail (step 1 retries), then all succeed
             if call_count[0] <= 3:

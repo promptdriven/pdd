@@ -294,7 +294,7 @@ class TestStep11PreprocessedPromptRetainsMockingGuidance:
             step11_prompt_content,
             recursive=True,
             double_curly_brackets=True,
-            exclude_keys=context_keys,
+            exclude=context_keys,
         )
         # Un-double braces like the orchestrator does
         rendered = processed.replace("{{", "{").replace("}}", "}")
@@ -650,12 +650,12 @@ class TestStep11AgenticAPIMockingIntegration:
         try:
             from pdd.preprocess import preprocess
 
-            exclude_keys = list(context.keys())
+            exclude = list(context.keys())
             processed = preprocess(
                 step11_prompt_content,
                 recursive=True,
                 double_curly_brackets=True,
-                exclude_keys=exclude_keys,
+                exclude=exclude,
             )
             rendered = processed.replace("{{", "{").replace("}}", "}")
         except ImportError:
