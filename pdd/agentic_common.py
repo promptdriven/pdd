@@ -598,23 +598,26 @@ _PERMANENT_ERROR_CLASSES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ),
     ),
     (
-        # Issue (this PR): Claude Code subscription-tier weekly limit ("You've
-        # hit your limit · resets [TIME]"). Distinct from API-tier 429 because
-        # the reset window is hours-to-days, not seconds-to-minutes — retrying
-        # on the 60s rate-limit floor wastes minutes. Stable token
-        # `credential-limit` lets pdd_cloud's OAuth-token waterfall detect this
-        # and rotate to a different credential instead of retrying the dead one.
+        # Claude Code subscription-tier caps. Covers the weekly/overall limit
+        # ("You've hit your limit · resets [TIME]") AND the 5-hour session limit
+        # and the usage limit ("You've hit your session/usage limit · resets
+        # [TIME]") — all are hours-to-days resets where retrying the same token
+        # is futile. Distinct from API-tier 429 because the reset window is
+        # hours-to-days, not seconds-to-minutes — retrying on the 60s rate-limit
+        # floor wastes minutes. Stable token `credential-limit` lets pdd_cloud's
+        # OAuth-token waterfall detect this and rotate to a different credential
+        # instead of retrying the dead one.
         "credential-limit",
         (
-            # Proximity + time-token guard. Requires "hit your limit" and
-            # "resets" within 40 chars (typical envelope is "... limit ·
-            # resets May 18, 11pm (UTC) ...") AND requires a time-token
-            # OR delimiter immediately after "resets" so distant prose
-            # like "if you hit your limit, nothing resets automatically"
-            # does NOT classify as credential-limit. Without the time
-            # token, any sentence stringing both phrases together would
+            # Proximity + time-token guard. Requires "hit your [session/usage/
+            # weekly/monthly] limit" and "resets" within 40 chars (typical
+            # envelope is "... limit · resets May 18, 11pm (UTC) ...") AND
+            # requires a time-token OR delimiter immediately after "resets" so
+            # distant prose like "if you hit your limit, nothing resets
+            # automatically" does NOT classify as credential-limit. Without the
+            # time token, any sentence stringing both phrases together would
             # short-circuit the rate-limit retry path on benign text.
-            r"hit\s+your\s+limit[^\n]{0,40}?\bresets?\b\s*(?:[·:|\-]|in\s|at\s|on\s|\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+            r"hit\s+your\s+(?:session\s+|usage\s+|weekly\s+|monthly\s+)?limit[^\n]{0,40}?\bresets?\b\s*(?:[·:|\-]|in\s|at\s|on\s|\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
         ),
     ),
     (
@@ -3363,6 +3366,31 @@ def _interactive_auth_failure_message(detail: str) -> str:
     )
 
 
+def _interactive_credential_limit_message(detail: str) -> str:
+    """Deterministic, PDD-owned, credential-safe message for an interactive
+    subscription/usage cap (``credential-limit``).
+
+    Symmetric to :func:`_interactive_auth_failure_message`. When the latest
+    assistant turn is a synthetic ``credential-limit`` failure — the Claude Code
+    subscription hit its weekly/usage limit mid-run ("You've hit your limit ·
+    resets <time>") — the PTY loop fast-fails with this message instead of
+    parking until the per-step timeout. The stable ``credential-limit`` token
+    lets the pdd_cloud OAuth-token waterfall force-rotate to a fresh credential
+    (the reset window is hours-to-days, so retrying the same token is futile).
+    Kept deliberately distinct from an API-tier 429 so this never lands on the
+    60s rate-limit retry floor. Never echoes ``detail`` (raw provider text can
+    quote the reset time / account info).
+    """
+    return (
+        "Claude Code interactive session reached its Claude subscription cap — "
+        "you've hit your limit · resets at a provider-set time (PDD "
+        "credential-limit). PDD detected a synthetic credential-limit turn in "
+        "the session transcript with no usable reply; fast-failing so the caller "
+        "rotates to the next OAuth credential instead of waiting for the full "
+        "interactive step timeout."
+    )
+
+
 def _claude_assistant_row_text(message: Dict[str, Any]) -> str:
     """Concatenate the text parts of an assistant message's content."""
     return " ".join(
@@ -3377,9 +3405,12 @@ def _auth_state_after_row(state: Optional[str], item: Dict[str, Any]) -> Optiona
 
     Returns the auth-failure message iff this row makes the session's latest
     ``assistant`` turn a terminal synthetic auth failure. The latest assistant
-    turn wins: a genuine model turn or a non-auth synthetic error (transient
-    overload/network/timeout, usage cap) supersedes an earlier auth error and
-    returns ``None``; a synthetic auth/oauth-login turn arms the fast-fail.
+    turn wins: a genuine model turn supersedes an earlier error and returns
+    ``None``. A synthetic auth/oauth-login turn arms the auth fast-fail; a
+    synthetic ``credential-limit`` turn (Claude subscription/usage cap) arms the
+    credential-limit fast-fail so the caller rotates credentials. A transient
+    synthetic error (overload/network/timeout) still returns ``None`` (the
+    caller keeps its retry/timeout fallback).
     Non-assistant rows (including the per-retry ``system``/``api_error`` rows)
     leave the state unchanged, so an in-flight, still-retrying turn is never
     killed mid-retry.
@@ -3396,8 +3427,15 @@ def _auth_state_after_row(state: Optional[str], item: Dict[str, Any]) -> Optiona
         # Genuine model output: authentication worked; supersede any prior error.
         return None
     text = _claude_assistant_row_text(item.get("message") or {})
-    if _classify_permanent_error(text) in ("auth", "oauth/login"):
+    classification = _classify_permanent_error(text)
+    if classification in ("auth", "oauth/login"):
         return _interactive_auth_failure_message(text)
+    if classification == "credential-limit":
+        # A mid-run subscription/usage cap parks the PTY at the prompt the same
+        # way an auth failure does; arm a credential-limit fast-fail so the
+        # caller rotates to the next OAuth token instead of burning the step
+        # timeout (the cloud waterfall force-rotates on this stable token).
+        return _interactive_credential_limit_message(text)
     return None
 
 
