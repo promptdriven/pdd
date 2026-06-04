@@ -312,32 +312,37 @@ class TestFinalGateLibrary:
     def test_rejects_invalid_review_budget_at_library_boundary(self, tmp_path: Path) -> None:
         """A direct caller passing an invalid Layer-2 budget must be rejected
         BEFORE Layer 1 spends cost / mutates the PR — not run a gate that dies
-        via a runtime cap."""
-        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
-            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
-        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
-            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
-        ), patch(
-            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
-        ), patch(
-            "pdd.agentic_checkup._load_pddrc_content", return_value=""
-        ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup_orchestrator"
-        ) as orch_mock, patch(
-            "pdd.agentic_checkup.run_checkup_review_loop"
-        ) as loop_mock:
-            success, msg, _cost, _model = run_agentic_checkup(
-                issue_url=ISSUE_URL,
-                quiet=True,
-                use_github_state=False,
-                pr_url=PR_URL,
-                final_gate=True,
-                max_review_rounds=0,
-            )
-        assert success is False
-        assert "review budget invalid" in msg
-        orch_mock.assert_not_called()
-        loop_mock.assert_not_called()
+        via a runtime cap. ``max_review_rounds`` is typed ``int`` but a direct
+        caller is not bound by the hint, so non-positive, non-integer (``1.5``),
+        non-finite (``nan``/``inf``), and ``bool`` rounds must all fail closed
+        before Layer 1."""
+        for rounds in (0, -1, 1.5, float("nan"), float("inf"), True):
+            with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+                "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+            ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+                "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+            ), patch(
+                "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+            ), patch(
+                "pdd.agentic_checkup._load_pddrc_content", return_value=""
+            ), patch(
+                "pdd.agentic_checkup.run_agentic_checkup_orchestrator"
+            ) as orch_mock, patch(
+                "pdd.agentic_checkup.run_checkup_review_loop"
+            ) as loop_mock:
+                success, msg, _cost, _model = run_agentic_checkup(
+                    issue_url=ISSUE_URL,
+                    quiet=True,
+                    use_github_state=False,
+                    pr_url=PR_URL,
+                    final_gate=True,
+                    max_review_rounds=rounds,
+                )
+            assert success is False, rounds
+            assert "review budget invalid" in msg, rounds
+            assert "max_review_rounds must be a positive integer" in msg, rounds
+            orch_mock.assert_not_called()
+            loop_mock.assert_not_called()
 
     def test_non_finite_budget_rejected_at_library_boundary(self, tmp_path: Path) -> None:
         """NaN/inf budgets bypass a bare ``<= 0`` check; the library must reject

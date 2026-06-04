@@ -656,8 +656,17 @@ def run_agentic_checkup(
         # caller could push Layer-1 fixes and then have Layer 2 die via a runtime
         # cap (e.g. "Max review rounds reached: 0"). Mirror the CLI's checks.
         budget_errors = []
-        if max_review_rounds < 1:
-            budget_errors.append("max_review_rounds must be >= 1")
+        # ``max_review_rounds`` is typed ``int`` but a direct library caller is
+        # not bound by the hint: ``1.5``/``nan``/``inf`` all slip past a bare
+        # ``< 1`` (and a float ``max_rounds`` later breaks ``range(1, n + 1)`` in
+        # the loop). Require an actual positive integer — and reject ``bool``,
+        # which is an ``int`` subclass — BEFORE Layer 1 spends cost / mutates.
+        if (
+            isinstance(max_review_rounds, bool)
+            or not isinstance(max_review_rounds, int)
+            or max_review_rounds < 1
+        ):
+            budget_errors.append("max_review_rounds must be a positive integer")
         if not math.isfinite(max_review_cost) or max_review_cost <= 0:
             budget_errors.append("max_review_cost must be a finite value > 0")
         if not math.isfinite(max_review_minutes) or max_review_minutes <= 0:
