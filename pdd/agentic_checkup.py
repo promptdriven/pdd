@@ -348,10 +348,14 @@ def _review_loop_ship_verdict(
         return False
     if reviewer_status.get(active) not in _SHIP_REVIEWER_STATES:
         return False
+    # The canonical ``_write_final_state`` ALWAYS serializes ``findings`` as a
+    # list, so a missing or non-list value means the verdict file is malformed
+    # or not from a real run — fail closed rather than treat the absence of an
+    # open-finding row as "no findings".
     findings = final_state.get("findings")
-    if isinstance(findings, list) and any(
-        isinstance(f, dict) and f.get("status") == "open" for f in findings
-    ):
+    if not isinstance(findings, list):
+        return False
+    if any(isinstance(f, dict) and f.get("status") == "open" for f in findings):
         return False
     if has_issue and str(final_state.get("issue_aligned")).lower() != "true":
         return False
@@ -603,6 +607,35 @@ def run_agentic_checkup(
         # The final gate is the two-layer PR-readiness path; it is issue-coupled
         # and PR-scoped, so it never runs in plain issue mode.
         return False, "--final-gate requires --pr and --issue.", 0.0, ""
+
+    if final_gate:
+        # The CLI rejects these combinations, but ``run_agentic_checkup`` is the
+        # real contract boundary (the e2e/pdd-issue path and pdd_cloud call it
+        # directly). Enforce the same gate-owned-knobs rule here so a direct
+        # caller cannot run a non-canonical "final gate" — e.g. Layer 1
+        # inheriting ``no_fix`` or a resume override — and silently get a
+        # weaker verdict than the gate promises.
+        conflicts = [
+            name
+            for name, set_ in (
+                ("no_fix", no_fix),
+                ("review_only", review_only),
+                ("review_loop", review_loop),
+                ("start_step_override", start_step_override is not None),
+            )
+            if set_
+        ]
+        if conflicts:
+            return (
+                False,
+                (
+                    "--final-gate cannot be combined with: "
+                    f"{', '.join(conflicts)}; the gate owns the fix/review steps "
+                    "and runs the review-loop as Layer 2."
+                ),
+                0.0,
+                "",
+            )
 
     if review_loop and not final_gate:
         if not pr_context_ready:

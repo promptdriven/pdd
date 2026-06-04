@@ -120,6 +120,18 @@ class TestShipVerdictPredicate:
         state["findings"] = [{"status": "open"}]
         assert _review_loop_ship_verdict(state, has_issue=True) is False
 
+    def test_missing_findings_key_fails_closed(self) -> None:
+        # The canonical writer always serializes findings as a list; a missing
+        # key means a malformed verdict file and must not ship.
+        state = _clean_final_state()
+        del state["findings"]
+        assert _review_loop_ship_verdict(state, has_issue=True) is False
+
+    def test_non_list_findings_fails_closed(self) -> None:
+        state = _clean_final_state()
+        state["findings"] = None
+        assert _review_loop_ship_verdict(state, has_issue=True) is False
+
 
 # ---------------------------------------------------------------------------
 # Library: two-layer dispatch, ordering, propagation, verdict
@@ -231,6 +243,41 @@ class TestFinalGateLibrary:
         success, _msg, _cost, _model = result
         assert success is False
 
+    def test_rejects_conflicting_knobs_at_library_boundary(self, tmp_path: Path) -> None:
+        """run_agentic_checkup is the real contract boundary (e2e/pdd_cloud call
+        it directly), so final_gate must reject gate-owned-knob conflicts there
+        too — not only at the CLI — instead of silently running a weaker gate."""
+        for conflict in ({"no_fix": True}, {"review_only": True}, {"review_loop": True}):
+            with patch(
+                "pdd.agentic_checkup._check_gh_cli", return_value=True
+            ), patch(
+                "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+            ), patch(
+                "pdd.agentic_checkup._fetch_comments", return_value=""
+            ), patch(
+                "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+            ), patch(
+                "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+            ), patch(
+                "pdd.agentic_checkup._load_pddrc_content", return_value=""
+            ), patch(
+                "pdd.agentic_checkup.run_agentic_checkup_orchestrator"
+            ) as orch_mock, patch(
+                "pdd.agentic_checkup.run_checkup_review_loop"
+            ) as loop_mock:
+                success, msg, _cost, _model = run_agentic_checkup(
+                    issue_url=ISSUE_URL,
+                    quiet=True,
+                    use_github_state=False,
+                    pr_url=PR_URL,
+                    final_gate=True,
+                    **conflict,
+                )
+            assert success is False, conflict
+            assert "--final-gate cannot be combined" in msg
+            orch_mock.assert_not_called()
+            loop_mock.assert_not_called()
+
     def test_final_gate_requires_issue(self, tmp_path: Path) -> None:
         with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
             "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
@@ -329,3 +376,20 @@ class TestFinalGateCli:
         )
         assert result.exit_code == 2
         assert "--final-gate" in result.output
+
+    def test_rejects_nonpositive_review_budget(self) -> None:
+        """The gate runs the review loop as Layer 2, so its budget knobs must be
+        validated for --final-gate too (else it can die via a runtime cap)."""
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr", PR_URL,
+                "--issue", ISSUE_URL,
+                "--final-gate",
+                "--max-review-rounds", "0",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+        assert result.exit_code == 2
+        assert "--max-review-rounds must be >= 1" in result.output

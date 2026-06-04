@@ -649,17 +649,20 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--review-loop cannot be combined with --no-fix; the loop owns the fixer step.",
             param_hint="'--review-loop'",
         )
-    if review_loop and max_review_rounds < 1:
+    # The final gate runs the review loop as Layer 2, so its budget knobs must
+    # be valid there too — otherwise the canonical gate could terminate via a
+    # runtime cap path (e.g. "Max review rounds reached: 0").
+    if (review_loop or final_gate) and max_review_rounds < 1:
         raise click.BadParameter(
             "--max-review-rounds must be >= 1.",
             param_hint="'--max-review-rounds'",
         )
-    if review_loop and max_review_cost <= 0:
+    if (review_loop or final_gate) and max_review_cost <= 0:
         raise click.BadParameter(
             "--max-review-cost must be > 0.",
             param_hint="'--max-review-cost'",
         )
-    if review_loop and max_review_minutes <= 0:
+    if (review_loop or final_gate) and max_review_minutes <= 0:
         raise click.BadParameter(
             "--max-review-minutes must be > 0.",
             param_hint="'--max-review-minutes'",
