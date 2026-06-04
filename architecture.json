@@ -8407,10 +8407,11 @@
     }
   },
   {
-    "reason": "Registers the pdd checkup CLI command for project health checks and lint dispatch.",
-    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
+    "reason": "Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.",
+    "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, agentic checkup integration, and pdd checkup prompt <target> dispatch. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
     "dependencies": [
-      "agentic_checkup_python.prompt"
+      "agentic_checkup_python.prompt",
+      "commands/checkup_prompt_python.prompt"
     ],
     "priority": 236,
     "filename": "commands/checkup_python.prompt",
@@ -8425,7 +8426,7 @@
         "commands": [
           {
             "name": "checkup",
-            "description": "Run agentic health checkup or local diagnostics including lint"
+            "description": "Run agentic health checkup, local diagnostics including lint, or unified prompt-space source-set health (checkup prompt)"
           }
         ]
       }
@@ -10172,7 +10173,7 @@
   },
   {
     "reason": "Single blocking pre-checkup gate that drift-syncs and build/smoke-verifies a PR before handing off to checkup --pr.",
-    "description": "A blocking pre-checkup quality gate invoked by both the change/feature and fix/bug e2e orchestrators immediately before `pdd checkup --pr`. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block the handoff. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "description": "A blocking pre-checkup quality gate invoked by both the change/feature and fix/bug e2e orchestrators immediately before `pdd checkup --pr`. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block the handoff. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it \u2014 the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate \u2014 so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
     "dependencies": [
       "checkup_gates_python.prompt",
       "ci_drift_heal_python.prompt",
@@ -10200,6 +10201,62 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Thin CLI wrapper for the unified prompt-space source-set health check (pdd checkup prompt).",
+    "description": "Defines the checkup_prompt Click command reached via pdd checkup prompt TARGET. Provides --explain (read-only LLM advisory), --interactive, and --apply flags. Enforces authority model: --apply requires --interactive, --interactive requires a TTY.",
+    "dependencies": [
+      "checkup_prompt_main_python.prompt"
+    ],
+    "priority": 236.1,
+    "filename": "commands/checkup_prompt_python.prompt",
+    "filepath": "pdd/commands/checkup_prompt.py",
+    "tags": [
+      "command",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "checkup_prompt_cmd",
+            "description": "Unified prompt-space source-set health: Check \u2192 Explain \u2192 Apply"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13700,
+      "y": 2400
+    }
+  },
+  {
+    "reason": "Orchestrates the three-stage unified prompt-space source-set health check (Check \u2192 Explain \u2192 Apply).",
+    "description": "Core orchestrator for pdd checkup prompt. Stage 1: aggregates deterministic engines (prompt-lint, coverage, gate-policy, contract-IR). Stage 2: optional bounded read-only LLM advisory keyed to finding IDs. Stage 3: human-approved apply of patches to .prompt and user_stories/story__*.md files only, with postflight re-check.",
+    "dependencies": [],
+    "priority": 236.05,
+    "filename": "checkup_prompt_main_python.prompt",
+    "filepath": "pdd/checkup_prompt_main.py",
+    "tags": [
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_checkup_prompt",
+            "signature": "(target: str, *, explain: bool, interactive: bool, apply: bool, quiet: bool, verbose: bool) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13700,
+      "y": 2800
     }
   }
 ]

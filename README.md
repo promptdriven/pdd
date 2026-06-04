@@ -58,6 +58,9 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
 For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
+
+For the unified prompt-space source-set report with optional explain/apply (`pdd checkup prompt`), see [docs/checkup_prompt.md](docs/checkup_prompt.md).
+
 ## Installation
 
 ### Prerequisites for macOS
@@ -2862,7 +2865,17 @@ Run an automated health check on a project from a GitHub issue. The checkup work
 
 `checkup` can also run against an existing pull request. With `--pr <PR_URL>` alone it reviews the PR diff on its own merits (correctness / quality), using full project context (architecture, `.pddrc`); the issue-alignment gate is skipped. Add `--issue <ISSUE_URL>` to also verify the PR resolves that issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop (which still requires `--issue`).
 
-**Local utilities** (no GitHub issue URL): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, **`pdd checkup snapshot`** for nondeterministic-prompt snapshot policy (prompts with `<shell>`, `<web>`, or `query=` includes must have a replayable artifact under `.pdd/evidence/`), and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` or `pdd policy snapshot` command—use `pdd checkup snapshot` only.
+**Unified prompt-space entry point**: `pdd checkup prompt <target>` gives a single entry point for source-set health. Before debugging generated code, answer: *Is this prompt clear, complete, covered, evidenced, and ready to generate from?*
+
+| Step | Command | What happens |
+|------|---------|--------------|
+| **Check** | `pdd checkup prompt <target>` | Unified source-set report: lint, contract, coverage, waivers, evidence, snapshot/gate readiness, and recommended next steps. |
+| **Explain** | `… --explain` | Read-only LLM advisory on deterministic finding IDs; non-fatal, exit code unchanged. |
+| **Apply** | `… --interactive --apply` | Human-approved patches to `.prompt` and `user_stories/story__*.md` only; postflight re-check. Both flags required. |
+
+See [docs/checkup_prompt.md](docs/checkup_prompt.md) for the full reference, authority model, and non-goals.
+
+**Focused checkers** (no GitHub issue URL, for CI and deep debugging): `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, **`pdd checkup snapshot`** for nondeterministic-prompt snapshot policy (prompts with `<shell>`, `<web>`, or `query=` includes must have a replayable artifact under `.pdd/evidence/`), and **`pdd checkup gate`** for evidence-manifest policy enforcement before merge. There is no top-level `pdd gate` or `pdd policy snapshot` command—use `pdd checkup snapshot` only.
 
 `pdd checkup gate` accepts `--policy-file` to load waiver policy keys from a YAML file instead of `.pddrc`; `--skip-evidence` to run only waiver-policy checks; and `--skip-waivers` to run only evidence-manifest checks.
 
