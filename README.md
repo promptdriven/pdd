@@ -3481,6 +3481,8 @@ This tiered approach allows for both shared project configurations and individua
 
 **Note:** You can manually edit this CSV, but running `pdd setup` again is the recommended way to add providers and update models.
 
+If a model added by a newer PDD release still appears to be ignored after upgrading, check for a stale override at `~/.pdd/llm_model.csv` or `<PROJECT_ROOT>/.pdd/llm_model.csv`. These files take precedence over the packaged catalog. Move/delete the stale override or regenerate it with `pdd setup` so selection can see the newer model rows.
+
 **Model ranking is agent-reviewed.** The `model_rank_score` column is the selector score: DeepSWE solve-rate rows are primary and use `10000 + round(solve_rate_percent * 100)`, while models absent from DeepSWE fall back to raw Arena/static ELO. The `coding_arena_elo` column remains raw Arena/static metadata and is not overwritten with fake DeepSWE ELO. The intended refresh path is agentic: inspect current DeepSWE and Arena source rows, record the raw model row, leaderboard/category, publish date, rank, rating bounds, vote count, match reason, and aliases in the respective manifest, then run the deterministic generator. See [Regenerate Model Catalog](#regenerate-model-catalog-pddgenerate_model_catalogpy) under Utilities.
 
 *Note: This file-based configuration primarily affects local operations and utilities. Cloud execution modes likely rely on centrally managed configurations.*
@@ -3865,7 +3867,7 @@ It performs the following steps:
 *   **Loads** reviewed scores, aliases, and row-level provenance from both manifests. Each DeepSWE entry carries a `solve_rate` plus `match_reason` explaining the harness, effort level, and date rationale for the mapping.
 *   **Normalizes** LiteLLM model IDs and applies only exact reviewed aliases from the manifests. Runtime fuzzy matching is intentionally disabled so model identity decisions stay reviewable. Reasoning-effort variants such as `-high`, `-medium`, `-low`, and `-minimal` remain distinct unless the manifest explicitly maps them.
 *   **Falls back** gracefully — if either manifest is missing or malformed, the run still succeeds using lower-priority sources or the curated static fallback dict for local-runner roots like `lm_studio/`, `ollama/`, aliases, and not-yet-reviewed models.
-*   Applies pricing overrides, deprecation/placeholder filtering, dedup, and a per-provider Pareto filter, then writes the resulting CSV.
+*   Applies pricing overrides, deprecation/placeholder filtering, dedup, and a per-provider Pareto filter that prunes dominated fallback rows while preserving DeepSWE-ranked rows, exact Arena-reviewed rows, and routable static fallback IDs, then writes the resulting CSV.
 *   **Emits** the `interactive_only` column, setting it to `True` for the provider roots that require interactive human auth or a running local server (`github_copilot`, `chatgpt`, `lm_studio`, `ollama`) and `False` for everyone else. Automatic model selection skips `interactive_only` rows unless `PDD_ALLOW_INTERACTIVE` is set (see [Core Environment Variables](#core-environment-variables)).
 *   **Prints** a raw-ELO diagnostic breakdown reporting counts for `arena-exact`, `static`, `static-prefix`, and `none`. DeepSWE provenance is visible per row in `model_rank_source`.
 

@@ -780,6 +780,37 @@ def test_prod_cloud_default_models_present_in_catalog():
     )
 
 
+def test_committed_csv_preserves_deepswe_and_arena_fallback_rows_removed_by_1405():
+    """Issue #1405: DeepSWE ranking must not delete supported fallback routes."""
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
+    text = csv_path.read_text(encoding="utf-8")
+
+    expected_models = [
+        "azure/gpt-5",
+        "azure/o3",
+        "azure/o4-mini",
+        "azure_ai/claude-opus-4-7",
+        "azure_ai/claude-sonnet-4-6",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+        "gemini/gemini-3.1-pro-preview",
+        "gemini/gemini-3.1-pro-preview-customtools",
+        "gmi/anthropic/claude-opus-4.5",
+        "gpt-5",
+        "o3",
+        "o4-mini",
+        "openrouter/google/gemini-3-flash-preview",
+        "openrouter/google/gemini-3.1-pro-preview",
+        "vercel_ai_gateway/anthropic/claude-haiku-4.5",
+    ]
+    missing = [model for model in expected_models if f",{model}," not in text]
+
+    assert not missing, (
+        "DeepSWE-primary catalog generation dropped fallback model rows: "
+        f"{missing}"
+    )
+
+
 # ==============================================================================
 # DeepSWE manifest — four-tier ELO resolution (issue #1375)
 #
@@ -943,6 +974,99 @@ def test_build_rows_keeps_deepswe_rows_below_raw_cutoff_but_drops_fallback_rows(
     assert "perplexity/google/gemini-2.5-pro" not in by_model, (
         "Arena/static fallback rows below ELO_CUTOFF must still be excluded"
     )
+
+
+def test_build_rows_keeps_reviewed_rows_and_static_fallbacks_under_deepswe_ranking(monkeypatch):
+    fake_litellm = type("L", (), {"model_cost": {
+        "gemini-3.5-flash": {
+            "mode": "chat",
+            "input_cost_per_token": 1.5e-6,
+            "output_cost_per_token": 9.0e-6,
+            "litellm_provider": "vertex_ai-language-models",
+            "supports_function_calling": True,
+            "supports_reasoning": True,
+        },
+        "gemini-3.1-pro-preview": {
+            "mode": "chat",
+            "input_cost_per_token": 2.0e-6,
+            "output_cost_per_token": 12.0e-6,
+            "litellm_provider": "vertex_ai-language-models",
+            "supports_function_calling": True,
+            "supports_reasoning": True,
+        },
+        "gpt-5.4-mini": {
+            "mode": "chat",
+            "input_cost_per_token": 0.75e-6,
+            "output_cost_per_token": 4.5e-6,
+            "litellm_provider": "openai",
+            "supports_function_calling": True,
+            "supports_reasoning": True,
+        },
+        "o4-mini": {
+            "mode": "chat",
+            "input_cost_per_token": 1.1e-6,
+            "output_cost_per_token": 4.4e-6,
+            "litellm_provider": "openai",
+            "supports_function_calling": True,
+            "supports_reasoning": True,
+        },
+        "vercel_ai_gateway/zai/glm-4.6": {
+            "mode": "chat",
+            "input_cost_per_token": 0.45e-6,
+            "output_cost_per_token": 1.8e-6,
+            "litellm_provider": "vercel_ai_gateway",
+            "supports_function_calling": True,
+        },
+        "vercel_ai_gateway/anthropic/claude-haiku-4.5": {
+            "mode": "chat",
+            "input_cost_per_token": 1.0e-6,
+            "output_cost_per_token": 5.0e-6,
+            "litellm_provider": "vercel_ai_gateway",
+            "supports_function_calling": True,
+        },
+    }})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {
+        gmc._normalize_model_name("gemini-3.5-flash"): {
+            "solve_rate": 28.0,
+            "raw_name": "gemini-3.5-flash",
+            "source": "agent-reviewed:deepswe",
+        },
+        gmc._normalize_model_name("gemini-3.1-pro-preview"): {
+            "solve_rate": 10.0,
+            "raw_name": "gemini-3.1-pro-preview",
+            "source": "agent-reviewed:deepswe",
+        },
+        gmc._normalize_model_name("gpt-5.4-mini"): {
+            "solve_rate": 24.0,
+            "raw_name": "gpt-5.4-mini",
+            "source": "agent-reviewed:deepswe",
+        },
+    })
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {
+        gmc._normalize_model_name("gemini-3.5-flash"): {
+            "elo": 1442.0,
+            "raw_name": "gemini-3.5-flash",
+        },
+        gmc._normalize_model_name("gemini-3.1-pro-preview"): {
+            "elo": 1456.0,
+            "raw_name": "gemini-3.1-pro-preview",
+        },
+        gmc._normalize_model_name("vercel_ai_gateway/anthropic/claude-haiku-4.5"): {
+            "elo": 1316.0,
+            "raw_name": "claude-haiku-4.5",
+        },
+    })
+
+    rows = gmc.build_rows()
+    by_model = {r["model"]: r for r in rows}
+
+    assert by_model["gemini-3.5-flash"]["model_rank_source"] == "deepswe-solve-rate"
+    assert by_model["gemini-3.1-pro-preview"]["model_rank_source"] == "deepswe-solve-rate"
+    assert by_model["o4-mini"]["model_rank_source"] == "static"
+    assert by_model["vercel_ai_gateway/anthropic/claude-haiku-4.5"][
+        "model_rank_source"
+    ] == "arena-elo-fallback"
 
 
 def test_committed_csv_has_no_non_deepswe_rows_below_cutoff():
