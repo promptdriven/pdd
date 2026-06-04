@@ -15,6 +15,9 @@
 }
 </pdd-interface>
 
+<pdd-dependency>checkup_prompt_explain_LLM.prompt</pdd-dependency>
+<pdd-dependency>checkup_prompt_apply_LLM.prompt</pdd-dependency>
+
 % Write `pdd/checkup_prompt_main.py`, the core orchestrator for `pdd checkup prompt`.
 
 <include>context/python_preamble.prompt</include>
@@ -37,12 +40,13 @@ Deterministic checks decide pass/fail.
 
 ### Stage 1 — Deterministic report (always runs)
 1. Resolve `target` to a prompt file path. Accept a bare module name (e.g., `refund_payment`), a prompt filename (e.g., `refund_payment_python.prompt`), or a relative/absolute path. Raise `click.UsageError` with a clear message when the target cannot be resolved.
-2. Aggregate the following deterministic sub-engines in order:
-   - `scan_prompt` / `check_prompt` (prompt-lint findings)
+2. Aggregate the following deterministic sub-engines in order (same engines as focused `pdd checkup lint`, `pdd checkup contract check`, `pdd checkup coverage`, and `pdd checkup gate`):
+   - `scan_prompt` from `prompt_lint` (prompt/story lint findings)
+   - `check_prompt` from `contract_check` (contract-section lint; equivalent to `pdd checkup contract check`)
    - `build_coverage` (rule-to-story/test coverage matrix)
    - `run_gate_policy` (evidence-manifest and waiver-policy gate)
-   - `parse_prompt_contracts` (contract-IR extraction: `contract_rules`, `vocabulary`, `coverage`, `waivers`, `capabilities`)
-3. Produce a structured `PromptSourceSetReport` collecting all findings, coverage gaps, and gate outcomes.
+   - `parse_prompt_contracts` (contract-IR extraction: rules, vocabulary, coverage, waivers, capabilities)
+3. Produce a structured `PromptSourceSetReport` dataclass with: `prompt_path`, `project_root`, `findings` (list of `SourceSetFinding` with stable `finding_id`, `engine`, `level`, `message`, …), optional `lint`, `coverage`, `gate`, `contract_ir`, `contract_passed`, and `passed`/`error_count`/`warn_count` properties.
 4. Print a human-readable unified report: findings by engine, coverage gaps, gate status, and recommended next steps.
 5. Return `(pass, summary, cost, model)` where `pass` is `True` when all deterministic checks pass.
 

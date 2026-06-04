@@ -17,9 +17,9 @@ from .checkup_simplify import checkup_simplify
 from .checkup_snapshot import checkup_snapshot
 from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
-from .gate import gate_cmd
 from .drift import drift_cmd
 from .gate import gate_cmd
+from .checkup_prompt import checkup_prompt_cmd
 from .prompt import prompt_lint
 
 
@@ -365,6 +365,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:
       pdd checkup lint TARGET [OPTIONS]  →  lint prompts and user stories for quality and ambiguity.
+    Unified prompt-space health:
+      pdd checkup prompt TARGET [OPTIONS]  →  source-set report (Check → Explain → Apply; see --help).
     Contract checks:
       pdd checkup contract check TARGET [OPTIONS]  (alias: ``pdd checkup contracts check``)
     Contract coverage:
@@ -387,6 +389,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         "gate",
         "simplify",
         "snapshot",
+        "prompt",
     }:
         click.echo(ctx.command.get_help(ctx))
         return None
@@ -446,6 +449,29 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         exit_code = checkup_simplify.main(
             args=simplify_args,
             prog_name="pdd checkup simplify",
+            standalone_mode=False,
+            obj=ctx.obj,
+        )
+        if show_help:
+            ctx.exit()
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return None
+
+    if target == "prompt":
+        prompt_args = list(ctx.args)
+        if not prompt_args or show_help:
+            click.echo(
+                checkup_prompt_cmd.get_help(
+                    click.Context(checkup_prompt_cmd, info_name="pdd checkup prompt")
+                )
+            )
+            return None
+        if show_help:
+            prompt_args.append("--help")
+        exit_code = checkup_prompt_cmd.main(
+            args=prompt_args,
+            prog_name="pdd checkup prompt",
             standalone_mode=False,
             obj=ctx.obj,
         )
