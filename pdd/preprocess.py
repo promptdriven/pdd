@@ -1288,7 +1288,15 @@ def process_include_many_tags(
                 full_path = get_file_path(p)
                 console.print(f"Including (many): [cyan]{full_path}[/cyan]")
                 with open(full_path, 'r', encoding='utf-8') as fh:
-                    content = fh.read()
+                    raw_content = fh.read()
+                    content = (
+                        _compressed_include_with_fallback_or_raw(
+                            raw_content,
+                            full_path,
+                        )
+                        if compress
+                        else raw_content
+                    )
                     contents.append(content)
                 if snapshot_recorder is not None:
                     snapshot_recorder.record_include(source_path=full_path, content=content)
@@ -1322,9 +1330,13 @@ def process_include_many_tags(
         return replace_many(match)
     return re.sub(pattern, replace_many_with_spans, text, flags=re.DOTALL)
 
-def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
+def double_curly(
+    text: str,
+    exclude_keys: Optional[List[str]] = None,
+    exclude: Optional[List[str]] = None,
+) -> str:
     if exclude_keys is None:
-        exclude_keys = []
+        exclude_keys = exclude if exclude is not None else []
     
     if not _is_quiet_mode():
         console.print("Doubling curly brackets...")
