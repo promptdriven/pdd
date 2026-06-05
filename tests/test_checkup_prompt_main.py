@@ -136,6 +136,47 @@ def test_report_json_findings_include_clarification_flag() -> None:
     assert all("code" in finding.as_dict() for finding in report.findings)
 
 
+def test_build_prompt_source_set_report_coverage_anchored_to_project_root(
+    tmp_path: Path,
+) -> None:
+    # Regression: coverage dirs must be resolved relative to project_root, not
+    # the process cwd.  Invoke from outside the project dir to verify.
+    project = tmp_path / "myproject"
+    project.mkdir()
+    prompts_dir = project / "prompts"
+    prompts_dir.mkdir()
+    stories_dir = project / "user_stories"
+    stories_dir.mkdir()
+    tests_dir = project / "tests"
+    tests_dir.mkdir()
+
+    # Minimal prompt with a contract_rules section so coverage is attempted.
+    prompt = prompts_dir / "simple_python.prompt"
+    prompt.write_text(
+        "% Simple prompt\n<contract_rules>\nR-001: always return something\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+
+    import os
+
+    orig_cwd = os.getcwd()
+    try:
+        os.chdir(tmp_path)  # cwd is OUTSIDE the project
+        report = build_prompt_source_set_report(
+            prompt,
+            target="simple",
+            project_root=project,
+        )
+    finally:
+        os.chdir(orig_cwd)
+
+    # Coverage must have run against project/user_stories and project/tests,
+    # not tmp_path/user_stories which does not exist.
+    assert report.coverage is not None
+    # No filesystem error — the correct dirs were found even from a foreign cwd.
+    assert report.coverage.error is None
+
+
 def test_checkup_issue_url_still_uses_agentic_path() -> None:
     runner = CliRunner()
     with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:

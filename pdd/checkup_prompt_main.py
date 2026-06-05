@@ -200,6 +200,12 @@ def build_prompt_source_set_report(
     """Run deterministic engines and collect a unified source-set report."""
     root = (project_root or Path.cwd()).resolve()
     prompt_path = prompt_path.resolve()
+    # Anchor coverage/gate source-set dirs to the resolved project root so that
+    # `pdd checkup` invoked from outside the project still finds the right paths.
+    if stories_dir is None:
+        stories_dir = root / "user_stories"
+    if tests_dir is None:
+        tests_dir = root / "tests"
     report = PromptSourceSetReport(
         prompt_path=prompt_path,
         project_root=root,

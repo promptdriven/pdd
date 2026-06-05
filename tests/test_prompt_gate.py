@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from pdd.prompt_gate import (
+    _normalize_prompt_gate_mode,
     filter_changed_prompt_paths,
     load_prompt_gate_config,
     parse_prompt_gate_block_exit,
@@ -138,3 +139,24 @@ def test_run_automatic_prompt_gate_warn_continues_on_failure(tmp_path: Path) -> 
     )
     assert should_continue is True
     assert exit_code == 0
+
+
+def test_normalize_prompt_gate_mode_yaml_boolean_false_maps_to_off() -> None:
+    # PyYAML parses unquoted `off` as boolean False; that must resolve to "off".
+    assert _normalize_prompt_gate_mode(False, source="<test>") == "off"
+
+
+def test_load_prompt_gate_config_unquoted_off_in_pddrc(tmp_path: Path) -> None:
+    # Regression: `prompt_gate: off` without quotes is loaded by PyYAML as boolean
+    # False; the config reader must still return "off", not fall back to "warn".
+    pddrc_content = (
+        "version: 1\n"
+        "contexts:\n"
+        "  default:\n"
+        "    paths:\n"
+        "      prompts: prompts\n"
+        "checkup:\n"
+        "  prompt_gate: off\n"
+    )
+    (tmp_path / ".pddrc").write_text(pddrc_content, encoding="utf-8")
+    assert load_prompt_gate_config(tmp_path) == "off"
