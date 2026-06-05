@@ -58,6 +58,7 @@
 
 % Public API preservation requirements:
 - Preserve the existing public module surface exactly. Do not remove or rename `functools`; keep `import functools` at module scope and call `@functools.wraps(func)` inside `track_cost`.
+- Preserve the existing datetime import surface exactly: keep `from datetime import datetime` and continue to call `datetime.now()`. Do not replace it with `import datetime`, `datetime.datetime`, aliases, wrappers, or any other public `datetime` binding change.
 - Preserve these public function names and signatures exactly, with no added annotations, no changed parameters, and no renamed arguments:
   - `def track_cost(func):`
   - `def extract_cost_and_model(result: Any) -> Tuple[Any, str]:`
@@ -65,6 +66,7 @@
   - `def collect_files(args, kwargs) -> Tuple[List[str], List[str]]:`
   - `def looks_like_file(path_str) -> bool:`
 - Add helper functions only as private underscore-prefixed functions. Do not make the token-count feature by changing public function signatures or removing legacy functions.
+- Do not add new public functions/classes/constants while implementing token-count logging. Any helper added for token extraction, CSV header handling, or legacy warnings must be underscore-prefixed.
 - `track_cost`, `collect_files`, and `looks_like_file` are imported by tests and downstream callers, so regenerated code that changes their signatures is a public API regression even if behavior still works internally.
 
 % Here is an example of how the `track_cost` decorator will be used in the `pdd` program:
