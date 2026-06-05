@@ -52,6 +52,25 @@ def classify_checkup_target(
     return CheckupTargetKind.UNKNOWN
 
 
+def _devunit_prompts_exist(devunit: str, project_root: Path) -> bool:
+    """Return True when *devunit* resolves to at least one prompt file."""
+    basename = devunit.strip()
+    if not basename:
+        return False
+
+    prompts_dir = project_root / "prompts"
+    if any(
+        path
+        for path in prompts_dir.glob(f"{basename}_*.prompt")
+        if not path.name.lower().endswith("_llm.prompt")
+    ):
+        return True
+
+    from .evidence_store import resolve_prompt_path
+
+    return resolve_prompt_path(project_root, basename) is not None
+
+
 def is_prompt_shaped_target(
     target: Optional[str],
     *,
@@ -59,8 +78,12 @@ def is_prompt_shaped_target(
 ) -> bool:
     """Return True when *target* should run the unified prompt source-set report."""
     kind = classify_checkup_target(target, project_root=project_root)
-    return kind in {
+    if kind in {
         CheckupTargetKind.PROMPT_FILE,
         CheckupTargetKind.PROMPT_DIRECTORY,
-        CheckupTargetKind.DEVUNIT,
-    }
+    }:
+        return True
+    if kind == CheckupTargetKind.DEVUNIT:
+        root = (project_root or Path.cwd()).resolve()
+        return _devunit_prompts_exist(str(target).strip(), root)
+    return False

@@ -108,6 +108,7 @@ def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
         or ("checkup", "contracts") in pairs
         or ("checkup", "coverage") in pairs
         or ("checkup", "gate") in pairs
+        or ("checkup", "drift") in pairs
         or ("contracts", "check") in pairs
     )
 

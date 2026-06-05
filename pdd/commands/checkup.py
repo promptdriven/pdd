@@ -26,6 +26,23 @@ from .gate import gate_cmd
 from .prompt import prompt_lint
 
 
+def _forward_subcommand_json(
+    args: list[str],
+    *,
+    as_json: bool,
+    after: Optional[str] = None,
+) -> list[str]:
+    """Forward parent ``--json`` to focused checkup subcommands."""
+    if not as_json or "--json" in args:
+        return list(args)
+    forwarded = list(args)
+    if after is not None and after in forwarded:
+        forwarded.insert(forwarded.index(after) + 1, "--json")
+    else:
+        forwarded.insert(0, "--json")
+    return forwarded
+
+
 @click.command(
     "checkup",
     context_settings={"ignore_unknown_options": True, "allow_extra_args": True},
@@ -445,7 +462,11 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target in {"contract", "contracts"}:
-        contract_args = list(ctx.args)
+        contract_args = _forward_subcommand_json(
+            list(ctx.args),
+            as_json=as_json,
+            after="check",
+        )
         if strict:
             # Forward strict to the subcommand scope, not the group scope.
             if contract_args and contract_args[0] == "check":
@@ -528,7 +549,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "lint":
-        lint_args = list(ctx.args)
+        lint_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
         if strict:
             lint_args.insert(0, "--strict")
         if not lint_args or show_help:
@@ -553,7 +574,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             )
             return None
         exit_code = coverage_cmd.main(
-            args=list(ctx.args),
+            args=_forward_subcommand_json(list(ctx.args), as_json=as_json),
             prog_name="pdd checkup coverage",
             standalone_mode=False,
             obj=ctx.obj,
@@ -563,7 +584,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "gate":
-        gate_args = list(ctx.args)
+        gate_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
         if show_help and not gate_args:
             click.echo(
                 gate_cmd.get_help(click.Context(gate_cmd, info_name="pdd checkup gate"))
@@ -580,7 +601,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "drift":
-        drift_args = list(ctx.args)
+        drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
         if not drift_args or show_help:
             click.echo(
                 drift_cmd.get_help(click.Context(drift_cmd, info_name="pdd checkup drift"))

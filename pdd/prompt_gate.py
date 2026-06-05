@@ -145,12 +145,19 @@ def maybe_run_workflow_prompt_gate(
     quiet: bool = False,
 ) -> tuple[bool, int]:
     """Shared hook for generate/change workflows that touch ``.prompt`` files."""
+    prompt_paths = [
+        path
+        for path in filter_changed_prompt_paths(changed_files)
+        if path.is_file()
+    ]
+    if not prompt_paths:
+        return True, 0
+
     gate_mode = resolve_prompt_gate_mode(
         cli_prompt_checkup=cli_prompt_checkup,
         no_prompt_checkup=no_prompt_checkup,
         project_root=project_root,
     )
-    prompt_paths = filter_changed_prompt_paths(changed_files)
     return run_automatic_prompt_gate(
         prompt_paths,
         mode=gate_mode,

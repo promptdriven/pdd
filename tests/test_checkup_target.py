@@ -28,8 +28,15 @@ def test_classify_github_issue_target() -> None:
     )
 
 
-def test_is_prompt_shaped_target_for_devunit() -> None:
-    assert is_prompt_shaped_target("refund_payment") is True
+def test_is_prompt_shaped_target_for_devunit(tmp_path: Path) -> None:
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "refund_payment_python.prompt").write_text("% test\n", encoding="utf-8")
+    assert is_prompt_shaped_target("refund_payment", project_root=tmp_path) is True
+
+
+def test_is_prompt_shaped_target_for_unresolved_devunit(tmp_path: Path) -> None:
+    assert is_prompt_shaped_target("refund_payment", project_root=tmp_path) is False
 
 
 def test_is_prompt_shaped_target_for_issue_url() -> None:
