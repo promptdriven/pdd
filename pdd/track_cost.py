@@ -2,177 +2,36 @@ import functools
 from datetime import datetime
 import csv
 import os
+from typing import Any, Callable, List, Optional, Tuple
+
 import click
 from rich import print as rprint
-from typing import Any, List, Optional, Tuple
+
 
 # Tracks cost-CSV paths we've already warned the user about for legacy headers.
-# Keyed on absolute path so a long-running session doesn't spam the same notice.
+# Keyed on absolute path so a long-running session does not repeat the notice.
 _legacy_csv_warned: set = set()
 
 
 def looks_like_file(path_str) -> bool:
-    """Check if string looks like a file path."""
-    if not path_str or not isinstance(path_str, str):
+    """Check if a string is path-like enough to consider for tracking."""
+    if not isinstance(path_str, str) or not path_str.strip():
         return False
-    return '.' in os.path.basename(path_str) or os.path.isfile(path_str)
+    return (
+        bool(os.path.splitext(path_str)[1])
+        or '/' in path_str
+        or '\\' in path_str
+        or os.path.isfile(path_str)
+    )
 
-def track_cost(func):
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        ctx = click.get_current_context()
-        if ctx is None:
-            return func(*args, **kwargs)
-
-        start_time = datetime.now()
-        result = None
-        exception_raised = None
-
-        # Snapshot any prior `attempted_models` so it cannot leak from an
-        # earlier tracked command into this one. We clear it before invoking
-        # the wrapped command and restore the prior value (or remove the key)
-        # after the row is written.
-        prior_attempted_models = None
-        had_prior_attempted_models = False
-        try:
-            if ctx.obj is not None and isinstance(ctx.obj, dict) and 'attempted_models' in ctx.obj:
-                prior_attempted_models = ctx.obj.pop('attempted_models')
-                had_prior_attempted_models = True
-        except Exception:
-            pass
-
-        try:
-            try:
-                if not os.environ.get('PYTEST_CURRENT_TEST'):
-                    if ctx.obj is not None:
-                        invoked = ctx.obj.get('invoked_subcommands') or []
-                        cmd_name = ctx.command.name if ctx.command else None
-                        if cmd_name:
-                            invoked.append(cmd_name)
-                            ctx.obj['invoked_subcommands'] = invoked
-            except Exception:
-                pass
-
-            result = func(*args, **kwargs)
-        except Exception as e:
-            exception_raised = e
-        finally:
-            end_time = datetime.now()
-
-            try:
-                input_files, output_files = collect_files(args, kwargs)
-
-                if ctx.obj is not None and ctx.obj.get('core_dump'):
-                    files_set = ctx.obj.get('core_dump_files', set())
-                    for f in input_files + output_files:
-                        if isinstance(f, str) and f:
-                            abs_path = os.path.abspath(f)
-                            if os.path.exists(abs_path) or '.' in os.path.basename(f):
-                                files_set.add(abs_path)
-                    ctx.obj['core_dump_files'] = files_set
-
-                if exception_raised is None:
-                    if ctx.obj and hasattr(ctx.obj, 'get'):
-                        output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
-                    else:
-                        output_cost_path = os.getenv('PDD_OUTPUT_COST_PATH')
-
-                    if output_cost_path and os.environ.get('PYTEST_CURRENT_TEST') is None:
-                        command_name = ctx.command.name
-                        cost, model_name = extract_cost_and_model(result)
-                        input_tokens, output_tokens = extract_token_counts(result)
-
-                        attempted_models_list = ctx.obj.get('attempted_models') if ctx.obj and isinstance(ctx.obj, dict) else None
-                        if not attempted_models_list:
-                            attempted_models_list = [model_name]
-                        attempted_models = ';'.join(str(m).replace(';', ':') for m in attempted_models_list)
-
-                        timestamp = start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
-
-                        row = {
-                            'timestamp': timestamp,
-                            'model': model_name,
-                            'command': command_name,
-                            'cost': cost,
-                            'input_tokens': input_tokens if input_tokens is not None else '',
-                            'output_tokens': output_tokens if output_tokens is not None else '',
-                            'input_files': ';'.join(input_files),
-                            'output_files': ';'.join(output_files),
-                            'attempted_models': attempted_models,
-                        }
-
-                        file_exists = os.path.isfile(output_cost_path)
-                        file_has_content = file_exists and os.path.getsize(output_cost_path) > 0
-
-                        new_fieldnames = [
-                            'timestamp', 'model', 'command', 'cost',
-                            'input_tokens', 'output_tokens',
-                            'input_files', 'output_files', 'attempted_models',
-                        ]
-
-                        fieldnames = new_fieldnames
-                        if file_has_content:
-                            with open(output_cost_path, 'r', encoding='utf-8') as f:
-                                first_line = f.readline()
-                                parsed_header = next(csv.reader([first_line]), [])
-                                fieldnames = parsed_header or new_fieldnames
-                                missing_new_columns = [
-                                    column for column in (
-                                        'input_tokens', 'output_tokens',
-                                        'attempted_models',
-                                    )
-                                    if column not in fieldnames
-                                ]
-                                if missing_new_columns:
-                                    abs_path = os.path.abspath(output_cost_path)
-                                    if abs_path not in _legacy_csv_warned:
-                                        _legacy_csv_warned.add(abs_path)
-                                        missing = ', '.join(missing_new_columns)
-                                        rprint(
-                                            "[yellow]Note: cost CSV "
-                                            f"'{output_cost_path}' uses the legacy "
-                                            f"header; the new column(s) {missing} "
-                                            "will not be recorded. Delete or "
-                                            "rename the file to start fresh with the "
-                                            "expanded columns.[/yellow]"
-                                        )
-                        row = {field: row.get(field, '') for field in fieldnames}
-
-                        with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
-                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-                            if not file_has_content:
-                                writer.writeheader()
-                            writer.writerow(row)
-
-            except Exception as e:
-                rprint(f"[red]Error tracking cost: {e}[/red]")
-
-            # Always clear/restore `attempted_models` so it cannot leak into a
-            # subsequent tracked command sharing the same ctx.obj.
-            try:
-                if ctx.obj is not None and isinstance(ctx.obj, dict):
-                    if had_prior_attempted_models:
-                        ctx.obj['attempted_models'] = prior_attempted_models
-                    else:
-                        ctx.obj.pop('attempted_models', None)
-            except Exception:
-                pass
-
-        if exception_raised is not None:
-            raise exception_raised
-
-        return result
-
-    return wrapper
 
 def extract_cost_and_model(result: Any) -> Tuple[Any, str]:
-    if isinstance(result, tuple) and len(result) >= 3:
-        return result[-2], result[-1]
-    return '', ''
+    if isinstance(result, (tuple, list)) and len(result) >= 2:
+        return result[-2], str(result[-1])
+    return 0.0, "unknown"
 
 
 def _coerce_token_count(value: Any) -> Optional[int]:
-    """Convert a token count to int when it is a valid non-negative number."""
     if value is None or isinstance(value, bool):
         return None
     try:
@@ -184,20 +43,20 @@ def _coerce_token_count(value: Any) -> Optional[int]:
     return token_count
 
 
-def _read_token_pair(payload: Any) -> Tuple[Optional[int], Optional[int]]:
-    """Read direct input/output token keys or attributes from one object."""
+def _direct_token_pair(payload: Any) -> Tuple[Optional[int], Optional[int]]:
     if isinstance(payload, dict):
-        input_value = payload.get('input_tokens')
-        output_value = payload.get('output_tokens')
-        return _coerce_token_count(input_value), _coerce_token_count(output_value)
-
-    input_value = getattr(payload, 'input_tokens', None)
-    output_value = getattr(payload, 'output_tokens', None)
-    return _coerce_token_count(input_value), _coerce_token_count(output_value)
+        return (
+            _coerce_token_count(payload.get('input_tokens')),
+            _coerce_token_count(payload.get('output_tokens')),
+        )
+    return (
+        _coerce_token_count(getattr(payload, 'input_tokens', None)),
+        _coerce_token_count(getattr(payload, 'output_tokens', None)),
+    )
 
 
 def extract_token_counts(result: Any) -> Tuple[Optional[int], Optional[int]]:
-    """Extract input/output token counts from result payloads when present."""
+    """Extract input/output token counts from supported result payloads."""
     seen: set[int] = set()
 
     def _scan(value: Any) -> Tuple[Optional[int], Optional[int]]:
@@ -209,7 +68,7 @@ def extract_token_counts(result: Any) -> Tuple[Optional[int], Optional[int]]:
             return None, None
         seen.add(value_id)
 
-        input_tokens, output_tokens = _read_token_pair(value)
+        input_tokens, output_tokens = _direct_token_pair(value)
         if input_tokens is not None or output_tokens is not None:
             return input_tokens, output_tokens
 
@@ -245,52 +104,195 @@ def collect_files(args, kwargs) -> Tuple[List[str], List[str]]:
     input_files: List[str] = []
     output_files: List[str] = []
 
-    input_param_names = {
-        'prompt_file', 'prompt', 'input', 'input_file', 'source', 'source_file',
-        'file', 'path', 'original_prompt_file_path', 'files', 'core_file',
-        'code_file', 'unit_test_file', 'error_file', 'test_file', 'example_file'
-    }
-
-    output_param_names = {
-        'output', 'output_file', 'output_path', 'destination', 'dest', 'target',
-        'output_test', 'output_code', 'output_results'
-    }
-
-    for k, v in kwargs.items():
-        if k in ('ctx', 'context', 'output_cost'):
+    for key, value in kwargs.items():
+        if key in ('ctx', 'context', 'output_cost', 'output_cost_path'):
             continue
 
-        is_input_param = k in input_param_names or 'file' in k.lower() or 'prompt' in k.lower()
-        is_output_param = k in output_param_names or 'output' in k.lower()
+        values = value if isinstance(value, (list, tuple)) else [value]
+        for item in values:
+            if not isinstance(item, str) or not item:
+                continue
+            if key.startswith('output'):
+                output_files.append(item)
+            elif os.path.isfile(item):
+                input_files.append(item)
 
-        if isinstance(v, str) and v:
-            if is_input_param or is_output_param or looks_like_file(v):
-                if is_output_param:
-                    output_files.append(v)
-                elif is_input_param:
-                    input_files.append(v)
-                else:
-                    input_files.append(v)
-        elif isinstance(v, list):
-            for item in v:
-                if isinstance(item, str) and item:
-                    if is_input_param or is_output_param or looks_like_file(item):
-                        if is_output_param:
-                            output_files.append(item)
-                        elif is_input_param:
-                            input_files.append(item)
-                        else:
-                            input_files.append(item)
-
-    for i, arg in enumerate(args):
-        if i == 0 and hasattr(arg, 'obj'):
+    for index, arg in enumerate(args):
+        if index == 0 and hasattr(arg, 'obj'):
             continue
 
-        if isinstance(arg, str) and arg and looks_like_file(arg):
-            input_files.append(arg)
-        elif isinstance(arg, list):
-            for item in arg:
-                if isinstance(item, str) and item and looks_like_file(item):
-                    input_files.append(item)
+        values = arg if isinstance(arg, (list, tuple)) else [arg]
+        for item in values:
+            if isinstance(item, str) and item and os.path.isfile(item):
+                input_files.append(item)
 
     return input_files, output_files
+
+
+def _get_output_cost_path(ctx) -> Optional[str]:
+    if ctx is not None and ctx.obj is not None and hasattr(ctx.obj, 'get'):
+        return (
+            ctx.obj.get('output_cost')
+            or ctx.obj.get('output_cost_path')
+            or ctx.obj.get('PDD_OUTPUT_COST_PATH')
+            or os.environ.get('PDD_OUTPUT_COST_PATH')
+        )
+    return os.environ.get('PDD_OUTPUT_COST_PATH')
+
+
+def _new_fieldnames() -> List[str]:
+    return [
+        'timestamp',
+        'model',
+        'command',
+        'cost',
+        'input_tokens',
+        'output_tokens',
+        'input_files',
+        'output_files',
+        'attempted_models',
+    ]
+
+
+def _fieldnames_for_path(output_cost_path: str) -> Tuple[List[str], bool]:
+    fieldnames = _new_fieldnames()
+    file_exists = os.path.isfile(output_cost_path)
+    file_has_content = file_exists and os.path.getsize(output_cost_path) > 0
+
+    if file_has_content:
+        with open(output_cost_path, 'r', encoding='utf-8') as cost_file:
+            first_line = cost_file.readline()
+        parsed_header = next(csv.reader([first_line]), [])
+        fieldnames = parsed_header or fieldnames
+
+    return fieldnames, file_has_content
+
+
+def _warn_if_legacy(output_cost_path: str, fieldnames: List[str]) -> None:
+    missing_columns = [
+        column for column in ('input_tokens', 'output_tokens', 'attempted_models')
+        if column not in fieldnames
+    ]
+    if not missing_columns:
+        return
+
+    abs_path = os.path.abspath(output_cost_path)
+    if abs_path in _legacy_csv_warned:
+        return
+
+    _legacy_csv_warned.add(abs_path)
+    missing = ', '.join(missing_columns)
+    rprint(
+        "[yellow]Note: cost CSV "
+        f"'{output_cost_path}' uses a legacy header; the new column(s) "
+        f"{missing} will not be recorded. Delete or rename the file to opt in."
+        "[/yellow]"
+    )
+
+
+def _attempted_models(ctx, model_name: str) -> str:
+    attempted = None
+    if ctx is not None and isinstance(ctx.obj, dict):
+        attempted = ctx.obj.get('attempted_models')
+    if not attempted:
+        attempted = [model_name]
+    return ';'.join(str(model).replace(';', ':') for model in attempted)
+
+
+def _record_core_dump_files(ctx, input_files: List[str], output_files: List[str]) -> None:
+    if ctx is None or ctx.obj is None or not hasattr(ctx.obj, 'get'):
+        return
+    if not ctx.obj.get('core_dump'):
+        return
+
+    files_set = ctx.obj.get('core_dump_files', set())
+    for path in input_files + output_files:
+        if isinstance(path, str) and path:
+            files_set.add(os.path.abspath(path))
+    ctx.obj['core_dump_files'] = files_set
+
+
+def _clear_attempted_models(ctx) -> Tuple[bool, Any]:
+    if ctx is not None and isinstance(ctx.obj, dict) and 'attempted_models' in ctx.obj:
+        return True, ctx.obj.pop('attempted_models')
+    return False, None
+
+
+def _restore_attempted_models(ctx, had_prior: bool, prior_value: Any) -> None:
+    if ctx is None or not isinstance(ctx.obj, dict):
+        return
+    if had_prior:
+        ctx.obj['attempted_models'] = prior_value
+    else:
+        ctx.obj.pop('attempted_models', None)
+
+
+def track_cost(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            ctx = click.get_current_context(silent=True)
+        except Exception:
+            ctx = None
+
+        start_time = datetime.now()
+        had_prior_attempted, prior_attempted = _clear_attempted_models(ctx)
+        result = None
+        command_error = None
+
+        try:
+            result = func(*args, **kwargs)
+        except Exception as exc:
+            command_error = exc
+        finally:
+            end_time = datetime.now()
+            del end_time
+
+            try:
+                input_files, output_files = collect_files(args, kwargs)
+                _record_core_dump_files(ctx, input_files, output_files)
+
+                output_cost_path = _get_output_cost_path(ctx)
+                if (
+                    ctx is not None
+                    and command_error is None
+                    and output_cost_path
+                    and os.environ.get('PYTEST_CURRENT_TEST') is None
+                ):
+                    cost, model_name = extract_cost_and_model(result)
+                    input_tokens, output_tokens = extract_token_counts(result)
+                    attempted_models = _attempted_models(ctx, model_name)
+
+                    row = {
+                        'timestamp': start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3],
+                        'model': model_name,
+                        'command': ctx.command.name if ctx.command else 'unknown',
+                        'cost': cost,
+                        'input_tokens': input_tokens if input_tokens is not None else '',
+                        'output_tokens': output_tokens if output_tokens is not None else '',
+                        'input_files': ';'.join(input_files),
+                        'output_files': ';'.join(output_files),
+                        'attempted_models': attempted_models,
+                    }
+
+                    fieldnames, file_has_content = _fieldnames_for_path(output_cost_path)
+                    if file_has_content:
+                        _warn_if_legacy(output_cost_path, fieldnames)
+
+                    with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        if not file_has_content:
+                            writer.writeheader()
+                        writer.writerow({field: row.get(field, '') for field in fieldnames})
+
+            except Exception as exc:
+                rprint(f"[red]Error tracking cost: {exc}[/red]")
+            finally:
+                _restore_attempted_models(ctx, had_prior_attempted, prior_attempted)
+
+        if command_error is not None:
+            raise command_error
+
+        return result
+
+    return wrapper

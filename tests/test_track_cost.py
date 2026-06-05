@@ -1,7 +1,34 @@
+# Test plan:
+# 1. Decorator preserves wrapped command return values, metadata behavior, and command exception propagation.
+# 2. Output cost path is accepted from ctx.obj keys and from PDD_OUTPUT_COST_PATH, and missing paths skip writing.
+# 3. CSV creation writes the exact fresh header, including token columns and attempted_models as the last column.
+# 4. Existing CSVs append rows without rewriting headers, including empty existing files and legacy headers.
+# 5. Legacy CSVs missing attempted_models and/or token columns warn once per absolute file path.
+# 6. Cost/model extraction follows trailing tuple/list elements and handles short or non-tuple results.
+# 7. Token extraction covers direct/nested dicts, direct/nested objects, tuple payloads, invalid values, and blank CSV output.
+# 8. File collection records existing input files, output-prefixed parameters, multiple values, and ignores non-string values.
+# 9. attempted_models comes from ctx.obj, preserves order, sanitizes semicolons, defaults to the model, and does not leak between commands.
+# 10. CSV writing is skipped under PYTEST_CURRENT_TEST and logging failures use rprint without interrupting successful commands.
+# 11. Public API imports and exact public function signatures remain stable.
+# 12. Helper branch coverage includes no Click context, env fallback, fresh files, empty files, legacy files, and error paths.
+
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+import pdd
+
+pdd.__path__.insert(0, str(PROJECT_ROOT / "pdd"))
+sys.modules.pop("pdd.track_cost", None)
+sys.modules.pop("pdd.agentic_sync_runner", None)
+
 import pytest
 import unittest.mock as mock
 from unittest.mock import MagicMock, mock_open, patch
 import csv
+import inspect
 import os
 import re
 from datetime import datetime
@@ -48,6 +75,11 @@ def create_mock_context(command_name: str, params: dict, obj: dict = None):
         mock_ctx.obj = None
 
     return mock_ctx
+
+
+def _isfile_for_existing_inputs(path):
+    """Mock helper: cost CSV is new, command input paths exist."""
+    return not str(path).endswith('cost.csv')
 
 
 @pytest.fixture
@@ -210,7 +242,7 @@ def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rpr
     mock_click_context.return_value = mock_ctx
 
     # Mock os.path.isfile to return False (file does not exist)
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path and mode
@@ -249,7 +281,7 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
     monkeypatch.setenv('PDD_OUTPUT_COST_PATH', '/env/path/cost.csv')
 
     # Mock os.path.isfile to return False (file does not exist)
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called with the path from environment variable
@@ -286,7 +318,7 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
     mock_click_context.return_value = mock_ctx
 
     # Mock os.path.isfile to return False (file does not exist)
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called once
@@ -325,7 +357,7 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
     def train_command(ctx, input_file: str, output: str = None) -> Tuple[str, float, str]:
         return ('/path/to/output', 50.0, 'bert-base')
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = train_command(mock_ctx, '/path/to/input.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path
@@ -347,7 +379,7 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
 
 def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint):
     """
-    Test that when the command result tuple is too short, cost and model are set to empty strings.
+    Test that when the command result tuple is too short, cost/model fall back to 0.0 and unknown.
     """
     # Define a command that returns a short tuple
     @track_cost
@@ -365,7 +397,7 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = short_result_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
@@ -375,8 +407,8 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
     handle = mock_open_file()
     # Header should be written
     handle.write.assert_any_call('timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n')
-    # Data row should have empty cost and model; attempted_models defaults to the model_name (empty here)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,short,,,,/path/to/prompt.txt,,\r\n')
+    # Data row should have fallback cost/model; attempted_models defaults to the model_name.
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,unknown,short,0.0,,,/path/to/prompt.txt,,unknown\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -406,7 +438,7 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = process_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt')
 
     # Ensure that open was called with the correct path
@@ -447,7 +479,7 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = batch_command(
             mock_ctx,
             ['/path/to/input1.txt', '/path/to/input2.txt'],
@@ -529,7 +561,7 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = mixed_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt', config={'key': 'value'})
 
     # Ensure that open was called with the correct path
@@ -565,7 +597,7 @@ def test_missing_click_context(mock_open_file, mock_rprint):
 
 def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
     """
-    Test that if the command result is not a tuple, cost and model are set to empty strings.
+    Test that if the command result is not a tuple, cost/model fall back to 0.0 and unknown.
     """
     # Define a command that returns a non-tuple result
     @track_cost
@@ -583,7 +615,7 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = non_tuple_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
@@ -591,8 +623,8 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
-    # Data row should have empty cost and model; attempted_models defaults to model_name (empty)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,non_tuple,,,,/path/to/prompt.txt,,\r\n')
+    # Data row should have fallback cost/model; attempted_models defaults to model_name.
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,unknown,non_tuple,0.0,,,/path/to/prompt.txt,,unknown\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -883,7 +915,7 @@ def test_attempted_models_from_ctx_obj_joined_with_semicolons(
     })
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         cmd(mock_ctx, '/path/to/prompt.txt')
 
     handle = mock_open_file()
@@ -911,7 +943,7 @@ def test_attempted_models_sanitizes_semicolons_to_colons(
     })
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         cmd(mock_ctx, '/p.txt')
 
     handle = mock_open_file()
@@ -938,7 +970,7 @@ def test_attempted_models_defaults_to_model_name_when_missing(
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         cmd(mock_ctx, '/p.txt')
 
     handle = mock_open_file()
@@ -1094,11 +1126,52 @@ def test_existing_csv_without_token_headers_preserves_header(
 
 
 def test_extract_cost_and_model_short_or_non_tuple():
-    """extract_cost_and_model returns ('', '') for short/non-tuple results."""
+    """extract_cost_and_model returns (0.0, 'unknown') for unavailable cost/model."""
     from pdd.track_cost import extract_cost_and_model
-    assert extract_cost_and_model(('only-one',)) == ('', '')
-    assert extract_cost_and_model('not a tuple') == ('', '')
+    assert extract_cost_and_model(('only-one',)) == (0.0, 'unknown')
+    assert extract_cost_and_model('not a tuple') == (0.0, 'unknown')
     assert extract_cost_and_model(('out', 1.0, 'gpt')) == (1.0, 'gpt')
+
+
+def test_extract_token_counts_from_nested_object_attributes():
+    """extract_token_counts reads nested usage/token attributes from objects."""
+    from pdd.track_cost import extract_token_counts
+
+    class Usage:
+        input_tokens = '12'
+        output_tokens = 7.0
+
+    class ResultPayload:
+        usage = Usage()
+
+    assert extract_token_counts(ResultPayload()) == (12, 7)
+
+
+def test_extract_token_counts_from_tuple_payload_ignores_invalid_values():
+    """extract_token_counts scans tuple payloads before cost/model and ignores invalid counts."""
+    from pdd.track_cost import extract_token_counts
+
+    result = (
+        {'usage': {'input_tokens': 'bad', 'output_tokens': -4}},
+        {'tokens': {'input_tokens': 33, 'output_tokens': '44'}},
+        0.25,
+        'model-name',
+    )
+
+    assert extract_token_counts(result) == (33, 44)
+
+
+def test_public_api_signatures_and_import_surface_are_stable():
+    """Public function signatures and required module imports are preserved."""
+    import pdd.track_cost as track_cost_module
+
+    assert hasattr(track_cost_module, 'functools')
+    assert track_cost_module.datetime is datetime
+    assert str(inspect.signature(track_cost_module.track_cost)) == '(func)'
+    assert str(inspect.signature(track_cost_module.extract_cost_and_model)) == '(result: Any) -> Tuple[Any, str]'
+    assert str(inspect.signature(track_cost_module.extract_token_counts)) == '(result: Any) -> Tuple[Optional[int], Optional[int]]'
+    assert str(inspect.signature(track_cost_module.collect_files)) == '(args, kwargs) -> Tuple[List[str], List[str]]'
+    assert str(inspect.signature(track_cost_module.looks_like_file)) == '(path_str) -> bool'
 
 
 def test_looks_like_file_basic():
