@@ -2,6 +2,7 @@
 Checkup command — GitHub issue-driven project health check, or local diagnostics.
 """
 # pylint: disable=unknown-option-value
+import math
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -119,6 +120,22 @@ from .prompt import prompt_lint
     is_flag=True,
     default=False,
     help="In PR mode, run the primary-reviewer/fixer loop before returning a verdict.",
+)
+@click.option(
+    "--final-gate",
+    "final_gate",
+    is_flag=True,
+    default=False,
+    help=(
+        "Canonical final PR gate (issue #1406). Requires --pr and --issue. "
+        "Runs the PR-scoped checkup (Layer 1, no new PR) then the "
+        "reviewer/fixer review-loop (Layer 2) on the resulting PR head, and "
+        "returns a real ship verdict (exit non-zero unless the PR is "
+        "shippable). This is what \"ready for maintainer review\" means once a "
+        "PR exists. Cannot be combined with --review-loop, --no-fix, "
+        "--review-only, --start-step, --no-gates, or --test-scope targeted "
+        "(the verdict requires the deterministic gates and the full suite)."
+    ),
 )
 @click.option(
     "--review-only",
@@ -328,6 +345,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     issue_url_opt: Optional[str],
     test_scope: str,
     review_loop: bool,
+    final_gate: bool,
     review_only: bool,
     reviewers: str,
     reviewer: Optional[str],
@@ -585,6 +603,52 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--review-loop requires --pr and --issue.",
             param_hint="'--review-loop'",
         )
+    # ``--final-gate`` is the canonical two-layer PR-readiness gate (#1406). It
+    # requires both ``--pr`` and ``--issue`` and owns the review-loop as Layer 2,
+    # so it cannot be combined with flags that would contradict or duplicate the
+    # two-layer contract.
+    if final_gate:
+        if not pr_mode or issue_url_opt is None:
+            raise click.BadParameter(
+                "--final-gate requires --pr and --issue.",
+                param_hint="'--final-gate'",
+            )
+        if review_loop:
+            raise click.BadParameter(
+                "--final-gate already runs the review-loop as Layer 2; do not "
+                "also pass --review-loop.",
+                param_hint="'--final-gate'",
+            )
+        if no_fix:
+            raise click.BadParameter(
+                "--final-gate cannot be combined with --no-fix; the gate owns "
+                "the fix/review steps.",
+                param_hint="'--final-gate'",
+            )
+        if review_only:
+            raise click.BadParameter(
+                "--final-gate cannot be combined with --review-only.",
+                param_hint="'--final-gate'",
+            )
+        if start_step is not None:
+            raise click.BadParameter(
+                "--start-step applies to the legacy checkup workflow, not "
+                "--final-gate.",
+                param_hint="'--final-gate'",
+            )
+        if no_gates:
+            raise click.BadParameter(
+                "--final-gate cannot be combined with --no-gates; the canonical "
+                "ship verdict requires the deterministic local gates, otherwise "
+                "an LLM-only review could pass over a failing gate.",
+                param_hint="'--final-gate'",
+            )
+        if test_scope != "full":
+            raise click.BadParameter(
+                "--final-gate requires full test scope; --test-scope targeted "
+                "would return a ship verdict without running the full suite.",
+                param_hint="'--final-gate'",
+            )
     if review_loop and start_step is not None:
         raise click.BadParameter(
             "--start-step applies to the legacy checkup workflow, not --review-loop.",
@@ -600,19 +664,26 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--review-loop cannot be combined with --no-fix; the loop owns the fixer step.",
             param_hint="'--review-loop'",
         )
-    if review_loop and max_review_rounds < 1:
+    # The final gate runs the review loop as Layer 2, so its budget knobs must
+    # be valid there too — otherwise the canonical gate could terminate via a
+    # runtime cap path (e.g. "Max review rounds reached: 0").
+    if (review_loop or final_gate) and max_review_rounds < 1:
         raise click.BadParameter(
             "--max-review-rounds must be >= 1.",
             param_hint="'--max-review-rounds'",
         )
-    if review_loop and max_review_cost <= 0:
+    if (review_loop or final_gate) and (
+        not math.isfinite(max_review_cost) or max_review_cost <= 0
+    ):
         raise click.BadParameter(
-            "--max-review-cost must be > 0.",
+            "--max-review-cost must be a finite value > 0.",
             param_hint="'--max-review-cost'",
         )
-    if review_loop and max_review_minutes <= 0:
+    if (review_loop or final_gate) and (
+        not math.isfinite(max_review_minutes) or max_review_minutes <= 0
+    ):
         raise click.BadParameter(
-            "--max-review-minutes must be > 0.",
+            "--max-review-minutes must be a finite value > 0.",
             param_hint="'--max-review-minutes'",
         )
     if pr_mode:
@@ -675,6 +746,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             test_scope=test_scope,
             start_step_override=start_step_override,
             review_loop=review_loop,
+            final_gate=final_gate,
             review_only=review_only,
             reviewers=reviewers,
             reviewer=reviewer,

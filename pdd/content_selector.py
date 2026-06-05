@@ -766,6 +766,7 @@ def apply_compressed_include_with_fallback(
     *,
     file_path: str,
     selectors: list[str] | str | None = None,
+    expand_dependencies: bool = False,
 ) -> str:
     """Apply compressed-mode include transform with interface/truncation fallback."""
     if not _is_python(file_path):
@@ -778,10 +779,22 @@ def apply_compressed_include_with_fallback(
         sel_list = []
     selector = ContentSelector()
     raw = content
-    compressed = selector.select(raw, sel_list, file_path=file_path, mode="compressed")
+    compressed = selector.select(
+        raw,
+        sel_list,
+        file_path=file_path,
+        mode="compressed",
+        expand_dependencies=expand_dependencies,
+    )
     if len(compressed) <= _COMPRESSED_MAX_CHARS:
         return compressed
-    iface = selector.select(raw, sel_list, file_path=file_path, mode="interface")
+    iface = selector.select(
+        raw,
+        sel_list,
+        file_path=file_path,
+        mode="interface",
+        expand_dependencies=expand_dependencies,
+    )
     patch_targets = discover_sibling_patch_targets(file_path)
     restored = augment_interface_with_patch_targets(iface, raw, patch_targets)
     if len(restored) <= _COMPRESSED_MAX_CHARS:
@@ -798,6 +811,7 @@ class ContentSelector:
         selectors: list[str] | str,
         file_path: str | None = None,
         mode: str = "full",
+        expand_dependencies: bool = False,
     ) -> str:
         """Select portions of *content* according to *selectors*.
 
@@ -820,6 +834,9 @@ class ContentSelector:
             and type hints with bodies replaced by ``...``.
             ``"compressed"`` (Python only) strips docstrings and comment-only
             lines while preserving executable logic.
+        expand_dependencies:
+            When ``True`` (Python only), expand the selection to include
+            local symbol dependencies and unittest/mock patch targets.
 
         Returns
         -------
@@ -981,6 +998,9 @@ class ContentSelector:
                     f"Error processing selector '{sel.kind}:{sel.value}': {exc}"
                 ) from exc
 
+        if expand_dependencies and is_python and tree is not None and all_spans:
+            all_spans = _expand_dependency_spans(tree, all_spans, file_path)
+
         # Build final result
         parts: list[str] = []
 
@@ -1015,6 +1035,159 @@ class ContentSelector:
             return ""
 
         return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Dependency expansion (Python)
+# ---------------------------------------------------------------------------
+
+def _span_overlaps_node(span: _Span, node: ast.AST) -> bool:
+    node_start = _node_start_line(node)
+    node_end = _node_end_line(node)
+    return span.start < node_end and span.end > node_start
+
+
+def _top_level_symbol_map(tree: ast.Module) -> dict[str, ast.AST]:
+    mapping: dict[str, ast.AST] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            mapping[node.name] = node
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    mapping[target.id] = node
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+        ):
+            mapping[node.target.id] = node
+    return mapping
+
+
+def _referenced_local_names(node: ast.AST, top_level: set[str]) -> set[str]:
+    found: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+            if child.id in top_level:
+                found.add(child.id)
+    return found
+
+
+def _ast_node_for_symbol(
+    tree: ast.Module,
+    symbol: str,
+    top_map: dict[str, ast.AST],
+) -> ast.AST | None:
+    if "." not in symbol:
+        return top_map.get(symbol)
+    cls_name, remainder = symbol.split(".", 1)
+    cls_node = top_map.get(cls_name)
+    if not isinstance(cls_node, ast.ClassDef):
+        return None
+    if "." not in remainder:
+        for child in cls_node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == remainder:
+                return child
+        return None
+    inner_cls, method_name = remainder.split(".", 1)
+    for child in cls_node.body:
+        if isinstance(child, ast.ClassDef) and child.name == inner_cls:
+            for method in child.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name == method_name:
+                    return method
+    return None
+
+
+def _used_names_for_needed(
+    tree: ast.Module,
+    needed: set[str],
+    top_map: dict[str, ast.AST],
+) -> set[str]:
+    used: set[str] = set()
+    for name in needed:
+        node = _ast_node_for_symbol(tree, name, top_map)
+        if node is None:
+            continue
+        for child in ast.walk(node):
+            if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+                used.add(child.id)
+    return used
+
+
+def _import_spans_for_used_names(tree: ast.Module, used_names: set[str]) -> list[_Span]:
+    if not used_names:
+        return []
+    spans: list[_Span] = []
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            if any((alias.asname or alias.name.split(".")[0]) in used_names for alias in node.names):
+                spans.append(_Span(_node_start_line(node), _node_end_line(node)))
+        elif isinstance(node, ast.ImportFrom):
+            if any((alias.asname or alias.name) in used_names for alias in node.names):
+                spans.append(_Span(_node_start_line(node), _node_end_line(node)))
+    return spans
+
+
+def _span_for_symbol(tree: ast.Module, symbol: str, top_map: dict[str, ast.AST]) -> _Span | None:
+    node = _ast_node_for_symbol(tree, symbol, top_map)
+    if node is None:
+        return None
+    return _Span(_node_start_line(node), _node_end_line(node))
+
+
+def _expand_dependency_spans(
+    tree: ast.Module,
+    spans: list[_Span],
+    file_path: str | None,
+) -> list[_Span]:
+    top_map = _top_level_symbol_map(tree)
+    top_names = set(top_map.keys())
+
+    seed_names: set[str] = set()
+    for node in tree.body:
+        if not isinstance(
+            node,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Assign, ast.AnnAssign),
+        ):
+            continue
+        if any(_span_overlaps_node(span, node) for span in spans):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                seed_names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        seed_names.add(target.id)
+            elif isinstance(node.target, ast.Name):
+                seed_names.add(node.target.id)
+
+    from pdd.split_validation import collect_patch_symbols_for_module  # pylint: disable=import-outside-toplevel
+
+    if file_path:
+        seed_names.update(collect_patch_symbols_for_module(file_path))
+
+    needed: set[str] = set()
+    pending = list(seed_names)
+    while pending:
+        name = pending.pop()
+        if name in needed:
+            continue
+        needed.add(name)
+        root = name.split(".", 1)[0]
+        node = top_map.get(root)
+        if node is None:
+            continue
+        for dep in _referenced_local_names(node, top_names):
+            if dep not in needed:
+                pending.append(dep)
+
+    expanded = list(spans)
+    for name in needed:
+        symbol_span = _span_for_symbol(tree, name, top_map)
+        if symbol_span is not None:
+            expanded.append(symbol_span)
+    expanded.extend(_import_spans_for_used_names(tree, _used_names_for_needed(tree, needed, top_map)))
+    return expanded
 
 
 # ---------------------------------------------------------------------------

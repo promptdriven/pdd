@@ -3635,6 +3635,33 @@ Use this manual PR-review standard:
   environment or final user-visible state, not only an earlier base/default
   config snapshot. Do not treat a logging-only gap as a runtime failure unless
   the user workflow is actually broken.
+- Run adversarial probe families against any validator, checker, guard, static
+  analyzer, linter, parser, or CLI the PR adds or changes — this is the manual
+  maintainer/Greg-Codex review pattern, not optional. For each such surface,
+  construct concrete inputs that attack every decision branch instead of
+  trusting the happy path:
+  - Bypass/evasion probes: inputs crafted to slip past the check — case
+    variations, alternate suffixes/extensions, symlinks, renames, path-prefix
+    tricks, Unicode/whitespace/quoting, encoding, and "looks-allowed but isn't"
+    shapes. If a guard enumerates forbidden shapes, ask which sibling shape it
+    forgot.
+  - Boundary probes: empty, missing, null, oversized, truncated, duplicated,
+    and out-of-order inputs; off-by-one ranges; the first and last element.
+  - Fail-open vs fail-closed probes: force each error/exception/timeout/"cannot
+    decide" path and confirm the surface fails in the safe direction (a
+    security/correctness guard must fail closed; an availability helper must not
+    brick on a transient error). Name any path that swallows an error into a
+    silent pass.
+  - CLI/flag probes: for every new or changed flag/argument, exercise it
+    present, absent, default, conflicting, and combined with related flags;
+    confirm the resolved value reaches every execution path (planning,
+    execution, subprocess, retries, runners, tests) and that invalid
+    combinations are rejected, not silently ignored.
+  - Idempotency/replay probes: run the surface twice on the same input and
+    confirm it does not double-apply, double-post, or leave partial state that
+    makes a re-run short-circuit as already-handled.
+  Report each surviving probe as its own finding with the exact input that
+  defeats the check; do not collapse distinct bypasses into one note.
 - Look for regressions and newly opened holes in security, reliability, UX,
   maintainability, compatibility, and tests. Do not stop after the first issue.
 - If prompts, examples, architecture, docs, or tests must be updated for the PR
@@ -6802,6 +6829,43 @@ def _write_final_state(
         "gates": [_scrubbed_gate_run(run) for run in state.gate_runs],
     }
     _write_artifact(artifacts_dir / "final-state.json", json.dumps(payload, indent=2))
+
+
+def load_final_state(
+    cwd: Path, issue_number: int, pr_number: int
+) -> Optional[Dict[str, Any]]:
+    """Load the canonical ``final-state.json`` verdict for a review-loop run.
+
+    Returns the parsed mapping, or ``None`` when the artifact is absent or
+    unreadable. Used by the canonical final-gate (issue #1406) to derive a real
+    ship verdict and to recover the review-loop's verified head SHA after the
+    loop returns. Callers MUST treat ``None`` as fail-closed (no proof of a
+    clean verdict) rather than as a clean result.
+    """
+    path = _artifacts_dir(cwd, issue_number, pr_number) / "final-state.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> None:
+    """Delete any stale ``final-state.json`` before a fresh review-loop run.
+
+    The final-gate (issue #1406) clears the prior verdict so a later
+    ``load_final_state`` read cannot mistake a previous run's clean verdict for
+    the current one. A role-error or setup-error path that returns before
+    ``_finalize`` writes no new file, so the absence is correctly read as
+    fail-closed.
+    """
+    path = _artifacts_dir(cwd, issue_number, pr_number) / "final-state.json"
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
 
 
 def _scrubbed_gate_run(run: Dict[str, Any]) -> Dict[str, Any]:
