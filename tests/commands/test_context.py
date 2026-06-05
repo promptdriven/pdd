@@ -24,6 +24,7 @@ import json
 import pytest
 from click.testing import CliRunner
 
+from pdd.cli import cli
 from pdd.commands.context import context
 
 # ``pdd.commands.__init__`` binds the name ``context`` to the command function,
@@ -148,6 +149,19 @@ def test_json_shape_and_keys(runner, prompt_with_include, patched_tokens):
     assert include_row["tokens"] == 5
     for row in payload["rows"]:
         assert set(row.keys()) == {"source", "tokens", "percent"}
+
+
+def test_cli_json_output_is_machine_readable_without_summary(
+    runner, prompt_with_include, patched_tokens
+):
+    """AC4: through the real CLI, --json stdout is only the JSON payload so
+    dashboards can parse it; the global execution summary is suppressed."""
+    result = runner.invoke(cli, ["context", str(prompt_with_include), "--json"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["model"] == "gpt-4o"
+    assert "--- Command Execution Summary ---" not in result.output
+    assert "Debug snapshot saved" not in result.output
 
 
 def test_model_option_overrides_default(runner, prompt_with_include, patched_tokens):
@@ -313,6 +327,28 @@ def test_nested_include_rolls_up_into_top_level_parent(runner, tmp_path, monkeyp
     assert mid_row["tokens"] == 7  # full expanded mid content, including the leaf
 
 
+def test_overlapping_top_level_includes_are_both_attributed(
+    runner, tmp_path, monkeypatch, patched_tokens
+):
+    """review #5: independent top-level includes must not be treated as nested
+    just because one file's realized content is a substring of another file."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "a.txt").write_text("alpha beta", encoding="utf-8")
+    (tmp_path / "context" / "b.txt").write_text(
+        "prefix alpha beta suffix", encoding="utf-8"
+    )
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        "Body\n<include>context/a.txt</include>\n<include>context/b.txt</include>",
+        encoding="utf-8",
+    )
+    rows = _rows(runner, prompt)
+    by_source = {r["source"]: r["tokens"] for r in rows}
+    assert by_source.get("context/a.txt") == 2
+    assert by_source.get("context/b.txt") == 4
+
+
 def test_missing_include_is_surfaced_not_hidden(runner, tmp_path, monkeypatch, patched_tokens):
     """review #2: an unresolved include must appear as a warning and a row, not
     be silently folded into the body."""
@@ -327,6 +363,58 @@ def test_missing_include_is_surfaced_not_hidden(runner, tmp_path, monkeypatch, p
     payload = json.loads(result.output)
     assert any("missing.prompt" in w and "unresolved" in w for w in payload["warnings"])
     assert any(r["source"] == "context/missing.prompt" for r in payload["rows"])
+
+
+def test_code_fenced_include_syntax_is_not_reported_unresolved(
+    runner, tmp_path, monkeypatch, patched_tokens
+):
+    """review #5: documentation/example blocks that show include syntax are not
+    real preprocess directives and must not produce unresolved rows."""
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        "Body\n```\n<include>context/missing.prompt</include>\n```\n",
+        encoding="utf-8",
+    )
+    payload = json.loads(runner.invoke(context, [str(prompt), "--json"], obj={}).output)
+    assert not any("missing.prompt" in w for w in payload["warnings"])
+    assert not any("missing.prompt" in r["source"] for r in payload["rows"])
+
+
+def test_code_fenced_include_many_is_not_expanded_or_reported(
+    runner, tmp_path, monkeypatch, patched_tokens
+):
+    """review #5: <include-many> inside a code fence is documentation, not a
+    directive to expand or warn on."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "a.txt").write_text("aa bb", encoding="utf-8")
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        "Body\n```\n<include-many>context/a.txt, context/missing.txt</include-many>\n```",
+        encoding="utf-8",
+    )
+    payload = json.loads(runner.invoke(context, [str(prompt), "--json"], obj={}).output)
+    assert not any(r["source"] == "context/a.txt" for r in payload["rows"])
+    assert not any("missing.txt" in w for w in payload["warnings"])
+
+
+def test_optional_missing_include_is_silent(
+    runner, tmp_path, monkeypatch, patched_tokens
+):
+    """review #5: optional missing includes mirror preprocess semantics: skipped
+    without an unresolved row or warning."""
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        "Body\n<include optional>context/missing.prompt</include>\n"
+        '<include-many optional="true">context/missing_many.prompt</include-many>',
+        encoding="utf-8",
+    )
+    payload = json.loads(runner.invoke(context, [str(prompt), "--json"], obj={}).output)
+    assert not any("missing.prompt" in w for w in payload["warnings"])
+    assert not any("missing_many.prompt" in w for w in payload["warnings"])
+    assert not any("missing" in r["source"] for r in payload["rows"])
 
 
 def test_dynamic_tag_inside_included_file_is_warned(runner, tmp_path, monkeypatch, patched_tokens):

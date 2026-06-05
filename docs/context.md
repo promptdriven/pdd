@@ -60,6 +60,8 @@ Context Usage
 
 The grid shows used context-window space split by category against free space (`⛶`). The breakdown lists one line per source. Categories are ordered largest-token-consumer first.
 
+`pdd context` does not append the global PDD command-execution summary or core-dump notice to its output, so the default display stays equivalent to Claude Code's `/context` view.
+
 ### Per-source table (`--table`)
 
 ```
@@ -78,6 +80,14 @@ Rows are sorted by token count descending. Deferred dynamic-tag warnings appear 
 ### JSON output (`--json`)
 
 A single object with keys: `total_tokens`, `context_limit`, `percent_used`, `model`, `rows` (each `{source, tokens, percent}`, sorted by `tokens` descending), `warnings`, and `threshold_exceeded`.
+
+The JSON mode writes only that JSON object to stdout, with no onboarding banner, command summary, or debug footer.
+
+## Attribution semantics
+
+`pdd context` attributes includes from the same expansion path used to hydrate the prompt. `lines=`, `select=`, compression modes, and nested includes are counted by their realized content, not by re-reading the whole source file. Nested includes roll up into the top-level include that brought them in; independent top-level includes each get their own row even when their text overlaps.
+
+Missing includes are reported only when preprocess would treat the syntax as a real directive. Include and include-many examples inside code fences are left alone, and optional missing includes are skipped silently. Deferred dynamic tags (`<shell>`, `<web>`, and semantic `query=` includes) are shown as warnings and excluded from the deterministic token total.
 
 ## Exit codes
 

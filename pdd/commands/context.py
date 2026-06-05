@@ -24,7 +24,11 @@ from ..context_snapshot import detect_dynamic_tags
 from ..core.errors import handle_error
 from ..path_resolution import get_default_resolver
 from ..preprocess import (
+    _extract_code_spans,
+    _intersects_any_span,
     compute_user_intent_paths,
+    process_backtick_includes,
+    process_include_tags,
     preprocess,
     process_include_many_tags,
 )
@@ -69,7 +73,7 @@ class _SegmentRecorder:
         self.deferred: List[str] = []
 
     def record_include(
-        self, *, source_path, content, query=None, output=None, **_: object
+        self, *, source_path, content, query=None, output=None, **kwargs: object
     ) -> Dict:
         """Capture one include's realized content for per-source attribution."""
         # Query includes are LLM-driven and deferred in pass 1; they are handled
@@ -77,7 +81,10 @@ class _SegmentRecorder:
         if query:
             return {}
         text = output if output is not None else content
-        self.includes.append({"source": str(source_path), "content": str(text)})
+        depth = int(kwargs.get("include_depth", 0) or 0)
+        self.includes.append(
+            {"source": str(source_path), "content": str(text), "depth": depth}
+        )
         return {}
 
     def __getattr__(self, _name: str):  # record_shell / record_web / etc.
@@ -106,8 +113,12 @@ _INCLUDE_MANY_RE = re.compile(
 
 def _expand_include_many(text: str, recorder: "_SegmentRecorder") -> str:
     """Expand literal top-level ``<include-many>`` lists; defer variable ones."""
+    code_spans = _extract_code_spans(text)
+    user_intent_paths = compute_user_intent_paths(text)
 
     def _replace(match: "re.Match") -> str:
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            return match.group(0)
         inner = match.group("inner")
         if "${" in inner or "{" in inner:
             recorder.deferred.append(
@@ -118,7 +129,7 @@ def _expand_include_many(text: str, recorder: "_SegmentRecorder") -> str:
         return process_include_many_tags(
             match.group(0),
             recursive=False,
-            _user_intent_paths=compute_user_intent_paths(match.group(0)),
+            _user_intent_paths=user_intent_paths,
             _failed=[],
             snapshot_recorder=recorder,
         )
@@ -180,23 +191,14 @@ def _attribute_includes(
 
     A nested include's content is expanded *into* its parent's content, so the
     recorder holds both. Counting all of them would double-count the nested
-    text; we therefore keep only segments whose content is not a strict
-    substring of another recorded segment (i.e. the outermost / top-level
-    includes), which rolls nested includes up into the parent the user actually
-    wrote. Repeated includes of the same source are summed.
+    text; keep only records emitted at include depth 0, which corresponds to
+    the directives authored in the audited prompt. Repeated includes of the
+    same source are summed.
     """
-    kept: List[Dict[str, str]] = []
-    for i, rec in enumerate(records):
-        content = rec["content"]
-        nested = any(
-            j != i and len(other["content"]) > len(content) and content in other["content"]
-            for j, other in enumerate(records)
-        )
-        if not nested:
-            kept.append(rec)
-
     by_source: Dict[str, int] = {}
-    for rec in kept:
+    for rec in records:
+        if int(rec.get("depth", 0) or 0) != 0:
+            continue
         tokens = count_tokens(_strip_dynamic_markup(rec["content"]), model)
         display = _display_source(rec["source"])
         by_source[display] = by_source.get(display, 0) + tokens
@@ -211,19 +213,37 @@ def _unresolved_includes(raw: str) -> List[str]:
     ``${VAR}`` paths are skipped — they only materialize after variable
     expansion at generation time, so they are deferred, not missing.
     """
-    resolver = get_default_resolver()
-    unresolved: set = set()
-    for path in compute_user_intent_paths(raw):
-        if "${" in path or "{" in path:
-            continue
-        try:
-            resolved = resolver.resolve_include(path)
-        except (OSError, ValueError):
-            unresolved.add(path)
-            continue
-        if not Path(resolved).exists():
-            unresolved.add(path)
-    return sorted(unresolved)
+    _ = get_default_resolver()  # ensure resolver initialization errors surface here
+    failed: List[str] = []
+    user_intent_paths = compute_user_intent_paths(raw)
+    prev_quiet = os.environ.get("PDD_QUIET")
+    os.environ["PDD_QUIET"] = "1"
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            checked = process_backtick_includes(
+                raw,
+                recursive=False,
+                _failed=failed,
+                _user_intent_paths=user_intent_paths,
+            )
+            checked = process_include_tags(
+                checked,
+                recursive=False,
+                _failed=failed,
+                _user_intent_paths=user_intent_paths,
+            )
+            process_include_many_tags(
+                checked,
+                recursive=False,
+                _failed=failed,
+                _user_intent_paths=compute_user_intent_paths(checked),
+            )
+    finally:
+        if prev_quiet is None:
+            os.environ.pop("PDD_QUIET", None)
+        else:
+            os.environ["PDD_QUIET"] = prev_quiet
+    return sorted({path for path in failed if "${" not in path and "{" not in path})
 
 
 def _build_rows(prompt_path: str, model: str) -> Tuple[List[Dict], int, List[str]]:
@@ -405,6 +425,10 @@ def context(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """Show context-window usage by source for a preprocessed prompt."""
 
     try:
+        if isinstance(ctx.obj, dict):
+            ctx.obj["_suppress_result_summary"] = True
+            ctx.obj["_suppress_core_dump"] = True
+
         resolved_model = model or os.environ.get("PDD_MODEL_DEFAULT") or "gpt-4o"
 
         rows, total_tokens, warnings = _build_rows(prompt_path, resolved_model)
@@ -412,9 +436,8 @@ def context(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         percent_used = _percent(total_tokens, context_limit)
 
         threshold_exceeded = bool(
-            threshold > 0
-            and percent_used is not None
-            and percent_used > threshold
+            percent_used is not None
+            and 0 < threshold < percent_used
         )
 
         if json_output:

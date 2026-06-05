@@ -521,7 +521,11 @@ def process_backtick_includes(
                         snapshot_recorder=snapshot_recorder,
                     )
                 if snapshot_recorder is not None:
-                    snapshot_recorder.record_include(source_path=full_path, content=content)
+                    snapshot_recorder.record_include(
+                        source_path=full_path,
+                        content=content,
+                        include_depth=len(_seen),
+                    )
                 _dbg(f"Included via backticks: {file_path} (len={len(content)})")
                 return f"```{content}```"
         except FileNotFoundError:
@@ -954,7 +958,11 @@ def process_include_tags(
                             snapshot_recorder=snapshot_recorder,
                         )
                     if snapshot_recorder is not None:
-                        snapshot_recorder.record_include(source_path=full_path, content=content)
+                        snapshot_recorder.record_include(
+                            source_path=full_path,
+                            content=content,
+                            include_depth=len(_seen),
+                        )
                     _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
                     return content
         except FileNotFoundError:
@@ -1282,6 +1290,8 @@ def process_include_many_tags(
     include's source contains literal `<include-many>...</include-many>` syntax in
     a docstring or regex string.
     """
+    if _seen is None:
+        _seen = set()
     pattern = r'<include-many(?P<attrs>\s+[^>]*?)?>(?P<inner>.*?)</include-many>'
     def replace_many(match):
         attrs = _parse_attrs(match.group('attrs') or "")
@@ -1314,7 +1324,11 @@ def process_include_many_tags(
                     )
                     contents.append(content)
                 if snapshot_recorder is not None:
-                    snapshot_recorder.record_include(source_path=full_path, content=content)
+                    snapshot_recorder.record_include(
+                        source_path=full_path,
+                        content=content,
+                        include_depth=len(_seen),
+                    )
                 _dbg(f"Included (many): {p}")
             except FileNotFoundError:
                 _dbg(f"Missing include-many: {p}")

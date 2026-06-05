@@ -25,8 +25,10 @@ Regeneration path (needs a keyed env):
 - AC6: Surfaces deferred/nondeterministic tags with clear warnings.
 - AC7: Per-include attribution reflects what is actually hydrated — a targeted include
   (`lines=`, `select=`, `mode=`, `<include-many>`) is counted by its realized content,
-  not the whole source file — so no row exceeds the prompt's own total.
-- AC8: Unresolved/missing includes are surfaced (warning + row), never silently hidden.
+  not the whole source file — so no row exceeds the prompt's own total. Independent
+  top-level includes are not dropped just because their realized text overlaps.
+- AC8: Unresolved/missing includes are surfaced (warning + row), never silently hidden,
+  while code-fenced examples and optional missing includes follow preprocess semantics.
 - CH1 (PR #1387 intentional change): default output is a Claude-Code `/context`-style
   usage box under the `pdd context` command name; the raw attribution table is available
   via `--table`.
@@ -72,9 +74,15 @@ than triggering a network call.
 6. Given an include that targets part of a file (`lines=`/`select=`/`mode=`) or a literal
    `<include-many>` list, when I run `pdd context <prompt>`, then each include is attributed
    by its realized (post-selection) content and no row's tokens exceed `total_tokens`.
-7. Given an include whose path does not resolve to a readable file (and is not a deferred
+7. Given two independent top-level includes whose contents overlap, when I run
+   `pdd context <prompt>`, then both top-level include rows appear and are not mistaken for
+   a nested include relationship.
+8. Given an include whose path does not resolve to a readable file (and is not a deferred
    `${VAR}` path), when I run `pdd context <prompt>`, then it appears as a warning and as a
    `0`-token row marked unresolved, rather than being folded into the prompt body.
+9. Given include or include-many syntax inside a fenced/inline code example, when I run
+   `pdd context <prompt>`, then it is treated as documentation, not expanded or reported
+   unresolved; given a static optional missing include, then it is skipped silently.
 
 ## Oracle
 
@@ -87,6 +95,8 @@ These details matter for pass/fail:
 - JSON contains exactly the documented keys; `threshold_exceeded` drives exit code 2.
 - No LLM call is made for the deterministic audit.
 - Each unexpanded dynamic tag produces a warning.
+- Top-level include identity comes from the expansion path, not string containment.
+- Missing include warnings mirror preprocess code-span and optional semantics.
 
 ## Non-Oracle
 
@@ -105,6 +115,10 @@ These details should not matter:
 - Failing to exit non-zero when the budget threshold is exceeded.
 - Counting a whole include file when the include only selects part of it (a row whose
   token count exceeds the prompt total).
+- Dropping an independent top-level include because its content is contained in another
+  top-level include's content.
+- Reporting unresolved rows for include syntax inside fenced/inline code examples.
+- Warning on static optional missing includes.
 - Counting deferred dynamic-tag markup (`<shell>`/`<web>`/`query=`) as hydrated payload.
 - Silently folding an unresolved/missing include into the prompt body.
 
