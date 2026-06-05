@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any, Mapping
 
 import click
 import requests
@@ -25,6 +26,7 @@ from .code_generator_main import (
     _prompt_allows_test_churn,
     _verify_test_churn,
 )
+from .compressed_sync_context import compressed_context_is_active, render_for_prompt
 
 console = Console()
 
@@ -44,6 +46,7 @@ def cmd_test_main(
     manual: bool = False,
     *,
     repair_directive: str | None = None,
+    compressed_context: Mapping[str, Any] | None = None,
 ) -> TestResult:
     """
     CLI wrapper for generating or enhancing unit tests.
@@ -326,10 +329,13 @@ def cmd_test_main(
             f"{repair_directive.strip()}\n"
             "</test_repair_directive>\n"
         )
+    rendered_compressed_context = render_for_prompt(compressed_context)
+    if rendered_compressed_context:
+        prompt_content = f"{prompt_content}\n\n{rendered_compressed_context}"
 
-    # Handle existing tests concatenation
+    # Handle existing tests concatenation (skip when compressed context is active).
     concatenated_tests = None
-    if existing_tests:
+    if existing_tests and not compressed_context_is_active(compressed_context):
         test_contents = []
         for et_path in existing_tests:
             try:

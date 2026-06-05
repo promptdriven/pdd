@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\")", "returns": "str"}
+      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\", expand_dependencies: bool = False)", "returns": "str"}
     ]
   }
 }
@@ -24,7 +24,7 @@ Write the `pdd/content_selector.py` module.
 Deterministic content extraction from files based on line ranges, Python AST structures, Markdown sections, regex patterns, and JSON/YAML path traversal. Used by the PDD preprocessor to handle selective includes (`<include select="...">`).
 
 % Requirements
-1. Class: `ContentSelector` with a static `select(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = "full") -> str` method
+1. Class: `ContentSelector` with a static `select(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = "full", expand_dependencies: bool = False) -> str` method
 2. Exception: `SelectorError(Exception)` — all user-facing errors must raise `SelectorError` with a descriptive message
 3. Selectors are `kind:value` strings where `kind` is one of: `lines`, `def`, `class`, `section`, `pattern`, `path`, `pytest`, `contract`
    - Accept `selectors` as a `list[str]` or a single comma-separated string
@@ -80,11 +80,31 @@ Deterministic content extraction from files based on line ranges, Python AST str
 14. Any unexpected exception during selector processing should be caught and re-raised as `SelectorError` with context about which selector failed.
 15. Preserve original indentation and whitespace in all extracted content.
 
+% Expansion (Python only)
+15. `expand_dependencies=True`: Recursively expand the selection to include local dependencies and patch targets.
+    - Local Dependencies: Scan AST of selected functions/classes for references to other top-level symbols (functions, classes, constants) within the same file. Include their definitions (recursive).
+    - Imports: Include top-level imports referenced by the selected/expanded symbols.
+    - Circular Dependencies: Handle circular references between local symbols gracefully (prevent infinite loops during expansion).
+    - Patch Target Preservation: Scan sibling `test_*.py` files (if `file_path` is known) for mock/patch targets (e.g., `@patch("module.symbol")`, `monkeypatch.setattr("module.symbol", ...)`, `patch.object(Class, "method", ...)`) where `module` matches the current module name.
+    - Include these patch targets (even if private/underscore-prefixed) in the expanded selection if they are defined in the current file.
+    - Implementation: Use Python's `ast` module for dependency analysis. Use AST preferred (with regex fallback) on sibling test files to identify patch targets.
+
 % Interface Mode (Python only)
 - Full-file interface (no selectors): include imports, module-level constants, annotated assignments, module docstring, and all public classes/functions. Skip private top-level names (starting with `_`). Insert blank lines between top-level definitions for readability.
 - For each function/async function: keep decorators, the full signature (may span multiple lines), and docstring. Replace body with `...` at the body's indentation level.
 - Within classes: keep decorators, class header, class docstring, class-level annotated assignments. Include public methods (processed as above). Exclude private methods (starting with `_`) except `__init__`.
 - With selectors + `mode="interface"`: apply interface transformation only to AST nodes overlapping the selected spans. If no AST nodes overlap, fall back to returning the raw span content.
+- If `expand_dependencies=True`, apply expansion *before* interface mode transformation.
+
+% Context Compression Modes
+- `contracts` mode: Extract only contract-related elements from prompt or documentation files. This includes:
+  - Architecture metadata tags: `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`.
+  - Logical sections: `<responsibility>`, `<non_responsibilities>`, `<vocabulary>`, `<contract_rules>`, `<capabilities>`, `<waivers>`, `<coverage>`.
+  - Contract rules: Any numbered list item starting with `R\d+ -` (e.g., `R1 - Idempotency`).
+  - Vocabulary definitions: Any line starting with `- ` within a `<vocabulary>` block.
+  - Non-responsibilities: Any line starting with `- ` within a `<non_responsibilities>` block.
+  - Capabilities: Any line starting with `- MAY`, `- MUST`, or `- MUST NOT` within a `<capabilities>` block.
+- `test_interface` mode: use AST-based slicing to include only failing tests (identified by a comma-separated list of test names or IDs passed in the `PDD_FAILING_TESTS` environment variable or a separate metadata channel) and their necessary fixtures (functions decorated with @pytest.fixture). This mode is optimized for minimizing token usage when providing failing test context to an LLM.
 
 % Compression Mode (Python only)
 - `mode="compressed"`: optimized for dense few-shot examples.

@@ -5,7 +5,7 @@ import subprocess
 import datetime
 import sys
 from pathlib import Path
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Mapping, Tuple, Any, Optional
 from xml.sax.saxutils import escape
 import time
 
@@ -44,6 +44,17 @@ except ImportError:
     CloudConfig = None
     get_cloud_timeout = None
     get_cloud_request_timeout = None
+
+
+def _call_fix_verification_errors(
+    *,
+    compressed_context: Optional[Mapping[str, Any]] = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Call fix_verification_errors, omitting compressed_context when unset."""
+    if compressed_context is not None:
+        kwargs["compressed_context"] = compressed_context
+    return fix_verification_errors(**kwargs)
 
 
 def cloud_verify_fix(
@@ -127,6 +138,84 @@ def _normalize_agentic_result(result):
             return bool(ok), str(msg), 0.0, "agentic-cli", []
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
+
+def _record_agentic_verify_fallback_event(
+    agentic_fallback_events: Optional[list[dict[str, Any]]],
+    *,
+    success: bool,
+    detail: str,
+) -> None:
+    """Append verify-phase agentic fallback telemetry when a list is provided."""
+    if agentic_fallback_events is not None:
+        agentic_fallback_events.append(
+            {
+                "phase": "verify",
+                "attempted": True,
+                "used": success,
+                "detail": detail,
+            }
+        )
+
+
+def _run_non_python_agentic_verify_fallback(
+    *,
+    agentic_fallback: bool,
+    prompt_file: str,
+    code_file: str,
+    verification_program: str,
+    verification_log_file: str,
+    verbose: bool,
+) -> tuple[bool, str, float, str | None, list[str]]:
+    """Invoke agentic verify for non-Python targets when fallback is enabled."""
+    if not agentic_fallback:
+        console.print(
+            "[yellow]Agentic verify fallback disabled; non-Python verify cannot "
+            "complete without it.[/yellow]"
+        )
+        return False, "agentic verify fallback disabled", 0.0, None, []
+
+    agent_cwd = Path(prompt_file).parent if prompt_file else None
+    console.print(
+        f"[cyan]Attempting agentic verify fallback "
+        f"(prompt_file={rich_escape(repr(prompt_file))})...[/cyan]"
+    )
+    success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
+        prompt_file=prompt_file,
+        code_file=code_file,
+        program_file=verification_program,
+        verification_log_file=verification_log_file,
+        verbose=verbose,
+        cwd=agent_cwd,
+    )
+    if not success:
+        console.print(
+            f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]"
+        )
+    if agent_changed_files:
+        console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
+        for changed in agent_changed_files:
+            console.print(f"  • {changed}")
+    return success, agent_msg, agent_cost, agent_model, agent_changed_files
+
+
+def _read_non_python_final_artifacts(
+    verification_program: str,
+    code_file: str,
+) -> tuple[str, str]:
+    final_program = ""
+    final_code = ""
+    try:
+        with open(verification_program, "r", encoding="utf-8") as f:
+            final_program = f.read()
+    except Exception:
+        pass
+    try:
+        with open(code_file, "r", encoding="utf-8") as f:
+            final_code = f.read()
+    except Exception:
+        pass
+    return final_program, final_code
+
 
 def _safe_run_agentic_verify(*, prompt_file, code_file, program_file, verification_log_file, verbose=False, cwd=None, deadline=None):
     """
@@ -233,6 +322,8 @@ def fix_verification_errors_loop(
     llm_time: float = DEFAULT_TIME, # Add time parameter
     agentic_fallback: bool = True,
     use_cloud: bool = False,
+    compressed_context: Optional[Mapping[str, Any]] = None,
+    agentic_fallback_events: Optional[list[dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Attempts to fix errors in a code file based on program execution output
@@ -290,34 +381,29 @@ def fix_verification_errors_loop(
                     f.write(f"No verification command available for language: {lang}\n")
                     f.write("Agentic fix will attempt to resolve the issue.\n")
 
-            agent_cwd = Path(prompt_file).parent if prompt_file else None
-            console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={rich_escape(repr(prompt_file))})...[/cyan]")
-            success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
-                prompt_file=prompt_file,
-                code_file=code_file,
-                program_file=verification_program,
-                verification_log_file=verification_log_file,
-                verbose=verbose,
-                cwd=agent_cwd,
+            success, _agent_msg, agent_cost, agent_model, _changed = (
+                _run_non_python_agentic_verify_fallback(
+                    agentic_fallback=agentic_fallback,
+                    prompt_file=prompt_file,
+                    code_file=code_file,
+                    verification_program=verification_program,
+                    verification_log_file=verification_log_file,
+                    verbose=verbose,
+                )
             )
-            if not success:
-                console.print(f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]")
-            if agent_changed_files:
-                console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-                for f in agent_changed_files:
-                    console.print(f"  • {f}")
-            final_program = ""
-            final_code = ""
-            try:
-                with open(verification_program, "r") as f:
-                    final_program = f.read()
-            except Exception:
-                pass
-            try:
-                with open(code_file, "r") as f:
-                    final_code = f.read()
-            except Exception:
-                pass
+            final_program, final_code = _read_non_python_final_artifacts(
+                verification_program, code_file
+            )
+            if agentic_fallback:
+                _record_agentic_verify_fallback_event(
+                    agentic_fallback_events,
+                    success=success,
+                    detail=(
+                        "agentic verify fallback succeeded (non-Python, no verify command)"
+                        if success
+                        else "agentic verify fallback failed (non-Python, no verify command)"
+                    ),
+                )
             return {
                 "success": success,
                 "final_program": final_program,
@@ -336,34 +422,29 @@ def fix_verification_errors_loop(
         with open(verification_log_path, "w") as f:
             f.write(pytest_output)
         
-        agent_cwd = Path(prompt_file).parent if prompt_file else None
-        console.print(f"[cyan]Attempting agentic verify fallback (prompt_file={rich_escape(repr(prompt_file))})...[/cyan]")
-        success, agent_msg, agent_cost, agent_model, agent_changed_files = _safe_run_agentic_verify(
-            prompt_file=prompt_file,
-            code_file=code_file,
-            program_file=verification_program,
-            verification_log_file=verification_log_file,
-            verbose=verbose,
-            cwd=agent_cwd,
+        success, _agent_msg, agent_cost, agent_model, _changed = (
+            _run_non_python_agentic_verify_fallback(
+                agentic_fallback=agentic_fallback,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                verification_program=verification_program,
+                verification_log_file=verification_log_file,
+                verbose=verbose,
+            )
         )
-        if not success:
-            console.print(f"[bold red]Agentic verify fallback failed: {rich_escape(str(agent_msg))}[/bold red]")
-        if agent_changed_files:
-            console.print(f"[cyan]Agent modified {len(agent_changed_files)} file(s):[/cyan]")
-            for f in agent_changed_files:
-                console.print(f"  • {f}")
-        final_program = ""
-        final_code = ""
-        try:
-            with open(verification_program, "r") as f:
-                final_program = f.read()
-        except Exception:
-            pass
-        try:
-            with open(code_file, "r") as f:
-                final_code = f.read()
-        except Exception:
-            pass
+        final_program, final_code = _read_non_python_final_artifacts(
+            verification_program, code_file
+        )
+        if agentic_fallback:
+            _record_agentic_verify_fallback_event(
+                agentic_fallback_events,
+                success=success,
+                detail=(
+                    "agentic verify fallback succeeded (non-Python, after verify command)"
+                    if success
+                    else "agentic verify fallback failed (non-Python, after verify command)"
+                ),
+            )
         return {
             "success": success,
             "final_program": final_program,
@@ -561,7 +642,7 @@ def fix_verification_errors_loop(
                 except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
                     # Cloud failed - fall back to local
                     console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
-                    initial_fix_result = fix_verification_errors(
+                    initial_fix_result = _call_fix_verification_errors(
                         program=initial_program_content,
                         prompt=prompt,
                         code=initial_code_content,
@@ -569,10 +650,11 @@ def fix_verification_errors_loop(
                         strength=strength,
                         temperature=temperature,
                         verbose=verbose,
-                        time=llm_time
+                        time=llm_time,
+                        compressed_context=compressed_context,
                     )
             else:
-                initial_fix_result = fix_verification_errors(
+                initial_fix_result = _call_fix_verification_errors(
                     program=initial_program_content,
                     prompt=prompt,
                     code=initial_code_content,
@@ -580,7 +662,8 @@ def fix_verification_errors_loop(
                     strength=strength,
                     temperature=temperature,
                     verbose=verbose,
-                    time=llm_time # Pass time
+                    time=llm_time,
+                    compressed_context=compressed_context,
                 )
             # 3e: Add cost
             initial_cost = initial_fix_result.get('total_cost', 0.0)
@@ -794,7 +877,7 @@ def fix_verification_errors_loop(
                 except (requests.exceptions.RequestException, RuntimeError) as cloud_err:
                     # Cloud failed - fall back to local
                     console.print(f"[yellow]Cloud verify fix failed: {cloud_err}. Falling back to local.[/yellow]")
-                    fix_result = fix_verification_errors(
+                    fix_result = _call_fix_verification_errors(
                         program=program_contents,
                         prompt=prompt,
                         code=code_contents,
@@ -802,10 +885,11 @@ def fix_verification_errors_loop(
                         strength=strength,
                         temperature=temperature,
                         verbose=verbose,
-                        time=llm_time
+                        time=llm_time,
+                        compressed_context=compressed_context,
                     )
             else:
-                fix_result = fix_verification_errors(
+                fix_result = _call_fix_verification_errors(
                     program=program_contents,
                     prompt=prompt,
                     code=code_contents,
@@ -813,7 +897,8 @@ def fix_verification_errors_loop(
                     strength=strength,
                     temperature=temperature,
                     verbose=verbose,
-                    time=llm_time # Pass time
+                    time=llm_time,
+                    compressed_context=compressed_context,
                 )
 
             # 4f: Add cost
@@ -1278,6 +1363,15 @@ def fix_verification_errors_loop(
                 console.print(f"[yellow]Warning: Could not read files after successful agentic fix: {rich_escape(str(e))}[/yellow]")
         else:
             console.print("[bold red]Agentic fallback failed.[/bold red]")
+        _record_agentic_verify_fallback_event(
+            agentic_fallback_events,
+            success=agent_success,
+            detail=(
+                "agentic verify fallback succeeded"
+                if agent_success
+                else "agentic verify fallback failed"
+            ),
+        )
 
     return {
         "success": overall_success,

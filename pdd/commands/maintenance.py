@@ -38,6 +38,8 @@ def _write_sync_evidence_manifest(
     context_snapshot: Optional[Mapping[str, Any]] = None,
     grounding: Optional[Mapping[str, Any]] = None,
     reviewed: bool = False,
+    compression: Optional[Mapping[str, Any]] = None,
+    agentic_fallback: Optional[Mapping[str, Any]] = None,
     compress: bool = False,
 ) -> None:
     """Write or refresh the dev-unit evidence manifest for a sync attempt."""
@@ -66,6 +68,8 @@ def _write_sync_evidence_manifest(
         context_snapshot=context_snapshot,
         grounding=grounding,
         reviewed=reviewed,
+        compression=compression,
+        agentic_fallback=agentic_fallback,
     )
     if not quiet:
         click.echo(
@@ -206,6 +210,14 @@ def _write_sync_evidence_manifest(
     ),
 )
 @click.option(
+    "--compressed-context/--no-compressed-context",
+    default=None,
+    help=(
+        "Enable bounded compressed sync context. Omit to use .pddrc "
+        "defaults.compressed_context, falling back to disabled."
+    ),
+)
+@click.option(
     "--model",
     "model",
     default=None,
@@ -214,6 +226,30 @@ def _write_sync_evidence_manifest(
          "the local llm_invoke route; for a chatgpt/* subscription model on a "
          "cloud-enabled install, also pass --local. Takes precedence over the "
          "PDD_MODEL_DEFAULT env var for this run only.",
+)
+@click.option(
+    "--compress-examples",
+    is_flag=True,
+    default=None,
+    help="Automatically apply mode=\"interface\" to example includes.",
+)
+@click.option(
+    "--compress-test-context",
+    is_flag=True,
+    default=None,
+    help="Automatically compress test context to failing tests only.",
+)
+@click.option(
+    "--context-compression",
+    type=click.Choice(["off", "test", "examples", "contracts", "all"]),
+    default=None,
+    help="Set context compression mode for this sync run.",
+)
+@click.option(
+    "--compression-fallback",
+    type=click.Choice(["full", "error"]),
+    default=None,
+    help="Behavior when context compression fails (default: full).",
 )
 @click.pass_context
 @track_cost
@@ -240,7 +276,12 @@ def sync(
     evidence: bool,
     snapshot_context: bool,
     compress: bool,
+    compressed_context: Optional[bool],
     model: Optional[str] = None,
+    compress_examples: Optional[bool] = None,
+    compress_test_context: Optional[bool] = None,
+    context_compression: Optional[str] = None,
+    compression_fallback: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -249,6 +290,25 @@ def sync(
     'prompts/my_module_python.prompt'), a GitHub issue URL for agentic
     multi-module sync, or omitted for project-wide Tier 1 architecture sync.
     """
+    from ..config_resolution import merge_cli_compression_override
+
+    ctx.ensure_object(dict)
+    cli_compression: dict[str, object] = {}
+    if compress_examples is not None:
+        ctx.obj["compress_examples"] = compress_examples
+        cli_compression["compress_examples"] = compress_examples
+    if compress_test_context is not None:
+        ctx.obj["compress_test_context"] = compress_test_context
+        cli_compression["compress_test_context"] = compress_test_context
+    if context_compression is not None:
+        ctx.obj["context_compression"] = context_compression
+        cli_compression["context_compression"] = context_compression
+    if compression_fallback is not None:
+        ctx.obj["compression_fallback"] = compression_fallback
+        cli_compression["compression_fallback"] = compression_fallback
+    if cli_compression:
+        merge_cli_compression_override(cli_compression)
+
     # Honor an explicit per-run model override (CLI > env, issue #1269).
     # Set PDD_MODEL_DEFAULT: subprocess/agentic sync paths inherit the env and
     # read it at their own import, and the in-process llm_invoke path resolves
@@ -281,6 +341,9 @@ def sync(
         )
         dry_run = True
 
+    effective_compressed_context = _resolve_compressed_context(compressed_context)
+    ctx.obj["compressed_context"] = effective_compressed_context
+
     # No basename -> global Tier 1 sync
     if basename is None:
         if snapshot_context:
@@ -300,6 +363,7 @@ def sync(
             max_attempts=max_attempts,
             one_session=effective_one_session,
             timeout_adder=timeout_adder,
+            compressed_context=effective_compressed_context,
         )
         if evidence and global_result:
             _, cost, model = global_result
@@ -313,6 +377,13 @@ def sync(
                     "detect_stories": "not_available",
                     "unit_tests": "not_available",
                     "verify": "not_available",
+                },
+                compression={
+                    "enabled": effective_compressed_context,
+                    "requested": effective_compressed_context,
+                    "used": False,
+                    "mode": "compressed-sync-context",
+                    "phases": [],
                 },
             )
         return global_result
@@ -349,6 +420,7 @@ def sync(
             strength=ctx.obj.get("strength"),
             temperature=ctx.obj.get("temperature"),
             context_override=ctx.obj.get("context"),
+            compressed_context=effective_compressed_context,
         )
         if evidence and agentic_result:
             _, cost, model = agentic_result
@@ -362,6 +434,19 @@ def sync(
                     "detect_stories": "not_available",
                     "unit_tests": "not_available",
                     "verify": "not_available",
+                },
+                compression={
+                    "enabled": effective_compressed_context,
+                    "requested": effective_compressed_context,
+                    "used": False,
+                    "mode": "compressed-sync-context",
+                    "phases": [],
+                },
+                agentic_fallback={
+                    "attempted": True,
+                    "used": True,
+                    "phases": ["agentic-sync"],
+                    "reason": "GitHub issue sync uses agentic module selection and child sync dispatch",
                 },
             )
         return agentic_result
@@ -387,6 +472,7 @@ def sync(
             one_session=effective_one_session,
             snapshot_context=snapshot_context,
             compress=compress,
+            compressed_context=effective_compressed_context,
         )
         if evidence:
             _write_sync_evidence_manifest(
@@ -401,6 +487,8 @@ def sync(
                 quiet=ctx.obj.get("quiet", False),
                 context_snapshot=(ctx.obj or {}).get("context_snapshot"),
                 compress=compress,
+                compression=_compression_from_sync_result(result),
+                agentic_fallback=_agentic_fallback_from_sync_result(result),
                 **grounding_kwargs_from_ctx(ctx.obj),
             )
         return str(result), total_cost, model_name
@@ -443,6 +531,7 @@ def _run_agentic_sync_dispatch(
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
     context_override: Optional[str] = None,
+    compressed_context: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to agentic sync runner for GitHub issue URLs."""
     ctx.ensure_object(dict)
@@ -472,6 +561,7 @@ def _run_agentic_sync_dispatch(
             strength=strength,
             temperature=temperature,
             context_override=context_override,
+            compressed_context=compressed_context,
         )
 
         if not quiet:
@@ -505,6 +595,7 @@ def _run_global_sync_dispatch(
     max_attempts: Optional[int],
     one_session: bool = False,
     timeout_adder: float = 0.0,
+    compressed_context: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to global sync runner for no-argument `pdd sync`."""
     ctx.ensure_object(dict)
@@ -531,6 +622,7 @@ def _run_global_sync_dispatch(
             strength=ctx.obj.get("strength"),
             temperature=ctx.obj.get("temperature"),
             context_override=ctx.obj.get("context"),
+            compressed_context=compressed_context,
         )
 
         if not quiet:
@@ -594,6 +686,55 @@ def _resolve_global_sync_target_coverage(target_coverage: Optional[float]) -> Op
             pass
 
     return None
+
+
+def _parse_boolish(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _resolve_compressed_context(cli_value: Optional[bool]) -> bool:
+    """Resolve compressed-context enablement from CLI, .pddrc, then default false."""
+    if cli_value is not None:
+        return cli_value
+    pddrc_path = _find_pddrc_file(Path.cwd())
+    if pddrc_path:
+        try:
+            config = _load_pddrc_config(pddrc_path)
+            contexts = config.get("contexts", {})
+            default_context = contexts.get("default", {})
+            resolved = _parse_boolish(default_context.get("defaults", {}).get("compressed_context"))
+            if resolved is not None:
+                return resolved
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
+def _compression_from_sync_result(result: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    compression = result.get("compression")
+    if isinstance(compression, Mapping):
+        return compression
+    phases: list[Any] = []
+    for phase_result in result.get("results_by_language", {}).values() if isinstance(result.get("results_by_language"), Mapping) else []:
+        if isinstance(phase_result, Mapping) and isinstance(phase_result.get("compression"), Mapping):
+            phases.append(phase_result["compression"])
+    if phases:
+        return {"enabled": True, "languages": phases}
+    return None
+
+
+def _agentic_fallback_from_sync_result(result: Mapping[str, Any]) -> Optional[Mapping[str, Any]]:
+    fallback = result.get("agentic_fallback")
+    return fallback if isinstance(fallback, Mapping) else None
 
 
 def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> None:
