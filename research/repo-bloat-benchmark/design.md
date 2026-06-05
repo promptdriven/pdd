@@ -546,6 +546,8 @@ The report closes by filing follow-up issues for any product gaps surfaced (e.g.
 
 **LOCKED: Codex CLI (GPT), run inside the Linux container ([§6.2](#62-how-we-capture-it-defense-in-depth)).** Codex receives `task.md` and the materialized repo via the OverlayFS `merged` mount, may search/read before editing, and edits implementation code. All [§6](#6-instrumentation-plan) instrumentation applies.
 
+Codex is an *agentic-search* agent: a ReAct loop whose primary lever on the repo is a shell tool (it shells out to `grep`/`ripgrep`/`find`/`cat`), with edits applied via `apply_patch` and no precomputed index — so its searches and reads cross the kernel and are captured by the FS tap. The companion background section ([`agentic_cli_search.md`](./agentic_cli_search.md), issue [#1430](https://github.com/promptdriven/pdd/issues/1430)) documents this in depth, places Codex in a cross-agent taxonomy, and explains why this single-agent lock is one point in a retrieval-mechanism space worth a pre-registered cross-agent extension (e.g., Claude Code as a second agentic-search agent; Aider/Cursor as index/embedding comparators).
+
 #### 8.1.1 Run-environment freeze (review #3)
 
 Filesystem isolation alone is not enough: the *agent* environment is a second source of uncontrolled variance and hidden inputs (e.g. a stray web search or a cached session could let the agent "localize" without reading the repo). Every run must execute against a **frozen, isolated, fingerprinted** Codex environment. The harness asserts each item below before the run and records the combination as `env_fingerprint_sha256` in the run record; a mismatch aborts the run.
@@ -603,7 +605,7 @@ Frozen before any model run (pre-registration). A change to any of these is a ne
 ### Still to confirm (Codex specifics — do not block scenario authoring)
 
 1. **Exact Codex model id + reasoning-effort** setting to pin in the run config (must be stated in the report).
-2. **Codex read/search execution path** — confirm whether Codex shells out (e.g. `ripgrep`) vs reads in-process. Either way the kernel-level FUSE tap captures it; this only affects how we *reconcile* the transcript tap against the FS tap.
+2. **Codex read/search execution path** — confirm whether Codex shells out (e.g. `ripgrep`) vs reads in-process. Either way the kernel-level FUSE tap captures it; this only affects how we *reconcile* the transcript tap against the FS tap. (Why this matters across agents — shelling out keeps Codex in the agentic-search family the FS tap observes natively, whereas an embedding/index agent retrieves off the local FS and would need a tool-boundary tap — is analyzed in [`agentic_cli_search.md` §6](./agentic_cli_search.md#6-implications-for-the-benchmarks-instrumentation-and-validity).)
 
 ### Consequence of choice #3 (hand-authored repos) — realism guardrail
 
@@ -623,6 +625,7 @@ Hand-authored repos trade organic realism for control, so the issue's non-goal �
 
 ## References
 
+- [`agentic_cli_search.md`](./agentic_cli_search.md) — **background section** (issue [#1430](https://github.com/promptdriven/pdd/issues/1430)): how agentic coding CLIs acquire code context, a mechanism-level taxonomy (agentic grep/read vs. embedding/repo-map retrieval), per-agent profiles (Codex CLI, Claude Code, Aider, Cursor, SWE-agent), and why the retrieval family predicts bloat sensitivity. Motivates a pre-registered cross-agent extension and sharpens the instrumentation/validity notes referenced from §6.2, §8.1, and §10.
 - Issue [#1209](https://github.com/promptdriven/pdd/issues/1209) — research question, metrics, acceptance criteria, non-goals (source of truth for this design).
 - Issue [#789](https://github.com/promptdriven/pdd/issues/789) — context budget audit (still **open**; the `pdd context-audit` command and its `docs/context_audit.md` are proposed in PR #1387 and **not yet merged to `main`**). Its token attribution is reused only by the deferred prompt-space arm, and only once that work lands; this pilot does not depend on it.
 - `docs/pdd_vs_agentic_cli_definitive_proof_plan.md` — broader pre-registration/falsification methodology this pilot follows.

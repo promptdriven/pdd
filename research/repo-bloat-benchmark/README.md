@@ -16,6 +16,12 @@ promoted to `docs/whitepaper_with_benchmarks/`; active infra lives here.
 - **[design.md](design.md)** — the design document: benchmark architecture,
   scenario format, distractor generation strategy, instrumentation plan, and
   reporting format. Read this first.
+- **[agentic_cli_search.md](agentic_cli_search.md)** — background section (issue
+  [#1430](https://github.com/promptdriven/pdd/issues/1430)): how agentic coding CLIs
+  acquire code context, a mechanism-level taxonomy (agentic grep/read vs.
+  embedding/repo-map retrieval), per-agent profiles (Codex CLI, Claude Code, Aider,
+  Cursor, SWE-agent), and why the retrieval family predicts an agent's sensitivity to
+  repo bloat — motivating a pre-registered cross-agent extension. Cited.
 
 ## Planned layout
 
