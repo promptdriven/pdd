@@ -7267,6 +7267,105 @@ def test_test_extend_python_agentic_does_not_skip(orchestration_fixture):
     assert result['success'] is True
 
 
+# --- Issue #1403: PR auto-heal scope guard (PDD_DISABLE_TEST_EXTEND) ---
+
+
+def test_pr_scope_guard_skips_python_test_extend_without_appending_tests(
+    orchestration_fixture,
+    monkeypatch,
+):
+    """#1403 execution backstop: a suppressed Python test_extend must accept the
+    run as complete and never append unrelated generated tests."""
+    monkeypatch.setenv("PDD_DISABLE_TEST_EXTEND", "1")
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_test = orchestration_fixture['cmd_test_main']
+    mock_get_paths = orchestration_fixture['get_pdd_file_paths']
+    test_path = Path(mock_get_paths.return_value['test'])
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    sentinel = "# existing reviewed tests\n"
+    test_path.write_text(sentinel, encoding="utf-8")
+
+    def append_unrelated_block(*args, **kwargs):
+        test_path.write_text(
+            sentinel + "\n# unrelated generated test block\n",
+            encoding="utf-8",
+        )
+        return {'success': True, 'cost': 0.06, 'model': 'mock-model'}
+
+    mock_test.side_effect = append_unrelated_block
+    # The orchestrator reaches the test_extend branch directly; the guard fires
+    # before cmd_test_main is invoked and accepts the run as complete.
+    mock_determine.side_effect = [
+        SyncDecision(operation='test_extend', reason='Coverage 75.0 below target 90.0'),
+        SyncDecision(operation='all_synced', reason='Accepted after PR scope skip'),
+    ]
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report'), \
+         patch('pdd.sync_orchestration.maybe_steer_operation') as mock_steer:
+        mock_steer.side_effect = lambda op, reason, app, quiet, skip_tests, skip_verify, timeout_s=None: (op, False)
+        result = sync_orchestration(basename="calculator", language="python")
+
+    assert result['success'] is True
+    mock_test.assert_not_called()
+    assert test_path.read_text(encoding="utf-8") == sentinel
+
+
+def test_pr_scope_guard_logs_test_extend_skipped_for_python(
+    orchestration_fixture,
+    monkeypatch,
+):
+    """#1403: the execution backstop emits the existing test_extend_skipped event,
+    citing PDD_DISABLE_TEST_EXTEND."""
+    monkeypatch.setenv("PDD_DISABLE_TEST_EXTEND", "1")
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_test = orchestration_fixture['cmd_test_main']
+    mock_determine.side_effect = [
+        SyncDecision(operation='test_extend', reason='Coverage 75.0 below target 90.0'),
+        SyncDecision(operation='all_synced', reason='Accepted after PR scope skip'),
+    ]
+
+    with patch('pdd.sync_orchestration.log_event') as mock_log_event, \
+         patch('pdd.sync_orchestration._execute_tests_and_create_run_report'), \
+         patch('pdd.sync_orchestration.maybe_steer_operation') as mock_steer:
+        mock_steer.side_effect = lambda op, reason, app, quiet, skip_tests, skip_verify, timeout_s=None: (op, False)
+        result = sync_orchestration(basename="calculator", language="python")
+
+    assert result['success'] is True
+    mock_test.assert_not_called()
+    skipped_events = [
+        call_args for call_args in mock_log_event.call_args_list
+        if len(call_args.args) >= 3 and call_args.args[2] == "test_extend_skipped"
+    ]
+    assert skipped_events, "suppressed Python test_extend should log test_extend_skipped"
+    assert "PDD_DISABLE_TEST_EXTEND" in skipped_events[0].args[3]["reason"]
+
+
+def test_pr_scope_guard_does_not_save_test_extend_fingerprint(
+    orchestration_fixture,
+    monkeypatch,
+):
+    """#1403: a suppressed test_extend must not write a fingerprint whose command
+    is 'test_extend' (the symptom Greg flagged on PR #1390)."""
+    monkeypatch.setenv("PDD_DISABLE_TEST_EXTEND", "1")
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_save_fp = orchestration_fixture['_save_fingerprint_atomic']
+    mock_test = orchestration_fixture['cmd_test_main']
+    mock_determine.side_effect = [
+        SyncDecision(operation='test_extend', reason='Coverage 75.0 below target 90.0'),
+        SyncDecision(operation='all_synced', reason='Accepted after PR scope skip'),
+    ]
+
+    with patch('pdd.sync_orchestration._execute_tests_and_create_run_report'), \
+         patch('pdd.sync_orchestration.maybe_steer_operation') as mock_steer:
+        mock_steer.side_effect = lambda op, reason, app, quiet, skip_tests, skip_verify, timeout_s=None: (op, False)
+        result = sync_orchestration(basename="calculator", language="python")
+
+    assert result['success'] is True
+    mock_test.assert_not_called()
+    saved_operations = [call_args.args[2] for call_args in mock_save_fp.call_args_list]
+    assert "test_extend" not in saved_operations
+
+
 def test_test_extend_agentic_skip_rejects_zero_coverage(orchestration_fixture):
     """
     Bug #573: When test_extend is skipped in agentic mode (non-Python language),

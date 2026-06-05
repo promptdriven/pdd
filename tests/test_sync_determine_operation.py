@@ -440,6 +440,84 @@ def test_decision_test_on_low_coverage(mock_get_pdd_paths, mock_construct, pdd_t
     assert decision.operation == 'test_extend'
     assert f"coverage 75.0% below target {TARGET_COVERAGE:.1f}%" in decision.reason.lower()
 
+
+@patch('sync_determine_operation.construct_paths')
+@patch('sync_determine_operation.get_pdd_file_paths')
+def test_decision_pr_scope_guard_suppresses_python_low_coverage_test_extend(
+    mock_get_pdd_paths,
+    mock_construct,
+    pdd_test_environment,
+    monkeypatch,
+):
+    """#1403: PDD_DISABLE_TEST_EXTEND converts Python coverage growth into a no-op."""
+    tmp_path = pdd_test_environment
+    Path("tests").mkdir(exist_ok=True)
+    test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+    create_file(test_path, "def test_foo(): pass")
+    code_path = tmp_path / f"{BASENAME}.py"
+    create_file(code_path, "def foo(): pass")
+
+    mock_get_pdd_paths.return_value = {
+        'prompt': tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt",
+        'code': code_path,
+        'example': tmp_path / f"{BASENAME}_example.py",
+        'test': test_path,
+    }
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "1.0", "timestamp": "t", "command": "test",
+        "prompt_hash": "p", "code_hash": "c", "example_hash": "e", "test_hash": "t"
+    })
+    create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 62, "tests_failed": 0,
+        "coverage": 0.0, "test_hash": "t"
+    })
+
+    monkeypatch.setenv("PDD_DISABLE_TEST_EXTEND", "1")
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
+
+    assert decision.operation == 'all_synced'
+    assert decision.details['test_extend_skipped'] is True
+    assert decision.details['skip_reason'] == 'PDD_DISABLE_TEST_EXTEND'
+    assert decision.details['current_coverage'] == 0.0
+
+
+@patch('sync_determine_operation.construct_paths')
+@patch('sync_determine_operation.get_pdd_file_paths')
+def test_decision_test_extend_default_still_runs_without_pr_scope_guard(
+    mock_get_pdd_paths,
+    mock_construct,
+    pdd_test_environment,
+    monkeypatch,
+):
+    """#1403 regression guard: normal pdd sync still chooses test_extend when the flag is absent."""
+    tmp_path = pdd_test_environment
+    Path("tests").mkdir(exist_ok=True)
+    test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+    create_file(test_path, "def test_foo(): pass")
+    code_path = tmp_path / f"{BASENAME}.py"
+    create_file(code_path, "def foo(): pass")
+
+    mock_get_pdd_paths.return_value = {
+        'prompt': tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt",
+        'code': code_path,
+        'example': tmp_path / f"{BASENAME}_example.py",
+        'test': test_path,
+    }
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "1.0", "timestamp": "t", "command": "test",
+        "prompt_hash": "p", "code_hash": "c", "example_hash": "e", "test_hash": "t"
+    })
+    create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 62, "tests_failed": 0,
+        "coverage": 0.0, "test_hash": "t"
+    })
+
+    monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
+
+    assert decision.operation == 'test_extend'
+    assert decision.details['extend_tests'] is True
+
 # --- No Fingerprint Tests ---
 @patch('sync_determine_operation.construct_paths')
 def test_decision_generate_for_new_prompt(mock_construct, pdd_test_environment):
