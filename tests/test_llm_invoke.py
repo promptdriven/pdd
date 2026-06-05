@@ -34,6 +34,14 @@ import httpx # Import httpx for mocking request/response
 import litellm
 import logging # For caplog
 
+CLOUD_RUNTIME_ENV_KEYS = {
+    "CLOUD_BUILD",
+    "BATCH_TASK_INDEX",
+    "K_SERVICE",
+    "CLOUD_RUN_JOB",
+    "CLOUD_RUN_EXECUTION",
+}
+
 # Define MockModelInfo locally in the test file using namedtuple
 # Fields should match columns used in _load_model_data and subsequent logic
 MockModelInfoData = namedtuple("MockModelInfoData", [
@@ -847,9 +855,14 @@ def test_llm_invoke_auth_error_new_key_retry(mock_load_models, mock_set_llm_cach
     mock_completion.side_effect = [auth_error, mock_successful_response]
 
     # Use patch.dict to properly isolate the environment, removing all API keys
-    # This ensures no API keys are present, forcing the code to prompt for them
+    # and cloud runtime markers. This test simulates an interactive CLI session
+    # that prompts twice after an auth failure.
     env_without_api_keys = {k: v for k, v in os.environ.items()
-                           if not k.endswith('_API_KEY') and k != 'PDD_FORCE'}
+                           if (
+                               not k.endswith('_API_KEY')
+                               and k not in {'PDD_FORCE', 'PDD_NO_INTERACTIVE', 'CI'}
+                               and k not in CLOUD_RUNTIME_ENV_KEYS
+                           )}
 
     with patch.dict(os.environ, env_without_api_keys, clear=True), \
          patch('builtins.open', mock_open()), \
