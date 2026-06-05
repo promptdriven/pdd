@@ -112,6 +112,41 @@ def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
     )
 
 
+def _is_checkup_source_set_json_invocation(arguments: List[str]) -> bool:
+    """Return whether ``pdd checkup <prompt-target> --json`` needs clean stdout."""
+    if "--json" not in arguments:
+        return False
+    try:
+        checkup_idx = arguments.index("checkup")
+    except ValueError:
+        return False
+    if checkup_idx + 1 >= len(arguments):
+        return False
+    next_arg = arguments[checkup_idx + 1]
+    if next_arg.startswith("-"):
+        return False
+    if next_arg in {
+        "lint",
+        "contract",
+        "contracts",
+        "coverage",
+        "gate",
+        "drift",
+        "snapshot",
+        "simplify",
+    }:
+        return False
+    return True
+
+
+def _is_machine_json_invocation(arguments: List[str]) -> bool:
+    """Return whether stdout must remain machine-parseable JSON only."""
+    return (
+        _is_prompt_lint_json_invocation(arguments)
+        or _is_checkup_source_set_json_invocation(arguments)
+    )
+
+
 class PDDCLI(click.Group):
     """Custom Click Group that adds a Generate Suite section to root help."""
 
@@ -404,7 +439,7 @@ def cli(
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
     # Prompt-lint JSON output is intended for downstream machine consumers.
-    json_mode = _is_prompt_lint_json_invocation(sys.argv)
+    json_mode = _is_machine_json_invocation(sys.argv)
     quiet = quiet or json_mode
     core_dump = core_dump and not json_mode
 

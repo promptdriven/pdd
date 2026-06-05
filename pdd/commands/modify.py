@@ -20,6 +20,7 @@ from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from ..operation_log import log_operation
 from ..evidence_manifest import write_evidence_manifest
+from ..prompt_gate import maybe_run_workflow_prompt_gate
 
 console = Console()
 
@@ -365,6 +366,16 @@ def change(
             
             if not success:
                 raise click.exceptions.Exit(1)
+
+            should_continue, gate_exit = maybe_run_workflow_prompt_gate(
+                changed_files,
+                cli_prompt_checkup=prompt_checkup,
+                no_prompt_checkup=no_prompt_checkup,
+                project_root=Path.cwd(),
+                quiet=quiet,
+            )
+            if not should_continue:
+                raise click.exceptions.Exit(gate_exit)
 
             if evidence:
                 write_evidence_manifest(

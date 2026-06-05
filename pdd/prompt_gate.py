@@ -11,6 +11,7 @@ from .checkup_prompt_main import (
     render_automatic_gate_summary,
     run_checkup_prompt_paths,
 )
+from .construct_paths import _find_pddrc_file, _load_pddrc_config
 
 logger = logging.getLogger(__name__)
 
@@ -18,26 +19,58 @@ _PROMPT_GATE_MODES = frozenset({"off", "warn", "strict"})
 _DEFAULT_MODE = "warn"
 
 
-def load_prompt_gate_config(project_root: Path) -> str:
-    """Load ``checkup.prompt_gate`` from ``pyproject.toml`` ``[tool.pdd.checkup]``."""
-    pyproject = project_root / "pyproject.toml"
-    if not pyproject.is_file():
-        return _DEFAULT_MODE
-    try:
-        import tomllib
-
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except (OSError, ValueError, ImportError):
-        return _DEFAULT_MODE
-
-    checkup = data.get("tool", {}).get("pdd", {}).get("checkup", {})
-    if not isinstance(checkup, dict):
-        return _DEFAULT_MODE
-    mode = str(checkup.get("prompt_gate", _DEFAULT_MODE)).strip().lower()
+def _normalize_prompt_gate_mode(raw: object, *, source: str) -> Optional[str]:
+    if raw is None:
+        return None
+    mode = str(raw).strip().lower()
     if mode not in _PROMPT_GATE_MODES:
-        logger.warning("Unknown checkup.prompt_gate value %r; using %r", mode, _DEFAULT_MODE)
-        return _DEFAULT_MODE
+        logger.warning(
+            "Unknown checkup.prompt_gate value %r in %s; ignoring.",
+            raw,
+            source,
+        )
+        return None
     return mode
+
+
+def load_prompt_gate_config(project_root: Path) -> str:
+    """Load ``checkup.prompt_gate`` from ``.pddrc`` or ``pyproject.toml``."""
+    root = project_root.resolve()
+
+    pddrc = _find_pddrc_file(root)
+    if pddrc is not None:
+        try:
+            config = _load_pddrc_config(pddrc)
+        except (OSError, ValueError) as exc:
+            logger.warning("Failed to load .pddrc for prompt gate: %s", exc)
+        else:
+            checkup = config.get("checkup", {})
+            if isinstance(checkup, dict) and "prompt_gate" in checkup:
+                mode = _normalize_prompt_gate_mode(
+                    checkup.get("prompt_gate"),
+                    source=str(pddrc),
+                )
+                if mode is not None:
+                    return mode
+
+    pyproject = root / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            import tomllib
+
+            data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        except (OSError, ValueError, ImportError):
+            return _DEFAULT_MODE
+        checkup = data.get("tool", {}).get("pdd", {}).get("checkup", {})
+        if isinstance(checkup, dict) and "prompt_gate" in checkup:
+            mode = _normalize_prompt_gate_mode(
+                checkup.get("prompt_gate"),
+                source=str(pyproject),
+            )
+            if mode is not None:
+                return mode
+
+    return _DEFAULT_MODE
 
 
 def resolve_prompt_gate_mode(
@@ -85,7 +118,8 @@ def run_automatic_prompt_gate(
     Run automatic prompt checkup on changed prompt files.
 
     Returns ``(should_continue, exit_code)``. ``should_continue`` is False only
-    when ``mode == 'strict'`` and deterministic checks fail.
+    when ``mode == 'strict'`` and deterministic checks fail (errors, or warnings
+    when strict evaluation is enabled).
     """
     if mode == "off" or not prompt_paths:
         return True, 0
@@ -100,3 +134,27 @@ def run_automatic_prompt_gate(
     if mode == "strict" and exit_code != 0:
         return False, exit_code
     return True, 0
+
+
+def maybe_run_workflow_prompt_gate(
+    changed_files: Sequence[str | Path],
+    *,
+    cli_prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
+    project_root: Path,
+    quiet: bool = False,
+) -> tuple[bool, int]:
+    """Shared hook for generate/change workflows that touch ``.prompt`` files."""
+    gate_mode = resolve_prompt_gate_mode(
+        cli_prompt_checkup=cli_prompt_checkup,
+        no_prompt_checkup=no_prompt_checkup,
+        project_root=project_root,
+    )
+    prompt_paths = filter_changed_prompt_paths(changed_files)
+    return run_automatic_prompt_gate(
+        prompt_paths,
+        mode=gate_mode,
+        project_root=project_root,
+        quiet=quiet,
+        strict=(gate_mode == "strict"),
+    )

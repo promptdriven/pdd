@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import yaml
 
 from pdd.prompt_gate import (
     filter_changed_prompt_paths,
@@ -43,6 +44,24 @@ def test_resolve_prompt_gate_mode_no_prompt_checkup_wins(tmp_path: Path) -> None
 
 def test_load_prompt_gate_config_default_warn(tmp_path: Path) -> None:
     assert load_prompt_gate_config(tmp_path) == "warn"
+
+
+def test_load_prompt_gate_config_prefers_pddrc_over_pyproject(tmp_path: Path) -> None:
+    (tmp_path / ".pddrc").write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "contexts": {"default": {"paths": {"prompts": "prompts"}}},
+                "checkup": {"prompt_gate": "off"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.pdd.checkup]\nprompt_gate = "strict"\n',
+        encoding="utf-8",
+    )
+    assert load_prompt_gate_config(tmp_path) == "off"
 
 
 def test_run_automatic_prompt_gate_off_is_noop(tmp_path: Path) -> None:

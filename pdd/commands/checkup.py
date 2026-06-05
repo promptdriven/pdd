@@ -383,9 +383,27 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     gate_allow: Tuple[str, ...],
 ) -> Optional[Tuple[str, float, str]]:
     """
-    Run agentic health checkup from a GitHub issue, or local diagnostics.
+    pdd checkup = verifier namespace
+
+    Run agentic health checkup from a GitHub issue, or local prompt diagnostics.
 
     \b
+    Prompt targets (source-set health):
+      pdd checkup prompts/foo_python.prompt
+      pdd checkup prompts/
+      pdd checkup <devunit>
+          → Is this prompt source-set clear, covered, evidenced, and ready to generate from?
+    Focused prompt checks (CI / debugging):
+      pdd checkup lint ...
+      pdd checkup contract check ...
+      pdd checkup coverage ...
+      pdd checkup gate ...
+      pdd checkup snapshot ...
+      pdd checkup drift ...
+    Issue / PR checkup:
+      pdd checkup <issue-url>
+      pdd checkup --pr <pr-url>
+
     GitHub mode (default): TARGET is an issue URL.
     PR mode: pass --pr <pr-url> to run the full checkup against an existing
              PR. With no --issue the PR is reviewed on its own merits;
@@ -396,11 +414,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
-    Prompt targets (source-set health):
-      pdd checkup prompts/foo_python.prompt
-      pdd checkup prompts/
-      pdd checkup <devunit>
-          → Is this prompt source-set clear, covered, evidenced, and ready to generate from?
     Simplify (Claude Code /simplify, requires --apply):
       pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:

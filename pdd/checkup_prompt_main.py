@@ -102,26 +102,34 @@ class PromptSourceSetReport:
 
     def recommended_actions(self) -> list[str]:
         actions: list[str] = []
+
+        def _display_path(path: Path) -> str:
+            try:
+                return str(path.relative_to(self.project_root))
+            except ValueError:
+                return str(path)
+
         if self.lint and self.lint.error_count:
-            actions.append(
-                f"pdd checkup lint {self.prompt_path.relative_to(self.project_root)}"
-            )
+            actions.append(f"pdd checkup lint {_display_path(self.prompt_path)}")
         if not self.contract_passed:
             actions.append(
-                f"pdd checkup contract check {self.prompt_path.relative_to(self.project_root)}"
+                f"pdd checkup contract check {_display_path(self.prompt_path)}"
             )
         if self.coverage and self.coverage.has_contract_rules:
             summary = self.coverage.summary
             if summary.get("unchecked") or summary.get("failed"):
                 actions.append(
-                    f"pdd checkup coverage {self.prompt_path.relative_to(self.project_root)}"
+                    f"pdd checkup coverage {_display_path(self.prompt_path)}"
                 )
         if self.gate and not self.gate.passed:
             actions.append(
                 f"pdd checkup gate {self.prompt_path.stem.removesuffix('_python')}"
             )
         if any(finding.source_check == "snapshot" for finding in self.findings):
-            actions.append(f"pdd checkup snapshot {self.prompt_path}")
+            actions.append(f"pdd checkup snapshot {_display_path(self.prompt_path)}")
+        if any(finding.source_check == "drift" for finding in self.findings):
+            basename = self.prompt_path.stem.removesuffix("_python")
+            actions.append(f"pdd checkup drift {basename}")
         if not actions:
             actions.append("Source set looks ready to generate from.")
         return actions
@@ -199,7 +207,7 @@ def build_prompt_source_set_report(
     contract_status = "pass" if report.contract_passed else "fail"
     if report.contract_passed and contract_result.warn_count:
         contract_status = "warn"
-    _record_check(report, "contract", status=contract_status)
+        _record_check(report, "contract", status=contract_status)
     for index, issue in enumerate(contract_result.issues):
         report.findings.append(
             SourceSetFinding(
@@ -224,6 +232,20 @@ def build_prompt_source_set_report(
         stories_dir=stories_dir,
         tests_dir=tests_dir,
     )
+    waiver_issues = [
+        issue for issue in contract_result.issues if issue.section == "waivers"
+    ]
+    if waiver_issues:
+        waiver_status = (
+            "fail"
+            if any(issue.level == "error" for issue in waiver_issues)
+            else "warn"
+        )
+        _record_check(report, "waivers", status=waiver_status)
+    elif report.coverage.has_contract_rules:
+        _record_check(report, "waivers", status="pass")
+    else:
+        _record_check(report, "waivers", status="skip")
     if report.coverage.error:
         _record_check(report, "coverage", status="fail")
         report.findings.append(
@@ -306,6 +328,22 @@ def build_prompt_source_set_report(
                     code=failure.code,
                 )
             )
+        _record_check(report, "drift", status="note")
+        report.findings.append(
+            SourceSetFinding(
+                finding_id=_finding_id("drift", prompt_path, 0, "readiness"),
+                source_check="drift",
+                severity="info",
+                file=prompt_path,
+                message=(
+                    f"Evidence manifest present for {basename}; consider "
+                    f"`pdd checkup drift {basename}` before shipping regenerated code."
+                ),
+                recommended_action="Run drift check when evidence-backed regeneration matters.",
+                fix_command=f"pdd checkup drift {basename}",
+                code="drift_readiness",
+            )
+        )
     elif prompt_matches_devunit:
         _record_check(report, "gate", status="warn")
         report.findings.append(

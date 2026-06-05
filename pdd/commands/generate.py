@@ -19,11 +19,7 @@ from ..evidence_manifest import (
     resolve_test_output_paths,
     write_evidence_manifest,
 )
-from ..prompt_gate import (
-    filter_changed_prompt_paths,
-    resolve_prompt_gate_mode,
-    run_automatic_prompt_gate,
-)
+from ..prompt_gate import maybe_run_workflow_prompt_gate
 from ..user_story_tests import cache_story_prompt_links, generate_user_story
 
 # Initialize console
@@ -52,18 +48,12 @@ def _maybe_run_prompt_gate(
     if dry_run:
         return True
     root = Path(project_root or Path.cwd()).resolve()
-    gate_mode = resolve_prompt_gate_mode(
+    should_continue, _exit_code = maybe_run_workflow_prompt_gate(
+        output_files,
         cli_prompt_checkup=prompt_checkup,
         no_prompt_checkup=no_prompt_checkup,
         project_root=root,
-    )
-    prompt_paths = filter_changed_prompt_paths(output_files)
-    should_continue, _exit_code = run_automatic_prompt_gate(
-        prompt_paths,
-        mode=gate_mode,
-        project_root=root,
         quiet=quiet,
-        strict=(gate_mode == "strict"),
     )
     return should_continue
 

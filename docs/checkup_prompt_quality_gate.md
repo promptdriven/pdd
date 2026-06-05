@@ -20,8 +20,9 @@ engines:
 - `pdd checkup lint`
 - `pdd checkup contract check`
 - `pdd checkup coverage`
-- waiver / evidence readiness via `pdd checkup gate`
+- waiver / evidence readiness via `pdd checkup gate` (plus explicit `waivers` check in the unified report)
 - snapshot policy when nondeterministic tags exist
+- optional drift readiness note when an evidence manifest exists
 
 Focused subcommands remain unchanged for CI and debugging:
 
@@ -54,8 +55,21 @@ Machine-readable output uses `--json` and conforms to
 - `actions[]`: suggested next commands
 - `deterministic_exit_code`: 0 clean, 1 warnings, 2 errors (or strict warnings)
 
-`--strict` affects deterministic exit codes only. `--explain` prints a
+`--strict` affects deterministic exit codes only (warnings become failures in
+strict mode, including automatic `--prompt-checkup strict`). `--explain` prints a
 read-only finding summary and never changes the exit code.
+
+## Workflow hook interface
+
+Automatic prompt checkup is invoked through `maybe_run_workflow_prompt_gate()` in
+`pdd/prompt_gate.py`. Current hook points:
+
+- `pdd generate` agentic and incremental PRD paths (after prompt files are written)
+- `pdd change` manual path (`change_main`, after prompt saves)
+- `pdd change` agentic issue path (`modify`, after `run_agentic_change`)
+
+Future prompt-sync workflows should call the same helper with the list of
+touched `.prompt` paths and honor `--prompt-checkup` / `--no-prompt-checkup`.
 
 ## Automatic gate
 
@@ -68,7 +82,7 @@ Modes:
 |------|----------|
 | `off` | No automatic checkup |
 | `warn` (default) | Report issues; do not block downstream work |
-| `strict` | Block code generation / change on deterministic failure |
+| `strict` | Block code generation / change on deterministic failure (errors; warnings too when strict evaluation is active) |
 
 CLI:
 
@@ -81,18 +95,27 @@ pdd change ... --prompt-checkup warn
 pdd change ... --prompt-checkup strict
 ```
 
-Config (`pyproject.toml`):
+Config (`.pddrc`, preferred):
+
+```yaml
+checkup:
+  prompt_gate: warn   # off | warn | strict
+```
+
+Fallback (`pyproject.toml`):
 
 ```toml
 [tool.pdd.checkup]
 prompt_gate = "warn"   # off | warn | strict
 ```
 
+CLI flags override config.
+
 Workflows with no `.prompt` changes are unaffected.
 
 ## Related docs
 
-- [checkup_verifier.md](checkup_verifier.md)
+- [checkup_verifier.md](checkup_verifier.md) — verifier namespace overview
 - [prompt_lint.md](prompt_lint.md)
 - [coverage_contracts.md](coverage_contracts.md)
 - [evidence_manifest.md](evidence_manifest.md)

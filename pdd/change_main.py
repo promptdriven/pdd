@@ -24,11 +24,7 @@ from .process_csv_change import process_csv_change
 from .get_extension import get_extension
 from .user_story_tests import run_user_story_tests, discover_prompt_files
 from .validate_prompt_includes import sanitize_prompt_output
-from .prompt_gate import (
-    filter_changed_prompt_paths,
-    resolve_prompt_gate_mode,
-    run_automatic_prompt_gate,
-)
+from .prompt_gate import maybe_run_workflow_prompt_gate
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -516,17 +512,12 @@ def change_main(
                     return msg, total_cost, model_name or ""
 
         if saved_prompt_paths:
-            gate_mode = resolve_prompt_gate_mode(
+            should_continue, gate_exit = maybe_run_workflow_prompt_gate(
+                saved_prompt_paths,
                 cli_prompt_checkup=ctx.obj.get("prompt_checkup"),
                 no_prompt_checkup=ctx.obj.get("no_prompt_checkup", False),
                 project_root=Path.cwd(),
-            )
-            should_continue, gate_exit = run_automatic_prompt_gate(
-                filter_changed_prompt_paths(saved_prompt_paths),
-                mode=gate_mode,
-                project_root=Path.cwd(),
                 quiet=quiet,
-                strict=(gate_mode == "strict"),
             )
             if not should_continue:
                 msg = (

@@ -20,6 +20,10 @@ pdd contracts check TARGET [OPTIONS]
 
 Both invoke the same engine (`pdd/contract_check.py`).
 
+Waiver authoring defects surface in contract check and in the unified prompt
+source-set report's `waivers` check. See
+[checkup_prompt_quality_gate.md](checkup_prompt_quality_gate.md).
+
 ## Quick start
 
 ```bash
