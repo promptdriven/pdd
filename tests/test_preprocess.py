@@ -2206,12 +2206,13 @@ def test_process_include_with_content_selector(monkeypatch) -> None:
     
     # Create a mock selector class
     class MockSelector:
-        def select(self, content, selectors, file_path, mode):
+        def select(self, content, selectors, file_path, mode, expand_dependencies=False):
             assert content == mock_file_content
             assert "def:main" in selectors
             assert "class:App" in selectors
             assert "lines:10-20" in selectors
             assert mode == "interface"
+            assert expand_dependencies is False
             return expected_output
             
     # Mock the import of ContentSelector
@@ -2375,6 +2376,7 @@ def test_preprocess_pytest_include_real(tmp_path, monkeypatch) -> None:
 
 def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
     """If ContentSelector can't be imported, fall back to full file content with a warning."""
+    monkeypatch.delenv("PDD_COMPRESSION_FALLBACK", raising=False)
     monkeypatch.chdir(tmp_path)
     src = tmp_path / "module.py"
     full_content = "def foo():\n    return 42\n"
@@ -2391,6 +2393,7 @@ def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
 
 def test_include_select_fallback_on_selector_error(tmp_path, monkeypatch) -> None:
     """If ContentSelector raises, fall back to full file content with a warning."""
+    monkeypatch.delenv("PDD_COMPRESSION_FALLBACK", raising=False)
     monkeypatch.chdir(tmp_path)
     src = tmp_path / "module.py"
     full_content = "def foo():\n    return 42\n"

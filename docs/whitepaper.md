@@ -76,6 +76,7 @@ Adopting a PDD approach offers numerous advantages, particularly when contrasted
 *   **Increased Efficiency & Speed (Developer Focus & Throughput)**: Developers operate at a higher abstraction level. While a single patch might seem faster interactively, PDD's batch nature frees up developer time by eliminating the need to constantly "babysit" the AI, leading to greater overall throughput, especially on larger tasks.
 *   **Cost Savings (LLM Usage)**:
     *   **Token Efficiency**: PDD workflows, being more structured and modular (using examples as interfaces), can be more deterministic and token-efficient compared to the potentially verbose interactions of purely agentic/chat-based coding assistants.
+    *   **Automated Context Compression**: PDD supports global compression modes (`--context-compression`) that automatically reduce the token count of dependencies—extracting only contract rules, function signatures, or relevant failing tests—without losing behavioral integrity. This provides a compounding advantage as the codebase grows.
     *   **Batch Processing API Discounts**: PDD is inherently suited to batch-mode generation. Developers can define prompts, launch the generation process, and return later. LLM providers often offer significant discounts (e.g., 50% off) for batch processing APIs compared to the more expensive interactive APIs required by constantly supervised tools.
 
 ### Batch vs. Interactive Workflow Timelines
@@ -179,6 +180,8 @@ While PDD offers significant advantages, potential challenges exist:
 
 ## The PDD Workflow: A Synchronized Cycle
 
+A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contrasting with the constant supervision model of interactive patching. For large or repair-heavy runs, sync may first compress the relevant prompt, examples when present, tests, contract rules, and repair evidence into phase-aware context packages. The compressed-context setting is resolved explicitly from the CLI, then `.pddrc`, then the default off state; when enabled, generation, verification, testing, and fixing receive packages rather than a raw boolean flag. Isolated code repair or generation replay consumes existing examples as evidence but does not schedule unrelated example generation just to build repair context.
+
 ```mermaid
 flowchart TD
     subgraph Initialization
@@ -229,7 +232,7 @@ A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contra
 4.  **Crash**: Use `crash` to fix any runtime errors that prevent the code/example from running.
 5.  **Verify**: After resolving crashes, use `verify` to ensure the example runs correctly and aligns with the prompt's intent.
 6.  **Test**: Use `test` to generate unit tests for the code module.
-7.  **Fix**: Use `fix` along with the generated tests to identify and correct bugs in the generated code, iterating until tests pass.
+7.  **Fix**: Use `fix` along with the generated tests to identify and correct bugs in the generated code, iterating until tests pass. Support for automated context compression (e.g., via `--context-compression`) enables cost-effective fixing in large codebases by including only the most relevant failing tests and fixtures in the LLM's context.
 8.  **Update & Back-propagate**: Use `update` to synchronize any necessary changes made during fixing back to the prompt. Crucially, propagate these learnings back up the chain to architectural specs or parent prompts to ensure consistency across the system.
 
 The fundamental unit is often considered the prompt and its generated code, example, and test file – all kept in sync. If a prompt is too complex to generate correctly in one shot (even with fixing), it should be split (`split`) into smaller, manageable units.

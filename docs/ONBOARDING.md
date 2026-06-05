@@ -119,8 +119,11 @@ GEMINI_API_KEY=your-google-api-key
 
 # Optional: For Vertex AI (Gemini via GCP)
 VERTEX_CREDENTIALS=/path/to/service-account.json
-VERTEX_PROJECT=your-gcp-project-id
-VERTEX_LOCATION=us-central1
+VERTEXAI_PROJECT=your-gcp-project-id
+VERTEXAI_LOCATION=us-central1
+# Legacy aliases also work:
+# VERTEX_PROJECT=your-gcp-project-id
+# VERTEX_LOCATION=us-central1
 ```
 
 For issue-driven agentic CLI workflows, you can instead run the CLI's own

@@ -29,7 +29,7 @@ From a single prompt the system emits: working code, OpenAPI spec, client SDKs, 
 
 **Regeneration is cheaper than patchwork**
 
-Because the prompt knows the full intent, you can change "JWT" to "session cookie" once and re-generate the whole slice—tests and docs included. With code-as-source you chase that change across a dozen files and invariably miss one.
+Because the prompt knows the full intent, you can change "JWT" to "session cookie" once and re-generate the whole slice—tests and docs included. With code-as-source you chase that change across a dozen files and invariably miss one. For large codebases where regeneration costs can grow, PDD uses context compression to selectively include only the most relevant dependencies and tests, keeping the developer loop fast and affordable.
 
 **Non-dev stakeholders can read (and diff) it**
 
@@ -521,3 +521,22 @@ PDD now includes auth-aware detection and scaffolding across the pipeline:
 2. Add Pattern 14 fixtures from `context/test.prompt` to your test files
 3. Ensure auth modules use dependency injection (injectable OAuth client, injectable token verifier)
 4. Re-run `pdd sync` on auth modules to regenerate tests with auth-aware patterns
+
+---
+
+# Performance and Cost
+
+## Q: How do I manage large context windows in complex projects?
+
+As projects grow, the size of included files and examples can exceed the model's context window or lead to high costs. PDD provides several ways to manage this:
+
+1. **Selective Includes**: Use `select=` in your `<include>` tags to pull only the specific functions or classes you need.
+2. **Interface Mode**: Use `mode="interface"` for Python dependencies to include only signatures and docstrings.
+3. **Context Compression**: Use the global `--context-compression all` flag to automatically compress examples and test context across the entire project.
+
+## Q: What happens if context compression fails?
+
+If the system cannot compress a file (for example, if a dependency has syntax errors that prevent AST parsing), it will default to including the full file to ensure no critical context is lost. You can change this behavior with the `--compression-fallback {full,error}` flag:
+
+- `full` (default): Fallback to full file inclusion on compression error.
+- `error`: Stop and report an error if compression fails.

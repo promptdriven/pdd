@@ -76,7 +76,12 @@ the web, download parquet files, or fuzzy match model identities at runtime.
    - Fix C: remove dated/versioned variants when an undated equivalent exists.
    - Fix A: dedupe by `(provider_display, canonical_base_model)`, falling back to `_normalize_model_name(row["model"])` for manifest-only models.
    - Remove rows where input or output exceeds `MAX_COST_PER_MTOK`.
-   - Fix D: per-provider Pareto filter; skip all-zero-cost providers.
+   - Fix D: per-provider Pareto filter; skip all-zero-cost providers. The filter
+     must only remove fallback rows that are strictly dominated by another
+     fallback row in the same provider. Preserve all DeepSWE-ranked rows and
+     exact Arena-reviewed rows, and do not let those reviewed rows delete
+     static fallback rows. This keeps DeepSWE as the primary ranking source
+     while preserving routable fallback/default model IDs.
    - Final sort: provider asc, `model_rank_score` desc, model asc.
 7. Logging/output:
    - Print concise diagnostics for manifest load/fallback, skipped previews, Fix C/A/D removals, sanity removals, ELO source breakdown, and overall post-processing reduction.

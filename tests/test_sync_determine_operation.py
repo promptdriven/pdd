@@ -5009,3 +5009,62 @@ class TestIssue1201GenerateOutputPathInArchBranch:
             f"With context_override='backend', code_path should be in backend/src/, "
             f"but got: {paths['code']!r}"
         )
+from datetime import datetime, timezone
+from pathlib import Path
+
+from pdd.sync_determine_operation import _handle_missing_expected_files
+
+
+def test_missing_example_schedules_example_by_default(tmp_path: Path) -> None:
+    from pdd.sync_determine_operation import Fingerprint
+    prompt = tmp_path / "prompts" / "calc_python.prompt"
+    code = tmp_path / "pdd" / "calc.py"
+    example = tmp_path / "context" / "calc_example.py"
+    test = tmp_path / "tests" / "test_calc.py"
+    prompt.parent.mkdir()
+    code.parent.mkdir()
+    example.parent.mkdir()
+    test.parent.mkdir()
+    prompt.write_text("Create calc.\n", encoding="utf-8")
+    code.write_text("def add(a, b): return a + b\n", encoding="utf-8")
+    fingerprint = Fingerprint("test", datetime.now(timezone.utc).isoformat(), "fix", "p", "c", "e", "t")
+
+    decision = _handle_missing_expected_files(
+        ["example"],
+        {"prompt": prompt, "code": code, "example": example, "test": test},
+        fingerprint,
+        "calc",
+        "python",
+        str(prompt.parent),
+    )
+
+    assert decision.operation == "example"
+
+
+def test_missing_example_is_bypassed_for_isolated_repair_or_replay(tmp_path: Path) -> None:
+    from pdd.sync_determine_operation import Fingerprint
+
+    prompt = tmp_path / "prompts" / "calc_python.prompt"
+    code = tmp_path / "pdd" / "calc.py"
+    example = tmp_path / "context" / "calc_example.py"
+    test = tmp_path / "tests" / "test_calc.py"
+    prompt.parent.mkdir()
+    code.parent.mkdir()
+    example.parent.mkdir()
+    test.parent.mkdir()
+    prompt.write_text("Create calc.\n", encoding="utf-8")
+    code.write_text("def add(a, b): return a + b\n", encoding="utf-8")
+    fingerprint = Fingerprint("test", datetime.now(timezone.utc).isoformat(), "fix", "p", "c", "e", "t")
+
+    decision = _handle_missing_expected_files(
+        ["example"],
+        {"prompt": prompt, "code": code, "example": example, "test": test},
+        fingerprint,
+        "calc",
+        "python",
+        str(prompt.parent),
+        isolated_replay_or_repair=True,
+    )
+
+    assert decision.operation == "generate"
+    assert decision.details["isolated_replay_or_repair"] is True

@@ -1,7 +1,9 @@
 import fnmatch
 import glob
+import os
 import re
 import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -25,7 +27,9 @@ from .construct_paths import (
     get_extension
 )
 from .sync_determine_operation import get_pdd_file_paths
+from .operation_log import get_run_report_path
 from .architecture_include_validation import print_architecture_include_validation_warnings
+from .compressed_sync_context import build_compressed_sync_context, metadata as compressed_context_metadata
 from .sync_orchestration import sync_orchestration
 from .sync_tui import DEFAULT_STEER_TIMEOUT_S
 from .template_expander import expand_template
@@ -607,6 +611,7 @@ def sync_main(
     compress: bool = False,
     evidence: bool = False,
     snapshot_context: bool = False,
+    compressed_context: bool = False,
 ) -> Tuple[Dict[str, Any], float, str]:
     """
     CLI wrapper for the sync command. Handles parameter validation, path construction,
@@ -928,6 +933,7 @@ def sync_main(
                         log_mode=True,
                         prompts_dir=str(prompt_file_path.parent),
                         context_override=context_override,
+                        isolated_replay_or_repair=force or bool(os.environ.get("PDD_REPAIR_DIRECTIVE")),
                     )
                     if decision.operation == "nothing":
                         if not quiet:
@@ -952,6 +958,49 @@ def sync_main(
                     pre_cost = 0.0
                     pre_model = ""
                     _generate_ran = False
+                    compression_phase_metadata: List[Dict[str, Any]] = []
+
+                    def _one_session_compressed_context(
+                        phase: str,
+                        repair_directive: Optional[str] = None,
+                    ) -> Optional[Dict[str, Any]]:
+                        if not compressed_context:
+                            return None
+                        try:
+                            test_paths = (
+                                [Path(p) for p in pdd_files.get("test_files", [])]
+                                if pdd_files.get("test_files")
+                                else [pdd_files.get("test")]
+                            )
+                            package = build_compressed_sync_context(
+                                phase=phase,
+                                prompt_path=pdd_files["prompt"],
+                                code_path=pdd_files.get("code"),
+                                example_path=pdd_files.get("example"),
+                                test_paths=[p for p in test_paths if p],
+                                run_report_path=get_run_report_path(
+                                    basename,
+                                    resolved_language,
+                                    paths=pdd_files,
+                                ),
+                                repair_directive=repair_directive,
+                            )
+                            package_dict = asdict(package)
+                            compression_phase_metadata.append(
+                                compressed_context_metadata(package_dict)
+                            )
+                            return package_dict
+                        except Exception as exc:
+                            fallback = {
+                                "enabled": True,
+                                "used": False,
+                                "phase": phase,
+                                "mode": "compressed-sync-context",
+                                "unavailable_reason": str(exc),
+                            }
+                            compression_phase_metadata.append(fallback)
+                            return None
+
                     if not pdd_files["code"].exists() or force:
                         from .code_generator_main import (
                             code_generator_main,
@@ -1009,6 +1058,10 @@ def sync_main(
                                         # context config), so let front-matter override it.
                                         output_from_config=True,
                                         snapshot_context=snapshot_context,
+                                        compressed_context=_one_session_compressed_context(
+                                            "generate",
+                                            _os.environ.get("PDD_REPAIR_DIRECTIVE"),
+                                        ),
                                     )
                                     last_exc = None
                                     break
@@ -1136,6 +1189,13 @@ def sync_main(
                         )
                         # Merge costs from both phases
                         one_session_result["total_cost"] = pre_cost + one_session_result.get("total_cost", 0.0)
+                        one_session_result["compression"] = {
+                            "enabled": compressed_context,
+                            "requested": compressed_context,
+                            "used": any(item.get("used") for item in compression_phase_metadata),
+                            "mode": "compressed-sync-context",
+                            "phases": compression_phase_metadata,
+                        }
 
                         # Surface the pre-generate phase in operations_completed and
                         # summary so the Details column doesn't under-report when the
@@ -1199,6 +1259,7 @@ def sync_main(
                     steer_timeout=steer_timeout if steer_timeout is not None else DEFAULT_STEER_TIMEOUT_S,
                     agentic_mode=agentic_mode,
                     snapshot_context=snapshot_context,
+                    compressed_context=compressed_context,
                 )
 
                 # Post-sync: auto-submit example to cloud on success (multi-step path)
@@ -1294,5 +1355,23 @@ def sync_main(
     aggregated_results["overall_success"] = overall_success
     aggregated_results["total_cost"] = total_cost
     aggregated_results["primary_model"] = primary_model
+    language_compression = [
+        result["compression"]
+        for result in aggregated_results["results_by_language"].values()
+        if isinstance(result, dict) and isinstance(result.get("compression"), dict)
+    ]
+    aggregated_results["compression"] = {
+        "enabled": compressed_context,
+        "requested": compressed_context,
+        "used": any(item.get("used") for item in language_compression),
+        "mode": "compressed-sync-context",
+        "languages": language_compression,
+    }
+    from .operation_log import aggregate_agentic_fallback_metadata
+
+    aggregated_results["agentic_fallback"] = aggregate_agentic_fallback_metadata(
+        language_results=aggregated_results["results_by_language"].values(),
+        agentic_sync_mode=agentic_mode,
+    )
 
     return aggregated_results, total_cost, primary_model

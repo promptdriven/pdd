@@ -499,6 +499,11 @@ _pdd_checkup() {
     '--pr[Target PR number or URL]:pr:' \
     '--issue[Target issue number or URL]:issue:' \
     '--review-loop[Enable PR review loop]' \
+    '--final-gate[Canonical final PR gate: PR checkup then review-loop (needs --pr and --issue)]' \
+    '--test-scope[PR-mode test scope]:scope:(full targeted)' \
+    '--no-gates[Disable deterministic local gates (issue #1092)]' \
+    '--gate-timeout[Per-gate wall-clock timeout in seconds (default 60)]:seconds:' \
+    '--gate-allow[Repeatable: extra gate name to opt into discovery]:gate:' \
     '--review-only[Run reviewer only, no fixer]' \
     '--reviewers[Comma-separated reviewer roles]:reviewers:' \
     '--reviewer[Primary reviewer role]:reviewer:' \

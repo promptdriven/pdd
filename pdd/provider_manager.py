@@ -46,16 +46,52 @@ def parse_api_key_vars(api_key_field: str) -> List[str]:
 
 
 GOOGLE_API_KEY_ALIASES = ("GOOGLE_API_KEY", "GEMINI_API_KEY")
+LLM_INVOKE_ALIAS_PREFIX = "PDD_LLM_INVOKE_"
+
+
+def _llm_invoke_alias_name(key_name: str) -> str:
+    """Return the inner llm_invoke-only alias name for a credential env var."""
+    key_name = (key_name or "").strip()
+    if key_name.startswith(LLM_INVOKE_ALIAS_PREFIX):
+        return key_name
+    return f"{LLM_INVOKE_ALIAS_PREFIX}{key_name}"
+
+
+def _base_api_key_name(key_name: str) -> str:
+    """Strip the llm_invoke-only prefix when present."""
+    key_name = (key_name or "").strip()
+    if key_name.startswith(LLM_INVOKE_ALIAS_PREFIX):
+        return key_name[len(LLM_INVOKE_ALIAS_PREFIX):]
+    return key_name
 
 
 def api_key_aliases(key_name: str) -> List[str]:
-    """Return env var names that can satisfy a catalog credential name."""
-    key_name = (key_name or "").strip()
-    if not key_name:
+    """Return standard env var names that can satisfy a catalog credential name."""
+    raw_name = (key_name or "").strip()
+    if not raw_name:
         return []
-    if key_name in GOOGLE_API_KEY_ALIASES:
+    base_name = _base_api_key_name(raw_name)
+    if base_name in GOOGLE_API_KEY_ALIASES:
         return list(GOOGLE_API_KEY_ALIASES)
-    return [key_name]
+    return [base_name]
+
+
+def _resolution_aliases(
+    key_name: str,
+    *,
+    include_llm_invoke_aliases: bool = False,
+) -> List[str]:
+    """Return env vars that can satisfy a runtime credential lookup."""
+    aliases = api_key_aliases(key_name)
+    if not include_llm_invoke_aliases:
+        return aliases
+
+    expanded = list(aliases)
+    for alias in aliases:
+        llm_invoke_alias = _llm_invoke_alias_name(alias)
+        if llm_invoke_alias not in expanded:
+            expanded.append(llm_invoke_alias)
+    return expanded
 
 
 def expand_api_key_vars(api_key_field: str) -> List[str]:
@@ -83,11 +119,16 @@ def api_key_requirements_satisfied(
 def resolve_api_key_from_env(
     key_name: str,
     env: Optional[Dict[str, str]] = None,
+    *,
+    include_llm_invoke_aliases: bool = False,
 ) -> Tuple[Optional[str], Optional[str]]:
     """Resolve a key value from env, accepting aliases such as GOOGLE_API_KEY."""
     if env is None:
         env = os.environ
-    for alias in api_key_aliases(key_name):
+    for alias in _resolution_aliases(
+        key_name,
+        include_llm_invoke_aliases=include_llm_invoke_aliases,
+    ):
         value = env.get(alias)
         if value and str(value).strip():
             return str(value).strip(), alias

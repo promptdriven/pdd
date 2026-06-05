@@ -1,10 +1,24 @@
-% You are an expert Python engineer. Write `fix_main`, the CLI wrapper for the PDD `fix` command. It orchestrates single-pass fixes via `fix_errors_from_unit_tests`, iterative fixes via `fix_error_loop`, optional cloud execution, and optional auto-submit of successful fixes.
+<pdd-reason>CLI wrapper for unit-test repair with loop mode, cloud/local execution, compressed repair context, AST test-context compression, and optional auto-submit.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "fix_main", "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, compress_test_context: bool | None = None, context_compression: str | None = None, compression_fallback: str | None = None, compressed_context: Mapping[str, Any] | None = None, agentic_fallback_events: list[dict[str, Any]] | None = None) -> Tuple[bool, str, str, int, float, str]", "returns": "Tuple[bool, str, str, int, float, str]"}
+    ]
+  }
+}
+</pdd-interface>
 
 <pdd-dependency>fix_error_loop_python.prompt</pdd-dependency>
 <pdd-dependency>fix_focus_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>auth_service_python.prompt</pdd-dependency>
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
+<pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Write `fix_main`, the CLI wrapper for the PDD `fix` command. It orchestrates single-pass fixes via `fix_errors_from_unit_tests`, iterative fixes via `fix_error_loop`, optional cloud execution, and optional auto-submit of successful fixes.
 
 <include>context/python_preamble.prompt</include>
 <include>context/ctx_obj_params.prompt</include>
@@ -43,6 +57,11 @@
 - `protect_tests` (`bool`, default `False`)
 - `test_files` (`list[str] | None`)
 - `failure_aware_retries` (`bool`, default `True`)
+- `compress_test_context` (`bool | None`, default `None`)
+- `context_compression` (`str | None`, default `None`)
+- `compression_fallback` (`str | None`, default `None`)
+- `compressed_context` (`Mapping[str, Any] | None`, default `None`): optional sync-provided repair context containing failing tests/errors, relevant contract rules, prompt interface, and selected prior repair evidence.
+- `agentic_fallback_events` (`list[dict[str, Any]] | None`, default `None`): optional mutable list from sync that records per-phase agentic fallback telemetry (`phase`, `attempted`, `used`, `detail`). Forward to `fix_error_loop` in loop mode when supplied.
 
 % Output
 Return `Tuple[bool, str, str, int, float, str]`:
@@ -71,7 +90,7 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - Also read `time`, `verbose`, and `local` behavior from `ctx.obj`.
 
 4. Execution strategy:
-   - Loop mode always calls `fix_error_loop` with the original file paths plus `prompt=input_strings["prompt_file"]`, `verification_program`, `strength`, `temperature`, `time`, `max_attempts`, `budget`, `error_log_file=output_file_paths.get("output_results")`, `verbose`, `agentic_fallback`, `protect_tests`, `test_files`, `failure_aware_retries`, the computed `use_cloud` flag, and `no_local_fallback=cloud_only`.
+   - Loop mode always calls `fix_error_loop` with the original required file-path arguments positionally, then uses keyword arguments for every optional loop parameter so signature drift cannot misroute values: `prompt=input_strings["prompt_file"]`, `verification_program=verification_program`, `strength=strength`, `temperature=temperature`, `time=time`, `max_attempts=max_attempts`, `budget=budget`, `error_log_file=output_file_paths.get("output_results")`, `verbose=verbose`, `agentic_fallback=agentic_fallback`, `protect_tests=protect_tests`, `use_cloud=use_cloud`, `test_files=test_files`, `failure_aware_retries=failure_aware_retries`, `no_local_fallback=cloud_only`, `compress_test_context=compress_test_context`, `context_compression=context_compression`, `compression_fallback=compression_fallback`, `compressed_context=compressed_context`, and `agentic_fallback_events=agentic_fallback_events` when sync supplies it.
    - Loop mode is hybrid by default: local test execution, but `use_cloud=True` for LLM calls unless local execution is explicitly forced. `PDD_CLOUD_ONLY` / `PDD_NO_LOCAL_FALLBACK` still keep cloud LLM calls enabled in loop mode.
    - Single-pass mode is cloud-first unless local execution is forced or `CloudConfig.is_running_in_cloud()` says the process is already running inside the cloud worker environment.
    - Respect `PDD_CLOUD_ONLY` / `PDD_NO_LOCAL_FALLBACK` so cloud failures do not silently fall back to local execution when fallback is disabled. Pass `no_local_fallback=cloud_only` to `fix_error_loop`; it stops the loop and logs an error instead of attempting a local LLM call when fallback is forbidden.
@@ -80,6 +99,7 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - Authenticate with `CloudConfig.get_jwt_token(verbose=verbose)`.
    - POST to `CloudConfig.get_endpoint_url("fixCode")` with timeout `get_cloud_timeout()`.
    - Payload includes `unitTest`, `code`, `prompt`, `errors`, `language`, `strength`, `temperature`, `time` (defaulting to `0.25` when unset), `verbose`, and `protectTests`.
+   - When `compressed_context` is provided, include its rendered repair context in the single-pass cloud payload and local LLM prompt as supplemental context while preserving concrete failing test output and error logs.
    - Focused-repair path (large dev units): before building the payload, if `is_large(code_content, unit_test_content)`, call `prepare_focused_inputs` to obtain sliced failing-test and code subsets. Send those slices as `unitTest` / `code`, set `protectTests` to `protect_tests or bool(focused_inputs)`, and store `focused_inputs.slices` for reconstruction.
    - Parse `success`, `fixedUnitTest`, `fixedCode`, `analysis`, `updateUnitTest`, `updateCode`, `totalCost`, and `modelName`.
    - If focused repair was used and the cloud result includes updated code, reconstruct the full code with `reconstruct_code(original_code, fixedCode, focused_inputs.slices)` before validation, saving, or returning.
@@ -112,6 +132,10 @@ Return `Tuple[bool, str, str, int, float, str]`:
    - Include original prompt/code/test, optional error/example inputs, fixed code/test outputs, and analysis from `output_results` if readable, otherwise from in-memory `analysis_results`.
    - Metadata should include a title/description, language from `get_language(os.path.splitext(code_file)[1])`, empty framework, tags `["auto-fix", "example"]`, `isPublic=True`, and `price=0.0`.
    - Submission failures should be reported but must not change the main fix result.
+
+8a. Compression and fallback metadata:
+   - Expose whether agentic fallback was invoked or used so sync/evidence can record it.
+   - Preserve `protect_tests`, focused repair, cloud-only fallback, and direct CLI behavior when no compressed context is supplied.
 
 9. Error handling:
    - Re-raise `click.Abort` and `click.UsageError`.

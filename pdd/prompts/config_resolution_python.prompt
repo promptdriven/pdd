@@ -29,7 +29,7 @@
      2. CLI global options (in `ctx.obj`)
      3. pddrc context defaults (in `resolved_config`)
      4. Hardcoded defaults (from `pdd/__init__.py`)
-  3) Return a dictionary with keys: "strength", "temperature", "time".
+  3) Return a dictionary with keys: "strength", "temperature", "time", "context_compression", "compress_examples", "compress_test_context", "compression_fallback".
   4) Handle `ctx.obj` safely (default to empty dict if None).
   5) Use `DEFAULT_STRENGTH`, `DEFAULT_TEMPERATURE`, `DEFAULT_TIME` imported from `.` as the hardcoded defaults.
   6) Ensure strict type hints (Dict, Any, Optional).

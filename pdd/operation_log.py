@@ -9,7 +9,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple, Union
 
 from rich.console import Console
 
@@ -18,6 +18,91 @@ logger = logging.getLogger(__name__)
 # We assume standard paths relative to the project root
 PDD_DIR = ".pdd"
 META_DIR = os.path.join(PDD_DIR, "meta")
+
+_SENSITIVE_METADATA_KEYS = {
+    "content",
+    "compressed_content",
+    "compressed_context",
+    "context",
+    "prompt",
+    "raw",
+    "raw_context",
+    "rendered",
+    "rendered_context",
+    "text",
+}
+
+
+def _safe_metadata(value: Any) -> Any:
+    """Copy log metadata while omitting raw prompt/context payload fields."""
+    if isinstance(value, dict):
+        safe: Dict[str, Any] = {}
+        for key, item in value.items():
+            key_str = str(key)
+            if key_str.lower() in _SENSITIVE_METADATA_KEYS:
+                continue
+            safe[key_str] = _safe_metadata(item)
+        return safe
+    if isinstance(value, (list, tuple)):
+        return [_safe_metadata(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def aggregate_agentic_fallback_metadata(
+    *,
+    phase_events: Sequence[Mapping[str, Any]] | None = None,
+    language_results: Sequence[Mapping[str, Any]] | None = None,
+    agentic_sync_mode: bool = False,
+) -> dict[str, Any]:
+    """Merge per-phase fallback telemetry from sync runs."""
+    phases: list[dict[str, Any]] = []
+    if phase_events:
+        for item in phase_events:
+            if isinstance(item, Mapping):
+                phases.append(dict(item))
+    if language_results:
+        for result in language_results:
+            if not isinstance(result, Mapping):
+                continue
+            fallback = result.get("agentic_fallback")
+            if not isinstance(fallback, Mapping):
+                continue
+            nested = fallback.get("phases")
+            if isinstance(nested, list):
+                for item in nested:
+                    if isinstance(item, Mapping):
+                        phases.append(dict(item))
+    fallback_attempted = any(item.get("attempted") for item in phases)
+    fallback_used = any(item.get("used") for item in phases)
+    return {
+        "attempted": fallback_attempted,
+        "used": fallback_used,
+        "phases": phases,
+        "agentic_sync_mode": bool(agentic_sync_mode),
+        "reason": (
+            "agentic fallback invoked during fix/verify"
+            if fallback_used
+            else (
+                "agentic sync mode enabled"
+                if agentic_sync_mode
+                else "local sync path"
+            )
+        ),
+    }
+
+
+def _attach_safe_metadata(
+    entry: Dict[str, Any],
+    *,
+    compression: Any = None,
+    agentic_fallback: Any = None,
+) -> None:
+    if compression is not None:
+        entry["compression"] = _safe_metadata(compression)
+    if agentic_fallback is not None:
+        entry["agentic_fallback"] = _safe_metadata(agentic_fallback)
 
 
 def _detect_project_root(start: Optional[Path] = None) -> Optional[Path]:
@@ -365,9 +450,13 @@ def append_log_entry(
     """
     log_path = get_log_path(basename, language, paths=paths)
     
-    # Ensure standard fields exist
+    # Ensure standard fields exist and raw context payloads never reach disk.
     if "timestamp" not in entry:
         entry["timestamp"] = datetime.now().isoformat()
+    if "compression" in entry:
+        entry["compression"] = _safe_metadata(entry["compression"])
+    if "agentic_fallback" in entry:
+        entry["agentic_fallback"] = _safe_metadata(entry["agentic_fallback"])
     
     try:
         with open(log_path, 'a', encoding='utf-8') as f:
@@ -384,12 +473,14 @@ def create_log_entry(
     invocation_mode: str = "sync",
     estimated_cost: float = 0.0,
     confidence: float = 0.0,
-    decision_type: str = "unknown"
+    decision_type: str = "unknown",
+    compression: Any = None,
+    agentic_fallback: Any = None,
 ) -> Dict[str, Any]:
     """
     Create a new log entry dictionary structure.
     """
-    return {
+    entry = {
         "timestamp": datetime.now().isoformat(),
         "operation": operation,
         "reason": reason,
@@ -403,6 +494,12 @@ def create_log_entry(
         "model": "unknown",
         "error": None
     }
+    _attach_safe_metadata(
+        entry,
+        compression=compression,
+        agentic_fallback=agentic_fallback,
+    )
+    return entry
 
 
 def create_manual_log_entry(operation: str) -> Dict[str, Any]:
@@ -422,7 +519,9 @@ def update_log_entry(
     cost: float,
     model: str,
     duration: float,
-    error: Optional[str] = None
+    error: Optional[str] = None,
+    compression: Any = None,
+    agentic_fallback: Any = None,
 ) -> Dict[str, Any]:
     """
     Update a log entry with execution results.
@@ -432,6 +531,11 @@ def update_log_entry(
     entry["model"] = model
     entry["duration"] = duration
     entry["error"] = error
+    _attach_safe_metadata(
+        entry,
+        compression=compression,
+        agentic_fallback=agentic_fallback,
+    )
     return entry
 
 
@@ -442,6 +546,8 @@ def log_event(
     details: Any,
     invocation_mode: str = "manual",
     paths: Optional[Dict[str, Any]] = None,
+    compression: Any = None,
+    agentic_fallback: Any = None,
 ) -> None:
     """
     Log a special event to the sync log.
@@ -456,6 +562,11 @@ def log_event(
         "details": details,
         "invocation_mode": invocation_mode
     }
+    _attach_safe_metadata(
+        entry,
+        compression=compression,
+        agentic_fallback=agentic_fallback,
+    )
     append_log_entry(basename, language, entry, paths=paths)
 
 

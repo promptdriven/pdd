@@ -620,6 +620,37 @@ def grounding_kwargs_from_ctx(
     return {"grounding": grounding, "reviewed": reviewed}
 
 
+_SENSITIVE_METADATA_KEYS = {
+    "content",
+    "compressed_content",
+    "compressed_context",
+    "context",
+    "prompt",
+    "raw",
+    "raw_context",
+    "rendered",
+    "rendered_context",
+    "text",
+}
+
+
+def _safe_generation_metadata(value: Any) -> Any:
+    """Copy generation metadata while omitting raw prompt/context payload fields."""
+    if isinstance(value, Mapping):
+        safe: dict[str, Any] = {}
+        for key, item in value.items():
+            key_str = str(key)
+            if key_str.lower() in _SENSITIVE_METADATA_KEYS:
+                continue
+            safe[key_str] = _safe_generation_metadata(item)
+        return safe
+    if isinstance(value, (list, tuple)):
+        return [_safe_generation_metadata(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
 
 def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals
     *,
@@ -636,6 +667,8 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     context_snapshot: Optional[Mapping[str, Any]] = None,
     grounding: Optional[Mapping[str, Any]] = None,
     reviewed: bool = False,
+    compression: Optional[Mapping[str, Any]] = None,
+    agentic_fallback: Optional[Mapping[str, Any]] = None,
     compress: bool = False,
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
@@ -725,6 +758,10 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         },
         "logs": log_values,
     }
+    if compression is not None:
+        manifest["generation"]["compression"] = _safe_generation_metadata(compression)
+    if agentic_fallback is not None:
+        manifest["generation"]["agentic_fallback"] = _safe_generation_metadata(agentic_fallback)
     if snapshot_context:
         manifest["context_snapshot"] = {
             "enabled": True,
