@@ -1,0 +1,91 @@
+<include>context/python_preamble.prompt</include>
+<pdd-reason>Non-interactive bounded repair loop that patches prompt files after failed prompt lint.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_prompt_repair_loop", "signature": "(path: Path, config: PromptRepairConfig, *, context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None) -> RepairResult", "returns": "RepairResult"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>prompt_lint_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/prompt_repair.py`.
+
+% Role & Scope
+Bounded, non-interactive repair loop for prompt files that fail `scan_prompt()`. Invokes an LLM
+patch-proposal pass, validates proposals against an allowlist of schema-aware edit types, applies
+accepted patches, re-runs the deterministic lint oracle, measures token delta, and writes an audit
+artifact. Does NOT rewrite full prompts. Does NOT edit code, test, or non-prompt files.
+
+% Requirements
+1. `PromptRepairConfig` dataclass: `mode: str` (accepted values: "off" | "best-effort" | "strict",
+   default "off"), `max_rounds: int = 1`, `max_token_growth: int = 1000`,
+   `max_seconds: float = 120.0`.
+2. `RepairResult` dataclass: `success: bool`, `issues_before: List[LintIssue]`,
+   `issues_after: List[LintIssue]`, `rounds_used: int`, `tokens_before: int`,
+   `tokens_after: int`, `token_delta: int`, `preamble_estimate: Optional[int]`,
+   `repair_skipped: bool = False`, `audit_path: Optional[Path] = None`.
+3. Function: `run_prompt_repair_loop(path: Path, config: PromptRepairConfig, *,
+   context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None) -> RepairResult`.
+4. When `config.mode == "off"`, return a `RepairResult` immediately with `repair_skipped=True`,
+   `issues_before=scan_prompt(path)`, `rounds_used=0`, token fields set to -1.
+   Never write any files in this mode.
+5. Measure prompt token count before repair via `count_tokens()` and store as `tokens_before`.
+   Estimate `preamble_estimate` as tokens in all lines before the first non-comment body line
+   (lines starting with `%` or `<` after any leading blank lines and `<include>` preambles).
+6. For each repair round (up to `config.max_rounds`):
+   a. Read current prompt text and lint issues.
+   b. Load and invoke the `prompt_repair_LLM` template (via `load_prompt_template("prompt_repair_LLM")` then `run_agentic_task()`) providing: prompt text,
+      lint issues as JSON, and any `context` values supplied by the caller (stories text,
+      test file excerpts, issue/PRD text — the caller decides what context to pass; this
+      module does not fetch context itself).
+   c. Parse the LLM response as a JSON array of patch proposals.
+   d. Validate each proposal: accept only these patch types:
+      ADD_VOCABULARY, NORMALIZE_RULE_ID, ADD_COVERAGE_LINE, ADD_STORY_TODO,
+      ADD_WAIVER_PLACEHOLDER, CLARIFY_VAGUE_TERM, ADD_CONTRACT_SKELETON.
+      Reject any proposal that would delete existing content or rewrite a whole section.
+   e. Compute token growth if all accepted patches are applied. If `tokens_before +
+      projected_growth > tokens_before + config.max_token_growth`, drop the largest
+      patches until the budget is satisfied; log each dropped patch at DEBUG level.
+   f. Apply accepted patches to the prompt file in the order given.
+   g. Re-run `scan_prompt(path)` as the oracle. If no issues remain, stop early.
+7. Measure `tokens_after = count_tokens(path.read_text())`. Compute
+   `token_delta = tokens_after - tokens_before`. If `token_delta > config.max_token_growth`,
+   log a WARNING with the delta and the budget so callers can surface it to the user.
+8. Write an audit note to `.pdd/evidence/prompt_repair/<slug>-<timestamp>.json` recording:
+   path, mode, rounds_used, token_delta, preamble_estimate, issues_before count,
+   issues_after count, applied patch types (not full patch content). Set
+   `result.audit_path` to this path.
+9. In `strict` mode, non-empty `issues_after` means `success=False`. In `best-effort`
+   mode, return `success=True` even when issues remain (they are visible in `issues_after`).
+10. LLM call failure, JSON parse failure, or repair timeout (wall-clock >=
+    `config.max_seconds`) must NOT raise. Return `RepairResult` with `success=False`,
+    `issues_before` populated, `rounds_used` reflecting completed rounds, and empty
+    `issues_after`. Log a WARNING with the failure reason.
+
+% Error Handling
+- `scan_prompt()` failures: propagate as-is (the oracle contract owns these)
+- LLM failure: log WARNING, `success=False`, return partial result
+- Audit write failure: log WARNING, `audit_path=None`, do NOT raise
+- Token count failure: set all token fields to -1, do NOT raise
+
+% Dependencies
+<pdd.prompt_lint>
+    <include select="def:scan_prompt,class:LintIssue,class:LintResult" mode="interface">pdd/prompt_lint.py</include>
+</pdd.prompt_lint>
+<pdd.token_counter>
+    <include mode="interface">pdd/server/token_counter.py</include>
+</pdd.token_counter>
+<pdd.agentic_common>
+    <include>context/agentic_common_example.py</include>
+</pdd.agentic_common>
+<pdd.load_prompt_template>
+    <include>context/load_prompt_template_example.py</include>
+</pdd.load_prompt_template>
+
+% Deliverables
+- Code: `pdd/prompt_repair.py`
