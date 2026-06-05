@@ -2776,7 +2776,7 @@ def _sanitize_api_key(key_value: str) -> str:
 
     # Additional validation: ensure no remaining control characters
     if any(ord(c) < 32 for c in sanitized):
-        logger.warning("API key contains control characters that may cause issues")
+        logger.warning("Environment value contains control characters that may cause issues")
         # Remove any remaining control characters
         sanitized = ''.join(c for c in sanitized if ord(c) >= 32)
 
@@ -2784,18 +2784,11 @@ def _sanitize_api_key(key_value: str) -> str:
     if sanitized:
         # Check for common API key patterns
         if len(sanitized) < 10:
-            logger.warning(f"API key appears too short ({len(sanitized)} characters) - may be invalid")
+            logger.warning(f"Environment value appears too short ({len(sanitized)} characters) - may be invalid")
 
         # Check for invalid characters in API keys (should be printable ASCII)
         if not all(32 <= ord(c) <= 126 for c in sanitized):
-            logger.warning("API key contains non-printable characters")
-
-        # Check for WSL-specific issues (detect if original had carriage returns)
-        if key_value != sanitized and '\r' in key_value:
-            if _is_wsl_environment():
-                logger.info("Detected and fixed WSL line ending issue in API key")
-            else:
-                logger.info("Detected and fixed line ending issue in API key")
+            logger.warning("Environment value contains non-printable characters")
 
     return sanitized
 
@@ -2849,7 +2842,6 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
     """
     from pdd.provider_manager import (
         parse_api_key_vars,
-        preferred_api_key_name,
         resolve_api_key_from_env,
     )
 
@@ -2947,7 +2939,6 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
     # --- Single-credential provider (original behaviour) ---
     key_name = env_vars[0]
-    prompt_key_name = preferred_api_key_name(key_name)
 
     key_value, resolved_key_name = resolve_api_key_from_env(
         key_name,
@@ -2958,12 +2949,11 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
     if key_value:
         if verbose:
-            effective_name = resolved_key_name or key_name
-            logger.info(f"API key '{effective_name}' found in environment.")
+            logger.info("Required environment value found.")
         newly_acquired_keys[resolved_key_name or key_name] = False  # Mark as existing
         return True
 
-    logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
+    logger.warning(f"Required environment value for model '{model_info.get('model')}' is not set.")
 
     # Vertex AI ADC fallback: when VERTEX_CREDENTIALS is missing but a
     # GCP project is configured, Application Default Credentials (e.g.
@@ -2979,14 +2969,14 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
     # Skip prompting if --force flag is set (non-interactive mode)
     if not prompt_allowed:
         logger.error(
-            f"API key '{key_name}' not set. In non-interactive force/cloud mode, "
+            "Required environment value not set. In non-interactive force/cloud mode, "
             "skipping interactive prompt."
         )
         return False
 
     try:
         # Interactive prompt
-        user_provided_key = input(f"Please enter the API key for {prompt_key_name}: ").strip()
+        user_provided_key = input(f"Please enter the API key for {key_name}: ").strip()
         if not user_provided_key:
             logger.error("No API key provided. Cannot proceed with this model.")
             return False
@@ -2995,15 +2985,15 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         user_provided_key = _sanitize_api_key(user_provided_key)
 
         # Set environment variable for the current process
-        os.environ[prompt_key_name] = user_provided_key
-        logger.info(f"API key '{prompt_key_name}' set for the current session.")
-        newly_acquired_keys[prompt_key_name] = True  # Mark as newly acquired
+        os.environ[key_name] = user_provided_key
+        logger.info("Required value set for the current session.")
+        newly_acquired_keys[key_name] = True  # Mark as newly acquired
 
         # Update .env file
         try:
-            _save_key_to_env_file(prompt_key_name, user_provided_key, ENV_PATH)
-            logger.info(f"API key '{prompt_key_name}' saved to {ENV_PATH}.")
-            logger.warning("SECURITY WARNING: The API key has been saved to your .env file. "
+            _save_key_to_env_file(key_name, user_provided_key, ENV_PATH)
+            logger.info(f"Required value saved to {ENV_PATH}.")
+            logger.warning("SECURITY WARNING: The value has been saved to your .env file. "
                    "Ensure this file is kept secure and is included in your .gitignore.")
 
         except IOError as e:
@@ -3013,7 +3003,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         return True
 
     except EOFError:  # Handle non-interactive environments
-         logger.error(f"Cannot prompt for API key '{prompt_key_name}' in a non-interactive environment.")
+         logger.error("Cannot prompt for a required value in a non-interactive environment.")
          return False
     except Exception as e:
          logger.error(f"An unexpected error occurred during API key acquisition: {e}")
@@ -3983,8 +3973,7 @@ def llm_invoke(
                     litellm_kwargs["api_key"] = key_value
                     if verbose:
                         logger.info(
-                            "[INFO] Passing API key from '%s' to LiteLLM.",
-                            resolved_key_name or env_vars[0],
+                            "[INFO] Passing resolved provider setting to LiteLLM.",
                         )
                 elif verbose:
                     logger.warning(f"[WARN] Env var '{env_vars[0]}' not set. LiteLLM will use default auth.")
