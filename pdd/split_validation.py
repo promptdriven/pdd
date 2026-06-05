@@ -1,6 +1,7 @@
 """pdd/split_validation.py — Post-extraction validation for the agentic split orchestrator."""
 from __future__ import annotations
 
+import ast
 import errno
 import re
 import subprocess
@@ -118,10 +119,22 @@ _PATCH_STRING_PATTERNS = [
     re.compile(r'''patch(?:\.object)?\s*\(\s*["']([^"']+)["']'''),
     # Python: mocker.patch("mod.X") AND mocker.patch.object("mod.X", ...)
     re.compile(r'''mocker\.patch(?:\.object)?\s*\(\s*["']([^"']+)["']'''),
+    # pytest: monkeypatch.setattr("mod.X", ...)
+    re.compile(r'''monkeypatch\.setattr\s*\(\s*["']([^"']+)["']'''),
     # JS/TS: jest.mock('mod'), jest.doMock('mod')
     re.compile(r'''jest\.(?:do)?[mM]ock\s*\(\s*["']([^"']+)["']'''),
     # Go: reflect-based lookups that reference module paths as strings
     # (best-effort; Go rarely uses string-based patching)
+]
+
+# patch.object("module.path", "attr") and patch.object(module_ref, "attr")
+_PATCH_OBJECT_PATTERNS = [
+    re.compile(
+        r'''(?:patch|mocker\.patch)\.object\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']'''
+    ),
+    re.compile(
+        r'''(?:patch|mocker\.patch)\.object\s*\(\s*([\w.]+)\s*,\s*["']([^"']+)["']'''
+    ),
 ]
 
 
@@ -139,6 +152,204 @@ def _collect_patch_paths(test_file_content: str) -> list[str]:
             if "." in match and not match.startswith(".") and not match.endswith("."):
                 paths.add(match)
     return sorted(paths)
+
+
+def symbols_from_patch_path(patch_path: str, module_stem: str) -> set[str]:
+    """Map a dotted patch path to symbol names defined in *module_stem*."""
+    symbols: set[str] = set()
+    prefix = f"{module_stem}."
+    if patch_path.startswith(prefix):
+        symbols.add(patch_path[len(prefix) :])
+    parts = patch_path.split(".")
+    for index, part in enumerate(parts):
+        if part == module_stem and index < len(parts) - 1:
+            symbols.add(".".join(parts[index + 1 :]))
+    return symbols
+
+
+def symbols_from_patch_object_target(
+    module_ref: str,
+    attr: str,
+    module_stem: str,
+) -> set[str]:
+    """Map ``patch.object(<module_ref>, \"attr\")`` to symbols in *module_stem*."""
+    ref = module_ref.strip()
+    if "." in ref:
+        dotted = ref if ref.endswith(f".{attr}") else f"{ref}.{attr}"
+        return symbols_from_patch_path(dotted, module_stem)
+    if ref == module_stem or ref.split(".")[-1] == module_stem:
+        return {attr}
+    return set()
+
+
+def _symbols_from_qualified_import(qualified: str, attr: str, module_stem: str) -> set[str]:
+    """Map a test import alias to a symbol name under *module_stem*."""
+    if qualified == module_stem:
+        return {attr}
+    prefix = f"{module_stem}."
+    if qualified.startswith(prefix):
+        owner = qualified[len(prefix) :]
+        return {f"{owner}.{attr}"} if owner else {attr}
+    return set()
+
+
+def _module_import_map(tree: ast.Module, module_stem: str) -> dict[str, str]:
+    """Map local test names to dotted paths rooted at *module_stem*."""
+    mapping: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                mod = alias.name
+                if mod != module_stem and not mod.endswith(f".{module_stem}"):
+                    continue
+                local = alias.asname or mod.split(".")[-1]
+                mapping[local] = module_stem
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is None:
+                continue
+            mod = node.module
+            if mod != module_stem and not mod.endswith(f".{module_stem}"):
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                local = alias.asname or alias.name
+                mapping[local] = f"{module_stem}.{alias.name}"
+    return mapping
+
+
+def _patch_object_attr_name(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _patch_object_attr_from_call(node: ast.Call) -> Optional[str]:
+    """Return the patched attribute name from positional or keyword args."""
+    if len(node.args) >= 2:
+        attr = _patch_object_attr_name(node.args[1])
+        if attr:
+            return attr
+    for keyword in node.keywords:
+        if keyword.arg in {"attribute", "method", "name"}:
+            attr = _patch_object_attr_name(keyword.value)
+            if attr:
+                return attr
+    return None
+
+
+def _patch_object_target_ref(node: ast.AST) -> Optional[str]:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parts: list[str] = []
+        current: ast.AST = node
+        while isinstance(current, ast.Attribute):
+            parts.append(current.attr)
+            current = current.value
+        if isinstance(current, ast.Name):
+            parts.append(current.id)
+            return ".".join(reversed(parts))
+    return None
+
+
+def _is_patch_object_callee(func: ast.AST) -> bool:
+    """True for ``patch.object``, ``mocker.patch.object``, ``unittest.mock.patch.object``, etc."""
+    if not isinstance(func, ast.Attribute) or func.attr != "object":
+        return False
+    node: ast.AST = func.value
+    while isinstance(node, ast.Attribute):
+        if node.attr == "patch":
+            return True
+        node = node.value
+    return isinstance(node, ast.Name) and node.id == "patch"
+
+
+def _symbols_for_patch_object_target(
+    target_ref: str,
+    attr: str,
+    import_map: dict[str, str],
+    module_stem: str,
+) -> set[str]:
+    symbols: set[str] = set()
+    if target_ref in import_map:
+        symbols.update(_symbols_from_qualified_import(import_map[target_ref], attr, module_stem))
+    symbols.update(symbols_from_patch_object_target(target_ref, attr, module_stem))
+    return symbols
+
+
+def _collect_patch_object_symbols_ast(test_file_content: str, module_stem: str) -> set[str]:
+    """Resolve ``patch.object(ImportedClass, \"method\")`` via test import aliases.
+
+    Only targets imported from the module under test are mapped; a ``Service``
+    class defined locally in the test file without a matching import is ignored.
+    """
+    try:
+        tree = ast.parse(test_file_content)
+    except SyntaxError:
+        return set()
+    import_map = _module_import_map(tree, module_stem)
+    symbols: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not _is_patch_object_callee(node.func):
+            continue
+        attr = _patch_object_attr_from_call(node)
+        target_ref = _patch_object_target_ref(node.args[0]) if node.args else None
+        if attr is None or target_ref is None:
+            continue
+        symbols.update(_symbols_for_patch_object_target(target_ref, attr, import_map, module_stem))
+    return symbols
+
+
+def _collect_patch_object_symbols(test_file_content: str, module_stem: str) -> set[str]:
+    symbols: set[str] = set()
+    for pattern in _PATCH_OBJECT_PATTERNS:
+        for module_ref, attr in pattern.findall(test_file_content):
+            symbols.update(symbols_from_patch_object_target(module_ref, attr, module_stem))
+    symbols.update(_collect_patch_object_symbols_ast(test_file_content, module_stem))
+    return symbols
+
+
+def iter_sibling_test_files(file_path: Path | str) -> list[Path]:
+    """Return deduplicated ``test_*.py`` files adjacent to *file_path*."""
+    path = Path(file_path)
+    candidates: list[Path] = []
+    candidates.extend(path.parent.glob("test_*.py"))
+    tests_dir = path.parent / "tests"
+    if tests_dir.is_dir():
+        candidates.extend(tests_dir.glob("test_*.py"))
+    parent_tests = path.parent.parent / "tests"
+    if parent_tests.is_dir():
+        candidates.extend(parent_tests.glob("test_*.py"))
+    seen: set[str] = set()
+    unique: list[Path] = []
+    for candidate in candidates:
+        key = str(candidate.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def collect_patch_symbols_for_module(file_path: Path | str | None) -> set[str]:
+    """Collect dotted symbol names patched by sibling tests for a Python module."""
+    if not file_path:
+        return set()
+    path = Path(file_path)
+    if not path.is_file() or path.suffix.lower() != ".py":
+        return set()
+    module_stem = path.stem
+    symbols: set[str] = set()
+    for test_file in iter_sibling_test_files(path):
+        try:
+            test_content = test_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for patch_path in _collect_patch_paths(test_content):
+            symbols.update(symbols_from_patch_path(patch_path, module_stem))
+        symbols.update(_collect_patch_object_symbols(test_content, module_stem))
+    return symbols
 
 
 _STDLIB_MODULES_COMMON: set[str] = {

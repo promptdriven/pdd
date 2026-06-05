@@ -709,7 +709,83 @@ def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
     return state
 
 
-def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
+def _assign_target_matches(target: ast.AST, symbol: str) -> bool:
+    """Return True when *symbol* is bound by an assignment target subtree."""
+    if isinstance(target, ast.Name):
+        return target.id == symbol
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_assign_target_matches(elt, symbol) for elt in target.elts)
+    if isinstance(target, ast.Starred):
+        return _assign_target_matches(target.value, symbol)
+    return False
+
+
+def _symbol_exists_in_module(tree: ast.Module, symbol: str) -> bool:
+    """Return True when *symbol* is defined in *tree* (supports dotted class paths)."""
+    if "." not in symbol:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name == symbol:
+                    return True
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if _assign_target_matches(target, symbol):
+                        return True
+            elif isinstance(node, ast.AnnAssign):
+                if node.value is not None and _assign_target_matches(node.target, symbol):
+                    return True
+        return False
+    cls_name, remainder = symbol.split(".", 1)
+    cls_node = next(
+        (node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == cls_name),
+        None,
+    )
+    if cls_node is None:
+        return False
+    if "." not in remainder:
+        return any(
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == remainder
+            for child in cls_node.body
+        )
+    inner_cls, method_name = remainder.split(".", 1)
+    for child in cls_node.body:
+        if isinstance(child, ast.ClassDef) and child.name == inner_cls:
+            return any(
+                isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and method.name == method_name
+                for method in child.body
+            )
+    return False
+
+
+def _effective_patch_targets(
+    existing_code: str,
+    language: str,
+    file_path: Optional[str],
+) -> Set[str]:
+    """Patch targets referenced by tests that are actually defined in *existing_code*."""
+    candidates = _collect_patch_targets(file_path)
+    if not candidates or (language or "").lower() not in {"python", "py"}:
+        return set()
+    try:
+        tree = ast.parse(existing_code or "")
+    except SyntaxError:
+        return set()
+    return {symbol for symbol in candidates if _symbol_exists_in_module(tree, symbol)}
+
+
+def _collect_patch_targets(file_path: Optional[str]) -> Set[str]:
+    """Return dotted symbol names patched by sibling tests for *file_path*."""
+    from .split_validation import collect_patch_symbols_for_module  # pylint: disable=import-outside-toplevel
+
+    return set(collect_patch_symbols_for_module(file_path))
+
+
+def _snapshot_public_surface(
+    code_text: str,
+    language: str,
+    patch_targets: Optional[Set[str]] = None,
+) -> Set[str]:
     """Collect public top-level functions/classes plus public class methods.
 
     Recurses into public nested classes so a method on ``Outer.Inner`` is
@@ -795,6 +871,8 @@ def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
                 # User opted the whole class into __all__; treat its
                 # members (including underscore-prefixed) as public.
                 _walk_class(class_defs[name], name, include_underscore=True)
+        if patch_targets:
+            names.update(patch_targets)
         return names
 
     def _add_assign_targets(target: ast.AST) -> None:
@@ -857,6 +935,9 @@ def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
                 exposed = alias.asname or alias.name
                 if exposed and not exposed.startswith("_"):
                     names.add(exposed)
+
+    if patch_targets:
+        names.update(patch_targets)
 
     return names
 
@@ -1485,7 +1566,52 @@ def _synthesize_dataclass_init_signature(
     return f"({', '.join(parts)})"
 
 
-def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
+def _patch_target_signature_entry(
+    tree: ast.Module,
+    symbol: str,
+    class_defs: Dict[str, ast.ClassDef],
+) -> Optional[str]:
+    """Return a snapshot signature string for a patched callable *symbol*."""
+    if "." not in symbol:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == symbol:
+                kind = "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function"
+                return f"[{kind}] {_format_python_signature(node)}"
+        return None
+
+    parts = symbol.split(".")
+    cls_name = parts[0]
+    cls_node = class_defs.get(cls_name)
+    if cls_node is None:
+        return None
+
+    if len(parts) == 2:
+        method_name = parts[1]
+        for child in cls_node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method_name:
+                binding_kind = _python_method_binding_kind(child)
+                skip_first = binding_kind != "staticmethod"
+                return f"[{binding_kind}] {_format_python_signature(child, skip_first=skip_first)}"
+        return None
+
+    inner_cls, method_name = parts[1], parts[2]
+    for child in cls_node.body:
+        if isinstance(child, ast.ClassDef) and child.name == inner_cls:
+            for method in child.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name == method_name:
+                    binding_kind = _python_method_binding_kind(method)
+                    skip_first = binding_kind != "staticmethod"
+                    return (
+                        f"[{binding_kind}] {_format_python_signature(method, skip_first=skip_first)}"
+                    )
+    return None
+
+
+def _snapshot_public_signatures(
+    code_text: str,
+    language: str,
+    patch_targets: Optional[Set[str]] = None,
+) -> Dict[str, str]:
     """Collect signatures for public top-level functions, classes, and class methods.
 
     Recurses into public nested classes so a method like ``Outer.Inner.method``
@@ -1832,6 +1958,13 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
                     # sufficient to distinguish it from a same-named
                     # ``def Path()`` later in the file.
                     signatures[exposed] = f"[import:from {module}]"
+    if patch_targets:
+        for symbol in sorted(patch_targets):
+            if symbol in signatures:
+                continue
+            entry = _patch_target_signature_entry(tree, symbol, class_defs)
+            if entry is not None:
+                signatures[symbol] = entry
     return signatures
 
 
@@ -1864,8 +1997,20 @@ def _verify_public_surface_regression(
     ):
         return
 
-    before = _snapshot_public_surface(existing_code, language or "python")
-    after = _snapshot_public_surface(generated_code, language or "python")
+    patch_targets = _effective_patch_targets(existing_code, language or "python", output_path)
+    before = _snapshot_public_surface(
+        existing_code,
+        language or "python",
+        patch_targets=patch_targets,
+    )
+    after_patch_targets = _effective_patch_targets(
+        generated_code, language or "python", output_path
+    )
+    after = _snapshot_public_surface(
+        generated_code,
+        language or "python",
+        patch_targets=after_patch_targets,
+    )
     if not before:
         return
     allowed_removed = _prompt_breaking_change_removed_symbols(prompt_content)
@@ -1886,8 +2031,16 @@ def _verify_public_surface_regression(
         for symbol in _diff_public_surface(before, after)
         if symbol not in expanded_allowed
     ]
-    before_signatures = _snapshot_public_signatures(existing_code, language or "python")
-    after_signatures = _snapshot_public_signatures(generated_code, language or "python")
+    before_signatures = _snapshot_public_signatures(
+        existing_code,
+        language or "python",
+        patch_targets=patch_targets,
+    )
+    after_signatures = _snapshot_public_signatures(
+        generated_code,
+        language or "python",
+        patch_targets=after_patch_targets,
+    )
     allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
     changed_set = {
         symbol
