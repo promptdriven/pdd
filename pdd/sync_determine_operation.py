@@ -1718,7 +1718,8 @@ def _handle_missing_expected_files(
     language: str, 
     prompts_dir: str,
     skip_tests: bool = False,
-    skip_verify: bool = False
+    skip_verify: bool = False,
+    isolated_replay_or_repair: bool = False,
 ) -> SyncDecision:
     """
     Handle the case where expected files are missing.
@@ -1771,6 +1772,19 @@ def _handle_missing_expected_files(
                 )
     
     elif 'example' in missing_files and paths['code'].exists():
+        if isolated_replay_or_repair:
+            return SyncDecision(
+                operation='generate',
+                reason='Example file missing but isolated repair/replay requested - regenerate code without unrelated example work',
+                confidence=1.0,
+                estimated_cost=estimate_operation_cost('generate'),
+                details={
+                    'decision_type': 'heuristic',
+                    'missing_files': missing_files,
+                    'code_path': str(paths['code']),
+                    'isolated_replay_or_repair': True
+                }
+            )
         # Code exists but example missing
         return SyncDecision(
             operation='example',
@@ -2042,6 +2056,7 @@ def sync_determine_operation(
     skip_verify: bool = False,
     context_override: Optional[str] = None,
     read_only: bool = False,
+    isolated_replay_or_repair: bool = False,
 ) -> SyncDecision:
     """
     Core decision-making function for sync operations with skip flag awareness.
@@ -2068,6 +2083,7 @@ def sync_determine_operation(
             basename, language, target_coverage, budget,
             prompts_dir, skip_tests, skip_verify, context_override,
             read_only=analysis_read_only,
+            isolated_replay_or_repair=isolated_replay_or_repair,
         )
     else:
         # Normal exclusive locking for actual operations
@@ -2076,6 +2092,7 @@ def sync_determine_operation(
                 basename, language, target_coverage, budget,
                 prompts_dir, skip_tests, skip_verify, context_override,
                 read_only=analysis_read_only,
+                isolated_replay_or_repair=isolated_replay_or_repair,
             )
 
 
@@ -2089,6 +2106,7 @@ def _perform_sync_analysis(
     skip_verify: bool = False,
     context_override: Optional[str] = None,
     read_only: bool = False,
+    isolated_replay_or_repair: bool = False,
 ) -> SyncDecision:
     """
     Perform the sync state analysis without locking concerns.
@@ -2504,7 +2522,7 @@ def _perform_sync_analysis(
             # Files are missing that should exist - need to regenerate
             # This prevents the incorrect analyze_conflict decision
             return _handle_missing_expected_files(
-                missing_expected_files, paths, fingerprint, basename, language, prompts_dir, skip_tests, skip_verify
+                missing_expected_files, paths, fingerprint, basename, language, prompts_dir, skip_tests, skip_verify, isolated_replay_or_repair
             )
     
     # Compare hashes only for files that actually exist (prevents None != "hash" false positives)
