@@ -10,6 +10,7 @@ import click
 
 from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
+from ..prompt_repair import load_prompt_repair_defaults
 from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
@@ -320,6 +321,33 @@ from .prompt import prompt_lint
     ),
 )
 @click.option(
+    "--prompt-repair",
+    type=click.Choice(["off", "best-effort", "strict"]),
+    default=None,
+    help=(
+        "Non-interactive prompt repair when changed prompts fail lint. "
+        "Overrides pyproject.toml [tool.pdd.checkup].prompt_repair (default: off)."
+    ),
+)
+@click.option(
+    "--max-prompt-repair-rounds",
+    type=int,
+    default=None,
+    help="Maximum repair-and-recheck iterations per prompt file (default: 1).",
+)
+@click.option(
+    "--max-prompt-token-growth",
+    type=int,
+    default=None,
+    help="Maximum token increase allowed during repair (default: 1000).",
+)
+@click.option(
+    "--max-prompt-repair-seconds",
+    type=float,
+    default=None,
+    help="Wall-clock timeout for the prompt repair loop in seconds (default: 120).",
+)
+@click.option(
     "-h",
     "--help",
     "show_help",
@@ -364,6 +392,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     no_gates: bool,
     gate_timeout: float,
     gate_allow: Tuple[str, ...],
+    prompt_repair: Optional[str],
+    max_prompt_repair_rounds: Optional[int],
+    max_prompt_token_growth: Optional[int],
+    max_prompt_repair_seconds: Optional[float],
 ) -> Optional[Tuple[str, float, str]]:
     """
     Run agentic health checkup from a GitHub issue, or local diagnostics.
@@ -727,6 +759,25 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     quiet = ctx.obj.get("quiet", False)
     verbose = ctx.obj.get("verbose", False)
+    repair_defaults = load_prompt_repair_defaults(Path.cwd())
+    effective_prompt_repair = (
+        prompt_repair if prompt_repair is not None else repair_defaults.mode
+    )
+    effective_max_repair_rounds = (
+        max_prompt_repair_rounds
+        if max_prompt_repair_rounds is not None
+        else repair_defaults.max_rounds
+    )
+    effective_max_token_growth = (
+        max_prompt_token_growth
+        if max_prompt_token_growth is not None
+        else repair_defaults.max_token_growth
+    )
+    effective_max_repair_seconds = (
+        max_prompt_repair_seconds
+        if max_prompt_repair_seconds is not None
+        else repair_defaults.max_seconds
+    )
     start_step_override = None
     if start_step is not None:
         start_step_override = float(start_step)
@@ -765,6 +816,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             enable_gates=not no_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
+            prompt_repair=effective_prompt_repair,
+            max_prompt_repair_rounds=effective_max_repair_rounds,
+            max_prompt_token_growth=effective_max_token_growth,
+            max_prompt_repair_seconds=effective_max_repair_seconds,
         )
 
         if not quiet:
