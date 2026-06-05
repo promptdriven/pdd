@@ -208,6 +208,10 @@ if _AnthropicConfigOpus47 is not None:
                             if k not in merged:
                                 merged[k] = v
                         result["thinking"] = merged
+                if isinstance(non_default_params, dict) and "output_config" not in result:
+                    reasoning_effort = non_default_params.get("reasoning_effort")
+                    if reasoning_effort:
+                        result["output_config"] = {"effort": reasoning_effort}
                 return result
             _patched_map_openai_params._pdd_opus_4_7_thinking_patched = True
             _AnthropicConfigOpus47.map_openai_params = _patched_map_openai_params
@@ -2522,6 +2526,45 @@ def _alternative_base_lookups(base_model_name: str) -> List[Tuple[str, str]]:
     return alternatives
 
 
+def _clean_optional_scalar(value: Any) -> Optional[str]:
+    """Return a stripped string for a scalar value, treating blank/NaN as missing."""
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _interactive_credential_acquisition_allowed() -> bool:
+    """Whether API-key setup may prompt interactively in this process."""
+    return not (_env_truthy("PDD_FORCE") or _is_cloud_runtime())
+
+
+def _vertex_project_value() -> Optional[str]:
+    """Return the configured Vertex project, honoring legacy aliases."""
+    for env_name in ("VERTEXAI_PROJECT", "VERTEX_PROJECT", "GOOGLE_CLOUD_PROJECT"):
+        value = _clean_optional_scalar(os.getenv(env_name))
+        if value:
+            return value
+    return None
+
+
+def _vertex_location_value(model_info: Dict[str, Any]) -> Optional[str]:
+    """Return the resolved Vertex location from CSV or supported env aliases."""
+    row_location = _clean_optional_scalar(model_info.get("location"))
+    if row_location:
+        return row_location
+    for env_name in ("VERTEXAI_LOCATION", "VERTEX_LOCATION"):
+        value = _clean_optional_scalar(os.getenv(env_name))
+        if value:
+            return value
+    return None
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
@@ -2733,7 +2776,7 @@ def _sanitize_api_key(key_value: str) -> str:
 
     # Additional validation: ensure no remaining control characters
     if any(ord(c) < 32 for c in sanitized):
-        logger.warning("API key contains control characters that may cause issues")
+        logger.warning("Environment value contains control characters that may cause issues")
         # Remove any remaining control characters
         sanitized = ''.join(c for c in sanitized if ord(c) >= 32)
 
@@ -2741,18 +2784,11 @@ def _sanitize_api_key(key_value: str) -> str:
     if sanitized:
         # Check for common API key patterns
         if len(sanitized) < 10:
-            logger.warning(f"API key appears too short ({len(sanitized)} characters) - may be invalid")
+            logger.warning(f"Environment value appears too short ({len(sanitized)} characters) - may be invalid")
 
         # Check for invalid characters in API keys (should be printable ASCII)
         if not all(32 <= ord(c) <= 126 for c in sanitized):
-            logger.warning("API key contains non-printable characters")
-
-        # Check for WSL-specific issues (detect if original had carriage returns)
-        if key_value != sanitized and '\r' in key_value:
-            if _is_wsl_environment():
-                logger.info("Detected and fixed WSL line ending issue in API key")
-            else:
-                logger.info("Detected and fixed line ending issue in API key")
+            logger.warning("Environment value contains non-printable characters")
 
     return sanitized
 
@@ -2804,9 +2840,13 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
     - Single var  → existing interactive-prompt behaviour for simple providers.
     - Multi var   → checks all vars; if any missing, directs user to ``pdd setup``.
     """
-    from pdd.provider_manager import parse_api_key_vars
+    from pdd.provider_manager import (
+        parse_api_key_vars,
+        resolve_api_key_from_env,
+    )
 
     api_key_field = str(model_info.get('api_key', '') or '')
+    prompt_allowed = _interactive_credential_acquisition_allowed()
 
     if not api_key_field.strip() or api_key_field == "EXISTING_KEY":
         # github_copilot uses litellm-managed device-flow OAuth. If the
@@ -2832,10 +2872,10 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
                 if verbose:
                     logger.info(f"[INFO] Using ChatGPT subscription auth for {model_name}.")
                 return True
-            if os.environ.get('PDD_FORCE'):
+            if not prompt_allowed:
                 logger.warning(
                     f"Skipping {model_name}: no ChatGPT subscription token found "
-                    "(run `codex login`) and running in --force mode."
+                    "(run `codex login`) and running in a non-interactive force/cloud context."
                 )
                 return False
             logger.warning(
@@ -2876,18 +2916,17 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         # GOOGLE_CLOUD_PROJECT and missing VERTEXAI_LOCATION from CSV location column
         # (the invocation code already reads CSV location).
         if "GOOGLE_APPLICATION_CREDENTIALS" in env_vars:
-            project = os.getenv("VERTEXAI_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
-            has_location = (
-                "VERTEXAI_LOCATION" not in missing
-                or bool(model_info.get("location"))
-            )
-            if project and has_location:
+            if _vertex_project_value() and _vertex_location_value(model_info):
                 remaining = [
                     v for v in missing
                     if v not in ("GOOGLE_APPLICATION_CREDENTIALS", "VERTEXAI_PROJECT", "VERTEXAI_LOCATION")
                 ]
                 if not remaining:
-                    logger.info(f"Using Vertex AI credentials (project={project}).")
+                    logger.info(
+                        "Using Vertex AI credentials (project=%s, location=%s).",
+                        _vertex_project_value(),
+                        _vertex_location_value(model_info),
+                    )
                     newly_acquired_keys[api_key_field] = False
                     return True
 
@@ -2901,32 +2940,38 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
     # --- Single-credential provider (original behaviour) ---
     key_name = env_vars[0]
 
-    key_value = os.getenv(key_name)
+    key_value, resolved_key_name = resolve_api_key_from_env(
+        key_name,
+        include_llm_invoke_aliases=True,
+    )
     if key_value:
         key_value = _sanitize_api_key(key_value)
 
     if key_value:
         if verbose:
-            logger.info(f"API key '{key_name}' found in environment.")
-        newly_acquired_keys[key_name] = False  # Mark as existing
+            logger.info("Required environment value found.")
+        newly_acquired_keys[resolved_key_name or key_name] = False  # Mark as existing
         return True
 
-    logger.warning(f"API key environment variable '{key_name}' for model '{model_info.get('model')}' is not set.")
+    logger.warning(f"Required environment value for model '{model_info.get('model')}' is not set.")
 
     # Vertex AI ADC fallback: when VERTEX_CREDENTIALS is missing but a
     # GCP project is configured, Application Default Credentials (e.g.
     # Cloud Build, GCE metadata, `gcloud auth application-default login`)
     # can authenticate without an explicit key.
     if key_name == "VERTEX_CREDENTIALS":
-        project = os.getenv("VERTEXAI_PROJECT") or os.getenv("VERTEX_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+        project = _vertex_project_value()
         if project:
             logger.info(f"Using ADC for Vertex AI (project={project}).")
             newly_acquired_keys[key_name] = False
             return True
 
     # Skip prompting if --force flag is set (non-interactive mode)
-    if os.environ.get('PDD_FORCE'):
-        logger.error(f"API key '{key_name}' not set. In --force mode, skipping interactive prompt.")
+    if not prompt_allowed:
+        logger.error(
+            "Required environment value not set. In non-interactive force/cloud mode, "
+            "skipping interactive prompt."
+        )
         return False
 
     try:
@@ -2941,14 +2986,14 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
 
         # Set environment variable for the current process
         os.environ[key_name] = user_provided_key
-        logger.info(f"API key '{key_name}' set for the current session.")
+        logger.info("Required value set for the current session.")
         newly_acquired_keys[key_name] = True  # Mark as newly acquired
 
         # Update .env file
         try:
             _save_key_to_env_file(key_name, user_provided_key, ENV_PATH)
-            logger.info(f"API key '{key_name}' saved to {ENV_PATH}.")
-            logger.warning("SECURITY WARNING: The API key has been saved to your .env file. "
+            logger.info(f"Required value saved to {ENV_PATH}.")
+            logger.warning("SECURITY WARNING: The value has been saved to your .env file. "
                    "Ensure this file is kept secure and is included in your .gitignore.")
 
         except IOError as e:
@@ -2958,7 +3003,7 @@ def _ensure_api_key(model_info: Dict[str, Any], newly_acquired_keys: Dict[str, b
         return True
 
     except EOFError:  # Handle non-interactive environments
-         logger.error(f"Cannot prompt for API key '{key_name}' in a non-interactive environment.")
+         logger.error("Cannot prompt for a required value in a non-interactive environment.")
          return False
     except Exception as e:
          logger.error(f"An unexpected error occurred during API key acquisition: {e}")
@@ -3912,19 +3957,24 @@ def llm_invoke(
             #   - Single env var (e.g. "ANTHROPIC_API_KEY") → pass as api_key=
             #   - Pipe-delimited (e.g. "VAR1|VAR2|VAR3")   → litellm reads from env
             #   - Empty (device flow / local)               → no api_key needed
-            from pdd.provider_manager import parse_api_key_vars
+            from pdd.provider_manager import parse_api_key_vars, resolve_api_key_from_env
 
             api_key_field = str(model_info.get('api_key', '') or '')
             env_vars = parse_api_key_vars(api_key_field)
 
             if len(env_vars) == 1:
                 # Simple provider: pass env var value as api_key=
-                key_value = os.getenv(env_vars[0])
+                key_value = resolve_api_key_from_env(
+                    env_vars[0],
+                    include_llm_invoke_aliases=True,
+                )[0]
                 if key_value:
                     key_value = _sanitize_api_key(key_value)
                     litellm_kwargs["api_key"] = key_value
                     if verbose:
-                        logger.info(f"[INFO] Passing API key from '{env_vars[0]}' to LiteLLM.")
+                        logger.info(
+                            "[INFO] Passing resolved provider setting to LiteLLM.",
+                        )
                 elif verbose:
                     logger.warning(f"[WARN] Env var '{env_vars[0]}' not set. LiteLLM will use default auth.")
             elif len(env_vars) > 1:
@@ -3937,10 +3987,12 @@ def llm_invoke(
                 if verbose:
                     logger.info(f"[INFO] No API key for '{model_name_litellm}'; using device flow or default auth.")
 
-            # Pass vertex_location from CSV (e.g., "global" for gemini-3-flash-preview)
-            location = model_info.get('location')
-            if pd.notna(location) and location:
-                litellm_kwargs["vertex_location"] = str(location)
+            # Pass an explicit vertex_location only when the catalog row pins one
+            # (for example "global"). Blank-location rows rely on LiteLLM reading
+            # VERTEXAI_LOCATION / legacy aliases from the environment.
+            location = _clean_optional_scalar(model_info.get("location"))
+            if location and "VERTEXAI_LOCATION" in env_vars:
+                litellm_kwargs["vertex_location"] = location
 
             # Add base_url/api_base override if present in CSV
             api_base = model_info.get('base_url')

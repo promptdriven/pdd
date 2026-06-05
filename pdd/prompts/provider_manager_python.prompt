@@ -13,7 +13,7 @@
       {"name": "api_key_aliases", "signature": "(key_name: str) -> List[str]", "returns": "List[str]"},
       {"name": "expand_api_key_vars", "signature": "(api_key_field: str) -> List[str]", "returns": "List[str]"},
       {"name": "api_key_requirements_satisfied", "signature": "(api_key_field: str, configured_key_names: Iterable[str]) -> bool", "returns": "bool"},
-      {"name": "resolve_api_key_from_env", "signature": "(key_name: str, env: Optional[Dict[str, str]] = None) -> Tuple[Optional[str], Optional[str]]", "returns": "Tuple[Optional[str], Optional[str]]"},
+      {"name": "resolve_api_key_from_env", "signature": "(key_name: str, env: Optional[Dict[str, str]] = None, *, include_llm_invoke_aliases: bool = False) -> Tuple[Optional[str], Optional[str]]", "returns": "Tuple[Optional[str], Optional[str]]"},
       {"name": "preferred_api_key_name", "signature": "(key_name: str) -> str", "returns": "str"},
       {"name": "is_multi_credential", "signature": "(api_key_field: str) -> bool", "returns": "bool"}
     ]
@@ -40,14 +40,19 @@ persistence via shell-specific `api-env` files.
 2. `is_multi_credential(api_key_field)` — return True when api_key field contains
    multiple pipe-delimited env vars.
 
-2a. Google API key aliases: `GEMINI_API_KEY` and `GOOGLE_API_KEY` satisfy the
-    same Gemini direct-model credential requirement. Keep the catalog rows on
-    their existing `GEMINI_API_KEY` value, but expose helpers so setup,
-    api-key scanning, model testing, and llm_invoke can treat `GOOGLE_API_KEY`
-    as satisfying those rows without saving duplicate secrets:
-    `api_key_aliases`, `expand_api_key_vars`, `api_key_requirements_satisfied`,
-    `resolve_api_key_from_env`, and `preferred_api_key_name`. For prompting or
-    saving a missing Gemini key, prefer `GOOGLE_API_KEY`.
+    2a. API-key aliases: keep the catalog rows on their existing credential names,
+    but expose helpers so setup, api-key scanning, model testing, and
+    llm_invoke can accept equivalent env vars without saving duplicate secrets.
+    This includes:
+    - Gemini direct-model aliases: `GEMINI_API_KEY` and `GOOGLE_API_KEY`.
+    - Inner llm_invoke-only aliases emitted by cloud runtimes:
+      `PDD_LLM_INVOKE_<KEY>` should satisfy the corresponding base key (for
+      example `PDD_LLM_INVOKE_ANTHROPIC_API_KEY` for `ANTHROPIC_API_KEY`) ONLY
+      during runtime credential resolution, not during generic key enumeration.
+    `api_key_aliases` / `expand_api_key_vars` stay generic so scanner/setup only
+    see real provider keys plus the Google/Gemini pair. `resolve_api_key_from_env`
+    accepts `include_llm_invoke_aliases=True` for llm_invoke runtime lookups.
+    For prompting or saving a missing Gemini key, prefer `GOOGLE_API_KEY`.
 
 3. Support complex-auth providers (Google Vertex AI, AWS Bedrock, Azure OpenAI,
    Azure AI, Github Copilot) that require multiple credentials or special auth flows.
