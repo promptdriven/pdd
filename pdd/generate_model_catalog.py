@@ -1884,16 +1884,20 @@ def build_rows(
         )
 
     # ------------------------------------------------------------------
-    # Fix D: Pareto filter — remove models that are strictly dominated
-    # (higher cost AND lower ELO) by another model *from the same provider*.
+    # Fix D: Pareto filter — remove fallback models that are strictly dominated
+    # (higher cost AND lower rank) by another fallback model *from the same
+    # provider*.
     #
     # A model X is dominated if there exists model Y (same provider) where:
     #   Y.elo >= X.elo  AND  Y.avg_cost <= X.avg_cost  AND  (strictly better on >= 1)
     #
     # Scoped per-provider so that free-tier providers (GitHub Copilot) don't
     # wipe out paid providers that users with different API keys still need.
-    # This prunes e.g. Opus 4/4.1 ($15/$75, ELO 1405/1475) within Anthropic
-    # since Opus 4.5/4.6 ($5/$25, ELO 1496/1530) strictly dominate them.
+    # DeepSWE and Arena rows are leaderboard-reviewed rows. Keep them all even
+    # when a cheaper reviewed model outranks another one, and do not let
+    # reviewed rows delete static fallback rows. The fallback catalog must stay
+    # routable for configured defaults and users who choose a specific model id
+    # that lacks a DeepSWE score.
     # ------------------------------------------------------------------
     provider_groups: Dict[str, List[dict]] = defaultdict(list)
     for row in rows:
@@ -1910,12 +1914,27 @@ def build_rows(
             pareto_kept.extend(group)
             continue
         for candidate in group:
+            c_rank_source = str(candidate.get("model_rank_source", ""))
+            _c_elo, c_elo_source = _get_elo(
+                str(candidate["model"]), arena_index, deepswe_index
+            )
+            if c_rank_source == "deepswe-solve-rate" or c_elo_source == "arena-exact":
+                pareto_kept.append(candidate)
+                continue
             c_elo = candidate["coding_arena_elo"]
             c_rank = int(candidate.get("model_rank_score", c_elo))
             c_avg = (candidate["input"] + candidate["output"]) / 2
             dominated = False
             for other in group:
                 if other is candidate:
+                    continue
+                _o_elo, o_elo_source = _get_elo(
+                    str(other["model"]), arena_index, deepswe_index
+                )
+                if (
+                    str(other.get("model_rank_source", "")) == "deepswe-solve-rate"
+                    or o_elo_source == "arena-exact"
+                ):
                     continue
                 o_elo = other["coding_arena_elo"]
                 o_rank = int(other.get("model_rank_score", o_elo))

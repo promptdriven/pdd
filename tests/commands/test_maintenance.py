@@ -338,6 +338,53 @@ class TestSyncCommand:
             assert result.exit_code == 0
             assert mock_sm.call_args.kwargs["agentic_mode"] is True
 
+    def test_sync_compressed_context_forced_on(self, runner, base_ctx_obj):
+        mock_result = ({"ok": True}, 0.01, "gpt-4")
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
+            result = runner.invoke(cli, ["sync", "mod", "--compressed-context"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        assert mock_sm.call_args.kwargs["compressed_context"] is True
+
+    def test_sync_compressed_context_forced_off_overrides_pddrc(self, runner, base_ctx_obj):
+        mock_result = ({"ok": True}, 0.01, "gpt-4")
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with runner.isolated_filesystem():
+            with open(".pddrc", "w", encoding="utf-8") as fh:
+                fh.write("contexts:\n  default:\n    defaults:\n      compressed_context: true\n")
+            with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
+                result = runner.invoke(cli, ["sync", "mod", "--no-compressed-context"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        assert mock_sm.call_args.kwargs["compressed_context"] is False
+
+    def test_sync_compressed_context_omitted_reads_pddrc(self, runner, base_ctx_obj):
+        mock_result = ({"ok": True}, 0.01, "gpt-4")
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with runner.isolated_filesystem():
+            with open(".pddrc", "w", encoding="utf-8") as fh:
+                fh.write("contexts:\n  default:\n    defaults:\n      compressed_context: true\n")
+            with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
+                result = runner.invoke(cli, ["sync", "mod"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        assert mock_sm.call_args.kwargs["compressed_context"] is True
+
+    def test_sync_compressed_context_omitted_defaults_false(self, runner, base_ctx_obj):
+        mock_result = ({"ok": True}, 0.01, "gpt-4")
+        cli = _make_cli(sync, base_ctx_obj)
+
+        with runner.isolated_filesystem():
+            with patch("pdd.commands.maintenance.sync_main", return_value=mock_result) as mock_sm:
+                result = runner.invoke(cli, ["sync", "mod"], catch_exceptions=False)
+
+        assert result.exit_code == 0
+        assert mock_sm.call_args.kwargs["compressed_context"] is False
+
 
 # ---------------------------------------------------------------------------
 # auto-deps command tests

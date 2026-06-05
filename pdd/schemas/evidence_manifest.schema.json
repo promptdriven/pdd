@@ -43,7 +43,9 @@
         "temperature": {"type": ["number", "null"]},
         "cost_usd": {"type": "number"},
         "grounding_examples": {"type": "array"},
-        "grounding": {"$ref": "#/$defs/grounding"}
+        "grounding": {"$ref": "#/$defs/grounding"},
+        "compression": {"$ref": "#/$defs/compression"},
+        "agentic_fallback": {"$ref": "#/$defs/agenticFallback"}
       }
     },
     "outputs": {"type": "array", "items": {"$ref": "#/$defs/fileHash"}},
@@ -155,6 +157,64 @@
         "reviewed": {"type": "boolean"}
       },
       "additionalProperties": false
+    },
+    "compression": {
+      "type": "object",
+      "properties": {
+        "enabled": {"type": "boolean"},
+        "requested": {"type": "boolean"},
+        "used": {"type": "boolean"},
+        "mode": {"type": ["string", "null"]},
+        "phases": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {"type": "string"},
+              {
+                "type": "object",
+                "properties": {
+                  "phase": {"type": "string"},
+                  "used": {"type": "boolean"}
+                },
+                "additionalProperties": true
+              }
+            ]
+          }
+        },
+        "source_counts": {
+          "type": "object",
+          "additionalProperties": {"type": "integer"}
+        },
+        "source_hashes": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/fileHash"}
+        },
+        "compressed_sha256": {"type": ["string", "null"]},
+        "budget_tokens": {"type": ["integer", "null"]},
+        "original_tokens_estimate": {"type": ["integer", "null"]},
+        "compressed_tokens_estimate": {"type": ["integer", "null"]},
+        "unavailable_reason": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "agenticFallback": {
+      "type": "object",
+      "properties": {
+        "attempted": {"type": "boolean"},
+        "used": {"type": "boolean"},
+        "phases": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "reason": {"type": ["string", "null"]},
+        "provider": {"type": ["string", "null"]},
+        "tool": {"type": ["string", "null"]},
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
     }
   }
 }

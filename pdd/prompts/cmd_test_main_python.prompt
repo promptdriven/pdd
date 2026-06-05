@@ -1,3 +1,16 @@
+<pdd-reason>CLI wrapper for generating or enhancing unit tests with optional compressed sync context.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "cmd_test_main", "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None = None, language: str | None = None, coverage_report: str | None = None, existing_tests: list[str] | None = None, target_coverage: float | None = None, merge: bool = False, strength: float | None = None, temperature: float | None = None, manual: bool = False, *, repair_directive: str | None = None, compressed_context: Optional[Mapping[str, Any]] = None) -> TestResult", "returns": "TestResult"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function, 'cmd_test_main', that will be the CLI wrapper for generating or enhancing unit tests. This function will read a prompt file and a code file, generate unit tests using `generate_test`, or enhance existing tests using `increase_tests` when a coverage report is provided, and handle the output location and language detection via `construct_paths`.
 
 <include>./context/python_preamble.prompt</include>
@@ -20,6 +33,7 @@
         - `temperature` - An optional float (default None). If provided, overrides the 'temperature' value from `ctx.obj`. Used by orchestrators to pass explicit values.
         - `manual` - An optional boolean (default False). When True, forces legacy single-LLM test generation and bypasses the agentic test generation pipeline, regardless of detected language or agentic_mode setting.
         - `repair_directive` - An optional string (keyword-only, default None). When provided non-empty, injected as a `<test_repair_directive>` block into the in-process `prompt_content` flowing into the cloud payload, `generate_test`, `increase_tests`, or `run_agentic_test_generate`. Sourced explicitly from the caller's loop-local retry state; `cmd_test_main` MUST NOT read `PDD_REPAIR_DIRECTIVE` from `os.environ`. See Behavior section for full semantics.
+        - `compressed_context` - An optional sync-provided mapping (keyword-only, default None). When provided, use its rendered contract/test context as supplemental prompt context for test generation or enhancement without replacing accumulated tests.
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`, `bool | None`, `str`):
             - `str`: The generated unit test code.
@@ -61,6 +75,7 @@
 %      * The deletion-as-churn raise MUST gate on `agentic_success` being truthy (#1012, F-B). If `agentic_success` is False the agent itself errored (tool failure, provider crash) — that is NOT churn. Instead: defensively restore the pre-existing test file (in case the agent partially modified it before erroring), then return the TestResult with `agentic_success=False` and the agentic `error_message` so the caller can diagnose the real failure rather than mistaking it for a churn issue and setting a churn repair directive. If `agentic_success=False` AND there is no pre-existing file, just propagate the failure cleanly.
 %      * Ensure parent directories exist and write with UTF-8 encoding.
 %  - **Test-generation repair-directive injection** (#1012, F-A / F-H): `cmd_test_main` accepts an explicit `repair_directive: str | None = None` keyword-only parameter. After loading `prompt_content` from `input_strings.get("prompt_file", "")` and BEFORE passing it into the cloud payload, `generate_test`, or `increase_tests`, if `repair_directive` is non-empty (after stripping) append a `<test_repair_directive>...</test_repair_directive>` block to `prompt_content` containing the stripped directive. Mirror the `<architecture_repair_directive>` injection in `code_generator_main`. Preserve the original prompt body. Do NOT also modify `prompt_content_for_churn` (the agentic-branch churn-gate copy reads the unaugmented prompt so an injected repair directive cannot silently disable the gate via the anchored `BREAKING-CHANGE:` parser). This injection covers the cloud `payload["promptContent"]` path AND the local `generate_test`/`increase_tests` calls — both branches read `prompt_content` after the injection point. The agentic test path receives the same `repair_directive` value forwarded explicitly to `run_agentic_test_generate(..., repair_directive=repair_directive)`. **`cmd_test_main` MUST NOT read `PDD_REPAIR_DIRECTIVE` from `os.environ`**: a stale outer value (set by the caller's shell, a parent orchestration layer, or a prior PDD command) would otherwise contaminate direct CLI invocations that have no active retry context. The retry helpers (`sync_orchestration._run_test_op_with_churn_retry`, `one_session_sync`) source the directive from their loop-local state and pass it explicitly. The env var `PDD_REPAIR_DIRECTIVE` is still written by those retry helpers so nested PDD CLI subprocesses spawned by agentic test generation can inherit it, but cmd_test_main itself uses ONLY the kwarg.
+%  - **Compressed sync context:** If `compressed_context` is provided by sync, append its rendered content to `prompt_content` after the original prompt and any test repair directive. Use it for cloud, local, and agentic test generation paths as supplemental context only. Preserve accumulated tests and churn protections. Propagate compression metadata in the returned result envelope or sidecar metadata consumed by sync; direct CLI `pdd test` behavior remains unchanged unless an orchestrator passes this kwarg.
 %  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}", None)` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
 
 % Agentic Test Generation:

@@ -2206,12 +2206,13 @@ def test_process_include_with_content_selector(monkeypatch) -> None:
     
     # Create a mock selector class
     class MockSelector:
-        def select(self, content, selectors, file_path, mode):
+        def select(self, content, selectors, file_path, mode, expand_dependencies=False):
             assert content == mock_file_content
             assert "def:main" in selectors
             assert "class:App" in selectors
             assert "lines:10-20" in selectors
             assert mode == "interface"
+            assert expand_dependencies is False
             return expected_output
             
     # Mock the import of ContentSelector

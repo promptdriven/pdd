@@ -1,10 +1,11 @@
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Mapping, Optional
 from rich import print as rprint
 from rich.markdown import Markdown
 from pydantic import BaseModel, Field
 from .load_prompt_template import load_prompt_template
 from .llm_invoke import llm_invoke
 from . import DEFAULT_TIME, DEFAULT_STRENGTH # Import defaults
+from .compressed_sync_context import render_for_prompt
 
 # Define Pydantic model for structured LLM output for VERIFICATION
 class VerificationOutput(BaseModel):
@@ -25,7 +26,8 @@ def fix_verification_errors(
     strength: float = DEFAULT_STRENGTH,
     temperature: float = 0.0,
     verbose: bool = False,
-    time: float = DEFAULT_TIME
+    time: float = DEFAULT_TIME,
+    compressed_context: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Identifies and fixes issues in a code module based on verification output.
@@ -52,6 +54,8 @@ def fix_verification_errors(
     """
     total_cost = 0.0
     model_name = None
+    rendered_compressed_context = render_for_prompt(compressed_context)
+    prompt_for_llm = prompt + ("\n\n" + rendered_compressed_context if rendered_compressed_context else "")
     verification_issues_count = 0
     verification_details = None
     fix_explanation = None
@@ -106,7 +110,7 @@ def fix_verification_errors(
 
     verification_input_json = {
         "program": program,
-        "prompt": prompt,
+        "prompt": prompt_for_llm,
         "code": code,
         "output": output,
     }
@@ -189,7 +193,7 @@ def fix_verification_errors(
 
         fix_input_json = {
             "program": program,
-            "prompt": prompt,
+            "prompt": prompt_for_llm,
             "code": code,
             "output": output,
             "issues": verification_details,
