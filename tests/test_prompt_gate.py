@@ -12,6 +12,7 @@ from pdd.prompt_gate import (
     parse_prompt_gate_block_exit,
     prompt_gate_block_message,
     resolve_prompt_gate_mode,
+    resolve_prompt_gate_project_root,
     run_automatic_prompt_gate,
 )
 
@@ -20,6 +21,33 @@ def test_prompt_gate_block_message_round_trip() -> None:
     message = prompt_gate_block_message(2)
     assert parse_prompt_gate_block_exit(message) == 2
     assert parse_prompt_gate_block_exit("unrelated message") is None
+
+
+def test_resolve_prompt_gate_project_root_anchors_on_prompt(tmp_path: Path) -> None:
+    # Nested repo: gate root must resolve to the prompt's own project (.git
+    # marker), not the process working directory.
+    project = tmp_path / "nested"
+    (project / ".git").mkdir(parents=True)
+    prompt = project / "prompts" / "foo_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% test\n", encoding="utf-8")
+
+    resolved = resolve_prompt_gate_project_root([prompt])
+    assert resolved == project.resolve()
+
+
+def test_resolve_prompt_gate_project_root_falls_back(tmp_path: Path) -> None:
+    orphan = tmp_path / "no_markers" / "foo_python.prompt"
+    orphan.parent.mkdir(parents=True)
+    orphan.write_text("% test\n", encoding="utf-8")
+    fallback = tmp_path / "fallback"
+    fallback.mkdir()
+
+    # No project marker above the prompt => use the provided fallback.
+    resolved = resolve_prompt_gate_project_root([orphan], fallback=fallback)
+    assert resolved == fallback.resolve()
+    # Empty inputs also fall back without raising.
+    assert resolve_prompt_gate_project_root([], fallback=fallback) == fallback.resolve()
 
 def test_filter_changed_prompt_paths() -> None:
     paths = filter_changed_prompt_paths(

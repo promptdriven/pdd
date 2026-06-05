@@ -24,7 +24,11 @@ from .process_csv_change import process_csv_change
 from .get_extension import get_extension
 from .user_story_tests import run_user_story_tests, discover_prompt_files
 from .validate_prompt_includes import sanitize_prompt_output
-from .prompt_gate import maybe_run_workflow_prompt_gate, prompt_gate_block_message
+from .prompt_gate import (
+    maybe_run_workflow_prompt_gate,
+    prompt_gate_block_message,
+    resolve_prompt_gate_project_root,
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -516,7 +520,7 @@ def change_main(
                 saved_prompt_paths,
                 cli_prompt_checkup=ctx.obj.get("prompt_checkup"),
                 no_prompt_checkup=ctx.obj.get("no_prompt_checkup", False),
-                project_root=Path.cwd(),
+                project_root=resolve_prompt_gate_project_root(saved_prompt_paths),
                 quiet=quiet,
             )
             if not should_continue:

@@ -20,7 +20,11 @@ from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from ..operation_log import log_operation
 from ..evidence_manifest import write_evidence_manifest
-from ..prompt_gate import maybe_run_workflow_prompt_gate, parse_prompt_gate_block_exit
+from ..prompt_gate import (
+    maybe_run_workflow_prompt_gate,
+    parse_prompt_gate_block_exit,
+    resolve_prompt_gate_project_root,
+)
 
 console = Console()
 
@@ -378,7 +382,7 @@ def change(
                 changed_files,
                 cli_prompt_checkup=prompt_checkup,
                 no_prompt_checkup=no_prompt_checkup,
-                project_root=Path.cwd(),
+                project_root=resolve_prompt_gate_project_root(changed_files or []),
                 quiet=quiet,
             )
             if not should_continue:

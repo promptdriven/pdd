@@ -12,12 +12,36 @@ from .checkup_prompt_main import (
     run_checkup_prompt_paths,
 )
 from .construct_paths import _find_pddrc_file, _load_pddrc_config
+from .path_resolution import find_project_root_from_path
 
 logger = logging.getLogger(__name__)
 
 _PROMPT_GATE_MODES = frozenset({"off", "warn", "strict"})
 _DEFAULT_MODE = "warn"
 _PROMPT_GATE_BLOCKED_PREFIX = "Prompt checkup blocked"
+
+
+def resolve_prompt_gate_project_root(
+    prompt_paths: Sequence[Path | str],
+    *,
+    fallback: Optional[Path] = None,
+) -> Path:
+    """Resolve the PDD project root that anchors gate config and evidence.
+
+    Anchors on the first prompt path so nested-repo / ``--project-root`` layouts
+    resolve the gate against the prompt's own project rather than ``Path.cwd()``.
+    Falls back to *fallback* (or the current working directory) when no project
+    marker is found above the prompt.
+    """
+    base = (fallback or Path.cwd()).resolve()
+    for raw in prompt_paths:
+        if not raw:
+            continue
+        resolved = find_project_root_from_path(str(raw))
+        if resolved:
+            return Path(resolved).resolve()
+        break
+    return base
 
 
 def prompt_gate_block_message(gate_exit: int) -> str:

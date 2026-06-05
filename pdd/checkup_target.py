@@ -11,6 +11,24 @@ from .agentic_sync import _is_github_issue_url
 _DEVUNIT_NAME_RE = re.compile(r"^[\w-]+$")
 
 
+def _is_prompt_directory(path: Path) -> bool:
+    """Return True only for directories that hold prompts.
+
+    A bare ``prompts`` directory always qualifies (explicit intent). Otherwise
+    the directory must contain at least one non-``*_LLM.prompt`` file, so that
+    ``pdd checkup src/`` is not misclassified as a prompt directory and instead
+    falls through to the standard non-prompt target handling.
+    """
+    if not path.is_dir():
+        return False
+    if path.name == "prompts":
+        return True
+    for child in path.rglob("*.prompt"):
+        if not child.name.lower().endswith("_llm.prompt"):
+            return True
+    return False
+
+
 class CheckupTargetKind(str, Enum):
     """Supported high-level checkup target kinds."""
 
@@ -43,7 +61,7 @@ def classify_checkup_target(
     for path in (candidate, root / raw):
         if path.is_file() and path.suffix.lower() == ".prompt":
             return CheckupTargetKind.PROMPT_FILE
-        if path.is_dir():
+        if _is_prompt_directory(path):
             return CheckupTargetKind.PROMPT_DIRECTORY
 
     if _DEVUNIT_NAME_RE.fullmatch(raw) and "/" not in raw and not raw.startswith("."):

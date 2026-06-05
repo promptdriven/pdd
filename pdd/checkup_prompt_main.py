@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 REPORT_SCHEMA = "pdd.prompt_source_set_report.v1"
 
 
+_CLARIFICATION_CODE_MARKERS = ("VAGUE",)
+
+
+def _finding_requires_clarification(code: str) -> bool:
+    """Vague-term findings need semantic clarification before automated repair."""
+    upper = code.upper()
+    return any(marker in upper for marker in _CLARIFICATION_CODE_MARKERS)
+
+
 @dataclass
 class SourceSetFinding:
     """One deterministic finding in the unified prompt source-set report."""
@@ -41,13 +50,24 @@ class SourceSetFinding:
     fix_command: str = ""
     code: str = ""
     rule_id: str = ""
+    # Repair hints consumed by the non-interactive repair orchestrator (#1422).
+    requires_clarification: bool = False
+    confidence: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        # Vague-term findings (lint/contract) cannot be fixed mechanically; flag
+        # them so repair routes them through clarification rather than auto-apply.
+        if not self.requires_clarification and _finding_requires_clarification(
+            self.code
+        ):
+            self.requires_clarification = True
 
     @property
     def is_error(self) -> bool:
         return self.severity == "error"
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "id": self.finding_id,
             "source_check": self.source_check,
             "severity": self.severity,
@@ -57,7 +77,13 @@ class SourceSetFinding:
             "evidence": self.evidence,
             "recommended_action": self.recommended_action,
             "fix_command": self.fix_command,
+            "code": self.code,
+            "rule_id": self.rule_id,
+            "requires_clarification": self.requires_clarification,
         }
+        if self.confidence is not None:
+            payload["confidence"] = self.confidence
+        return payload
 
 
 @dataclass

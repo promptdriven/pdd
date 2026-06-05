@@ -7,7 +7,11 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from pdd.checkup_prompt_main import build_prompt_source_set_report, run_checkup_prompt
+from pdd.checkup_prompt_main import (
+    SourceSetFinding,
+    build_prompt_source_set_report,
+    run_checkup_prompt,
+)
 from pdd.commands.checkup import checkup
 
 
@@ -81,6 +85,55 @@ def test_run_checkup_prompt_json_includes_contract_check_under_strict() -> None:
         if item["name"] == "contract"
     ]
     assert contract_checks == [{"name": "contract", "status": "fail"}]
+
+
+def test_source_set_finding_as_dict_exposes_repair_fields() -> None:
+    finding = SourceSetFinding(
+        finding_id="contract:foo:0:MISSING_MODAL",
+        source_check="contract",
+        severity="error",
+        file=Path("prompts/foo_python.prompt"),
+        code="MISSING_MODAL",
+        rule_id="S-001",
+        confidence=0.75,
+    )
+    payload = finding.as_dict()
+    assert payload["code"] == "MISSING_MODAL"
+    assert payload["rule_id"] == "S-001"
+    assert payload["requires_clarification"] is False
+    assert payload["confidence"] == 0.75
+
+
+def test_source_set_finding_flags_vague_terms_for_clarification() -> None:
+    finding = SourceSetFinding(
+        finding_id="lint:foo:0:VAGUE_TERM_UNDEFINED",
+        source_check="lint",
+        severity="error",
+        file=Path("prompts/foo_python.prompt"),
+        code="VAGUE_TERM_UNDEFINED",
+    )
+    assert finding.requires_clarification is True
+    assert finding.as_dict()["requires_clarification"] is True
+    # Confidence stays absent unless explicitly provided.
+    assert "confidence" not in finding.as_dict()
+
+
+def test_report_json_findings_include_clarification_flag() -> None:
+    prompt = FIXTURES / "vague_undefined.prompt"
+    report = build_prompt_source_set_report(
+        prompt,
+        target=str(prompt),
+        project_root=FIXTURES,
+        strict=True,
+    )
+    vague = [
+        finding
+        for finding in report.findings
+        if "VAGUE" in finding.code.upper()
+    ]
+    assert vague, "expected vague-term findings in the fixture"
+    assert all(finding.as_dict()["requires_clarification"] for finding in vague)
+    assert all("code" in finding.as_dict() for finding in report.findings)
 
 
 def test_checkup_issue_url_still_uses_agentic_path() -> None:

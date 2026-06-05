@@ -99,53 +99,9 @@ def _restore_captured_streams(ctx: click.Context) -> None:
             sys.stderr = stderr_capture.original_stream
 
 
-def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
-    """Return whether this invocation needs prompt-lint machine output."""
-    pairs = set(zip(arguments, arguments[1:]))
-    return "--json" in arguments and (
-        ("checkup", "lint") in pairs
-        or ("checkup", "contract") in pairs
-        or ("checkup", "contracts") in pairs
-        or ("checkup", "coverage") in pairs
-        or ("checkup", "gate") in pairs
-        or ("checkup", "drift") in pairs
-        or ("contracts", "check") in pairs
-    )
-
-
-def _is_checkup_source_set_json_invocation(arguments: List[str]) -> bool:
-    """Return whether ``pdd checkup <prompt-target> --json`` needs clean stdout."""
-    if "--json" not in arguments:
-        return False
-    try:
-        checkup_idx = arguments.index("checkup")
-    except ValueError:
-        return False
-    if checkup_idx + 1 >= len(arguments):
-        return False
-    next_arg = arguments[checkup_idx + 1]
-    if next_arg.startswith("-"):
-        return False
-    if next_arg in {
-        "lint",
-        "contract",
-        "contracts",
-        "coverage",
-        "gate",
-        "drift",
-        "snapshot",
-        "simplify",
-    }:
-        return False
-    return True
-
-
-def _is_machine_json_invocation(arguments: List[str]) -> bool:
-    """Return whether stdout must remain machine-parseable JSON only."""
-    return (
-        _is_prompt_lint_json_invocation(arguments)
-        or _is_checkup_source_set_json_invocation(arguments)
-    )
+# JSON-invocation detection is shared with the early pre-parse in pdd/cli.py via a
+# stdlib-only leaf module so the two call sites cannot drift apart.
+from ..json_invocation import is_machine_json_invocation as _is_machine_json_invocation
 
 
 class PDDCLI(click.Group):
