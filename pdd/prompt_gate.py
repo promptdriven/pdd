@@ -72,9 +72,17 @@ def parse_prompt_gate_block_exit(message: str) -> Optional[int]:
 def _normalize_prompt_gate_mode(raw: object, *, source: str) -> Optional[str]:
     if raw is None:
         return None
-    # PyYAML parses unquoted `off` as boolean False; treat it as "off".
-    if raw is False:
-        return "off"
+    # PyYAML 1.1 maps off/no/false → False and on/yes/true → True.
+    # Use isinstance to distinguish Python bools from integers (0 is not False by identity).
+    if isinstance(raw, bool):
+        if not raw:
+            return "off"
+        logger.warning(
+            "checkup.prompt_gate value %r in %s is a boolean True; use 'off', 'warn', or 'strict'.",
+            raw,
+            source,
+        )
+        return None
     mode = str(raw).strip().lower()
     if mode not in _PROMPT_GATE_MODES:
         logger.warning(

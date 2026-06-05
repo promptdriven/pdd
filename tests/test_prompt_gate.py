@@ -142,8 +142,19 @@ def test_run_automatic_prompt_gate_warn_continues_on_failure(tmp_path: Path) -> 
 
 
 def test_normalize_prompt_gate_mode_yaml_boolean_false_maps_to_off() -> None:
-    # PyYAML parses unquoted `off` as boolean False; that must resolve to "off".
+    # PyYAML parses unquoted `off`/`no`/`false` as boolean False; must resolve to "off".
     assert _normalize_prompt_gate_mode(False, source="<test>") == "off"
+
+
+def test_normalize_prompt_gate_mode_yaml_boolean_true_returns_none_with_warning() -> None:
+    # PyYAML parses unquoted `on`/`yes`/`true` as boolean True; no valid mode maps
+    # to True, so the function must warn and return None (caller falls back to default).
+    assert _normalize_prompt_gate_mode(True, source="<test>") is None
+
+
+def test_normalize_prompt_gate_mode_integer_zero_not_treated_as_off() -> None:
+    # TOML integer 0 must NOT be silently treated as "off" — only Python bool False is.
+    assert _normalize_prompt_gate_mode(0, source="<test>") is None
 
 
 def test_load_prompt_gate_config_unquoted_off_in_pddrc(tmp_path: Path) -> None:

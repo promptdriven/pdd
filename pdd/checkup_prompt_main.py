@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -202,8 +203,14 @@ def build_prompt_source_set_report(
     prompt_path = prompt_path.resolve()
     # Anchor coverage/gate source-set dirs to the resolved project root so that
     # `pdd checkup` invoked from outside the project still finds the right paths.
+    # PDD_USER_STORIES_DIR is honoured for consistency with other pdd commands.
     if stories_dir is None:
-        stories_dir = root / "user_stories"
+        env_stories = os.environ.get("PDD_USER_STORIES_DIR")
+        if env_stories:
+            p = Path(env_stories)
+            stories_dir = p if p.is_absolute() else root / p
+        else:
+            stories_dir = root / "user_stories"
     if tests_dir is None:
         tests_dir = root / "tests"
     report = PromptSourceSetReport(

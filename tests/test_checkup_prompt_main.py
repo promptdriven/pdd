@@ -138,6 +138,7 @@ def test_report_json_findings_include_clarification_flag() -> None:
 
 def test_build_prompt_source_set_report_coverage_anchored_to_project_root(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Regression: coverage dirs must be resolved relative to project_root, not
     # the process cwd.  Invoke from outside the project dir to verify.
@@ -145,10 +146,8 @@ def test_build_prompt_source_set_report_coverage_anchored_to_project_root(
     project.mkdir()
     prompts_dir = project / "prompts"
     prompts_dir.mkdir()
-    stories_dir = project / "user_stories"
-    stories_dir.mkdir()
-    tests_dir = project / "tests"
-    tests_dir.mkdir()
+    (project / "user_stories").mkdir()
+    (project / "tests").mkdir()
 
     # Minimal prompt with a contract_rules section so coverage is attempted.
     prompt = prompts_dir / "simple_python.prompt"
@@ -157,24 +156,47 @@ def test_build_prompt_source_set_report_coverage_anchored_to_project_root(
         encoding="utf-8",
     )
 
-    import os
-
-    orig_cwd = os.getcwd()
-    try:
-        os.chdir(tmp_path)  # cwd is OUTSIDE the project
-        report = build_prompt_source_set_report(
-            prompt,
-            target="simple",
-            project_root=project,
-        )
-    finally:
-        os.chdir(orig_cwd)
+    monkeypatch.chdir(tmp_path)  # cwd is OUTSIDE the project
+    report = build_prompt_source_set_report(
+        prompt,
+        target="simple",
+        project_root=project,
+    )
 
     # Coverage must have run against project/user_stories and project/tests,
     # not tmp_path/user_stories which does not exist.
     assert report.coverage is not None
     # No filesystem error — the correct dirs were found even from a foreign cwd.
     assert report.coverage.error is None
+
+
+def test_build_prompt_source_set_report_respects_pdd_user_stories_dir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Regression: PDD_USER_STORIES_DIR must be honoured by checkup, consistent
+    # with pdd change/generate/test which all read the same env var.
+    project = tmp_path / "proj"
+    project.mkdir()
+    custom_stories = tmp_path / "custom_stories"
+    custom_stories.mkdir()
+    (project / "tests").mkdir()
+
+    prompt = project / "foo_python.prompt"
+    prompt.write_text(
+        "% Foo\n<contract_rules>\nR-001: do something\n</contract_rules>\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("PDD_USER_STORIES_DIR", str(custom_stories))
+    # No stories in custom_stories, so coverage runs but finds nothing — not an error.
+    report = build_prompt_source_set_report(
+        prompt,
+        target="foo",
+        project_root=project,
+    )
+    assert report.coverage is not None
+    assert report.coverage.error is None  # env-var path was used (no crash on missing dir)
 
 
 def test_checkup_issue_url_still_uses_agentic_path() -> None:
