@@ -212,6 +212,7 @@ def test_fallback_reaches_chatgpt_when_anthropic_key_missing(monkeypatch):
         raise RuntimeError("STOP_AFTER_CAPTURE")
 
     with patch("pdd.llm_invoke._load_model_data", return_value=_fake_model_df()), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
          patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
          patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):
         try:
@@ -347,6 +348,7 @@ def test_chatgpt_structured_never_sends_response_format(monkeypatch):
         return type("R", (), {"choices": [choice], "usage": usage})()
 
     with patch("pdd.llm_invoke._load_model_data", return_value=df), \
+         patch("pdd.codex_subscription.has_codex_subscription_auth", return_value=True), \
          patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=True), \
          patch("pdd.codex_subscription.apply_litellm_chatgpt_output_patch", return_value=True), \
          patch("pdd.llm_invoke.litellm.completion", side_effect=fake_completion):

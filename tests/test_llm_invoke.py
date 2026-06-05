@@ -2117,7 +2117,7 @@ def test_llm_invoke_responses_api_returns_attempted_models(mock_load_models, moc
 # --- Tests for Multi-Credential Provider (Vertex AI) ---
 
 def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
-    """Test that Vertex AI (pipe-delimited api_key) does NOT pass api_key= to litellm."""
+    """Vertex AI env aliases should work without passing direct auth kwargs."""
     with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
         mock_data = [{
             'provider': 'Google Vertex AI',
@@ -2137,8 +2137,8 @@ def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
 
         env_vars = {
             'GOOGLE_APPLICATION_CREDENTIALS': '/fake/path.json',
-            'VERTEXAI_PROJECT': 'test-project',
-            'VERTEXAI_LOCATION': 'us-east4',
+            'VERTEX_PROJECT': 'test-project',
+            'VERTEX_LOCATION': 'us-east4',
         }
 
         with patch.dict(os.environ, env_vars):
@@ -2152,6 +2152,66 @@ def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
                 assert 'vertex_credentials' not in call_kwargs
                 assert 'vertex_project' not in call_kwargs
                 assert 'vertex_location' not in call_kwargs
+
+
+def test_single_credential_alias_passed_to_litellm(mock_set_llm_cache):
+    """A GEMINI_API_KEY row should pass GOOGLE_API_KEY through to LiteLLM."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        mock_data = [{
+            'provider': 'Google Gemini',
+            'model': 'gemini/gemini-2.5-flash',
+            'input': 0.15, 'output': 0.6,
+            'coding_arena_elo': 1290,
+            'structured_output': True,
+            'base_url': '',
+            'api_key': 'GEMINI_API_KEY',
+            'reasoning_type': 'effort',
+            'max_reasoning_tokens': 0,
+            'location': ''
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        with patch.dict(os.environ, {'GOOGLE_API_KEY': 'goog-test-key'}):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('api_key') == 'goog-test-key'
+
+
+def test_llm_invoke_cloud_anthropic_alias_passed_to_litellm(mock_set_llm_cache):
+    """PDD_LLM_INVOKE_ANTHROPIC_API_KEY should satisfy and call Anthropic rows."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        mock_data = [{
+            'provider': 'Anthropic',
+            'model': 'claude-3-5-haiku-latest',
+            'input': 0.8, 'output': 4.0,
+            'coding_arena_elo': 1290,
+            'structured_output': True,
+            'base_url': '',
+            'api_key': 'ANTHROPIC_API_KEY',
+            'reasoning_type': 'none',
+            'max_reasoning_tokens': 0,
+            'location': ''
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        env_vars = {
+            'PDD_LLM_INVOKE_ANTHROPIC_API_KEY': 'sk-ant-cloud-alias',
+        }
+        with patch.dict(os.environ, env_vars, clear=False):
+            os.environ.pop('ANTHROPIC_API_KEY', None)
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('api_key') == 'sk-ant-cloud-alias'
 
 
 def test_vertex_location_passed_from_csv(mock_set_llm_cache):
@@ -3678,9 +3738,13 @@ def test_legitimate_api_key_warnings_still_shown(mock_set_llm_cache, caplog):
                             # Verify legitimate API key warnings are still shown
                             warning_messages = [record.message for record in caplog.records if record.levelname == 'WARNING']
 
-                            # Should warn about missing MISSING_KEY
-                            api_key_warning_found = any('MISSING_KEY' in warning for warning in warning_messages)
-                            assert api_key_warning_found, "Should warn about missing API key"
+                            # Should warn about the missing configured value without logging key-like env names.
+                            api_key_warning_found = any(
+                                "Required environment value" in warning
+                                and "gemini/gemini-2.0-flash-exp" in warning
+                                for warning in warning_messages
+                            )
+                            assert api_key_warning_found, "Should warn about missing configured value"
 
                             # But should NOT warn about missing base model
                             for warning in warning_messages:
@@ -5181,6 +5245,38 @@ class TestEnsureApiKey:
         result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
         assert result is False
 
+    def test_google_api_key_alias_satisfies_gemini_key(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("GOOGLE_API_KEY", "goog-test-key")
+        monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+        model_info = {"model": "gemini-model", "api_key": "GEMINI_API_KEY"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is True
+        assert newly_acquired.get("GOOGLE_API_KEY") is False
+
+    def test_llm_invoke_alias_satisfies_provider_key(self, llm_mod, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("PDD_LLM_INVOKE_ANTHROPIC_API_KEY", "sk-ant-test")
+        model_info = {"model": "claude-model", "api_key": "ANTHROPIC_API_KEY"}
+        newly_acquired = {}
+        result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
+        assert result is True
+        assert newly_acquired.get("PDD_LLM_INVOKE_ANTHROPIC_API_KEY") is False
+
+    def test_vertex_pipe_delimited_legacy_env_aliases_supported(self, llm_mod, monkeypatch):
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/sa.json")
+        monkeypatch.setenv("VERTEX_PROJECT", "legacy-project")
+        monkeypatch.setenv("VERTEX_LOCATION", "us-central1")
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        model_info = {
+            "model": "vertex_ai/gemini-3-flash-preview",
+            "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+            "location": "",
+        }
+        result = llm_mod._ensure_api_key(model_info, {}, False)
+        assert result is True
+
     def test_vertex_credentials_adc_fallback_with_project(self, llm_mod, monkeypatch):
         monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
         monkeypatch.delenv("VERTEX_CREDENTIALS", raising=False)
@@ -5218,6 +5314,32 @@ class TestEnsureApiKey:
         result = llm_mod._ensure_api_key(model_info, newly_acquired, False)
         assert result is False
 
+    def test_cloud_runtime_skips_input_when_key_missing(self, llm_mod, monkeypatch):
+        monkeypatch.delenv("PDD_FORCE", raising=False)
+        monkeypatch.setenv("K_SERVICE", "test-service")
+        monkeypatch.delenv("MISSING_KEY", raising=False)
+        model_info = {"model": "test-model", "api_key": "MISSING_KEY"}
+        with patch("builtins.input") as mock_input:
+            result = llm_mod._ensure_api_key(model_info, {}, False)
+        assert result is False
+        mock_input.assert_not_called()
+
+    def test_chatgpt_cloud_runtime_skips_when_bridge_unusable(self, llm_mod, monkeypatch):
+        monkeypatch.delenv("PDD_FORCE", raising=False)
+        monkeypatch.setenv("K_SERVICE", "test-service")
+        monkeypatch.setattr(
+            "pdd.codex_subscription.bridge_codex_auth_for_litellm",
+            lambda: False,
+        )
+        with patch("builtins.input") as mock_input:
+            result = llm_mod._ensure_api_key(
+                {"model": "chatgpt/gpt-5.4", "api_key": ""},
+                {},
+                False,
+            )
+        assert result is False
+        mock_input.assert_not_called()
+
     def test_vertex_pipe_delimited_creds_set_project_from_gcp(self, llm_mod, monkeypatch):
         """Regression: GOOGLE_APPLICATION_CREDENTIALS set + GOOGLE_CLOUD_PROJECT set,
         but VERTEXAI_PROJECT/VERTEXAI_LOCATION unset. CSV has location=global.
@@ -5252,7 +5374,9 @@ class TestEnsureApiKey:
         monkeypatch.setenv("PDD_FORCE", "1")
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEX_PROJECT", raising=False)
         monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("VERTEX_LOCATION", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
         model_info = {
             "model": "vertex_ai/gemini-3-flash-preview",
@@ -5283,11 +5407,30 @@ class TestEnsureApiKey:
         monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/sa.json")
         monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
         monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEX_PROJECT", raising=False)
         monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("VERTEX_LOCATION", raising=False)
         model_info = {
             "model": "vertex_ai/gemini-3-flash-preview",
             "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
             # No "location" key — can't resolve location
+        }
+        result = llm_mod._ensure_api_key(model_info, {}, False)
+        assert result is False
+
+    def test_vertex_pipe_delimited_blank_csv_location_fails(self, llm_mod, monkeypatch):
+        """Blank/NaN-ish CSV location must not count as usable when env location is absent."""
+        monkeypatch.setenv("PDD_FORCE", "1")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/sa.json")
+        monkeypatch.setenv("VERTEX_PROJECT", "legacy-project")
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("VERTEX_LOCATION", raising=False)
+        model_info = {
+            "model": "vertex_ai/gemini-3-flash-preview",
+            "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
+            "location": float("nan"),
         }
         result = llm_mod._ensure_api_key(model_info, {}, False)
         assert result is False
