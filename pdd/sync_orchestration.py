@@ -57,7 +57,7 @@ from .sync_determine_operation import (
     calculate_sha256,
     calculate_current_hashes,
     _safe_basename,
-    test_extend_disabled,
+    is_test_extend_disabled,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import (
@@ -2451,7 +2451,7 @@ def sync_orchestration(
                         # child re-derives a coverage gap, no unrelated test
                         # block is written. Accept regardless of coverage
                         # (the gap is known and intentionally not closed).
-                        if test_extend_disabled():
+                        if is_test_extend_disabled():
                             current_rr = read_run_report(basename, language, paths=pdd_files)
                             log_event(basename, language, "test_extend_skipped", {
                                 "reason": "test_extend disabled by PDD_DISABLE_TEST_EXTEND (PR auto-heal scope guard)",

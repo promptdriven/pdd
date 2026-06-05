@@ -440,10 +440,7 @@ def detect_drift(
             continue
 
         op = _extract_op(decision)
-        # 'all_synced' is a terminal "fully synced" decision (e.g. a coverage
-        # gap accepted as complete, including the PR auto-heal test_extend guard
-        # of #1403) — treat it as no drift, not an unknown actionable operation.
-        if not op or op in ("nothing", "synced", "all_synced"):
+        if not op or op in ("nothing", "synced"):
             continue
 
         reason = _extract_reason(decision) or "drift detected"
@@ -483,6 +480,14 @@ def detect_drift(
                     reason = "Prompt changed without code changes; only example refresh remains"
                 elif not code_in_changes and not prompt_in_changes:
                     continue
+
+        # A still-terminal 'all_synced' (e.g. a coverage gap accepted as
+        # complete, including the PR auto-heal test_extend guard of #1403) is
+        # fully synced — no drift. This is checked AFTER git reclassification so
+        # an all_synced module whose code changed without its prompt is still
+        # promoted to 'update' above rather than being dropped here.
+        if op == "all_synced":
+            continue
 
         drift = DriftInfo(
             basename=basename,

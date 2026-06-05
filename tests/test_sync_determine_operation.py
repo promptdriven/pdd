@@ -33,6 +33,7 @@ from sync_determine_operation import (
     get_pdd_dir,
     get_meta_dir,
     get_locks_dir,
+    is_test_extend_disabled,
     validate_expected_files,
     _handle_missing_expected_files,
     _is_workflow_complete,
@@ -517,6 +518,28 @@ def test_decision_test_extend_default_still_runs_without_pr_scope_guard(
 
     assert decision.operation == 'test_extend'
     assert decision.details['extend_tests'] is True
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("1", True), ("true", True), ("TRUE", True), ("Yes", True), ("on", True),
+        ("  on  ", True),
+        ("0", False), ("false", False), ("no", False), ("off", False), ("", False),
+        ("maybe", False),
+    ],
+)
+def test_test_extend_disabled_truthiness(value, expected, monkeypatch):
+    """#1403: only 1/true/yes/on (case-insensitive, trimmed) enable the guard;
+    falsey values (incl. '0'/'false') must leave test_extend enabled."""
+    monkeypatch.setenv("PDD_DISABLE_TEST_EXTEND", value)
+    assert is_test_extend_disabled() is expected
+
+
+def test_test_extend_disabled_unset_is_false(monkeypatch):
+    """#1403: with the flag unset the guard is inactive (default behavior)."""
+    monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
+    assert is_test_extend_disabled() is False
 
 # --- No Fingerprint Tests ---
 @patch('sync_determine_operation.construct_paths')

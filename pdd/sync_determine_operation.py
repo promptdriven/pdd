@@ -96,7 +96,7 @@ def _safe_basename(basename: str) -> str:
     return basename.replace('/', '_')
 
 
-def test_extend_disabled() -> bool:
+def is_test_extend_disabled() -> bool:
     """Return True when coverage-driven ``test_extend`` is opted out via env.
 
     The ``PDD_DISABLE_TEST_EXTEND`` flag is the PR auto-heal scope guard
@@ -2413,7 +2413,7 @@ def _perform_sync_analysis(
                 # Python) instead of escalating into coverage-driven test_extend.
                 # This single branch covers both the in-process detection call
                 # and the `pdd sync` subprocess that re-derives the same decision.
-                if test_extend_disabled():
+                if is_test_extend_disabled():
                     return SyncDecision(
                         operation='all_synced',
                         reason=f'Tests pass ({run_report.tests_passed} passed). Coverage {run_report.coverage:.1f}% below target but test_extend disabled (PDD_DISABLE_TEST_EXTEND / PR auto-heal scope guard) - accepting as complete',
