@@ -2,7 +2,7 @@
 
 **Issue:** [#1209](https://github.com/promptdriven/pdd/issues/1209) — Research: measure agentic localization degradation under repository bloat
 **Status:** Draft (pilot design) — **§10 decisions LOCKED** (Codex CLI · real-OSS subset-and-regrow w/ seeded bug · Linux container + OverlayFS + FUSE byte-extent reads · N=5 · 30-min timeout)
-**Branch:** `research/issue-1209-repo-bloat-benchmark`
+**Branch:** `research/issue-1209-oss-subset-regrow`
 **Last updated:** 2026-06-04
 
 > **Revision note (2026-06-04).** §10 decision #3 was revised *before any model run* from "hand-authored minimal repos" to **real open-source snapshots, dependency-sliced to a minimal core with one seeded bug, regrown with the repo's own out-of-core files** (see [§5](#5-distractor-sourcing-strategy-subset-and-regrow), [§10](#10-locked-decisions)). Rationale: hand-authoring believable repos *and* a 50x distractor pool is costly and carries an "honesty cost" — synthetic siblings an agent may pattern-match as filler. Using a real repo's own files as distractors removes that cost and is intrinsically realistic. Because no runs have occurred, this is a legitimate pre-registration revision, not post-hoc tuning. Two metric families were added in the same revision: **distractor context-window penetration** ([§6.1](#61-what-we-capture)) and a **token-dose vs. fixability** axis ([§7.2](#72-trend--slope-fits)).
@@ -348,7 +348,7 @@ Extends the issue's suggested schema with hashes and enforcement metadata:
   "tokenizer": "<pinned tokenizer id used for the dose budget>",
   "core_tokens": 5120,
   "core_loc": 1234,
-  "distractor_tokens": 97280,
+  "distractor_tokens_on_disk": 97280,
   "distractor_loc": 23446,
   "realized_total_tokens": 102400,
   "realized_total_loc": 24680,
@@ -464,6 +464,7 @@ One JSONL line per run, plus pointers to raw trace artifacts:
   "reasoning_effort": "<frozen>",
   "env_fingerprint_sha256": "…hash of the frozen run-environment manifest (§8.1)…",
   "calibration_passed": true,
+  "oracle_equivalence_passed": true,
   "timeout_seconds": 1800,
   "manifest_sha256": "…",
   "core_sha256": "…",
