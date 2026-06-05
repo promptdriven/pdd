@@ -10,6 +10,8 @@ import click
 
 from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
+from ..checkup_prompt_main import run_checkup_prompt
+from ..checkup_target import is_prompt_shaped_target
 from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
@@ -320,6 +322,19 @@ from .prompt import prompt_lint
     ),
 )
 @click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="With prompt targets: emit ``pdd.prompt_source_set_report.v1`` JSON.",
+)
+@click.option(
+    "--explain",
+    is_flag=True,
+    default=False,
+    help="With prompt targets: read-only finding summary (non-fatal; no exit-code change).",
+)
+@click.option(
     "-h",
     "--help",
     "show_help",
@@ -337,6 +352,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     validate_arch_includes: bool,
     project_root: Optional[Path],
     strict: bool,
+    as_json: bool,
+    explain: bool,
     no_fix: bool,
     timeout_adder: float,
     start_step: Optional[str],
@@ -379,6 +396,11 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
              skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
+    Prompt targets (source-set health):
+      pdd checkup prompts/foo_python.prompt
+      pdd checkup prompts/
+      pdd checkup <devunit>
+          → Is this prompt source-set clear, covered, evidenced, and ready to generate from?
     Simplify (Claude Code /simplify, requires --apply):
       pdd checkup simplify [PATH] [OPTIONS]
     Prompt lint:
@@ -576,6 +598,25 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
         return "validate-arch-includes: ok", 0.0, ""
 
+    if pr_url is None and target is not None and is_prompt_shaped_target(
+        target,
+        project_root=project_root,
+    ):
+        quiet = ctx.obj.get("quiet", False)
+        passed, message, cost, model, exit_code = run_checkup_prompt(
+            target,
+            explain=explain,
+            as_json=as_json,
+            quiet=quiet or as_json,
+            strict=strict,
+            project_root=project_root,
+        )
+        if not quiet and not as_json:
+            echo_model_line(model)
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return message, cost, model
+
     # PR-mode argument validation.
     #
     # Issue #1292: ``--issue`` is OPTIONAL in ``--pr`` mode. PR mode is keyed
@@ -710,7 +751,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     else:
         if not target:
             raise click.UsageError(
-                "Missing argument 'TARGET'. For local checks use "
+                "Missing argument 'TARGET'. For prompt source-set checks use "
+                "`pdd checkup <file.prompt|prompts/|devunit>`. For local checks use "
                 "`pdd checkup --validate-arch-includes`. To review a PR use "
                 "`pdd checkup --pr <pr-url> [--issue <issue-url>]`."
             )
@@ -718,7 +760,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if not _is_github_issue_url(target):
             raise click.BadParameter(
                 "TARGET must be a GitHub issue URL "
-                "(e.g., https://github.com/org/repo/issues/123), "
+                "(e.g., https://github.com/org/repo/issues/123), a prompt target "
+                "(e.g., prompts/foo_python.prompt, prompts/, or a devunit name), "
                 "or use --pr/--issue for PR verification, "
                 "or --validate-arch-includes for architecture / include validation.",
                 param_hint="'TARGET'",

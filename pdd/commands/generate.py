@@ -19,6 +19,11 @@ from ..evidence_manifest import (
     resolve_test_output_paths,
     write_evidence_manifest,
 )
+from ..prompt_gate import (
+    filter_changed_prompt_paths,
+    resolve_prompt_gate_mode,
+    run_automatic_prompt_gate,
+)
 from ..user_story_tests import cache_story_prompt_links, generate_user_story
 
 # Initialize console
@@ -32,6 +37,35 @@ _DEFAULT_CODE_GENERATOR_MAIN = None
 _GITHUB_ISSUE_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)(?:[/?#].*)?$"
 )
+
+
+def _maybe_run_prompt_gate(
+    *,
+    output_files: Tuple[str, ...] | List[str],
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
+    project_root: Optional[str],
+    quiet: bool,
+    dry_run: bool = False,
+) -> bool:
+    """Return False when strict prompt checkup blocks downstream work."""
+    if dry_run:
+        return True
+    root = Path(project_root or Path.cwd()).resolve()
+    gate_mode = resolve_prompt_gate_mode(
+        cli_prompt_checkup=prompt_checkup,
+        no_prompt_checkup=no_prompt_checkup,
+        project_root=root,
+    )
+    prompt_paths = filter_changed_prompt_paths(output_files)
+    should_continue, _exit_code = run_automatic_prompt_gate(
+        prompt_paths,
+        mode=gate_mode,
+        project_root=root,
+        quiet=quiet,
+        strict=(gate_mode == "strict"),
+    )
+    return should_continue
 
 class GenerateCommand(click.Command):
     """
@@ -124,6 +158,18 @@ class GenerateCommand(click.Command):
         "prompt (few-shot context reduction)."
     ),
 )
+@click.option(
+    "--prompt-checkup",
+    type=click.Choice(["warn", "strict"]),
+    default=None,
+    help="Automatic prompt checkup after creating or modifying .prompt files.",
+)
+@click.option(
+    "--no-prompt-checkup",
+    is_flag=True,
+    default=False,
+    help="Disable automatic prompt checkup for this run.",
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -147,6 +193,8 @@ def generate(
     evidence: bool,
     snapshot_context: bool,
     compress: bool,
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -282,6 +330,15 @@ def generate(
                     temperature=obj.get("temperature", 0.0),
                     **grounding_kwargs_from_ctx(ctx.obj),
                 )
+            if success and not _maybe_run_prompt_gate(
+                output_files=output_files,
+                prompt_checkup=prompt_checkup,
+                no_prompt_checkup=no_prompt_checkup,
+                project_root=project_root,
+                quiet=quiet,
+                dry_run=dry_run,
+            ):
+                return None
             return (message, cost, model) if success else None
 
         if dry_run:
@@ -321,6 +378,14 @@ def generate(
                     basename="agentic-generate",
                     **grounding_kwargs_from_ctx(ctx.obj),
                 )
+            if success and not _maybe_run_prompt_gate(
+                output_files=output_files,
+                prompt_checkup=prompt_checkup,
+                no_prompt_checkup=no_prompt_checkup,
+                project_root=project_root,
+                quiet=quiet,
+            ):
+                return None
             return (message, cost, model) if success else None
 
         if project_root:
