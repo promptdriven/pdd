@@ -694,14 +694,15 @@ Commands:
 - `pdd detect --stories` runs the validation suite.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
-- `pdd test <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file and links those prompts.
+- `pdd test --issue <url|number|issue.md> <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file from the issue text and links those prompts.
 - `pdd test user_stories/story__*.md` updates prompt links for an existing story file.
 
 Story prompt linkage:
 - Stories may include optional metadata to scope validation to a subset of prompts:
   `<!-- pdd-story-prompts: prompts/a_python.prompt, prompts/b_python.prompt -->`
 - If metadata is missing, `pdd detect --stories` validates against the full prompt set.
-- In `--stories` mode, when `detect` identifies impacted prompts, PDD caches links back into the story metadata for future deterministic runs.
+- `pdd test --issue ... <*.prompt>` links the prompt files passed on the command line directly in story metadata; it does not run `detect_change` during story authoring.
+- In `--stories` mode, existing story metadata scopes validation; when metadata is missing, validation falls back to the full prompt set.
 
 Template:
 - See `user_stories/story__template.md` for a starter format.
@@ -1930,19 +1931,20 @@ When the prompt contains a `contract_rules` section, unit test generation uses t
 
 #### Story Mode
 
-Generate or update user stories and link them to touched prompts.
+Generate issue-derived user stories or update story prompt metadata.
 
 ```
-pdd [GLOBAL OPTIONS] test prompts/upload_python.prompt prompts/notify_python.prompt
+pdd [GLOBAL OPTIONS] test --issue https://github.com/myorg/myrepo/issues/789 prompts/upload_python.prompt prompts/notify_python.prompt
+pdd [GLOBAL OPTIONS] test --issue ./issues/upload.md prompts/upload_python.prompt
 pdd [GLOBAL OPTIONS] test user_stories/story__my_flow.md
 ```
 
 Behavior:
-- If input is one or more `.prompt` files, PDD generates `user_stories/story__<name>.md`.
-- During story generation, PDD runs prompt detection and auto-links touched prompts in `pdd-story-prompts` metadata.
-- If generation-time detection finds no touched prompts, metadata falls back to the provided prompt-file inputs.
-- If `pdd-story-prompts` metadata already exists and resolves cleanly, PDD keeps it unchanged.
-- If metadata is missing (or stale), PDD runs prompt detection and writes:
+- If input is one or more `.prompt` files, `--issue` is required. The issue source can be a GitHub issue/PR URL, an issue number resolvable from the current repo, or a local issue markdown file.
+- PDD resolves the issue first and authors `user_stories/story__<name>.md` from that issue text. Prompt file content is withheld from the story author so the story can catch prompt drift from the issue intent.
+- The prompt files passed on the command line are linked directly in `pdd-story-prompts` metadata. Story generation does not run `detect_change` or auto-detect touched prompts.
+- Missing/unresolvable issue sources or invalid LLM story output fail the command instead of writing a prompt-derived fallback story.
+- `pdd test user_stories/story__*.md` updates metadata for an existing story file. If metadata is missing or stale, PDD runs prompt detection and writes:
   `<!-- pdd-story-prompts: prompt_a_python.prompt, prompt_b_python.prompt -->`
 - This enables deterministic prompt-subset validation in `pdd detect --stories`.
 
