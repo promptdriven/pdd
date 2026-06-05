@@ -55,8 +55,9 @@ research/repo-bloat-benchmark/
 
 Still to confirm (does not block scenario authoring): exact Codex model id +
 reasoning effort, whether Codex exposes a supported seed, whether its
-transcript exposes per-request `usage` for token metrics, and whether Codex
-shells out for reads/search.
+transcript exposes per-request `usage` for token metrics, and the pinned
+Codex read/search execution path (shell-spawned, direct local reads, or any
+server-side/MCP retrieval).
 
 ## Ground rules (see design §2)
 
