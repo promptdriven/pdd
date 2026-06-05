@@ -6078,14 +6078,25 @@
             ]
           },
           {
+            "name": "_read_review_loop_verified_head_sha",
+            "signature": "(cwd: Path, issue_number: int, pr_number: int) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "Reads verified_head_sha from the final gate's Layer-2 (review-loop) final-state.json via checkup_review_loop.load_final_state(cwd, issue_number, pr_number)",
+              "The review-loop pushes Layer-2 fixes from its OWN worktree, so a Layer-2 push advances the remote PR head past the Layer-1 checkup worktree head; this SHA is the second authoritative 'last verified/pushed' head the provenance check accepts as 'ours'",
+              "Best-effort: returns empty string when no review-loop verdict exists (Layer 2 not run or errored before finalizing)"
+            ]
+          },
+          {
             "name": "_run_final_checkup_on_pr",
             "signature": "(*, issue_url: str, issue_number: int, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], ci_step_template: str, ci_validation_timeout: float) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
-              "Snapshots PR remote head SHA before/after run_agentic_checkup",
-              "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup \u2014 fail closed without re-validating CI because Step 7 never saw the new code",
-              "When the worktree HEAD matches the post-checkup remote SHA, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post-checkup SHA>",
-              "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched \u2014 silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
+              "Runs the canonical two-layer final gate (issue #1406) by calling run_agentic_checkup(..., final_gate=True): Layer 1 = PR-scoped checkup, Layer 2 = review-loop on the resulting head; the returned success is a real ship verdict, not 'report produced'",
+              "Snapshots PR remote head SHA before/after the gate",
+              "When pre and post SHAs differ, the post head is 'ours' (and safe to CI-revalidate) when it equals EITHER the Layer-1 checkup worktree HEAD (_read_checkup_worktree_head_sha) OR the Layer-2 review-loop verified head (_read_review_loop_verified_head_sha); if it matches neither, an external push raced the gate \u2014 fail closed without re-validating CI because no reviewer saw the new code",
+              "When the post head matches a verified head, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post head>",
+              "Fails closed when the pre/post head SHAs cannot be fetched, or when NEITHER verified head (checkup worktree, review-loop) is available \u2014 silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
             ]
           }
         ]
@@ -7347,7 +7358,7 @@
   },
   {
     "reason": "Entry point for the agentic checkup workflow \u2014 fetches the GitHub issue when one is provided (optional in PR mode), loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
-    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
+    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, or (final_gate) the canonical two-layer final PR gate (issue #1406): Layer 1 PR-scoped checkup then Layer 2 review-loop on the resulting head, returning a real ship verdict derived from the review-loop final-state.json. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
       "checkup_review_loop_python.prompt"
@@ -7366,10 +7377,13 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: Optional[str] = None, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, final_gate: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
-              "None"
+              "Fetches the GitHub issue (when provided) and PR context via gh api",
+              "Dispatches to the checkup orchestrator and/or the PR review-loop; both may commit and push generated fixes to the PR head branch and post report comments to the issue/PR (suppressed when use_github_state is False)",
+              "For final_gate, clears then re-reads the review-loop final-state.json under .pdd/checkup-review-loop/ to derive the ship verdict",
+              "Posts an error comment on the source issue if the legacy orchestrator raises"
             ]
           },
           {

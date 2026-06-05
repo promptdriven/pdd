@@ -5515,6 +5515,140 @@ class TestStep11CodeCleanup:
             "https://github.com/owner/repo/pull/77"
         )
         assert checkup_mock.call_args.kwargs["no_fix"] is False
+        # Issue #1406: pdd-issue's final verification must route through the
+        # canonical two-layer final gate, not the legacy single-layer checkup.
+        assert checkup_mock.call_args.kwargs["final_gate"] is True
+
+    def test_final_gate_accepts_review_loop_pushed_head(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Issue #1406: when the final gate's Layer 2 (review-loop) pushes a fix,
+        the PR head advances to the review-loop worktree head, NOT the legacy
+        checkup worktree head. The post-checkup head-provenance check must accept
+        the review-loop's verified head as 'ours' and re-validate CI instead of
+        falsely reporting an external push."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ) as revalidate_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=77,
+            create=True,
+        ), patch(
+            # pre-checkup head, then post-checkup head advanced by Layer 2.
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "bbbbbbbb"],
+        ), patch(
+            # Layer 1 (legacy checkup worktree) did not push: still at pre head.
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="aaaaaaaa",
+        ), patch(
+            # Layer 2 (review-loop) verified+pushed the advanced head.
+            "pdd.agentic_e2e_fix_orchestrator._read_review_loop_verified_head_sha",
+            return_value="bbbbbbbb",
+            create=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(True, "pre_checkup_gate passed", 0.0),
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Final gate passed", 0.0, "model"),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, msg
+        assert "external push" not in msg.lower()
+        # CI was re-validated on the Layer-2-advanced head exactly once (the
+        # earlier main CI-validation call has no head-override).
+        override_calls = [
+            c
+            for c in revalidate_mock.call_args_list
+            if c.kwargs.get("expected_head_sha_override") == "bbbbbbbb"
+        ]
+        assert len(override_calls) == 1
+
+    def test_final_gate_external_push_still_fails(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """A head that matches NEITHER the legacy checkup worktree NOR the
+        review-loop verified head is a genuine external push and must fail
+        closed — never green-light CI re-validation on an unverified head."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ) as revalidate_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=77,
+            create=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "cccccccc"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="aaaaaaaa",
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._read_review_loop_verified_head_sha",
+            return_value="bbbbbbbb",
+            create=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(True, "pre_checkup_gate passed", 0.0),
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Final gate passed", 0.0, "model"),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "external push" in msg.lower()
+        # The post-push CI re-validation (head-override call) must NOT fire on a
+        # genuine external push, even though the earlier main CI loop ran.
+        override_calls = [
+            c
+            for c in revalidate_mock.call_args_list
+            if c.kwargs.get("expected_head_sha_override")
+        ]
+        assert override_calls == []
 
     def test_pre_checkup_gate_blocks_final_checkup(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args
