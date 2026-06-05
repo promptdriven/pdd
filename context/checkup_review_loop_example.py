@@ -13,7 +13,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -255,6 +255,31 @@ def run_checkup_review_loop(
     primary reviewer first pass and never invokes the fixer, commits, or pushes.
     """
     return True, "## Step 7/8: Review Loop Final Report", 0.0, "codex"
+
+
+def load_final_state(
+    cwd: Path, issue_number: int, pr_number: int
+) -> Optional[Dict[str, Any]]:
+    """Load the canonical ``final-state.json`` verdict for a review-loop run.
+
+    Returns the parsed mapping, or ``None`` when the artifact is absent or
+    unreadable (``OSError``/``json.JSONDecodeError``). The canonical final gate
+    (issue #1406) consumes this to derive a real ship verdict and to recover the
+    review-loop's verified head SHA after the loop returns; callers MUST treat
+    ``None`` as fail-closed, never as a clean result.
+    """
+    return {"reviewer_status": {"codex": "clean"}, "fresh_final_status": "clean"}
+
+
+def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> None:
+    """Delete any stale ``final-state.json`` before a fresh review-loop run.
+
+    Ensures a later ``load_final_state`` cannot mistake a prior run's verdict for
+    the current one. A run that returns before ``_finalize`` writes no new file,
+    so the post-clear absence reads as fail-closed. ``FileNotFoundError`` and
+    other ``OSError``s are swallowed.
+    """
+    return None
 
 
 # ---------------------------------------------------------------------------
