@@ -29,6 +29,11 @@ MAX_CONSECUTIVE_TESTS = 3  # Allow up to 3 consecutive test attempts
 MAX_TEST_EXTEND_ATTEMPTS = 2  # Allow up to 2 attempts to extend tests for coverage
 MAX_CONSECUTIVE_CRASHES = 3  # Allow up to 3 consecutive crash attempts (Bug #157 fix)
 MAX_CONSECUTIVE_FIXES = 5  # Allow up to 5 consecutive fix attempts (Issue #1203: only fires when not making progress)
+TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _is_truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in TRUTHY_ENV_VALUES
 
 # --- Real PDD Component Imports ---
 from .sync_tui import SyncApp
@@ -2442,6 +2447,18 @@ def sync_orchestration(
                             break
 
                     if operation == 'test_extend':
+                        if _is_truthy_env("PDD_DISABLE_TEST_EXTEND"):
+                            skipped_operations.append('test_extend')
+                            log_event(basename, language, "test_extend_skipped", {
+                                "reason": "test_extend disabled by PDD_DISABLE_TEST_EXTEND PR scope guard",
+                                "coverage": None,
+                                "coverage_ok": True
+                            }, invocation_mode="sync", paths=pdd_files)
+                            update_log_entry(log_entry, success=True, cost=0.0, model='skipped', duration=0.0, error=None)
+                            append_log_entry(basename, language, log_entry, paths=pdd_files)
+                            consecutive_noop_fixes = 0
+                            continue
+
                         # Skip test_extend for non-Python languages - code coverage tooling is Python-specific.
                         # Python always has working coverage tools, so test_extend runs even in agentic mode.
                         if language.lower() != 'python':
@@ -3153,6 +3170,15 @@ def sync_orchestration(
                                         test_files=pdd_files.get('test_files'),  # Bug #156
                                     )
                             elif operation == 'test_extend':
+                                if _is_truthy_env("PDD_DISABLE_TEST_EXTEND"):
+                                    result = {'success': True, 'cost': 0.0, 'model': 'skipped'}
+                                    log_event(basename, language, "test_extend_skipped", {
+                                        "reason": "test_extend disabled by PDD_DISABLE_TEST_EXTEND PR scope guard",
+                                        "coverage": None,
+                                        "coverage_ok": True
+                                    }, invocation_mode="sync", paths=pdd_files)
+                                    continue
+
                                 # Extend existing tests to improve coverage
                                 # Uses existing_tests and merge=True to add more test cases
                                 pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)

@@ -1649,6 +1649,9 @@ def main(
     diff_base: Optional[str] = None,
 ) -> int:
     """Detect drift, heal modules, and commit healed changes."""
+    if not skip_ci:
+        os.environ["PDD_DISABLE_TEST_EXTEND"] = "1"
+
     try:
         prompt_drifts, example_drifts = detect_drift(modules, diff_base=diff_base)
     except Exception as exc:
