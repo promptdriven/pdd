@@ -8299,7 +8299,7 @@
     "description": "Aggregates command functions from sibling modules in pdd/commands and registers them with the Click CLI group. Keeps the main cli.py clean and pins the registration order required by `pdd --help`.",
     "dependencies": [
       "commands/replay_python.prompt",
-      "commands/context_audit_python.prompt"
+      "commands/context_python.prompt"
     ],
     "priority": 70,
     "filename": "commands/__init___python.prompt",
@@ -10172,14 +10172,14 @@
     }
   },
   {
-    "reason": "Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation.",
-    "description": "Implements the `pdd context-audit` CLI command that preprocesses a prompt file the same way generation does and reports token attribution broken down by source (prompt body, each include, tests, examples, shell output, web output, grounding).",
+    "reason": "Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation, displayed by default as a Claude-Code /context-style usage box.",
+    "description": "Implements the `pdd context` CLI command that preprocesses a prompt file the same way generation does and reports token attribution broken down by source (prompt body, each include, tests, examples, shell output, web output, grounding), rendered by default as a Claude-Code /context-style usage box (--table for the raw table, --json for machine-readable output).",
     "dependencies": [
       "commands/replay_python.prompt"
     ],
     "priority": 249,
-    "filename": "commands/context_audit_python.prompt",
-    "filepath": "pdd/commands/context_audit.py",
+    "filename": "commands/context_python.prompt",
+    "filepath": "pdd/commands/context.py",
     "tags": [
       "cli",
       "python"
@@ -10189,8 +10189,8 @@
       "cli": {
         "commands": [
           {
-            "name": "context-audit",
-            "description": "Audit token attribution by source for a preprocessed prompt"
+            "name": "context",
+            "description": "Show context-window usage by source for a preprocessed prompt"
           }
         ]
       }

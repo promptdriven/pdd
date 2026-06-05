@@ -667,7 +667,7 @@ graph TB
 ### Prompt Management
 - **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives
 - **[`replay`](#5a-replay)**: Reconstructs and audits expanded prompt context from a snapshot-enabled run artifact
-- **[`context-audit`](#5b-context-audit)**: Reports per-source token attribution for a hydrated prompt to audit context-window cost
+- **[`context`](#5b-context)**: Shows context-window usage by source for a hydrated prompt, Claude-Code `/context`-style
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
@@ -2101,12 +2101,12 @@ pdd replay .pdd/evidence/runs/<run_id>.json
 
 Replay verifies that the expanded prompt hash can be reconstructed from the run artifact and its captured context snapshots. It does not promise identical generated code, because model execution may remain nondeterministic; the replay contract is identical prompt/context reconstruction.
 
-### 5b. context-audit
+### 5b. context
 
-Report token attribution broken down by source for a preprocessed prompt.
+Show context-window usage broken down by source for a preprocessed prompt, rendered like Claude Code's `/context` display.
 
 ```bash
-pdd context-audit <prompt_path> [--model MODEL] [--json] [--threshold N]
+pdd context <prompt_path> [--model MODEL] [--json] [--table] [--threshold N]
 ```
 
 Preprocesses the prompt the same way generation does and counts tokens per source segment without making an LLM call.
@@ -2116,14 +2116,19 @@ Preprocesses the prompt the same way generation does and counts tokens per sourc
 
 #### Options
 - `--model MODEL`: Model name used for context-limit lookup. Defaults to `PDD_MODEL_DEFAULT` env var, or `gpt-4o` if unset.
-- `--json`: Emit machine-readable JSON output to stdout instead of the human-readable table.
+- `--json`: Emit machine-readable JSON output to stdout instead of the usage box.
+- `--table`: Show the raw per-source token-attribution table instead of the usage box.
 - `--threshold N`: Integer percentage (0–100, default 80) above which the command exits with code 2 to signal context budget exceeded. Set to 0 to disable.
 
 #### Output
-The default human-readable table shows:
-- Header: total tokens, model name, context-limit size, and percentage used.
-- Rows sorted by token count descending (largest consumer first): prompt body, each `<include>` file, tests, examples, and grounding.
-- Warnings for any dynamic tags (`<shell>`, `<web>`, semantic `query=` includes) that were detected but not expanded (nondeterministic, deferred).
+By default it prints a Claude-Code `/context`-style usage box:
+- A grid of cells showing used context-window space split by category against free space (`⛶`).
+- The model name and `total/limit tokens (percent%)` summary.
+- An `Estimated usage by category` breakdown — one line per source (prompt body, each `<include>` file, tests, examples, grounding) — followed by a `Free space` line.
+
+`--table` instead prints a table with a header (total tokens, model, context-limit size, percentage used) and rows sorted by token count descending (largest consumer first).
+
+In both modes, warnings are printed for any dynamic tags (`<shell>`, `<web>`, semantic `query=` includes) that were detected but not expanded (nondeterministic, deferred).
 
 JSON output (`--json`) emits a single object with keys: `total_tokens`, `context_limit`, `percent_used`, `model`, `rows`, `warnings`, and `threshold_exceeded`.
 
@@ -2133,17 +2138,20 @@ JSON output (`--json`) emits a single object with keys: `total_tokens`, `context
 
 #### Examples
 ```bash
-# Human-readable audit with default 80% threshold
-pdd context-audit prompts/my_module_python.prompt
+# Claude-Code /context-style usage box with default 80% threshold
+pdd context prompts/my_module_python.prompt
+
+# Raw per-source attribution table
+pdd context prompts/my_module_python.prompt --table
 
 # Audit against a specific model
-pdd context-audit prompts/my_module_python.prompt --model claude-sonnet-4-6
+pdd context prompts/my_module_python.prompt --model claude-sonnet-4-6
 
 # JSON output for CI dashboards
-pdd context-audit prompts/my_module_python.prompt --json
+pdd context prompts/my_module_python.prompt --json
 
 # Fail CI when prompt uses more than 60% of context
-pdd context-audit prompts/my_module_python.prompt --threshold 60
+pdd context prompts/my_module_python.prompt --threshold 60
 ```
 
 ### 6. fix
