@@ -1,14 +1,14 @@
 {
-  "pdd_version": "0.0.250",
-  "timestamp": "2026-05-25T06:50:22.759285+00:00",
+  "pdd_version": "0.0.263",
+  "timestamp": "2026-06-05T22:37:29.378556+00:00",
   "command": "example",
-  "prompt_hash": "b2aadcef4fb87e8ef9a3009620f7434ac0ebc56045e282aa8b4a7c25d2cc3e31",
-  "code_hash": "f95eedec5bcb4ca505d8682d4a38ea5d4b3eb07ac1d52a38ebffa9f89941a92e",
-  "example_hash": "1b944854aa2708205de03d5b21b3be580b71546983f92bec5e13cfbc68b85e75",
-  "test_hash": "9ec3255a282541272316cb551c75d3f626743cadf058495b176cb748abf2877f",
+  "prompt_hash": "6838e9c6efc37a5a0197b62119966bf5efc9983bca1ef224ceca0fed3c812d61",
+  "code_hash": "e92713c711aad961fdba67f66f84327a71545e00552245b320c0e6ad191c187e",
+  "example_hash": "87dd5c4b059b40c84821f8ca69765b1c42e3f20f18f997f9df55bde1233b1ded",
+  "test_hash": "0b24940dc9c79288d3a9f34b5c8127efa3dd98ddb69e21f2bf01e53a79f3f7a0",
   "test_files": {
-    "test_preprocess.py": "9ec3255a282541272316cb551c75d3f626743cadf058495b176cb748abf2877f",
-    "test_preprocess_main.py": "cd0d7760dab77c36a8e988ef835af13164388db1a5471e4349f4b532b1d5c869",
+    "test_preprocess.py": "0b24940dc9c79288d3a9f34b5c8127efa3dd98ddb69e21f2bf01e53a79f3f7a0",
+    "test_preprocess_main.py": "0fa3887c7a4e2c3f051ce719117b8f07444da419b35363b9dff4a2b5ae0f17e9",
     "test_preprocess_main_pdd_tags.py": "abddfe41c460aa7dcd4186028134deb4eef0a85419a7f6f59869a274c25f7ee8"
   },
   "include_deps": {
@@ -16,7 +16,7 @@
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
     "context/path_resolution_example.py": "15ba84fd11c61af8fa12dcb19d63d42f0cb09b747542bf20e69650b8ff4ac137",
-    "pdd/content_selector.py": "ad19d58df177ac07cc8f06e3a85d48301770e3690902e90113b45c0cceddaf1a",
-    "pdd/include_query_extractor.py": "64259ee74b3bf89b7988892c00d131bb53432fd3ae9a74a5d0e74cd054eca046"
+    "pdd/content_selector.py": "0e4fe56b42ea98d8cbf3c59f0f25849adbad5068db2f5835e5b2e7c4c21e46d2",
+    "pdd/include_query_extractor.py": "c2bea7ea18bb8d743394485938240089f980ca3df94b3c62f29c606ff76da453"
   }
 }
