@@ -13,9 +13,28 @@ from pdd.user_story_tests import (
     discover_prompt_files,
     discover_story_files,
     generate_user_story,
+    resolve_issue_source,
     run_user_story_fix,
     run_user_story_tests,
 )
+
+
+# Issue #1356: stories are authored from the ISSUE, never the prompt. Tests use a
+# deterministic, offline local issue markdown file as the issue source so they
+# make no network/gh call. `_write_issue` returns the path to pass as --issue.
+_DEFAULT_ISSUE_BODY = (
+    "# Issue: Upload CSV and view a summary report\n\n"
+    "## Summary\n"
+    "Users can upload a CSV file and view a summary report.\n\n"
+    "## Acceptance Criteria\n"
+    "- Given a valid CSV, when uploaded, then a summary report is shown.\n"
+)
+
+
+def _write_issue(tmp_path, body=_DEFAULT_ISSUE_BODY, name="issue.md"):
+    issue_path = tmp_path / name
+    issue_path.write_text(body, encoding="utf-8")
+    return str(issue_path)
 
 
 def test_user_story_tests_no_stories(tmp_path):
@@ -468,6 +487,7 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -514,6 +534,7 @@ def test_generate_user_story_links_prompt_inputs_without_detection(tmp_path):
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -543,6 +564,7 @@ def test_generate_user_story_uses_input_links_when_detection_raises(tmp_path):
         mock_detect.side_effect = RuntimeError("provider unavailable")
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -558,20 +580,25 @@ def test_generate_user_story_uses_input_links_when_detection_raises(tmp_path):
     assert "As a data analyst, I can upload a CSV file" in story_text
 
 
-def test_generate_user_story_derives_unit_test_ready_details_from_prompt(tmp_path):
+def test_generate_user_story_derives_unit_test_ready_details_from_issue(tmp_path):
+    """The story carries concrete, unit-test-ready details. Those details come
+    from the issue/LLM, not from the prompt: the prompt body here is deliberately
+    vague, yet the generated story is specific."""
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
     prompt = prompts_dir / "csv_report_python.prompt"
-    prompt.write_text(
-        "\n".join(
-            [
-                "Build a CSV report workflow.",
-                "- Accept only .csv uploads with a header row.",
-                "- Return row_count and column_names in the summary.",
-                "- MUST NOT log raw uploaded cell values.",
-            ]
+    # Deliberately vague prompt: it does NOT mention header rows, row_count, or
+    # column_names. If story content leaked from the prompt, the asserts below
+    # would fail.
+    prompt.write_text("Build a CSV report workflow.", encoding="utf-8")
+
+    issue_src = _write_issue(
+        tmp_path,
+        body=(
+            "# Issue: CSV report\n\n"
+            "Accept only .csv uploads with a header row. Return row_count and "
+            "column_names in the summary. MUST NOT log raw uploaded cell values.\n"
         ),
-        encoding="utf-8",
     )
 
     csv_story = _LLM_STORY_MD.replace(
@@ -587,6 +614,7 @@ def test_generate_user_story_derives_unit_test_ready_details_from_prompt(tmp_pat
     ), patch("pdd.user_story_tests.detect_change") as mock_detect:
         success, _, _, _, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt)],
+            issue=issue_src,
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -619,6 +647,7 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
     ):
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -648,6 +677,7 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
     ):
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -759,8 +789,8 @@ _CONTEXT_AUDIT_STORY_MD = (
 
 
 def test_generate_user_story_uses_llm_output(tmp_path):
-    """Issue #1356: the story body is authored by the LLM from the prompt
-    content, and the pdd-story-prompts metadata is still stitched in."""
+    """Issue #1356: the story body is authored by the LLM from the ISSUE, and
+    the pdd-story-prompts metadata linking the prompt is still stitched in."""
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
     prompt_one = prompts_dir / "upload_python.prompt"
@@ -774,6 +804,7 @@ def test_generate_user_story_uses_llm_output(tmp_path):
     ) as mock_llm:
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -809,6 +840,7 @@ def test_generate_user_story_context_audit_story_protects_per_source_attribution
     ):
         success, _, _, _, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -923,6 +955,7 @@ def test_generate_user_story_fails_when_llm_errors(tmp_path):
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -953,6 +986,7 @@ def test_generate_user_story_fails_when_llm_output_malformed(tmp_path):
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -992,6 +1026,7 @@ def test_generate_user_story_rejects_llm_story_missing_canonical_sections(tmp_pa
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -1026,6 +1061,7 @@ def test_generate_user_story_fails_when_llm_output_contains_placeholders(tmp_pat
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
@@ -1075,6 +1111,7 @@ def test_legacy_minimal_story_passes_validation(tmp_path):
 def test_generate_user_story_missing_prompt_fails(tmp_path):
     success, message, cost, model, story_file, linked_prompts = generate_user_story(
         prompt_files=[str(tmp_path / "prompts" / "missing.prompt")],
+        issue=_write_issue(tmp_path),
         stories_dir=str(tmp_path / "user_stories"),
     )
 
@@ -1084,6 +1121,176 @@ def test_generate_user_story_missing_prompt_fails(tmp_path):
     assert model == ""
     assert story_file == ""
     assert linked_prompts == []
+
+
+def test_generate_user_story_requires_issue(tmp_path):
+    """Issue #1356: without an issue source, generation fails with a clear
+    message and makes no LLM call -- it must not fall back to prompt-derived
+    authoring."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    with patch("pdd.llm_invoke.llm_invoke") as mock_llm, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown"
+    ) as mock_author:
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=None,
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is False
+    assert "derives the story from a GitHub issue" in message
+    assert "--issue" in message
+    assert story_file == ""
+    assert linked_prompts == []
+    mock_llm.assert_not_called()
+    mock_author.assert_not_called()
+    assert not (tmp_path / "user_stories").exists()
+
+
+def test_generate_user_story_authors_from_issue_not_prompt(tmp_path):
+    """Independence guarantee: the LLM that authors the story receives the
+    ISSUE text and never the prompt body. This is what keeps the story an
+    independent TDD oracle."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    # A unique marker that must NEVER reach the story-authoring LLM.
+    prompt_one.write_text(
+        "PROMPT_ONLY_MARKER_should_not_leak_into_story", encoding="utf-8"
+    )
+
+    issue_src = _write_issue(
+        tmp_path,
+        body=(
+            "# Issue: Upload CSV\n\n"
+            "ISSUE_MARKER_must_drive_the_story. Users can upload a CSV file and "
+            "view a summary report.\n"
+        ),
+    )
+
+    captured = {}
+
+    def fake_llm(*, prompt, input_json, **_kwargs):
+        captured["input_json"] = input_json
+        return {"result": _LLM_STORY_MD, "cost": 0.05, "model_name": "story-model"}
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", side_effect=fake_llm
+    ) as mock_llm:
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=issue_src,
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert mock_llm.called
+    payload = "".join(str(v) for v in captured["input_json"].values())
+    # The issue text reaches the author...
+    assert "ISSUE_MARKER_must_drive_the_story" in payload
+    # ...but the prompt body must NOT.
+    assert "PROMPT_ONLY_MARKER_should_not_leak_into_story" not in payload
+    # The prompt is still linked for validation/regeneration.
+    assert linked_prompts == ["upload_python.prompt"]
+    mock_detect.assert_not_called()
+
+
+def test_generate_user_story_fails_when_issue_unresolvable(tmp_path):
+    """A garbage issue source that is neither a file, a URL, nor a number fails
+    generation before any LLM call."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    with patch("pdd.llm_invoke.llm_invoke") as mock_llm:
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue="not-a-real-issue-source",
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is False
+    assert "Could not resolve issue source" in message
+    assert story_file == ""
+    assert linked_prompts == []
+    mock_llm.assert_not_called()
+    assert not (tmp_path / "user_stories").exists()
+
+
+def test_resolve_issue_source_local_markdown_file(tmp_path):
+    issue_path = tmp_path / "issue.md"
+    issue_path.write_text(
+        "# Add a context command\n\nBody text here.\n", encoding="utf-8"
+    )
+
+    title, body, ref = resolve_issue_source(str(issue_path))
+
+    assert title == "Add a context command"
+    assert "Body text here." in body
+    assert ref == "issue.md"
+
+
+def test_resolve_issue_source_github_url_uses_gh(tmp_path):
+    with patch(
+        "pdd.user_story_tests._fetch_issue_via_gh",
+        return_value=("Issue title", "Issue body"),
+    ) as mock_fetch:
+        title, body, ref = resolve_issue_source(
+            "https://github.com/promptdriven/pdd/issues/789"
+        )
+
+    mock_fetch.assert_called_once_with("promptdriven/pdd", "789")
+    assert title == "Issue title"
+    assert body == "Issue body"
+    assert ref == "promptdriven/pdd#789"
+
+
+def test_resolve_issue_source_pull_url_uses_gh(tmp_path):
+    with patch(
+        "pdd.user_story_tests._fetch_issue_via_gh",
+        return_value=("PR title", "PR body"),
+    ) as mock_fetch:
+        title, body, ref = resolve_issue_source(
+            "https://github.com/promptdriven/pdd/pull/1387"
+        )
+
+    mock_fetch.assert_called_once_with("promptdriven/pdd", "1387")
+    assert ref == "promptdriven/pdd#1387"
+
+
+def test_resolve_issue_source_bare_number_infers_repo(tmp_path):
+    with patch(
+        "pdd.user_story_tests._infer_repo_slug", return_value="promptdriven/pdd"
+    ) as mock_repo, patch(
+        "pdd.user_story_tests._fetch_issue_via_gh",
+        return_value=("T", "B"),
+    ) as mock_fetch:
+        title, body, ref = resolve_issue_source("#1356")
+
+    mock_repo.assert_called_once()
+    mock_fetch.assert_called_once_with("promptdriven/pdd", "1356")
+    assert ref == "promptdriven/pdd#1356"
+
+
+def test_resolve_issue_source_unresolvable_returns_none(tmp_path):
+    assert resolve_issue_source("") == (None, None, None)
+    assert resolve_issue_source("not-a-source") == (None, None, None)
+    # A number with no inferable repo cannot be resolved.
+    with patch("pdd.user_story_tests._infer_repo_slug", return_value=None):
+        assert resolve_issue_source("123") == (None, None, None)
+    # gh failure surfaces as unresolved.
+    with patch("pdd.user_story_tests._fetch_issue_via_gh", return_value=None):
+        assert resolve_issue_source(
+            "https://github.com/promptdriven/pdd/issues/1"
+        ) == (None, None, None)
 
 
 def test_user_story_fix_happy_path(tmp_path):

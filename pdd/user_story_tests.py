@@ -2,9 +2,11 @@
 # pylint: disable=too-many-lines
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+import subprocess
 import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -493,6 +495,113 @@ def _story_slug_from_prompts(prompt_paths: List[Path]) -> str:
     return merged or "generated_story"
 
 
+# --- Issue-source resolution (issue #1356) -------------------------------
+# User stories are authored from the GitHub ISSUE that motivates the work, not
+# from the prompt. The issue is the behavioral source of truth; deriving the
+# story from it (and never from prompt content) keeps the story an independent
+# TDD oracle that can actually catch prompt regressions. An issue source may be
+# a GitHub issue/PR URL, a bare or ``#``-prefixed issue number (resolved against
+# the ``origin`` remote), or a path to a local markdown file.
+_GITHUB_ISSUE_URL_RE = re.compile(
+    r"^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/(?:issues|pull)/(?P<number>\d+)",
+    re.IGNORECASE,
+)
+_ISSUE_NUMBER_RE = re.compile(r"^#?(?P<number>\d+)$")
+_REMOTE_SLUG_RE = re.compile(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+)")
+
+
+def _issue_title_from_markdown(text: str) -> Optional[str]:
+    """Return the first level-1 markdown heading as a title, if present."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip() or None
+    return None
+
+
+def _infer_repo_slug() -> Optional[str]:
+    """Infer ``owner/repo`` from the ``origin`` git remote, or None."""
+    try:
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = _REMOTE_SLUG_RE.search(result.stdout.strip())
+    if not match:
+        return None
+    return f"{match.group('owner')}/{match.group('repo')}"
+
+
+def _fetch_issue_via_gh(repo: str, number: str) -> Optional[Tuple[str, str]]:
+    """Fetch ``(title, body)`` for an issue via the ``gh`` CLI, or None."""
+    try:
+        result = subprocess.run(
+            ["gh", "issue", "view", number, "--repo", repo, "--json", "title,body"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        return None
+    title = str(data.get("title") or "").strip()
+    body = str(data.get("body") or "").strip()
+    if not title and not body:
+        return None
+    return title, body
+
+
+def resolve_issue_source(  # pylint: disable=too-many-return-statements
+    issue: str,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve an issue source to ``(title, body, ref)``.
+
+    A local markdown file is preferred when the path exists (deterministic,
+    offline). Otherwise a GitHub issue/PR URL or a bare/``#`` issue number is
+    fetched via the ``gh`` CLI. Returns ``(None, None, None)`` when the source
+    cannot be resolved so the caller can fail generation rather than author a
+    story from nothing.
+    """
+    issue = (issue or "").strip()
+    if not issue:
+        return None, None, None
+
+    candidate = Path(issue)
+    if candidate.exists() and candidate.is_file():
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except OSError:
+            return None, None, None
+        title = _issue_title_from_markdown(text) or candidate.stem
+        return title, text, candidate.name
+
+    url_match = _GITHUB_ISSUE_URL_RE.match(issue)
+    if url_match:
+        repo = f"{url_match.group('owner')}/{url_match.group('repo')}"
+        number = url_match.group("number")
+    else:
+        number_match = _ISSUE_NUMBER_RE.match(issue)
+        if not number_match:
+            return None, None, None
+        repo = _infer_repo_slug()
+        if not repo:
+            return None, None, None
+        number = number_match.group("number")
+
+    fetched = _fetch_issue_via_gh(repo, number)
+    if fetched is None:
+        return None, None, None
+    title, body = fetched
+    return title, body, f"{repo}#{number}"
+
+
 _STORY_META_PROMPT_NAME = "generate_user_story_LLM"
 # An LLM-authored story must contain the full canonical section set (issue
 # #1356) to be accepted. Invalid or unavailable LLM output fails generation
@@ -540,8 +649,8 @@ def _contains_placeholder_tokens(markdown: str) -> bool:
 def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements,broad-exception-caught,import-outside-toplevel
     *,
     title: str,
-    prompt_paths: List[Path],
-    prompts_root: Optional[Path],
+    issue_text: str,
+    issue_ref: str,
     strength: float,
     temperature: float,
     time: float,
@@ -549,11 +658,14 @@ def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many
 ) -> Tuple[Optional[str], float, str]:
     """Author a complete ``story__*.md`` body with the LLM (issue #1356).
 
-    The model reads the prompt file(s) and writes the user story directly --
-    persona / capability / benefit, Context, Acceptance Criteria, Negative
-    Cases, etc. The ``pdd-story-prompts`` metadata is stitched deterministically
-    by the caller afterward, so story<->prompt linking and ``pdd detect
-    --stories`` are unaffected by what the model emits.
+    The model reads the GitHub ISSUE text -- never the prompt or generated code
+    -- and writes the user story directly (persona / capability / benefit,
+    Context, Acceptance Criteria, Negative Cases, etc.). Keeping prompt content
+    out of this call is the whole point: the story stays an independent oracle,
+    so it can fail when a prompt drifts away from the issue's intended behavior.
+    The ``pdd-story-prompts`` metadata is stitched deterministically by the
+    caller afterward, so story<->prompt linking and ``pdd detect --stories`` are
+    unaffected by what the model emits.
 
     Returns ``(markdown, cost, model)``. Returns ``(None, cost, model)`` when the
     LLM is unavailable, errors, or returns markdown missing a required section.
@@ -576,28 +688,19 @@ def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many
         )
         return None, 0.0, ""
 
-    blocks: List[str] = []
-    for path in prompt_paths:
-        ref = _prompt_reference_for_metadata(path.resolve(), prompts_root)
-        try:
-            prompt_text = path.read_text(encoding="utf-8")
-        except OSError as exc:
-            logger.debug("Could not read prompt %s for story generation: %s", path, exc)
-            return None, 0.0, ""
-        blocks.append(f'<prompt ref="{ref}">\n{prompt_text}\n</prompt>')
-    prompt_files_block = "\n\n".join(blocks)
+    issue_block = f'<issue ref="{issue_ref}">\n{issue_text}\n</issue>'
 
     processed = preprocess(
         template,
         recursive=False,
         double_curly_brackets=True,
-        exclude_keys=["STORY_TITLE", "PROMPT_FILES"],
+        exclude_keys=["STORY_TITLE", "ISSUE_TEXT"],
     )
 
     try:
         response = llm_invoke(
             prompt=processed,
-            input_json={"STORY_TITLE": title, "PROMPT_FILES": prompt_files_block},
+            input_json={"STORY_TITLE": title, "ISSUE_TEXT": issue_block},
             strength=strength,
             temperature=temperature,
             time=time,
@@ -628,9 +731,10 @@ def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many
     return markdown, cost, model
 
 
-def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,unused-argument
+def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements,unused-argument
     *,
     prompt_files: List[str],
+    issue: Optional[str] = None,
     output: Optional[str] = None,
     stories_dir: Optional[str] = None,
     prompts_dir: Optional[str] = None,
@@ -641,7 +745,14 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
     include_llm_prompts: bool = False,
 ) -> Tuple[bool, str, float, str, str, List[str]]:
     """
-    Generate a story__*.md file from one or more prompt files.
+    Generate a ``story__*.md`` file from a GitHub ISSUE (issue #1356).
+
+    The story body is authored from the issue -- the behavioral source of truth
+    -- and never from the prompt content. ``prompt_files`` are still required:
+    they are the prompts the story validates and are linked via
+    ``pdd-story-prompts`` metadata so the story is re-generated/re-checked when
+    those prompts (and their issue) change. Keeping prompt content out of story
+    authoring is what makes the story an independent TDD oracle.
 
     Returns:
         success flag, message, cost, model name, generated story path, linked prompt refs.
@@ -663,17 +774,48 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
         seen_keys.add(key)
         resolved_paths.append(prompt_path)
 
+    if not issue:
+        return (
+            False,
+            (
+                "User story generation derives the story from a GitHub issue, not "
+                "from prompt content. Provide an issue source with "
+                "--issue <url|number|path-to-issue.md>."
+            ),
+            0.0,
+            "",
+            "",
+            [],
+        )
+
     prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
-    title = _story_title_from_prompts(resolved_paths)
-    # Issue #1356 follow-up: author the user story with the LLM from prompt
-    # content. Do not fall back to deterministic story generation; a shallow
-    # deterministic story can pass `pdd detect --stories` even after meaningful
-    # prompt drift, so invalid/unavailable model output is a hard generation
-    # failure.
+
+    # Resolve the issue source (URL / number / local markdown) BEFORE any LLM
+    # call. The issue -- not the prompt -- is the behavioral input.
+    issue_title, issue_text, issue_ref = resolve_issue_source(issue)
+    if issue_text is None:
+        return (
+            False,
+            (
+                f"Could not resolve issue source '{issue}'. Provide a GitHub issue "
+                "URL, an issue number, or a path to a local issue markdown file."
+            ),
+            0.0,
+            "",
+            "",
+            [],
+        )
+
+    title = issue_title or _story_title_from_prompts(resolved_paths)
+    # Issue #1356: author the user story with the LLM from the ISSUE text only.
+    # The prompt is deliberately withheld so the story is an independent oracle.
+    # Do not fall back to deterministic story generation; a shallow deterministic
+    # story can pass `pdd detect --stories` even after meaningful prompt drift,
+    # so invalid/unavailable model output is a hard generation failure.
     story_markdown, story_cost, story_model = _llm_generate_story_markdown(
         title=title,
-        prompt_paths=resolved_paths,
-        prompts_root=prompts_root,
+        issue_text=issue_text,
+        issue_ref=issue_ref or issue,
         strength=strength,
         temperature=temperature,
         time=time,
@@ -683,8 +825,9 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
         return (
             False,
             (
-                "User story generation requires a valid LLM-authored story; "
-                "the model was unavailable or returned invalid story markdown."
+                "User story generation requires a valid LLM-authored story derived "
+                "from the issue; the model was unavailable or returned invalid story "
+                "markdown."
             ),
             story_cost,
             story_model,

@@ -662,12 +662,23 @@ def test_test_story_generation_mode_from_prompt_inputs(runner):
                 "user_stories/story__upload_flow.md",
                 ["upload_python.prompt"],
             )
-            result = runner.invoke(generate_module.test, ["upload_python.prompt", "notify_python.prompt"])
+            result = runner.invoke(
+                generate_module.test,
+                [
+                    "--issue",
+                    "https://github.com/promptdriven/pdd/issues/1356",
+                    "upload_python.prompt",
+                    "notify_python.prompt",
+                ],
+            )
 
     assert result.exit_code == 0
     mock_generate_story.assert_called_once()
     kwargs = mock_generate_story.call_args[1]
     assert kwargs["prompt_files"] == ["upload_python.prompt", "notify_python.prompt"]
+    # Issue #1356: the issue source is threaded through to story generation so
+    # the story is authored from the issue, not the prompt.
+    assert kwargs["issue"] == "https://github.com/promptdriven/pdd/issues/1356"
     assert kwargs["output"] is None
     assert kwargs["stories_dir"] is None
     assert kwargs["prompts_dir"] is None
