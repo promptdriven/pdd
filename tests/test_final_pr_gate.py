@@ -58,8 +58,20 @@ def _clean_final_state(*, reviewer: str = "codex", head: str = "deadbeef") -> di
     }
 
 
-def _run_final_gate(tmp_path: Path, *, orch_return, loop_side_effect=None, loop_return=None):
-    """Drive run_agentic_checkup(final_gate=True) with both layers mocked."""
+def _run_final_gate(
+    tmp_path: Path,
+    *,
+    orch_return,
+    loop_side_effect=None,
+    loop_return=None,
+    issue_url=ISSUE_URL,
+):
+    """Drive run_agentic_checkup(final_gate=True) with both layers mocked.
+
+    ``issue_url`` defaults to a real issue; pass ``None`` to exercise the
+    no-issue final gate (issue #1441), where ``issue_number`` aliases to the
+    PR number.
+    """
     with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
         "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
     ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
@@ -78,7 +90,7 @@ def _run_final_gate(tmp_path: Path, *, orch_return, loop_side_effect=None, loop_
         return_value=loop_return,
     ) as loop_mock:
         result = run_agentic_checkup(
-            issue_url=ISSUE_URL,
+            issue_url=issue_url,
             quiet=True,
             no_fix=False,
             use_github_state=False,
@@ -114,6 +126,26 @@ class TestShipVerdictPredicate:
         state = _clean_final_state()
         state["issue_aligned"] = "false"
         assert _review_loop_ship_verdict(state, has_issue=True) is False
+
+    def test_no_issue_ignores_alignment(self) -> None:
+        """Issue #1441: with no source issue (``has_issue=False``) the alignment
+        field is not evaluated — a clean state ships even with the field absent
+        or explicitly not "true"."""
+        state = _clean_final_state()
+        state.pop("issue_aligned", None)
+        assert _review_loop_ship_verdict(state, has_issue=False) is True
+        state["issue_aligned"] = "false"
+        assert _review_loop_ship_verdict(state, has_issue=False) is True
+        state["issue_aligned"] = "n/a"
+        assert _review_loop_ship_verdict(state, has_issue=False) is True
+
+    def test_no_issue_still_requires_clean_findings(self) -> None:
+        """No-issue mode drops only the alignment gate — the open-findings and
+        reviewer-clean gates still apply."""
+        state = _clean_final_state()
+        state.pop("issue_aligned", None)
+        state["findings"] = [{"status": "open"}]
+        assert _review_loop_ship_verdict(state, has_issue=False) is False
 
     def test_open_finding_fails(self) -> None:
         state = _clean_final_state()
@@ -406,7 +438,45 @@ class TestFinalGateLibrary:
         assert "could not clear" in msg.lower()
         loop_mock.assert_not_called()
 
-    def test_final_gate_requires_issue(self, tmp_path: Path) -> None:
+    def test_final_gate_without_issue_runs_both_layers(self, tmp_path: Path) -> None:
+        """Issue #1441: --final-gate no longer requires --issue. With no issue,
+        the gate still runs Layer 1 (PR checkup) and Layer 2 (review-loop) and
+        derives a real ship verdict on the PR's own merits — the issue-alignment
+        gate is skipped (``has_issue=False``). When no issue is supplied the
+        review-loop artifacts key on the PR number (``issue_number`` aliases to
+        ``pr_number``)."""
+
+        def loop(*_a, **_kw):
+            state = _clean_final_state()
+            # No source issue: alignment is not evaluated, so the verdict must
+            # not depend on issue_aligned being present/true.
+            state.pop("issue_aligned", None)
+            _write_final_state(tmp_path, issue_number=1, pr_number=1, payload=state)
+            return (True, "report produced", 1.0, "codex")
+
+        (result, orch_mock, loop_mock) = _run_final_gate(
+            tmp_path,
+            orch_return=(True, "checkup ok", 1.0, "model"),
+            loop_side_effect=loop,
+            issue_url=None,
+        )
+        success, _msg, _cost, _model = result
+        orch_mock.assert_called_once()
+        loop_mock.assert_called_once()
+        assert success is True
+        # The crux of #1441: the layer must be wired with merit-review context so
+        # the reviewer prompt drops issue framing. Assert the actual ReviewLoopContext
+        # threaded into Layer 2 — not just that the layer ran — so a future drop of
+        # the has_issue/effective_issue_url wiring can't silently regress to the
+        # open-findings trap while these tests stay green.
+        ctx = loop_mock.call_args.kwargs["context"]
+        assert ctx.has_issue is False
+        assert ctx.issue_url == ""  # effective_issue_url (""), never the raw None
+
+    def test_final_gate_still_requires_pr(self, tmp_path: Path) -> None:
+        """The PR is still mandatory: --final-gate is PR-scoped, so a run with
+        neither --pr nor --issue must fail closed without touching either
+        layer."""
         with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
             "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
         ), patch(
@@ -425,11 +495,12 @@ class TestFinalGateLibrary:
                 quiet=True,
                 no_fix=False,
                 use_github_state=False,
-                pr_url=PR_URL,
+                pr_url=None,
                 final_gate=True,
             )
         assert success is False
         assert "--final-gate" in msg or "final gate" in msg.lower()
+        assert "--pr" in msg
         orch_mock.assert_not_called()
         loop_mock.assert_not_called()
 
@@ -470,20 +541,42 @@ class TestFinalGateCli:
             ["--issue", ISSUE_URL, "--final-gate"],
             obj={"quiet": True, "verbose": False},
         )
-        # Rejected for lacking --pr (the pre-existing "--issue requires --pr"
-        # guard fires first; either way the gate cannot run without a PR).
+        # Rejected for lacking --pr. The final-gate-specific guard fires before
+        # the generic "--issue requires --pr" guard (#1441), so a user who typed
+        # --final-gate sees the gate's own requirement.
         assert result.exit_code == 2
-        assert "--pr" in result.output
+        assert "--final-gate requires --pr" in result.output
 
-    def test_requires_issue(self) -> None:
+    def test_requires_pr_without_issue(self) -> None:
+        """Even with no --issue, a bare --final-gate (no --pr) is rejected with
+        the final-gate message rather than falling through to a no-target
+        error."""
         runner = CliRunner()
         result = runner.invoke(
             checkup,
-            ["--pr", PR_URL, "--final-gate"],
+            ["--final-gate"],
             obj={"quiet": True, "verbose": False},
         )
         assert result.exit_code == 2
-        assert "--final-gate" in result.output
+        assert "--final-gate requires --pr" in result.output
+
+    def test_accepts_no_issue(self) -> None:
+        """Issue #1441: --final-gate is accepted with --pr and no --issue; the
+        no-issue run forwards ``issue_url=None`` so the gate reviews the PR on
+        its own merits."""
+        runner = CliRunner()
+        with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+            run_checkup.return_value = (True, "clean", 0.25, "codex")
+            result = runner.invoke(
+                checkup,
+                ["--pr", PR_URL, "--final-gate"],
+                obj={"quiet": True, "verbose": False},
+            )
+        assert result.exit_code == 0, result.output
+        kwargs = run_checkup.call_args.kwargs
+        assert kwargs["final_gate"] is True
+        assert kwargs["pr_url"] == PR_URL
+        assert kwargs["issue_url"] is None
 
     def test_rejects_combination_with_review_loop(self) -> None:
         runner = CliRunner()
