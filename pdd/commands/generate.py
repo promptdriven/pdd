@@ -535,6 +535,15 @@ def example(
 @click.option("--target-coverage", type=float, default=90.0, help="Desired code coverage percentage.")
 @click.option("--merge", is_flag=True, help="Merge new tests with existing test file.")
 @click.option(
+    "--issue",
+    default=None,
+    help=(
+        "Issue source for story generation: a GitHub issue/PR URL, an issue "
+        "number, or a path to a local issue markdown file. The story is "
+        "authored from the issue, independent of the prompt."
+    ),
+)
+@click.option(
     "--evidence",
     is_flag=True,
     default=False,
@@ -556,6 +565,7 @@ def test(
     existing_tests: Tuple[str, ...],
     target_coverage: float,
     merge: bool,
+    issue: Optional[str],
     evidence: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
@@ -564,7 +574,7 @@ def test(
     Supports four modes:
     1. Agentic UI Test Generation: pdd test <GITHUB_ISSUE_URL>
     2. Manual Unit Test Generation: pdd test --manual PROMPT_FILE CODE_OR_EXAMPLE_FILE
-    3. Story Generation: pdd test prompts/upload_python.prompt prompts/notify_python.prompt
+    3. Story Generation: pdd test --issue <url|number|issue.md> prompts/upload_python.prompt
     4. Story Metadata Linking: pdd test user_stories/story__my_story.md
     """
     from ..cmd_test_main import cmd_test_main
@@ -624,6 +634,7 @@ def test(
             story_prompt_args = [str(Path(arg)) for arg in args]
             success, message, cost, model, generated_story_file, linked_prompts = generate_user_story(
                 prompt_files=story_prompt_args,
+                issue=issue,
                 output=output,
                 stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
                 prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
@@ -639,6 +650,8 @@ def test(
                     console.print(f"[bold red]Story generation failed:[/bold red] {message}")
                 if linked_prompts:
                     console.print(f"Linked prompts: {', '.join(linked_prompts)}")
+            if not success:
+                raise click.ClickException(message)
             result_dict = {
                 "success": success,
                 "message": message,
@@ -748,7 +761,7 @@ def test(
                 )
             return test_result.content, test_result.cost, test_result.model
 
-    except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+    except (click.Abort, click.exceptions.Exit, click.ClickException, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False

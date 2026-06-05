@@ -2,16 +2,17 @@
 # pylint: disable=too-many-lines
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+import subprocess
 import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from rich import print as rprint
 
-from .contract_ir import Rule, parse_prompt_contracts
 from .detect_change import detect_change
 from .get_extension import get_extension
 
@@ -38,11 +39,6 @@ STORY_PROMPTS_METADATA_RE = re.compile(
 STORY_PROMPT_REFERENCE_RE = re.compile(
     r"(?P<ref>[A-Za-z0-9_./-]+\.prompt)\b",
     flags=re.IGNORECASE,
-)
-_FORBIDDEN_MODAL_RE = re.compile(r"\b(?:MUST|SHALL|MAY)\s+NOT\b", re.IGNORECASE)
-_FORBIDDEN_CLAUSE_RE = re.compile(
-    r"\b(?:must|shall|may)\s+not\s+([^.\n]+)",
-    re.IGNORECASE,
 )
 logger = logging.getLogger(__name__)
 
@@ -162,14 +158,6 @@ def _prompt_reference_for_metadata(prompt_path: Path, prompts_dir: Optional[Path
         except ValueError:
             pass
     return prompt_path.name
-
-
-def _cross_module_covers_ref(prompt_ref: str) -> str:
-    """Normalize a prompt ref for cross-module ``## Covers`` lines (``prompts/...#R1``)."""
-    normalized = prompt_ref.replace("\\", "/")
-    if normalized.startswith("prompts/"):
-        return normalized
-    return f"prompts/{normalized}"
 
 
 def _upsert_story_prompt_metadata(
@@ -335,7 +323,7 @@ def _select_story_prompt_links(
     return _dedupe_prompt_paths(prompt_files), "all_prompts"
 
 
-def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
+def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements,too-many-branches
     *,
     story_file: str,
     prompts_dir: Optional[str] = None,
@@ -386,14 +374,22 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
                 sorted(set(resolved_refs)),
             )
 
-    changes_list, cost, model = detect_change(
-        [str(p) for p in prompt_files],
-        story_content,
-        strength,
-        temperature,
-        time,
-        verbose=verbose,
-    )
+    detection_error = ""
+    try:
+        changes_list, cost, model = detect_change(
+            [str(p) for p in prompt_files],
+            story_content,
+            strength,
+            temperature,
+            time,
+            verbose=verbose,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.warning("Story prompt detection failed; using deterministic links: %s", exc)
+        changes_list = None
+        cost = 0.0
+        model = ""
+        detection_error = str(exc)
 
     linked_prompt_paths, link_source = _select_story_prompt_links(
         story_content=story_content,
@@ -415,6 +411,14 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
         }
     )
     if updated:
+        if detection_error:
+            return (
+                True,
+                "Story prompt metadata linked by deterministic fallback after detection failed.",
+                cost,
+                model,
+                linked_refs,
+            )
         if link_source == "detect_change":
             return True, "Story prompt metadata linked.", cost, model, linked_refs
         if link_source == "story_content":
@@ -426,6 +430,15 @@ def cache_story_prompt_links(  # pylint: disable=too-many-arguments,too-many-loc
                 linked_refs,
             )
         return True, "Story prompt metadata linked to full prompt set.", cost, model, linked_refs
+    if detection_error:
+        return (
+            True,
+            "Story prompt metadata already up to date by deterministic "
+            "fallback after detection failed.",
+            cost,
+            model,
+            linked_refs,
+        )
     if link_source == "detect_change":
         return True, "Story prompt metadata already up to date.", cost, model, linked_refs
     if link_source == "story_content":
@@ -494,187 +507,246 @@ def _story_slug_from_prompts(prompt_paths: List[Path]) -> str:
     return merged or "generated_story"
 
 
-def _prompt_summary_line(prompt_path: Path) -> str:
-    """Extract a compact summary line from prompt content."""
+# --- Issue-source resolution (issue #1356) -------------------------------
+# User stories are authored from the GitHub ISSUE that motivates the work, not
+# from the prompt. The issue is the behavioral source of truth; deriving the
+# story from it (and never from prompt content) keeps the story an independent
+# TDD oracle that can actually catch prompt regressions. An issue source may be
+# a GitHub issue/PR URL, a bare or ``#``-prefixed issue number (resolved against
+# the ``origin`` remote), or a path to a local markdown file.
+_GITHUB_ISSUE_URL_RE = re.compile(
+    r"^https?://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/(?:issues|pull)/(?P<number>\d+)",
+    re.IGNORECASE,
+)
+_ISSUE_NUMBER_RE = re.compile(r"^#?(?P<number>\d+)$")
+_REMOTE_SLUG_RE = re.compile(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.]+)")
+
+
+def _issue_title_from_markdown(text: str) -> Optional[str]:
+    """Return the first level-1 markdown heading as a title, if present."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped[2:].strip() or None
+    return None
+
+
+def _infer_repo_slug() -> Optional[str]:
+    """Infer ``owner/repo`` from the ``origin`` git remote, or None."""
     try:
-        content = prompt_path.read_text(encoding="utf-8")
-    except OSError:
-        return "Prompt included in story scope."
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        if line.startswith("%"):
-            continue
-        if line.startswith("#") and not line.startswith("##"):
-            continue
-        if len(line) > 140:
-            return f"{line[:137].rstrip()}..."
-        return line
-    return "Prompt included in story scope."
-
-
-def _summary_text_from_rule_line(text: str) -> str:
-    """Extract display summary from a rule header or first block line."""
-    id_prefix = re.match(r"^R-?\d+\s*[-:]\s*(.+)$", text, re.IGNORECASE)
-    if id_prefix:
-        return id_prefix.group(1).strip()
-    return re.sub(r"^[^a-zA-Z0-9]+", "", text).strip()
-
-
-def _rule_covers_summary(rule: Rule) -> str:
-    """Return a short human-readable summary for a parsed contract rule."""
-    summary = _summary_text_from_rule_line(rule.line.strip())
-    if not summary and rule.block:
-        first_line = rule.block.splitlines()[0].strip()
-        summary = _summary_text_from_rule_line(first_line)
-    if len(summary) > 120:
-        return summary[:117].rstrip() + "..."
-    return summary or rule.raw_id.upper()
-
-
-def _seed_covers_from_prompts(
-    prompt_paths: List[Path],
-    prompts_root: Optional[Path],
-) -> List[Tuple[str, str, str, str]]:
-    """Seed Covers bullets from ``<contract_rules>`` via ``contract_ir.parse_prompt_contracts``."""
-    seeded: List[Tuple[str, str, str, str]] = []
-    for path in prompt_paths:
-        if not path.exists() or not path.is_file():
-            continue
-        parsed = parse_prompt_contracts(path.resolve())
-        if not parsed.rules:
-            continue
-        ref = _prompt_reference_for_metadata(path, prompts_root)
-        for rule in parsed.rules:
-            if rule.raw_id == "(unnumbered)":
-                continue
-            rule_id = rule.raw_id.upper()
-            summary = _rule_covers_summary(rule)
-            seeded.append((ref, rule_id, summary, rule.block))
-    return seeded
-
-
-def _seed_negative_cases_from_rules(
-    rules: List[Tuple[str, str, str, str]],
-) -> List[str]:
-    """Extract forbidden outcomes from rules containing MUST/SHALL/MAY NOT."""
-    negatives: List[str] = []
-    for _, _, _, rule_text in rules:
-        if not _FORBIDDEN_MODAL_RE.search(rule_text):
-            continue
-        match = _FORBIDDEN_CLAUSE_RE.search(rule_text)
-        if not match:
-            continue
-        clause = match.group(1).strip()
-        if not clause:
-            continue
-        cleaned = re.sub(r"^[^a-zA-Z0-9]+", "", clause).strip()
-        if not cleaned:
-            continue
-        bullet = cleaned[0].upper() + cleaned[1:]
-        if not bullet.endswith("."):
-            bullet += "."
-        negatives.append(bullet)
-    deduped: List[str] = []
-    seen: set[str] = set()
-    for neg in negatives:
-        key = neg.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(neg)
-    return deduped
-
-
-def _render_story_markdown_from_prompts(  # pylint: disable=too-many-locals
-    *,
-    title: str,
-    prompt_paths: List[Path],
-    prompts_root: Optional[Path],
-) -> str:
-    """Render canonical story markdown using prompt-file inputs."""
-    metadata_refs = [
-        _prompt_reference_for_metadata(path, prompts_root)
-        for path in prompt_paths
-    ]
-    seeded_rules = _seed_covers_from_prompts(prompt_paths, prompts_root)
-    covers_lines: List[str] = []
-    if seeded_rules:
-        # Cross-module Covers when the story scopes multiple prompt files.
-        use_cross = len(prompt_paths) > 1
-        for ref, rule_id, summary, _ in seeded_rules:
-            if use_cross:
-                cross_ref = _cross_module_covers_ref(ref)
-                covers_lines.append(f"- {cross_ref}#{rule_id}: {summary}")
-            else:
-                covers_lines.append(f"- {rule_id}: {summary}")
-    else:
-        covers_lines.append(
-            "- R1: Add contract rule IDs here after contracts are authored."
+        result = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            capture_output=True,
+            text=True,
+            check=True,
         )
-    covers_block = "\n".join(covers_lines)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = _REMOTE_SLUG_RE.search(result.stdout.strip())
+    if not match:
+        return None
+    return f"{match.group('owner')}/{match.group('repo')}"
 
-    negatives = _seed_negative_cases_from_rules(seeded_rules)
-    if negatives:
-        neg_block = "\n".join(f"- {neg}" for neg in negatives)
+
+def _fetch_issue_via_gh(repo: str, number: str) -> Optional[Tuple[str, str]]:
+    """Fetch ``(title, body)`` for an issue via the ``gh`` CLI, or None."""
+    try:
+        result = subprocess.run(
+            ["gh", "issue", "view", number, "--repo", repo, "--json", "title,body"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        return None
+    title = str(data.get("title") or "").strip()
+    body = str(data.get("body") or "").strip()
+    if not title and not body:
+        return None
+    return title, body
+
+
+def resolve_issue_source(  # pylint: disable=too-many-return-statements
+    issue: str,
+) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve an issue source to ``(title, body, ref)``.
+
+    A local markdown file is preferred when the path exists (deterministic,
+    offline). Otherwise a GitHub issue/PR URL or a bare/``#`` issue number is
+    fetched via the ``gh`` CLI. Returns ``(None, None, None)`` when the source
+    cannot be resolved so the caller can fail generation rather than author a
+    story from nothing.
+    """
+    issue = (issue or "").strip()
+    if not issue:
+        return None, None, None
+
+    candidate = Path(issue)
+    if candidate.exists() and candidate.is_file():
+        try:
+            text = candidate.read_text(encoding="utf-8")
+        except OSError:
+            return None, None, None
+        title = _issue_title_from_markdown(text) or candidate.stem
+        return title, text, candidate.name
+
+    url_match = _GITHUB_ISSUE_URL_RE.match(issue)
+    if url_match:
+        repo = f"{url_match.group('owner')}/{url_match.group('repo')}"
+        number = url_match.group("number")
     else:
-        neg_block = "- List forbidden outcomes this story protects against."
+        number_match = _ISSUE_NUMBER_RE.match(issue)
+        if not number_match:
+            return None, None, None
+        repo = _infer_repo_slug()
+        if not repo:
+            return None, None, None
+        number = number_match.group("number")
 
-    context_lines = [
-        "Describe relevant state, assumptions, fixtures, users, records, "
-        "external services, or dependencies.",
-        "",
-        "This story covers the following prompt files:",
-    ]
-    for path in prompt_paths:
-        ref = _prompt_reference_for_metadata(path, prompts_root)
-        summary = _prompt_summary_line(path)
-        context_lines.append(f"- `{ref}`: {summary}")
-    context_block = "\n".join(context_lines)
+    fetched = _fetch_issue_via_gh(repo, number)
+    if fetched is None:
+        return None, None, None
+    title, body = fetched
+    return title, body, f"{repo}#{number}"
 
-    metadata_line = f"<!-- {STORY_PROMPTS_METADATA_KEY}: {', '.join(metadata_refs)} -->"
-    return (
-        f"{metadata_line}\n\n"
-        f"# User Story: {title}\n\n"
-        "## Covers\n\n"
-        f"{covers_block}\n\n"
-        "## Story\n\n"
-        "As a <persona>,\n"
-        "I want the scoped prompt capabilities to compose correctly,\n"
-        "so that the full workflow works end-to-end.\n\n"
-        "## Context\n\n"
-        f"{context_block}\n\n"
-        "## Acceptance Criteria\n\n"
-        "1. Given behavior required by all listed prompts, when used together, "
-        "then all components function correctly.\n"
-        "2. Given `pdd detect --stories` is run, when analyzed, then it reports "
-        "no required prompt changes.\n\n"
-        "## Oracle\n\n"
-        "These details matter for pass/fail:\n"
-        "- error type\n"
-        "- state transition\n"
-        "- absence/presence of external call\n"
-        "- emitted event\n"
-        "- returned value shape\n\n"
-        "## Non-Oracle\n\n"
-        "These details should not matter:\n"
-        "- private helper names\n"
-        "- internal class structure\n"
-        "- exact wording of non-user-facing messages\n"
-        "- deterministic but irrelevant ordering\n\n"
-        "## Negative Cases\n\n"
-        f"{neg_block}\n\n"
-        "## Non-Goals\n\n"
-        "What this story explicitly does not cover.\n\n"
-        "## Notes\n\n"
-        "Links, edge cases, fixtures, rationale, or implementation hints.\n"
+
+_STORY_META_PROMPT_NAME = "generate_user_story_LLM"
+# An LLM-authored story must contain the full canonical section set (issue
+# #1356) to be accepted. Invalid or unavailable LLM output fails generation
+# instead of writing a deterministic substitute, because deterministic stories
+# can miss prompt behavior and pass mutation tests that should fail.
+_REQUIRED_STORY_SECTIONS = (
+    "## Covers",
+    "## Story",
+    "## Context",
+    "## Acceptance Criteria",
+    "## Oracle",
+    "## Non-Oracle",
+    "## Negative Cases",
+    "## Non-Goals",
+    "## Notes",
+)
+_PLACEHOLDER_TOKEN_RE = re.compile(
+    r"<\s*(?:persona|capability|benefit|detail|state|action|behavior|"
+    r"forbidden outcome[^>\n]*|what this story[^>\n]*)\s*>",
+    re.IGNORECASE,
+)
+_PDD_METADATA_TAG_RE = re.compile(r"</?\s*pdd-(?:reason|interface|dependency)\b", re.IGNORECASE)
+_CODE_FENCE_RE = re.compile(
+    r"^\s*```[A-Za-z0-9_-]*\s*\n(?P<body>.*?)\n```\s*$",
+    re.DOTALL,
+)
+
+
+def _strip_markdown_code_fence(text: str) -> str:
+    """Drop a single wrapping ```...``` fence if the model wrapped the file."""
+    match = _CODE_FENCE_RE.match(text.strip())
+    if match:
+        return match.group("body").strip()
+    return text.strip()
+
+
+def _contains_placeholder_tokens(markdown: str) -> bool:
+    """Return True when model output still contains template placeholders."""
+    return bool(
+        _PLACEHOLDER_TOKEN_RE.search(markdown)
+        or _PDD_METADATA_TAG_RE.search(markdown)
     )
 
 
-def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements
+def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements,broad-exception-caught,import-outside-toplevel
+    *,
+    title: str,
+    issue_text: str,
+    issue_ref: str,
+    strength: float,
+    temperature: float,
+    time: float,
+    verbose: bool,
+) -> Tuple[Optional[str], float, str]:
+    """Author a complete ``story__*.md`` body with the LLM (issue #1356).
+
+    The model reads the GitHub ISSUE text -- never the prompt or generated code
+    -- and writes the user story directly (persona / capability / benefit,
+    Context, Acceptance Criteria, Negative Cases, etc.). Keeping prompt content
+    out of this call is the whole point: the story stays an independent oracle,
+    so it can fail when a prompt drifts away from the issue's intended behavior.
+    The ``pdd-story-prompts`` metadata is stitched deterministically by the
+    caller afterward, so story<->prompt linking and ``pdd detect --stories`` are
+    unaffected by what the model emits.
+
+    Returns ``(markdown, cost, model)``. Returns ``(None, cost, model)`` when the
+    LLM is unavailable, errors, or returns markdown missing a required section.
+    The caller treats that as a generation failure; it must not write a
+    deterministic substitute story.
+    """
+    try:  # lazy imports to avoid a top-of-module import cycle through llm_invoke
+        from .llm_invoke import llm_invoke
+        from .load_prompt_template import load_prompt_template
+        from .preprocess import preprocess
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        logger.debug("User-story LLM generation unavailable: %s", exc)
+        return None, 0.0, ""
+
+    template = load_prompt_template(_STORY_META_PROMPT_NAME)
+    if not template:
+        logger.debug(
+            "Meta-prompt %s not found; user-story generation cannot continue.",
+            _STORY_META_PROMPT_NAME,
+        )
+        return None, 0.0, ""
+
+    issue_block = f'<issue ref="{issue_ref}">\n{issue_text}\n</issue>'
+
+    processed = preprocess(
+        template,
+        recursive=False,
+        double_curly_brackets=True,
+        exclude_keys=["STORY_TITLE", "ISSUE_TEXT"],
+    )
+
+    try:
+        response = llm_invoke(
+            prompt=processed,
+            input_json={"STORY_TITLE": title, "ISSUE_TEXT": issue_block},
+            strength=strength,
+            temperature=temperature,
+            time=time,
+            verbose=verbose,
+        )
+    except Exception as exc:  # any provider/auth/network error -> generation failure
+        logger.debug("User-story LLM generation failed: %s", exc)
+        return None, 0.0, ""
+
+    cost = float(response.get("cost", 0.0) or 0.0)
+    model = response.get("model_name", "") or ""
+    raw = response.get("result", "")
+    if not isinstance(raw, str) or not raw.strip():
+        logger.debug("User-story LLM returned empty output.")
+        return None, cost, model
+
+    markdown = _strip_markdown_code_fence(raw)
+    missing = [section for section in _REQUIRED_STORY_SECTIONS if section not in markdown]
+    if missing:
+        logger.debug("LLM story missing required sections %s.", missing)
+        return None, cost, model
+    if _contains_placeholder_tokens(markdown):
+        logger.debug("LLM story contains placeholder tokens.")
+        return None, cost, model
+
+    if not markdown.endswith("\n"):
+        markdown += "\n"
+    return markdown, cost, model
+
+
+def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements,unused-argument
     *,
     prompt_files: List[str],
+    issue: Optional[str] = None,
     output: Optional[str] = None,
     stories_dir: Optional[str] = None,
     prompts_dir: Optional[str] = None,
@@ -685,7 +757,14 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
     include_llm_prompts: bool = False,
 ) -> Tuple[bool, str, float, str, str, List[str]]:
     """
-    Generate a story__*.md file from one or more prompt files.
+    Generate a ``story__*.md`` file from a GitHub ISSUE (issue #1356).
+
+    The story body is authored from the issue -- the behavioral source of truth
+    -- and never from the prompt content. ``prompt_files`` are still required:
+    they are the prompts the story validates and are linked via
+    ``pdd-story-prompts`` metadata so the story is re-generated/re-checked when
+    those prompts (and their issue) change. Keeping prompt content out of story
+    authoring is what makes the story an independent TDD oracle.
 
     Returns:
         success flag, message, cost, model name, generated story path, linked prompt refs.
@@ -707,13 +786,66 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
         seen_keys.add(key)
         resolved_paths.append(prompt_path)
 
+    if not issue:
+        return (
+            False,
+            (
+                "User story generation derives the story from a GitHub issue, not "
+                "from prompt content. Provide an issue source with "
+                "--issue <url|number|path-to-issue.md>."
+            ),
+            0.0,
+            "",
+            "",
+            [],
+        )
+
     prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
-    title = _story_title_from_prompts(resolved_paths)
-    story_markdown = _render_story_markdown_from_prompts(
+
+    # Resolve the issue source (URL / number / local markdown) BEFORE any LLM
+    # call. The issue -- not the prompt -- is the behavioral input.
+    issue_title, issue_text, issue_ref = resolve_issue_source(issue)
+    if issue_text is None:
+        return (
+            False,
+            (
+                f"Could not resolve issue source '{issue}'. Provide a GitHub issue "
+                "URL, an issue number, or a path to a local issue markdown file."
+            ),
+            0.0,
+            "",
+            "",
+            [],
+        )
+
+    title = issue_title or _story_title_from_prompts(resolved_paths)
+    # Issue #1356: author the user story with the LLM from the ISSUE text only.
+    # The prompt is deliberately withheld so the story is an independent oracle.
+    # Do not fall back to deterministic story generation; a shallow deterministic
+    # story can pass `pdd detect --stories` even after meaningful prompt drift,
+    # so invalid/unavailable model output is a hard generation failure.
+    story_markdown, story_cost, story_model = _llm_generate_story_markdown(
         title=title,
-        prompt_paths=resolved_paths,
-        prompts_root=prompts_root,
+        issue_text=issue_text,
+        issue_ref=issue_ref or issue,
+        strength=strength,
+        temperature=temperature,
+        time=time,
+        verbose=verbose,
     )
+    if story_markdown is None:
+        return (
+            False,
+            (
+                "User story generation requires a valid LLM-authored story derived "
+                "from the issue; the model was unavailable or returned invalid story "
+                "markdown."
+            ),
+            story_cost,
+            story_model,
+            "",
+            [],
+        )
 
     if output:
         output_path = Path(output)
@@ -730,91 +862,27 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(story_markdown, encoding="utf-8")
 
-    linked_refs_from_input = [
+    linked_refs = [
         _prompt_reference_for_metadata(path.resolve(), prompts_root)
         for path in resolved_paths
     ]
-    linked_refs = linked_refs_from_input
-    total_cost = 0.0
-    model_name = ""
-
-    # Generation-time auto-detection: run detect_change on the story and
-    # cache detected prompt links into metadata for deterministic reruns.
-    detected_pool = discover_prompt_files(prompts_dir, include_llm=include_llm_prompts)
-    merged_pool: List[Path] = []
-    seen_pool = set()
-    for prompt_path in resolved_paths + detected_pool:
-        key = str(prompt_path.resolve()).lower()
-        if key in seen_pool:
-            continue
-        merged_pool.append(prompt_path)
-        seen_pool.add(key)
-
-    (
-        detect_success,
-        detect_message,
-        detect_cost,
-        detect_model,
-        detected_links,
-    ) = cache_story_prompt_links(
-        story_file=str(output_path),
-        prompts_dir=prompts_dir,
-        prompt_files=merged_pool,
-        strength=strength,
-        temperature=temperature,
-        time=time,
-        verbose=verbose,
-        include_llm_prompts=include_llm_prompts,
-        force_relink=True,
+    latest_story = _read_story(output_path)
+    _upsert_story_prompt_metadata(
+        output_path,
+        latest_story,
+        [path.resolve() for path in resolved_paths],
+        prompts_root,
     )
-    total_cost += detect_cost
-    model_name = detect_model or model_name
-
-    if detect_success and detected_links:
-        message_lower = detect_message.lower()
-        if "full prompt set" not in message_lower and "story content" not in message_lower:
-            linked_refs = detected_links
-            status_message = (
-                f"Generated story file: {output_path}. "
-                "Story prompt metadata auto-detected from story content."
-            )
-        else:
-            # Detection fell back to full-project or story-text refs.
-            # Rewrite metadata to the explicit input prompts so the file
-            # stays scoped to what the user asked for.
-            linked_refs = linked_refs_from_input
-            latest_story = _read_story(output_path)
-            _upsert_story_prompt_metadata(
-                output_path,
-                latest_story,
-                [path.resolve() for path in resolved_paths],
-                prompts_root,
-            )
-            status_message = (
-                f"Generated story file: {output_path}. "
-                "Story prompt metadata linked from prompt inputs."
-            )
-    else:
-        # Detection produced no touched prompts or could not update metadata.
-        # Write metadata scoped to the explicit input prompts.
-        linked_refs = linked_refs_from_input
-        latest_story = _read_story(output_path)
-        _upsert_story_prompt_metadata(
-            output_path,
-            latest_story,
-            [path.resolve() for path in resolved_paths],
-            prompts_root,
-        )
-        status_message = (
-            f"Generated story file: {output_path}. "
-            "Story prompt metadata linked from prompt inputs."
-        )
+    status_message = (
+        f"Generated story file: {output_path}. "
+        "Story prompt metadata linked from prompt inputs."
+    )
 
     return (
         True,
         status_message,
-        total_cost,
-        model_name,
+        story_cost,
+        story_model,
         str(output_path),
         linked_refs,
     )
