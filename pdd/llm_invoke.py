@@ -3964,10 +3964,10 @@ def llm_invoke(
 
             if len(env_vars) == 1:
                 # Simple provider: pass env var value as api_key=
-                key_value, resolved_key_name = resolve_api_key_from_env(
+                key_value = resolve_api_key_from_env(
                     env_vars[0],
                     include_llm_invoke_aliases=True,
-                )
+                )[0]
                 if key_value:
                     key_value = _sanitize_api_key(key_value)
                     litellm_kwargs["api_key"] = key_value

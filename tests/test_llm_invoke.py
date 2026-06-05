@@ -2182,6 +2182,38 @@ def test_single_credential_alias_passed_to_litellm(mock_set_llm_cache):
                 assert call_kwargs.get('api_key') == 'goog-test-key'
 
 
+def test_llm_invoke_cloud_anthropic_alias_passed_to_litellm(mock_set_llm_cache):
+    """PDD_LLM_INVOKE_ANTHROPIC_API_KEY should satisfy and call Anthropic rows."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        mock_data = [{
+            'provider': 'Anthropic',
+            'model': 'claude-3-5-haiku-latest',
+            'input': 0.8, 'output': 4.0,
+            'coding_arena_elo': 1290,
+            'structured_output': True,
+            'base_url': '',
+            'api_key': 'ANTHROPIC_API_KEY',
+            'reasoning_type': 'none',
+            'max_reasoning_tokens': 0,
+            'location': ''
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        env_vars = {
+            'PDD_LLM_INVOKE_ANTHROPIC_API_KEY': 'sk-ant-cloud-alias',
+        }
+        with patch.dict(os.environ, env_vars, clear=False):
+            os.environ.pop('ANTHROPIC_API_KEY', None)
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('api_key') == 'sk-ant-cloud-alias'
+
+
 def test_vertex_location_passed_from_csv(mock_set_llm_cache):
     """Test that location from CSV is passed as vertex_location to litellm."""
     with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
@@ -3706,9 +3738,13 @@ def test_legitimate_api_key_warnings_still_shown(mock_set_llm_cache, caplog):
                             # Verify legitimate API key warnings are still shown
                             warning_messages = [record.message for record in caplog.records if record.levelname == 'WARNING']
 
-                            # Should warn about missing MISSING_KEY
-                            api_key_warning_found = any('MISSING_KEY' in warning for warning in warning_messages)
-                            assert api_key_warning_found, "Should warn about missing API key"
+                            # Should warn about the missing configured value without logging key-like env names.
+                            api_key_warning_found = any(
+                                "Required environment value" in warning
+                                and "gemini/gemini-2.0-flash-exp" in warning
+                                for warning in warning_messages
+                            )
+                            assert api_key_warning_found, "Should warn about missing configured value"
 
                             # But should NOT warn about missing base model
                             for warning in warning_messages:
@@ -5338,7 +5374,9 @@ class TestEnsureApiKey:
         monkeypatch.setenv("PDD_FORCE", "1")
         monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
         monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEX_PROJECT", raising=False)
         monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("VERTEX_LOCATION", raising=False)
         monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
         model_info = {
             "model": "vertex_ai/gemini-3-flash-preview",
@@ -5369,7 +5407,9 @@ class TestEnsureApiKey:
         monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/path/to/sa.json")
         monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
         monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEX_PROJECT", raising=False)
         monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        monkeypatch.delenv("VERTEX_LOCATION", raising=False)
         model_info = {
             "model": "vertex_ai/gemini-3-flash-preview",
             "api_key": "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION",
