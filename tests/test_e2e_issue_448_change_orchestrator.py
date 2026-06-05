@@ -120,10 +120,13 @@ class TestIssue448TemplatePreprocessingE2E:
         with pytest.raises(KeyError) as exc_info:
             processed_buggy.format(**context)
 
-        # Verify it's the specific error from the bug report
+        # Verify it is a missing placeholder from included literal-brace
+        # content, not one of the real orchestrator context fields. The first
+        # offending include can change as docs evolve.
         error_key = str(exc_info.value)
-        assert '"url"' in error_key or '"name"' in error_key or '"type"' in error_key, \
-            f"Expected KeyError for JSON key, got: {error_key}"
+        assert error_key.strip("'\""), "Expected a non-empty KeyError placeholder"
+        assert error_key.strip("'\"") not in context, \
+            f"Expected KeyError from included literal braces, got context key: {error_key}"
 
     def test_preprocessing_with_double_curly_prevents_keyerror(self):
         """
