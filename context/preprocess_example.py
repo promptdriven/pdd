@@ -1,84 +1,82 @@
-"""Example of using the pdd.preprocess module to prepare prompts for LLMs."""
-
 from __future__ import annotations
 
 import os
 import sys
 from pathlib import Path
 from rich.console import Console
+
+# Ensure the package is importable
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from pdd.preprocess import preprocess
 
-# Initialize rich console for beautiful output
 console = Console()
 
 
-def create_dummy_files(output_dir: Path) -> None:
-    """Create sample files in the output directory to simulate includes."""
+def main() -> None:
+    # Create the output directory for our example files
+    output_dir = Path("./output")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Standard code file to include
-    code_content = """def greet(name: str) -> str:
-    \"\"\"Return a friendly greeting.\"\"\"
-    return f"Hello, {name}!"
-"""
-    (output_dir / "utils.py").write_text(code_content, encoding="utf-8")
+    # 1. Create a dummy configuration/code file to include
+    config_file = output_dir / "config_schema.py"
+    config_file.write_text("""# Configuration Schema
+class AppConfig:
+    def __init__(self, port: int = 8080):
+        self.port = port
+        self.debug = True
+""", encoding="utf-8")
 
-    # 2. Configuration file
-    config_content = """{
-    "temperature": 0.2,
-    "max_tokens": 1024
-}"""
-    (output_dir / "config.json").write_text(config_content, encoding="utf-8")
+    # 2. Create a dummy documentation markdown file
+    doc_file = output_dir / "api_docs.md"
+    doc_file.write_text("""# API Reference
+This endpoint returns the system status.
+""", encoding="utf-8")
 
+    console.print("[bold blue]Created dummy files in ./output for inclusion:[/bold blue]")
+    console.print(f" - {config_file}")
+    console.print(f" - {doc_file}\n")
 
-def main() -> None:
-    # Ensure our working environment has dummy include targets
-    output_dir = Path("./output")
-    create_dummy_files(output_dir)
+    # 3. Define a prompt that utilizes different preprocessing features:
+    # - <include> tags for explicit files
+    # - Backtick includes: ```<path>```
+    # - Single braces that need to be doubled for standard LLM templating engines
+    # - Excluded keys that should NOT be doubled
+    prompt_template = """You are an expert assistant.
 
-    console.print(
-        "[bold blue]Starting pdd.preprocess example execution...[/bold blue]"
-    )
+Here is our configuration class:
+<include select="class:AppConfig" mode="full">./output/config_schema.py</include>
 
-    # Define a prompt template utilizing various preprocessing features:
-    # - <include> tag for files
-    # - Backtick includes for quick file embedding: ```<path>```
-    # - <shell> tags for dynamic command execution
-    # - Single curly braces that will be escaped/doubled (to protect them from
-    #   external template formatters like Jinja or LangChain's PromptTemplate)
-    prompt_template = """System: You are an expert system.
+Here is our API reference:
+```<./output/api_docs.md>```
 
-Here is our configuration:
-<include>output/config.json</include>
-
-Here are our helper utilities:
-```<output/utils.py>```
-
-We are running on the following OS platform:
-<shell>python -c "import platform; print(platform.system())"</shell>
-
-JSON format instruction:
-The user output must match this schema: { "status": "success", "data": { "key": "value" } }.
-This single brace variable {user_name} should be doubled except if excluded.
+Some variables that will be formatted later by a template engine:
+- Current user: {user_name}
+- API Key: {api_key}  <!-- This should remain single-braced because we exclude it -->
+- Some JSON syntax: {"key": "value"}
 """
 
-    console.print("\n[bold]Original Prompt Template:[/bold]")
-    console.print(prompt_template, style="dim")
+    console.print("[bold yellow]Original Prompt Template:[/bold yellow]")
+    console.print(prompt_template)
+    console.print("-" * 40)
 
-    # Call preprocess with:
-    # - double_curly_brackets=True: single braces like { "status": "success" }
-    #   become double braces {{ "status": "success" }} so Python's .format()
-    #   doesn't break on them.
-    # - exclude_keys=["user_name"]: exact match '{user_name}' will NOT be doubled.
+    # 4. Run the preprocessor
+    # Parameters Explained:
+    # - prompt: The input string containing tags and braces.
+    # - recursive: If True, recursively pre-processes nested includes (defers shell/web/include-many).
+    # - double_curly_brackets: Automatically escapes single '{' and '}' to '{{' and '}}' to avoid breaking template formatters.
+    # - exclude_keys: A list of keys inside single braces that should NOT be doubled.
+    # - compress: Activates context compression modes on applicable inclusions.
+    # - examples_dir / tests_dir: Directories used for applying auto-compression policies.
     preprocessed_prompt = preprocess(
         prompt=prompt_template,
         recursive=False,
         double_curly_brackets=True,
-        exclude_keys=["user_name"],
+        exclude_keys=["api_key"],  # Preserve {api_key} exactly as-is
         compress=False,
     )
 
-    console.print("\n[bold green]Successfully Preprocessed Prompt:[/bold green]")
+    console.print("[bold green]Preprocessed Prompt Output:[/bold green]")
     console.print(preprocessed_prompt)
 
 
