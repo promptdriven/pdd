@@ -159,6 +159,8 @@ def test_ensure_api_key_chatgpt_skipped_in_force_without_auth(monkeypatch):
 
 def test_ensure_api_key_chatgpt_allowed_interactively_without_auth(monkeypatch):
     monkeypatch.delenv("PDD_FORCE", raising=False)
+    for env_name in li._CLOUD_RUNTIME_ENV_KEYS:
+        monkeypatch.delenv(env_name, raising=False)
     with patch("pdd.codex_subscription.bridge_codex_auth_for_litellm", return_value=False):
         # Interactive: allow litellm to attempt its own device-flow login.
         assert li._ensure_api_key(_chatgpt_row(), {}, False) is True
