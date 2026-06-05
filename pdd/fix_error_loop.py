@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time as time_module
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 import requests
 from rich import print as rprint
@@ -33,6 +33,7 @@ from .get_language import get_language
 from .get_test_command import TestCommand, get_test_command_for_file
 from .pytest_output import _test_context_compression_active, run_pytest_and_capture_output
 from .python_env_detector import detect_host_python_executable
+from .compressed_sync_context import render_for_prompt
 
 console = Console()
 
@@ -356,6 +357,8 @@ def fix_error_loop(
     compress_test_context: bool = False,
     context_compression: str | None = None,
     compression_fallback: str | None = None,
+    compressed_context: Mapping[str, Any] | None = None,
+    agentic_fallback_events: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, str, str, int, float, str]:
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
@@ -373,14 +376,28 @@ def fix_error_loop(
     total_cost = 0.0
     total_attempts = 0
     model_name = ""
+    rendered_compressed_context = render_for_prompt(compressed_context)
+    prompt_for_llm = prompt + ("\n\n" + rendered_compressed_context if rendered_compressed_context else "")
     unit_test_content = ""
     code_content = ""
     last_attempt = 0
+
+    def _record_agentic_fallback(used: bool, detail: str) -> None:
+        if agentic_fallback_events is not None:
+            agentic_fallback_events.append(
+                {
+                    "phase": "fix",
+                    "attempted": True,
+                    "used": used,
+                    "detail": detail,
+                }
+            )
 
     def call_agentic() -> tuple[bool, str, str, int, float, str]:
         nonlocal total_cost, model_name, unit_test_content, code_content, total_attempts
         if not agentic_fallback:
             return False, unit_test_content, code_content, total_attempts, total_cost, model_name
+        _record_agentic_fallback(False, "invoking agentic fix fallback")
         success, _message, cost, agent_model, _changed = _safe_run_agentic_fix(
             prompt_file,
             code_file,
@@ -401,6 +418,10 @@ def fix_error_loop(
                 unit_test_content = content
             else:
                 code_content = content
+        _record_agentic_fallback(
+            success,
+            "agentic fix fallback succeeded" if success else "agentic fix fallback failed",
+        )
         return success, unit_test_content, code_content, total_attempts, total_cost, model_name
 
     if not os.path.isfile(unit_test_file) or not os.path.isfile(code_file):
@@ -515,7 +536,7 @@ def fix_error_loop(
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
                     target_test,
                     target_code,
-                    prompt,
+                    prompt_for_llm,
                     output_log,
                     error_log_file,
                     strength,
@@ -529,7 +550,7 @@ def fix_error_loop(
                 attempt_used_cloud = True
             else:
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
-                    target_test, target_code, prompt, output_log, error_log_file,
+                    target_test, target_code, prompt_for_llm, output_log, error_log_file,
                     strength=strength,
                     temperature=temperature,
                     time=time,
@@ -549,7 +570,7 @@ def fix_error_loop(
                     update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                         unit_test=target_test,
                         code=target_code,
-                        prompt=prompt,
+                        prompt=prompt_for_llm,
                         error=output_log,
                         error_file=error_log_file,
                         strength=strength,

@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "sync_orchestration", "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False) -> Dict[str, Any]", "returns": "Dict[str, Any]"}
+      {"name": "sync_orchestration", "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]", "returns": "Dict[str, Any]"}
     ]
   }
 }
@@ -13,6 +13,7 @@
 
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
 
 # sync_orchestration_python.prompt
 
@@ -74,6 +75,7 @@ def sync_orchestration(
     compress: bool = False,
     evidence: bool = False,
     snapshot_context: bool = False,
+    compressed_context: bool = False,
 ) -> Dict[str, Any]:
 ```
 
@@ -98,6 +100,18 @@ Returns a dictionary containing:
 - `model_name`: Name of the last model used
 - `log_entries`: List of log entries (only when `dry_run=True`)
 - `snapshot_manifest_path` / `context_snapshot`: Optional replayable context snapshot metadata when generation ran with `snapshot_context=True`
+- `compression`: Optional per-phase compressed-context metadata when `compressed_context=True`
+- `agentic_fallback`: Optional metadata summarizing whether agentic fallback was attempted or used by repair phases
+
+### Compressed Sync Context
+- When `compressed_context=True`, build a phase-aware compressed context package once per module/phase for `generate`, `verify`, `test`, and `fix` from the prompt, existing tests, examples when present, contract rules, coverage/user-story evidence, latest run or error reports, and active repair directives.
+- Pass the compressed package only to LLM-backed generate, verify, test, and fix/repair calls. Do not pass it to unrelated phases that do not consume prompt context.
+- Record per-phase metadata in the sync result and operation log: requested, used, unavailable reason, source counts, source hashes, compressed hash, token/character estimates, and fallback state. Never store raw compressed content in logs.
+- If compression fails, an optional source is missing, or the package is empty, continue with current full-context behavior and record `used=false` with a reason.
+- For isolated code repair or generation replay, do not force an `example` operation just to build context. Use existing example content only when it is present and relevant.
+- Implement a small helper such as `_build_phase_context(phase, repair_directive=None)` that returns `(package_or_none, metadata)`. It calls `build_compressed_sync_context(...)` only when the boolean request flag is true, catches construction errors, appends metadata to the result/log surfaces, and returns `None` on soft failure. Call this helper immediately before each phase attempt so retries see the current repair directive; do not reuse a stale generate package for fix or verify.
+- A `compressed_context` argument passed to phase executors is a mapping/package, not a boolean. The boolean `compressed_context` parameter on `sync_orchestration()` is only the request flag.
+- Isolated replay/repair means the sync invocation is deliberately replaying or repairing generated code rather than completing the whole dev-unit workflow. Treat the following as isolated: `force=True` generation replay, an active `PDD_REPAIR_DIRECTIVE`, a latest run report/error log that will route directly to `verify` or `fix`, or an explicit steering choice into `generate`, `verify`, or `fix` without an example operation. In isolated mode, missing/stale examples may be consumed if present but must not be scheduled before `generate`, `verify`, or `fix`.
 
 ## Dependencies
 
@@ -147,6 +161,9 @@ Returns a dictionary containing:
     <pytest_output>
         <include select="def:extract_failing_files_from_output,def:_find_project_root">pdd/pytest_output.py</include>
     </pytest_output>
+    <pdd.compressed_sync_context>
+        <include optional mode="interface">pdd/compressed_sync_context.py</include>
+    </pdd.compressed_sync_context>
 </examples>
 
 ### Module-Level Imports
@@ -187,6 +204,7 @@ from .fix_main import fix_main
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
+from .compressed_sync_context import build_compressed_sync_context, render_for_prompt
 from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
 ```
@@ -226,6 +244,8 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 9. **update**: Back-propagate learnings to prompt
 
 Terminal states: `all_synced`, `nothing`, `fail_and_request_manual_merge`, `error`
+
+For every call to `sync_determine_operation`, compute `isolated_replay_or_repair` from the current invocation state before analysis and pass it as a keyword argument. At minimum this is true for force-based generation replay and active repair directives; after steering, recompute it and re-run or override the decision if the steered operation is `generate`, `verify`, or `fix`. Ordinary full sync keeps the default value false so the normal `code -> example -> test` missing-file priority remains unchanged.
 
 ## Core Behaviors
 
@@ -282,7 +302,7 @@ When `skip_verify` or `skip_tests` is set:
 ### Operation Dispatch
 
 - For the **auto-deps** operation, invoke `auto_deps_main()` with the resolved prompt path, directory path, CSV path, and `_skip_finalization=True`. Pass `compress=compress`.
-- For the **generate** operation, invoke `code_generator_main()` with the resolved `pdd_files['prompt']` and `pdd_files['code']` (both `.resolve()`'d to absolute paths). Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc generate_output_path`), not an explicit user `--output`, so front-matter `output:` should still take precedence over the .pddrc default. Forward `compress` and `snapshot_context` during normal generation and during conformance retry attempts. The one-session sync path in `sync_main` follows the same convention.
+- For the **generate** operation, invoke `code_generator_main()` with the resolved `pdd_files['prompt']` and `pdd_files['code']` (both `.resolve()`'d to absolute paths). Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc generate_output_path`), not an explicit user `--output`, so front-matter `output:` should still take precedence over the .pddrc default. Forward `compress` and `snapshot_context` during normal generation and during conformance retry attempts. When compressed context is requested, build a fresh `phase="generate"` package for each initial attempt and retry, then pass it as `compressed_context=<package_or_none>` to `code_generator_main`; never pass the boolean request flag. The one-session sync path in `sync_main` follows the same convention.
 - **Architecture-conformance / public-surface / test-churn retry (#866, #1012)**: Wrap the **generate** invocation of `code_generator_main()` in a repair loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). The loop catches three typed exceptions from `code_generator_main` — `ArchitectureConformanceError`, `PublicSurfaceRegressionError`, and `TestChurnError` — and routes each through the same `PDD_REPAIR_DIRECTIVE` plumbing:
     - On `ArchitectureConformanceError`: accumulate `exc.total_cost`/`exc.model_name`, set `PDD_REPAIR_DIRECTIVE` to `exc.repair_directive`, and retry only while budget remains; abort early (without further attempts) when the next failure carries the **identical** sorted missing-symbol set as the previous one (no progress is being made). On exhaustion call `build_conformance_hard_failure_from_error(last_exc, basename)` and `print()` the structured block to **stderr** (it contains `prompt:`, `output:`, `expected:`, `found:`, `missing:`, `Reproduce locally: pdd sync <basename>`, and the `--- env ---` fingerprint) before re-raising `last_exc`.
     - On `PublicSurfaceRegressionError` (#1012): accumulate cost/model, set `PDD_REPAIR_DIRECTIVE` to `exc.repair_directive`, retry while budget remains, and abort early when the next failure carries the **identical** sorted `removed_symbols` set as the previous one. On exhaustion call `build_public_surface_hard_failure_from_error(last_exc, basename)` from `pdd.agentic_sync_runner` and `print()` the structured `=== public surface regression ===` block to stderr before re-raising. The block names the removed symbols and the `BREAKING-CHANGE:` opt-in path so the operator can either restore the symbols or annotate the prompt.

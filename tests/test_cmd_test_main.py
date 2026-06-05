@@ -174,6 +174,62 @@ def test_cmd_test_main_forwards_contract_rules_and_merge_preserves_tests(
     assert "test_R2_rejects_over_refund" in merged_content
 
 
+def test_cmd_test_main_skips_full_existing_tests_when_compressed_context_active(
+    mock_ctx_fixture,
+    tmp_path,
+):
+    """Compressed sync context must not concatenate full test bodies into the prompt."""
+    prompt_path = tmp_path / "module.prompt"
+    code_path = tmp_path / "module.py"
+    existing_test_path = tmp_path / "test_module.py"
+    prompt_path.write_text("<contract_rules>R1</contract_rules>\n", encoding="utf-8")
+    code_path.write_text("def run():\n    return 1\n", encoding="utf-8")
+    existing_test_path.write_text(
+        "def test_huge_existing_body_should_not_be_inlined():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+    compressed = {
+        "enabled": True,
+        "used": True,
+        "phase": "test",
+        "content": "<source>bounded</source>",
+        "budget": 12000,
+    }
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test:
+        mock_construct_paths.return_value = (
+            {},
+            {
+                "prompt_file": prompt_path.read_text(encoding="utf-8"),
+                "code_file": code_path.read_text(encoding="utf-8"),
+            },
+            {"output": str(tmp_path / "out_tests.py")},
+            "python",
+        )
+        mock_generate_test.return_value = ("def test_new():\n    assert True\n", 0.01, "m")
+
+        cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=str(prompt_path),
+            code_file=str(code_path),
+            output=str(tmp_path / "out_tests.py"),
+            language=None,
+            coverage_report=None,
+            existing_tests=[str(existing_test_path)],
+            target_coverage=None,
+            merge=False,
+            compressed_context=compressed,
+        )
+
+    sent_existing_tests = mock_generate_test.call_args.kwargs["existing_tests"]
+    assert sent_existing_tests is None
+    sent_prompt = mock_generate_test.call_args.kwargs["prompt"]
+    assert "test_huge_existing_body_should_not_be_inlined" not in sent_prompt
+    assert "<compressed_sync_context" in sent_prompt
+
+
 # pylint: disable=redefined-outer-name
 @pytest.mark.parametrize("coverage_report, existing_tests, expect_error", [
     (None, None, False),

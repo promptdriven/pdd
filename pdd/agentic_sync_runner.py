@@ -1986,6 +1986,12 @@ class AsyncSyncRunner:
         if self.sync_options.get("skip_tests"):
             cmd.append("--skip-tests")
 
+        compressed_context = self.sync_options.get("compressed_context")
+        if compressed_context is True:
+            cmd.append("--compressed-context")
+        elif compressed_context is False:
+            cmd.append("--no-compressed-context")
+
         max_attempts = self.sync_options.get("max_attempts")
         if max_attempts:
             cmd.extend(["--max-attempts", str(max_attempts)])

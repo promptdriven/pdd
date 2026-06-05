@@ -71,6 +71,7 @@ from .crash_main import crash_main
 from .fix_verification_main import fix_verification_main
 from .cmd_test_main import cmd_test_main
 from .fix_main import fix_main
+from .compressed_sync_context import build_compressed_sync_context, metadata as compressed_context_metadata
 from .update_main import update_main
 from .python_env_detector import detect_host_python_executable
 from .get_run_command import get_run_command_for_file
@@ -2002,6 +2003,7 @@ def sync_orchestration(
     compress: bool = False,
     evidence: bool = False,
     snapshot_context: bool = False,
+    compressed_context: bool = False,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
@@ -2086,6 +2088,8 @@ def sync_orchestration(
     code_box_color_ref = ["blue"]
     example_box_color_ref = ["blue"]
     tests_box_color_ref = ["blue"]
+    compression_phase_metadata: List[Dict[str, Any]] = []
+    agentic_fallback_events: List[Dict[str, Any]] = []
 
     # Mutable container for the app reference (set after app creation)
     # This allows the worker to access app.request_confirmation()
@@ -2139,6 +2143,51 @@ def sync_orchestration(
 
         return confirm_callback  # Fall back to provided callback
 
+    def _phase_compressed_context(phase: str, repair_directive: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        if not compressed_context:
+            return None
+        try:
+            test_paths = [Path(p) for p in pdd_files.get("test_files", [])] if pdd_files.get("test_files") else [pdd_files.get("test")]
+            package = build_compressed_sync_context(
+                phase=phase,
+                prompt_path=pdd_files["prompt"],
+                code_path=pdd_files.get("code"),
+                example_path=pdd_files.get("example"),
+                test_paths=[p for p in test_paths if p],
+                run_report_path=get_run_report_path(basename, language, paths=pdd_files),
+                repair_directive=repair_directive,
+            )
+            package_dict = asdict(package)
+            compression_phase_metadata.append(compressed_context_metadata(package_dict))
+            return package_dict
+        except Exception as exc:
+            fallback = {
+                "enabled": True,
+                "used": False,
+                "phase": phase,
+                "mode": "compressed-sync-context",
+                "unavailable_reason": str(exc),
+            }
+            compression_phase_metadata.append(fallback)
+            return fallback
+
+    def _compression_log_metadata() -> Dict[str, Any]:
+        return {
+            "enabled": compressed_context,
+            "requested": compressed_context,
+            "used": any(item.get("used") for item in compression_phase_metadata),
+            "mode": "compressed-sync-context",
+            "phases": list(compression_phase_metadata),
+        }
+
+    def _agentic_fallback_log_metadata() -> Dict[str, Any]:
+        from .operation_log import aggregate_agentic_fallback_metadata
+
+        return aggregate_agentic_fallback_metadata(
+            phase_events=agentic_fallback_events,
+            agentic_sync_mode=agentic_mode,
+        )
+
     def sync_worker_logic():
         """
         The main loop of sync logic, run in a worker thread by Textual App.
@@ -2161,6 +2210,8 @@ def sync_orchestration(
                 {"pid": os.getpid()},
                 invocation_mode="sync",
                 paths=pdd_files,
+                compression=_compression_log_metadata(),
+                agentic_fallback=_agentic_fallback_log_metadata(),
             )
         except Exception:
             # Best-effort logging; sync should proceed even if log setup fails.
@@ -2203,6 +2254,7 @@ def sync_orchestration(
                         skip_tests,
                         skip_verify,
                         context_override,
+                        isolated_replay_or_repair=force or bool(os.environ.get("PDD_REPAIR_DIRECTIVE")),
                     )
                     operation = decision.operation
 
@@ -2244,7 +2296,9 @@ def sync_orchestration(
                         invocation_mode="sync",
                         estimated_cost=decision.estimated_cost,
                         confidence=decision.confidence,
-                        decision_type=decision.details.get("decision_type", "heuristic") if decision.details else "heuristic"
+                        decision_type=decision.details.get("decision_type", "heuristic") if decision.details else "heuristic",
+                        compression=_compression_log_metadata(),
+                        agentic_fallback=_agentic_fallback_log_metadata(),
                     )
                     if decision.details:
                         log_entry.setdefault('details', {}).update(decision.details)
@@ -2652,7 +2706,7 @@ def sync_orchestration(
                                     for _conform_attempt in range(MAX_CONFORMANCE_ATTEMPTS):
                                         try:
                                             # Use absolute paths to avoid path_resolution_mode mismatch between sync (cwd) and generate (config_base)
-                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True, compress=compress, snapshot_context=snapshot_context)
+                                            result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True, compress=compress, snapshot_context=snapshot_context, compressed_context=_phase_compressed_context('generate', os.environ.get("PDD_REPAIR_DIRECTIVE")))
                                             last_conform_exc = None
                                             break
                                         except (
@@ -3027,7 +3081,7 @@ def sync_orchestration(
                                     _verify_pre_code = pdd_files['code'].read_text(encoding="utf-8")
                                 except OSError:
                                     _verify_pre_code = ""
-                                result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename.replace('/', '_')}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
+                                result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename.replace('/', '_')}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature, compressed_context=_phase_compressed_context('verify'), agentic_fallback_events=agentic_fallback_events)
                                 _verify_surface_exc = _verify_code_surface_after_write(
                                     code_path=pdd_files['code'],
                                     pre_code=_verify_pre_code,
@@ -3081,7 +3135,7 @@ def sync_orchestration(
                                 # re-raising — keep the generic `except` below clear of any
                                 # duplicate print.
                                 result = _run_test_op_with_churn_retry(
-                                    lambda _repair_directive: cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature, repair_directive=_repair_directive),
+                                    lambda _repair_directive: cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature, repair_directive=_repair_directive, compressed_context=_phase_compressed_context('test', _repair_directive)),
                                     basename=basename,
                                     budget_remaining=budget - current_cost_ref[0],
                                 )
@@ -3121,6 +3175,7 @@ def sync_orchestration(
                                             strength=strength,
                                             temperature=temperature,
                                             repair_directive=_repair_directive,
+                                            compressed_context=_phase_compressed_context('test_extend', _repair_directive),
                                         ),
                                         basename=basename,
                                         budget_remaining=budget - current_cost_ref[0],
@@ -3143,7 +3198,7 @@ def sync_orchestration(
                                     # pre), but wrap in the same helper for symmetry and so the
                                     # `PDD_REPAIR_DIRECTIVE` env var is still cleaned up.
                                     result = _run_test_op_with_churn_retry(
-                                        lambda _repair_directive: cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature, repair_directive=_repair_directive),
+                                        lambda _repair_directive: cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature, repair_directive=_repair_directive, compressed_context=_phase_compressed_context('test', _repair_directive)),
                                         basename=basename,
                                         budget_remaining=budget - current_cost_ref[0],
                                     )
@@ -3309,6 +3364,8 @@ def sync_orchestration(
                                     compress_test_context=bool(_ctx_obj.get("compress_test_context")),
                                     context_compression=_ctx_obj.get("context_compression"),
                                     compression_fallback=_ctx_obj.get("compression_fallback"),
+                                    compressed_context=_phase_compressed_context('fix'),
+                                    agentic_fallback_events=agentic_fallback_events,
                                 )
                                 _fix_surface_exc = _verify_code_surface_after_write(
                                     code_path=pdd_files['code'],
@@ -3438,7 +3495,16 @@ def sync_orchestration(
                             if operation_rollback is not None:
                                 operation_rollback.commit()
 
-                        update_log_entry(log_entry, success=success, cost=actual_cost, model=model_name, duration=duration, error=errors[-1] if errors and not success else None)
+                        update_log_entry(
+                            log_entry,
+                            success=success,
+                            cost=actual_cost,
+                            model=model_name,
+                            duration=duration,
+                            error=errors[-1] if errors and not success else None,
+                            compression=_compression_log_metadata(),
+                            agentic_fallback=_agentic_fallback_log_metadata(),
+                        )
                         if not success:
                             if test_output_excerpt:
                                 log_entry.setdefault("details", {})["test_output_excerpt"] = test_output_excerpt
@@ -3631,6 +3697,14 @@ def sync_orchestration(
                 terminal_reason=terminal_reason,
             ),
             'model_name': last_model_name,
+            'compression': {
+                'enabled': compressed_context,
+                'requested': compressed_context,
+                'used': any(item.get('used') for item in compression_phase_metadata),
+                'mode': 'compressed-sync-context',
+                'phases': compression_phase_metadata,
+            },
+            'agentic_fallback': _agentic_fallback_log_metadata(),
         }
 
     # Detect headless mode (no TTY, CI environment, or quiet mode)

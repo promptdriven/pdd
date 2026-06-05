@@ -333,6 +333,66 @@ def test_fix_main_passes_agentic_fallback_to_fix_error_loop(
     assert call_kwargs['agentic_fallback'] is False
 
 
+@patch('pdd.fix_main.construct_paths')
+@patch('pdd.fix_main.fix_error_loop')
+def test_fix_main_loop_passes_compressed_context_once(
+    mock_fix_error_loop,
+    mock_construct_paths,
+    mock_ctx
+):
+    mock_construct_paths.return_value = (
+        {},
+        {
+            'prompt_file': 'Base prompt content',
+            'code_file': 'Test code file content',
+            'unit_test_file': 'Test unit test file content'
+        },
+        {
+            'output_test': 'output/test_code_fixed.py',
+            'output_code': 'output/code_fixed.py',
+            'output_results': 'results/fix_results.log'
+        },
+        None
+    )
+    mock_fix_error_loop.return_value = (
+        True,
+        "Fixed test",
+        "Fixed code",
+        1,
+        0.5,
+        "gpt-4",
+    )
+    compressed_context = {
+        "enabled": True,
+        "used": True,
+        "phase": "fix",
+        "content": "compressed details",
+    }
+
+    with patch('builtins.open', mock_open()):
+        fix_main(
+            ctx=mock_ctx,
+            prompt_file="prompt_file.prompt",
+            code_file="code_file.py",
+            unit_test_file="test_code_file.py",
+            error_file="errors.log",
+            output_test=None,
+            output_code=None,
+            output_results=None,
+            loop=True,
+            verification_program="verify.py",
+            max_attempts=3,
+            budget=5.0,
+            auto_submit=False,
+            compressed_context=compressed_context,
+        )
+
+    call_kwargs = mock_fix_error_loop.call_args.kwargs
+    assert call_kwargs["prompt"] == "Base prompt content"
+    assert call_kwargs["compressed_context"] == compressed_context
+    assert "<compressed_sync_context" not in call_kwargs["prompt"]
+
+
 def test_fix_main_loop_requires_verification_program(mock_ctx):
     """
     Test that calling fix_main with loop=True but no verification_program
