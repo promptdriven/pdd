@@ -65,12 +65,31 @@ Most mature tools now combine A and B and let the model choose. Cursor explicitl
 |---|---|---|---|---|---|---|
 | **Codex CLI** (OpenAI) [1,2,4] | Agentic, ReAct loop | No (on-demand) | shell/`container.exec` → `grep`/`rg`/`find`/`ls`/`cat`; `apply_patch` for edits; optional web/MCP | Whatever the model reads/greps, cumulatively | Local FS (shells out) | A |
 | **Claude Code** (Anthropic) [5,6,7] | Agentic search | No (explicitly no index/embeddings) | `Grep` (ripgrep), `Glob`, `Read`; subagents | Files/snippets the model opens | Local FS | A |
-| **SWE-agent** (research) [12] | Agentic via ACI | No | ACI `search_file`/`search_dir`/`find`/scrolling viewer; linted edit | Viewed/searched windows | Local FS (sandboxed) | A |
+| **SWE-agent** (research) [12] | Agentic via ACI | No | ACI `search_file`/`search_dir`/`find_file`/`open`+`goto`/`scroll_*`; linted `edit` | Viewed/searched windows | Local FS (sandboxed) | A |
 | **Aider** [8,9] | Symbolic repo map | Yes (tree-sitter + PageRank) | Ranked-tags map in prompt; user adds files to chat | Token-budgeted signature map (+ added files) | Local (parse + rank) | B2 |
 | **Cursor** [10,11] | Embeddings + agentic grep | Yes (server-side vector DB) | `@codebase`/semantic search **and** grep; agent chooses | Top-k retrieved chunks and/or grep hits | **Server-side** embedding + local grep | C (B1+A) |
 | **Agentless** (research) [13] | Hierarchical retrieval | Partly (embedding + prompts) | Embedding + prompt retrieval, LLM re-rank, no autonomous tool loop | Ranked files/functions/edit spans | Mixed | C (B+heuristics) |
 
 (`ripgrep` is the shared text-search backbone for the Family-A tools [7, 15]; the rows above describe default behavior and are configuration- and version-dependent — see §7.)
+
+### Concrete search primitives — the commands agents actually issue
+
+Family A reduces, almost entirely, to a small set of POSIX text/file utilities invoked either directly (a shell tool) or through thin structured wrappers. The same four abstract operations recur — *discover files*, *search content*, *read a slice*, *navigate within a file* — and each agent realizes them with concrete commands. For a benchmark this matters concretely: every one of these read/search commands bottoms out in `open()`/`read()` syscalls that the FUSE tap logs ([`design.md` §6.2](./design.md#62-how-we-capture-it-defense-in-depth)), so the kernel tap captures them *regardless of which command the agent chose*, and it is exactly here that read **volume** diverges from in-context **tokens** (a `grep -r`/`rg` scan touches far more bytes than ever enter the window; a `sed -n`/`head` reads a slice that mostly does) — the read-volume-≠-tokens distinction in [`design.md` §6.1](./design.md#61-what-we-capture).
+
+| Abstract operation | Typical shell commands (Codex CLI; Claude Code `Bash`; SWE-agent bash) [1,2,4,5,12] | Structured-tool form |
+|---|---|---|
+| **Discover files** (by name/glob) | `find . -name '*.py'`, `fd`, `ls -R`, `tree`, shell globs `**/*.py` | Claude Code `Glob`; SWE-agent `find_file`; Codex `@` fuzzy file search |
+| **Search content** (by string/regex) | `rg -n 'symbol'`, `rg -l`, `grep -rn`, `grep -A/-B` for context, `ast-grep` (structural) | Claude Code `Grep` (ripgrep-backed [7]); SWE-agent `search_file` / `search_dir` (≤ 50 hits/query [12]); Cursor `grep` tool [10] |
+| **Read a slice** (open part of a file) | `sed -n '120,180p' f.py`, `cat`/`cat -n`, `head -n`, `tail -n`, `awk 'NR>=120&&NR<=180'`, `wc -l` | Claude Code `Read` (offset/limit); SWE-agent `open` (100-line window [12]); Codex file read |
+| **Navigate within a file** (move the window) | re-issue `sed -n`/`grep -n` at new line ranges | SWE-agent `goto` / `scroll_down` / `scroll_up` [12] |
+| **Edit** (apply the fix) | in-place `sed -i`, `patch`, here-doc rewrites (shell agents that allow it) | Codex `apply_patch` [2,4]; Claude Code `Edit`/`Write`; SWE-agent `edit` (linter-validated [12]) |
+
+Two clarifications matter for interpreting the benchmark:
+
+- **`ripgrep` (`rg`) is the de facto content-search backbone.** It is what Claude Code's `Grep` tool runs [7, 15] and a default choice in shell agents [16]; it is fast and `.gitignore`-aware, which means an agent's *content* search is biased toward tracked source — relevant when distractors are regrown into the tracked tree ([`design.md` §5](./design.md#5-distractor-generation-strategy)). `grep`/`ast-grep` appear as fallbacks or for structural queries.
+- **Structured tools are wrappers over the same primitives, with guardrails.** Claude Code's `Grep`/`Glob`/`Read` and SWE-agent's ACI (`search_file`, `search_dir`, `find_file`, `open`, `goto`, `scroll_*`, `edit`) wrap the utilities above but **cap output** (e.g., SWE-agent returns ≤ 50 search hits and a 100-line view per turn [12]) so a single command cannot dump an oversized file into the window. These caps are themselves a bloat-mitigation and a confound the design should record: an agent that pages through results via repeated `goto`/`scroll` (or repeated `sed -n`) inflates *read volume and tool-call counts* without proportionally inflating *in-context tokens* — visible directly in the [`design.md` §6.1](./design.md#61-what-we-capture) split.
+
+**Family B/C bypass these commands for retrieval.** Aider issues none of the above to *locate* code — it ships a precomputed tree-sitter/PageRank map in the prompt and only reads files the user adds to the chat [8, 9]. Cursor's *semantic* path answers a `semantic_search(query)` against a server-side vector index rather than the local filesystem, falling back to local `grep` only when the agent chooses it [10]. Consequently their localization work is **largely invisible to a kernel FS tap** and must be observed at the tool/retrieval boundary instead (§6).
 
 ---
 
