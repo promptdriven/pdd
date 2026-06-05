@@ -28,30 +28,32 @@ Implement the user-facing `pdd context <prompt_path>` command that preprocesses 
    - `--json`: emit machine-readable output (JSON) to stdout instead of the usage box.
    - `--table`: show the per-source token-attribution table instead of the usage box.
    - `--threshold`: integer percentage (0–100, default 80) above which to exit with code 2 to signal context budget exceeded; set to 0 to disable the threshold check.
-3. Preprocess the prompt file using the existing preprocessing pipeline to obtain the fully hydrated text; do NOT make an LLM call.
-4. Detect dynamic tags (`<shell>`, `<web>`, semantic `query=` includes) in the raw prompt source using `detect_dynamic_tags` from `pdd.context_snapshot`; emit a warning line to stderr for each detected dynamic tag that was not expanded (nondeterministic, deferred) rather than failing.
-5. Attribute tokens per source segment:
-   - `prompt_body`: tokens in the hydrated text that do not belong to any expanded include segment.
-   - One entry per resolved `<include>` directive: label as the included file path; count tokens for that segment's expanded content.
+3. Preprocess the prompt file the same way generation's deterministic first pass does — call `preprocess(text, recursive=True, double_curly_brackets=False, ...)` to obtain the hydrated text; do NOT make an LLM call, run a shell, or fetch the web. Attribution MUST be derived from this real expansion path (so include selectors are honored), never by re-reading whole include files.
+4. Capture per-include attribution from the expansion itself: pass an in-memory `snapshot_recorder` into `preprocess` that records each resolved include's *realized* content (already narrowed by `lines=`, `select=`, `mode=`/compression and with nested includes expanded). Count tokens of that realized content per include — NOT the whole source file. A nested include is expanded into its parent, so count each top-level include once (roll nested content up into the top-level include the user wrote) and do not double-count it.
+5. `<include-many>` is deferred past the recursive pass; expand literal (non-`${VAR}`) `<include-many>` lists deterministically (via `process_include_many_tags`, passing the same recorder) so each listed file is attributed and counted. Report a deferred warning for variable-driven (`${...}`) lists and do not bill their markup as payload.
+6. Detect dynamic tags (`<shell>`, `<web>`, semantic `query=` includes) in the **expanded** payload (not just the raw prompt) using `detect_dynamic_tags` from `pdd.context_snapshot`, so tags inside included files are caught; emit a warning for each. The deterministic total MUST exclude unexpanded dynamic-tag markup (strip `<shell>…</shell>`, `<web>…</web>`, and `query=` includes before counting) so deferred markup is never counted as hydrated payload.
+7. Surface unresolved/missing includes: any top-level `<include>`/`<include-many>` path that does not resolve to a readable file (excluding `${VAR}` paths, which are deferred) MUST appear both as a warning and as a `0`-token row with an `unresolved` note — never silently folded into the body.
+8. Attribute tokens per source segment:
+   - `prompt_body`: deterministic-total tokens that do not belong to any attributed include segment (clamp at zero).
+   - One entry per top-level include (label by file path, relative to cwd when possible); for `<include-many>`, one entry per listed file.
    - `grounding`: when cloud grounding data is unavailable, record `0` tokens with a `WARN: unavailable (requires cloud)` note; do not make a network call.
-   - `tests`, `examples`: parse from the preprocessed output where identifiable; label each by file path.
-6. Sort the attribution rows by token count descending (largest consumer first).
-7. Default usage-box output (Claude-Code `/context` style):
-   - Print a `Context Usage` header.
-   - Render a grid of cells where used context-window space is split by category (one distinct glyph per source row) against free space (`⛶`), proportional to each source's share of the context limit. Omit the grid when the context limit is unknown.
-   - Print the model name, the `total/limit tokens (percent%)` summary (or total tokens with a "context limit unknown" note when the limit is unknown).
-   - Under `Estimated usage by category`, print one line per source with its glyph, source label, token count, and percent of the context limit; append the grounding `WARN` note where present.
-   - Print a `Free space` line with the unused token count and percent when the context limit is known.
-8. Table output (`--table`):
-   - Print a header with total tokens, model name, context-limit tokens, and percentage used.
-   - Print a table with columns: Source, Tokens, % of total.
-9. After non-JSON output, print any deferred-tag warnings (from requirement 4) to stderr. When total tokens exceed `--threshold` percent of the context limit, print a warning line to stderr and exit with code 2.
-10. JSON output (`--json`):
+9. Sort the attribution rows by token count descending (largest consumer first).
+10. Default usage-box output (Claude-Code `/context` style):
+    - Print a `Context Usage` header.
+    - Render a grid of cells where used context-window space is split by category (one distinct glyph per source row) against free space (`⛶`), proportional to each source's share of the context limit. Omit the grid when the context limit is unknown.
+    - Print the model name, the `total/limit tokens (percent%)` summary (or total tokens with a "context limit unknown" note when the limit is unknown).
+    - Under `Estimated usage by category`, print one line per source with its glyph, source label, token count, and percent of the context limit; append the grounding `WARN` note where present.
+    - Print a `Free space` line with the unused token count and percent when the context limit is known.
+11. Table output (`--table`):
+    - Print a header with total tokens, model name, context-limit tokens, and percentage used.
+    - Print a table with columns: Source, Tokens, % of total.
+12. After non-JSON output, print any deferred/unresolved warnings (from requirements 6 and 7) to stderr. When total tokens exceed `--threshold` percent of the context limit, print a warning line to stderr and exit with code 2.
+13. JSON output (`--json`):
     - Emit a single JSON object with keys: `total_tokens`, `context_limit`, `percent_used`, `model`, `rows` (list of `{source, tokens, percent}` objects sorted by tokens descending), `warnings` (list of warning strings), `threshold_exceeded` (bool).
     - Exit with code 2 when `threshold_exceeded` is true.
-11. Use existing command error-handling conventions: re-raise `click.Abort`, `click.UsageError`, and `click.exceptions.Exit`; use `handle_error` for other exceptions.
-12. Do not require an LLM call for any deterministic portion of the audit.
-13. Import token utilities from `pdd.server.token_counter` (`count_tokens`, `get_context_limit`) and dynamic-tag detection from `pdd.context_snapshot` (`detect_dynamic_tags`).
+14. Use existing command error-handling conventions: re-raise `click.Abort`, `click.UsageError`, and `click.exceptions.Exit`; use `handle_error` for other exceptions.
+15. Do not require an LLM call for any deterministic portion of the audit.
+16. Import token utilities from `pdd.server.token_counter` (`count_tokens`, `get_context_limit`), dynamic-tag detection from `pdd.context_snapshot` (`detect_dynamic_tags`), and preprocessing from `pdd.preprocess` (`preprocess`, `compute_user_intent_paths`, `process_include_many_tags`).
 
 % Dependencies
 <replay_prompt><include>prompts/commands/replay_python.prompt</include></replay_prompt>

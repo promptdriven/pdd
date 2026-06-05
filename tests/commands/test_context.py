@@ -44,7 +44,14 @@ def _word_count_tokens(text, model="gpt-4o"):
 
 @pytest.fixture
 def patched_tokens(monkeypatch):
-    """Replace token counting + context-limit lookup with deterministic stubs."""
+    """Replace token counting + context-limit lookup with deterministic stubs.
+
+    Also clears ``PDD_MODEL_DEFAULT`` so tests that assert the built-in default
+    model (``gpt-4o``) are not sensitive to the developer's ambient environment
+    (the repo's ``pdd`` env sets it). Tests that exercise the env default set it
+    explicitly instead.
+    """
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
     monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
     monkeypatch.setattr(cx_module, "get_context_limit", lambda model: 1000)
 
@@ -224,3 +231,151 @@ def test_missing_prompt_path_errors(runner):
     """A non-existent prompt path is a usage error (no audit performed)."""
     result = runner.invoke(context, ["does_not_exist.prompt"], obj={})
     assert result.exit_code != 0
+
+
+# --------------------------------------------------------------------------- #
+# Attribution must match the *hydrated* payload, not whole-file recounts.      #
+# (issue #789 review #1 — lines=, select=, include-many, nested includes.)     #
+# --------------------------------------------------------------------------- #
+
+
+def _rows(runner, prompt):
+    return json.loads(runner.invoke(context, [str(prompt), "--json"], obj={}).output)["rows"]
+
+
+def test_lines_selector_attributes_only_selected_slice(runner, tmp_path, monkeypatch, patched_tokens):
+    """review #1: an include with lines= must attribute only the selected lines,
+    not the entire file (the old code reported the whole file, yielding >100%)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    # 5 lines, 11 words total; lines 1-2 are 5 words.
+    (tmp_path / "context" / "big.txt").write_text(
+        "l1 a b\nl2 c\nl3 d\nl4 e\nl5 f", encoding="utf-8"
+    )
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        'Body text\n<include lines="1-2">context/big.txt</include>', encoding="utf-8"
+    )
+    include_row = next(r for r in _rows(runner, prompt) if "big.txt" in r["source"])
+    assert include_row["tokens"] == 5  # the selected slice, not the whole 11-word file
+    assert include_row["percent"] <= 100.0
+
+
+def test_select_selector_attributes_only_selected_symbol(runner, tmp_path, monkeypatch, patched_tokens):
+    """review #1: an include with select=def:NAME attributes only that symbol."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "mod.py").write_text(
+        "def foo():\n    return 1\n\ndef bar():\n    return 2\n", encoding="utf-8"
+    )
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        'Body\n<include select="def:foo">context/mod.py</include>', encoding="utf-8"
+    )
+    include_row = next(r for r in _rows(runner, prompt) if "mod.py" in r["source"])
+    # Only `def foo(): return 1` (4 words), not both functions (8 words).
+    assert include_row["tokens"] == 4
+
+
+def test_include_many_attributes_each_listed_file(runner, tmp_path, monkeypatch, patched_tokens):
+    """review #1: a literal <include-many> attributes each file's real content."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "a.txt").write_text("aa bb", encoding="utf-8")
+    (tmp_path / "context" / "b.txt").write_text("cc dd ee", encoding="utf-8")
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        "Body here\n<include-many>context/a.txt, context/b.txt</include-many>",
+        encoding="utf-8",
+    )
+    rows = _rows(runner, prompt)
+    by_source = {r["source"]: r["tokens"] for r in rows}
+    assert by_source.get("context/a.txt") == 2
+    assert by_source.get("context/b.txt") == 3
+
+
+def test_nested_include_rolls_up_into_top_level_parent(runner, tmp_path, monkeypatch, patched_tokens):
+    """review #1: a nested include is counted once, rolled into the top-level
+    include the user wrote (not double-counted as its own row)."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "leaf.txt").write_text("leaf one two", encoding="utf-8")
+    (tmp_path / "context" / "mid.prompt").write_text(
+        "mid head\n<include>context/leaf.txt</include>\nmid tail", encoding="utf-8"
+    )
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text("Body\n<include>context/mid.prompt</include>", encoding="utf-8")
+    rows = _rows(runner, prompt)
+    sources = [r["source"] for r in rows]
+    assert any(s.endswith("mid.prompt") for s in sources)
+    assert not any(s.endswith("leaf.txt") for s in sources)  # rolled into the parent
+    mid_row = next(r for r in rows if r["source"].endswith("mid.prompt"))
+    assert mid_row["tokens"] == 7  # full expanded mid content, including the leaf
+
+
+def test_missing_include_is_surfaced_not_hidden(runner, tmp_path, monkeypatch, patched_tokens):
+    """review #2: an unresolved include must appear as a warning and a row, not
+    be silently folded into the body."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        "Body\n<include>context/missing.prompt</include>", encoding="utf-8"
+    )
+    result = runner.invoke(context, [str(prompt), "--json"], obj={})
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert any("missing.prompt" in w and "unresolved" in w for w in payload["warnings"])
+    assert any(r["source"] == "context/missing.prompt" for r in payload["rows"])
+
+
+def test_dynamic_tag_inside_included_file_is_warned(runner, tmp_path, monkeypatch, patched_tokens):
+    """review #3: a <shell>/<web> tag inside an *included* file is detected, not
+    just tags in the top-level prompt."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "dyn.prompt").write_text(
+        "alpha beta\n<shell>echo hi</shell>\ngamma", encoding="utf-8"
+    )
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text("Body\n<include>context/dyn.prompt</include>", encoding="utf-8")
+    result = runner.invoke(context, [str(prompt), "--json"], obj={})
+    assert result.exit_code == 0, result.output
+    warnings = json.loads(result.output)["warnings"]
+    assert any("shell" in w and "deferred" in w for w in warnings)
+
+
+def test_dynamic_markup_excluded_from_deterministic_total(runner, tmp_path, monkeypatch, patched_tokens):
+    """review #3: deferred dynamic-tag markup is not billed as hydrated payload."""
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        "Build it.\n<shell>echo hello world here now</shell>", encoding="utf-8"
+    )
+    payload = json.loads(runner.invoke(context, [str(prompt), "--json"], obj={}).output)
+    # Only "Build it." (2 words) counts; the 5-word shell body is excluded.
+    assert payload["total_tokens"] == 2
+
+
+# --------------------------------------------------------------------------- #
+# Model default resolution is explicit about the environment (review #4).      #
+# --------------------------------------------------------------------------- #
+
+
+def test_default_model_falls_back_to_gpt4o_when_env_unset(runner, prompt_with_include, monkeypatch):
+    """review #4: with PDD_MODEL_DEFAULT unset, the default model is gpt-4o."""
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(cx_module, "get_context_limit", lambda model: 1000)
+    result = runner.invoke(context, [str(prompt_with_include), "--json"], obj={})
+    assert json.loads(result.output)["model"] == "gpt-4o"
+
+
+def test_default_model_honors_pdd_model_default_env(runner, prompt_with_include, monkeypatch):
+    """review #4: when PDD_MODEL_DEFAULT is set, the default honors it (so the
+    suite is not silently env-sensitive — the behavior is asserted explicitly)."""
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "claude-sonnet-4-6")
+    monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(cx_module, "get_context_limit", lambda model: 1000)
+    result = runner.invoke(context, [str(prompt_with_include), "--json"], obj={})
+    assert json.loads(result.output)["model"] == "claude-sonnet-4-6"

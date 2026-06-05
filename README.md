@@ -2140,7 +2140,9 @@ By default it prints a Claude-Code `/context`-style usage box:
 
 `--table` instead prints a table with a header (total tokens, model, context-limit size, percentage used) and rows sorted by token count descending (largest consumer first).
 
-In both modes, warnings are printed for any dynamic tags (`<shell>`, `<web>`, semantic `query=` includes) that were detected but not expanded (nondeterministic, deferred).
+Attribution follows the real hydration path, so a targeted include (`lines=`, `select=`, `mode=`, or a literal `<include-many>` list) is counted by the content it actually contributes — not the whole source file. Unresolved/missing includes are surfaced as a warning and a `0`-token row instead of being silently folded into the prompt body.
+
+In both modes, warnings are printed for any dynamic tags (`<shell>`, `<web>`, semantic `query=` includes) — in the prompt or inside an included file — that were detected but not expanded (nondeterministic, deferred); their markup is excluded from the token total.
 
 JSON output (`--json`) emits a single object with keys: `total_tokens`, `context_limit`, `percent_used`, `model`, `rows`, `warnings`, and `threshold_exceeded`.
 
