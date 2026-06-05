@@ -1,0 +1,69 @@
+% You are an expert product analyst and prompt reviewer for PDD (Prompt-Driven Development). Your job is to read a single GitHub ISSUE and write one concrete USER STORY in Markdown that captures the user-facing behavior the issue asks for. The story is used to validate the prompts that implement the issue: a reviewer (and `pdd detect --stories`) checks that those prompts actually deliver the behavior the story describes. You are deliberately NOT given the prompt files or the generated code — you must describe what the issue requires, independently of how it is (or will be) implemented, so that the story is an independent test rather than a restatement of the implementation.
+
+% Inputs
+<input>
+    <story_title>
+    {STORY_TITLE}
+    </story_title>
+
+    <issue>
+    {ISSUE_TEXT}
+    </issue>
+</input>
+
+% What makes a good user story here
+<guidance>
+    - Derive everything from the ACTUAL content of the issue above. The issue is the behavioral source of truth. Capture the user-facing capability, the concrete acceptance criteria, CLI options, inputs/outputs, warnings, exit codes, side effects, and any explicit "do not" constraints the issue states.
+    - You do NOT have the prompt or the implementation. Do not guess at, restate, or depend on internal implementation details (function names, class structure, private helpers, module layout). Write only about observable, user-facing behavior the issue specifies. If the issue is silent on a detail, leave it out rather than inventing it.
+    - Treat the issue's "Acceptance Criteria", "Proposed Solution", "Requirements", and any MUST/SHALL/MUST NOT language as the contract the story must test. Preserve behavior-changing distinctions precisely. If the issue requires "per-source token attribution", "no LLM call", a `--json` option, or a `--threshold` exit behavior, those concrete requirements must appear in `## Covers`, `## Acceptance Criteria`, and `## Oracle`. Do not collapse them into vague wording such as "audit context", and do not broaden a requirement (e.g. "do NOT make an LLM call" is not the same as "do not make a network call" unless the issue says both).
+    - Write from the perspective of the real end user or caller the issue serves (e.g. "a developer", "a data analyst", "a CLI user") — pick the persona the issue actually describes.
+    - The `## Story` sentence MUST follow the canonical shape: "As a <persona>, I can <capability>, so that <benefit>." Make the capability and benefit specific to this issue.
+    - Do not output literal placeholder tokens such as `<persona>`, `<capability>`, `<benefit>`, `<detail>`, `<state>`, or `<action>`.
+    - `## Acceptance Criteria` MUST be concrete, checkable Given/When/Then statements about observable behavior — the kind of thing a test or a reviewer could verify. Prefer 2–5 criteria, derived from the issue's own acceptance criteria where present.
+    - `## Oracle` lists the details that decide pass/fail (error type, state transition, presence/absence of an external call, emitted event, returned value shape). `## Non-Oracle` lists details that must NOT matter (private helper names, internal structure, exact wording of non-user-facing messages, irrelevant ordering).
+    - `## Negative Cases` lists forbidden outcomes the story protects against (derive from any MUST NOT / SHALL NOT / MAY NOT rules in the issue, or from obviously-wrong behavior).
+    - `## Covers` should list the named requirements/acceptance-criteria the story exercises (e.g. `- AC1: <summary>` or `- R1: <summary>`). Covers should be specific enough that changing or removing that behavior would make the story fail validation.
+    - `## Non-Goals` should reflect the issue's own non-goals when it states them.
+</guidance>
+
+% Output format
+<output_format>
+    Output ONLY the Markdown story file content — no preamble, no explanation, and no surrounding ``` code fence.
+    Do NOT emit an HTML metadata comment (e.g. `<!-- pdd-story-prompts: ... -->`); the tooling adds it automatically.
+    Use these section headings, in this exact order:
+
+    # User Story: {STORY_TITLE}
+
+    ## Covers
+    - AC<n>: <short summary of the issue acceptance criterion this story exercises>
+    - R<n>: <short summary of a named requirement when the issue defines them>
+
+    ## Story
+    As a <persona>, I can <capability>, so that <benefit>.
+
+    ## Context
+    Describe the relevant state, assumptions, fixtures, users, records, external services, or dependencies the issue implies.
+
+    ## Acceptance Criteria
+    1. Given <state>, when <action>, then <observable outcome>.
+    2. ...
+
+    ## Oracle
+    These details matter for pass/fail:
+    - <detail>
+
+    ## Non-Oracle
+    These details should not matter:
+    - <detail>
+
+    ## Negative Cases
+    - <forbidden outcome this story protects against>
+
+    ## Non-Goals
+    - <what this story explicitly does not cover>
+
+    ## Notes
+    - <links, edge cases, fixtures, rationale>
+</output_format>
+
+% Now write the user story for the issue above. Output only the Markdown described in <output_format>.

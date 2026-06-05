@@ -1,3 +1,7 @@
+# pylint: disable=missing-module-docstring,missing-function-docstring
+# pylint: disable=use-implicit-booleaness-not-comparison,unused-variable
+# pylint: disable=too-many-locals,line-too-long,too-many-lines
+
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,9 +13,28 @@ from pdd.user_story_tests import (
     discover_prompt_files,
     discover_story_files,
     generate_user_story,
+    resolve_issue_source,
     run_user_story_fix,
     run_user_story_tests,
 )
+
+
+# Issue #1356: stories are authored from the ISSUE, never the prompt. Tests use a
+# deterministic, offline local issue markdown file as the issue source so they
+# make no network/gh call. `_write_issue` returns the path to pass as --issue.
+_DEFAULT_ISSUE_BODY = (
+    "# Issue: Upload CSV and view a summary report\n\n"
+    "## Summary\n"
+    "Users can upload a CSV file and view a summary report.\n\n"
+    "## Acceptance Criteria\n"
+    "- Given a valid CSV, when uploaded, then a summary report is shown.\n"
+)
+
+
+def _write_issue(tmp_path, body=_DEFAULT_ISSUE_BODY, name="issue.md"):
+    issue_path = tmp_path / name
+    issue_path.write_text(body, encoding="utf-8")
+    return str(issue_path)
 
 
 def test_user_story_tests_no_stories(tmp_path):
@@ -458,26 +481,30 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
     prompt_two.write_text("Send notifications.", encoding="utf-8")
 
-    changes = [{"prompt_name": "notify_python.prompt", "change_instructions": "Refine scope"}]
-    with patch("pdd.user_story_tests.detect_change") as mock_detect:
-        mock_detect.return_value = (changes, 0.2, "gpt-test")
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
 
     assert success is True
     assert "Generated story file:" in message
-    assert "auto-detected" in message
-    assert cost == 0.2
-    assert model == "gpt-test"
-    assert linked_prompts == ["notify_python.prompt"]
+    assert "linked from prompt inputs" in message
+    assert cost == pytest.approx(0.05)
+    assert model == "story-model"
+    assert linked_prompts == ["upload_python.prompt", "notify_python.prompt"]
+    mock_detect.assert_not_called()
     output_path = Path(story_file)
     assert output_path.exists()
     story_text = output_path.read_text(encoding="utf-8")
     assert story_text.startswith("<!-- pdd-story-prompts:")
-    assert "<!-- pdd-story-prompts: notify_python.prompt -->" in story_text
+    assert "upload_python.prompt" in story_text
+    assert "notify_python.prompt" in story_text
     assert "## Covers" in story_text
     assert "## Story" in story_text
     assert "## Context" in story_text
@@ -486,10 +513,14 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     assert "## Non-Oracle" in story_text
     assert "## Negative Cases" in story_text
     assert "## Prompt Scope" not in story_text
-    assert "- R1: Add contract rule IDs here after contracts are authored." in story_text
+    assert "<persona>" not in story_text
+    assert "<behavior>" not in story_text
+    assert "scoped prompt capabilities" not in story_text
+    assert "As a data analyst, I can upload a CSV file" in story_text
+    assert "scoped prompt capabilities" not in story_text
 
 
-def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_path):
+def test_generate_user_story_links_prompt_inputs_without_detection(tmp_path):
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
     prompt_one = prompts_dir / "upload_python.prompt"
@@ -497,23 +528,107 @@ def test_generate_user_story_falls_back_to_input_links_when_detection_empty(tmp_
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
     prompt_two.write_text("Send notifications.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect:
-        mock_detect.return_value = ([], 0.15, "gpt-test")
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
 
     assert success is True
     assert "linked from prompt inputs" in message
-    assert cost == 0.15
-    assert model == "gpt-test"
+    assert cost == pytest.approx(0.05)
+    assert model == "story-model"
     assert linked_prompts == ["upload_python.prompt", "notify_python.prompt"]
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "<!-- pdd-story-prompts:" in story_text
     assert "upload_python.prompt" in story_text
     assert "notify_python.prompt" in story_text
+
+
+def test_generate_user_story_uses_input_links_when_detection_raises(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt = prompts_dir / "offline_python.prompt"
+    prompt.write_text("Generate an offline-safe report.", encoding="utf-8")
+
+    with patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    ), patch("pdd.user_story_tests.detect_change") as mock_detect:
+        mock_detect.side_effect = RuntimeError("provider unavailable")
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert "linked from prompt inputs" in message
+    assert cost == pytest.approx(0.05)
+    assert model == "story-model"
+    assert linked_prompts == ["offline_python.prompt"]
+    mock_detect.assert_not_called()
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "<!-- pdd-story-prompts: offline_python.prompt -->" in story_text
+    assert "As a data analyst, I can upload a CSV file" in story_text
+
+
+def test_generate_user_story_derives_unit_test_ready_details_from_issue(tmp_path):
+    """The story carries concrete, unit-test-ready details. Those details come
+    from the issue/LLM, not from the prompt: the prompt body here is deliberately
+    vague, yet the generated story is specific."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt = prompts_dir / "csv_report_python.prompt"
+    # Deliberately vague prompt: it does NOT mention header rows, row_count, or
+    # column_names. If story content leaked from the prompt, the asserts below
+    # would fail.
+    prompt.write_text("Build a CSV report workflow.", encoding="utf-8")
+
+    issue_src = _write_issue(
+        tmp_path,
+        body=(
+            "# Issue: CSV report\n\n"
+            "Accept only .csv uploads with a header row. Return row_count and "
+            "column_names in the summary. MUST NOT log raw uploaded cell values.\n"
+        ),
+    )
+
+    csv_story = _LLM_STORY_MD.replace(
+        "As a data analyst, I can upload a CSV file and view a summary report",
+        "As a data analyst, I can upload a CSV file with a header row and view row_count and column_names",
+    ).replace(
+        "Rejecting a valid CSV",
+        "Logging raw uploaded cell values",
+    )
+    with patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(csv_story, 0.05, "story-model"),
+    ), patch("pdd.user_story_tests.detect_change") as mock_detect:
+        success, _, _, _, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt)],
+            issue=issue_src,
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert linked_prompts == ["csv_report_python.prompt"]
+    mock_detect.assert_not_called()
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "As a data analyst" in story_text
+    assert "header row" in story_text
+    assert "row_count and column_names" in story_text
+    assert "Logging raw uploaded cell values" in story_text
+    assert "<persona>" not in story_text
+    assert "List forbidden outcomes" not in story_text
 
 
 def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
@@ -526,20 +641,22 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
     prompt_one = prompts_dir / "contract_rules_python.prompt"
     prompt_one.write_text(prompt_content, encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect:
-        mock_detect.return_value = ([], 0.1, "gpt-test")
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    ):
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
 
     assert success is True
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
-    assert "- R1: Positive amount" in story_text
-    assert "- R2: Remaining balance" in story_text
-    assert "- R3: No provider call before validation" in story_text
-    assert "Call the payment provider for requests rejected by R1 or R2." in story_text
+    assert "- R1: Upload returns a summary report" in story_text
+    assert "## Negative Cases" in story_text
 
 
 def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
@@ -554,18 +671,434 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
     prompt_two = prompts_dir / "other_python.prompt"
     prompt_two.write_text("Handle other stuff.", encoding="utf-8")
 
-    with patch("pdd.user_story_tests.detect_change") as mock_detect:
-        mock_detect.return_value = ([], 0.1, "gpt-test")
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    ):
         success, _, _, _, story_file, _ = generate_user_story(
             prompt_files=[str(prompt_one), str(prompt_two)],
+            issue=_write_issue(tmp_path),
             stories_dir=str(tmp_path / "user_stories"),
             prompts_dir=str(prompts_dir),
         )
 
     assert success is True
+    mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
-    assert "- prompts/contract_rules_python.prompt#R1: Positive amount" in story_text
-    assert "- prompts/contract_rules_python.prompt#R2: Remaining balance" in story_text
+    assert "- R1: Upload returns a summary report" in story_text
+
+
+_LLM_STORY_MD = (
+    "# User Story: Upload CSV\n\n"
+    "## Covers\n\n- R1: Upload returns a summary report\n\n"
+    "## Story\n\n"
+    "As a data analyst, I can upload a CSV file and view a summary report, "
+    "so that I can quickly understand my data.\n\n"
+    "## Context\n\n- `prompts/upload_python.prompt`: CSV upload + summary\n\n"
+    "## Acceptance Criteria\n\n"
+    "1. Given a valid CSV, when uploaded, then a summary report is shown.\n\n"
+    "## Oracle\n\n- returned value shape\n\n"
+    "## Non-Oracle\n\n- internal helper names\n\n"
+    "## Negative Cases\n\n- Rejecting a valid CSV\n\n"
+    "## Non-Goals\n\n- Editing the CSV\n\n"
+    "## Notes\n\n- n/a\n"
+)
+
+
+# PR #1387 renamed `pdd context-audit` to `pdd context` and made the default
+# output a Claude-Code `/context`-style usage box (the raw attribution table
+# moved behind `--table`). These fixtures model that command as a prompt input so
+# the issue-derived story can be exercised against both the faithful prompt and a
+# harmful aggregate-only mutation.
+_CONTEXT_PROMPT_BASE = "\n".join(
+    [
+        "<pdd-reason>Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation, displayed by default as a Claude-Code /context-style usage box.</pdd-reason>",
+        "",
+        "% Goal",
+        "Write the `pdd/commands/context.py` module.",
+        "",
+        "% Requirements",
+        "1. Define a Click command named `context` with a required `prompt_path` argument.",
+        "2. Provide options `--model`, `--json`, `--table`, and `--threshold`.",
+        "3. Preprocess the prompt file; do NOT make an LLM call.",
+        "4. Detect dynamic tags such as `<shell>` and `<web>` and emit warnings.",
+        "5. Attribute tokens per source segment, including `prompt_body` and one row per resolved include.",
+        "6. By default render a Claude-Code `/context`-style usage box with an "
+        "`Estimated usage by category` breakdown (one line per source); `--table` "
+        "shows the raw per-source attribution table.",
+    ]
+)
+
+
+_CONTEXT_PROMPT_AGGREGATE_ONLY = "\n".join(
+    [
+        "<pdd-reason>Reports only aggregate token totals for a hydrated prompt so users can audit context-window cost before generation, without per-source attribution or a usage-box breakdown.</pdd-reason>",
+        "",
+        "% Goal",
+        "Write the `pdd/commands/context.py` module.",
+        "",
+        "% Requirements",
+        "1. Define a Click command named `context` with a required `prompt_path` argument.",
+        "2. Provide options `--model`, `--json`, `--table`, and `--threshold`.",
+        "3. Preprocess the prompt file; do NOT make an LLM call.",
+        "4. Detect dynamic tags such as `<shell>` and `<web>` and emit warnings.",
+        "5. Report only aggregate token totals, without per-source attribution rows.",
+        "6. Render only the aggregate total; omit the per-source `Estimated usage by "
+        "category` breakdown from the usage box.",
+    ]
+)
+
+
+_CONTEXT_STORY_MD = (
+    "# User Story: Audit context-window usage by source\n\n"
+    "## Covers\n\n"
+    "- context_python.prompt: CLI users can run `pdd context <prompt_path>` to see "
+    "per-source token attribution rendered as a Claude-Code `/context`-style usage "
+    "box before generation.\n"
+    "- context_python.prompt: The command supports `--table`, `--json`, `--model`, and "
+    "`--threshold` behavior without making an LLM call.\n\n"
+    "## Story\n\n"
+    "As a CLI user, I can audit a hydrated prompt's per-source token usage before "
+    "generation, rendered like Claude Code's `/context` display, so that I can "
+    "identify which prompt body, include, test, example, or grounding source "
+    "consumes the context window.\n\n"
+    "## Context\n\n"
+    "- `context_python.prompt` defines the `pdd context <prompt_path>` command, the "
+    "default `/context`-style usage box, the `--table` attribution table, JSON "
+    "output, threshold exit behavior, dynamic-tag warnings, and the no-LLM-call "
+    "requirement.\n\n"
+    "## Acceptance Criteria\n\n"
+    "1. Given a prompt with includes, when I run `pdd context <prompt_path>`, then "
+    "the default output is a Claude-Code `/context`-style usage box whose "
+    "`Estimated usage by category` breakdown reports token rows per source rather "
+    "than only an aggregate total.\n"
+    "2. Given `--table` is passed, when the audit completes, then the per-source "
+    "attribution table is shown with rows ordered largest-token-consumer first.\n"
+    "3. Given `--json` is passed, when the audit completes, then stdout is a JSON "
+    "object with `total_tokens`, `context_limit`, `percent_used`, `model`, `rows`, "
+    "`warnings`, and `threshold_exceeded`.\n"
+    "4. Given the threshold percentage is exceeded, when `--threshold` is nonzero, "
+    "then the command exits with code 2.\n"
+    "5. Given dynamic tags such as `<shell>` or `<web>` are present, when they are "
+    "not expanded, then warning entries are reported without making an LLM call.\n\n"
+    "## Oracle\n\n"
+    "These details matter for pass/fail:\n"
+    "- The default output is the Claude-Code `/context`-style usage box, with a "
+    "per-source `Estimated usage by category` breakdown.\n"
+    "- Per-source attribution rows are present for prompt body and resolved includes.\n"
+    "- Aggregate-only token totals are not sufficient.\n"
+    "- `--table`, `--json`, `--model`, and `--threshold` behavior matches the prompt.\n"
+    "- The command does not make an LLM call for local auditing.\n\n"
+    "## Non-Oracle\n\n"
+    "These details should not matter:\n"
+    "- The exact glyphs used in the usage box and the grid dimensions.\n"
+    "- Private helper names.\n"
+    "- Table styling.\n"
+    "- Internal ordering beyond sorting rows by token count.\n\n"
+    "## Negative Cases\n\n"
+    "- Reporting only an aggregate total with no per-source attribution.\n"
+    "- Dropping the per-source breakdown when rendering the `/context`-style box.\n"
+    "- Calling an LLM during the deterministic context audit.\n"
+    "- Silently ignoring dynamic tags without warnings.\n\n"
+    "## Non-Goals\n\n"
+    "- Generating code from the audited prompt.\n"
+    "- Fetching cloud grounding data locally.\n\n"
+    "## Notes\n\n"
+    "- This story should fail validation if the prompt changes from per-source "
+    "token attribution to aggregate-only token totals, or removes the default "
+    "`/context`-style usage box.\n"
+)
+
+
+def test_generate_user_story_uses_llm_output(tmp_path):
+    """Issue #1356: the story body is authored by the LLM from the ISSUE, and
+    the pdd-story-prompts metadata linking the prompt is still stitched in."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text(
+        "Users can upload a CSV file and view a summary report.", encoding="utf-8"
+    )
+
+    fake_llm = {"result": _LLM_STORY_MD, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", return_value=fake_llm
+    ) as mock_llm:
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert mock_llm.called
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    # LLM-authored narrative is present (not the deterministic placeholder).
+    assert "As a data analyst, I can upload a CSV file" in story_text
+    assert "<persona>" not in story_text
+    assert "## Acceptance Criteria" in story_text
+    # Metadata stitched deterministically even though the LLM did not emit it.
+    assert story_text.startswith("<!-- pdd-story-prompts:")
+    assert "upload_python.prompt" in story_text
+    assert "linked from prompt inputs" in message
+    assert cost == pytest.approx(0.05)
+    assert model == "story-model"
+    assert linked_prompts == ["upload_python.prompt"]
+    mock_detect.assert_not_called()
+
+
+def test_generate_user_story_context_story_protects_per_source_attribution(tmp_path):
+    """Regression for PR #1387 (`pdd context`) as a prompt input: the generated
+    story must capture concrete requirements -- the `/context`-style usage box and
+    per-source attribution -- that make aggregate-only prompt drift fail."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "context_python.prompt"
+    prompt_one.write_text(_CONTEXT_PROMPT_BASE, encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(_CONTEXT_STORY_MD, 0.05, "story-model"),
+    ):
+        success, _, _, _, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert linked_prompts == ["context_python.prompt"]
+    mock_detect.assert_not_called()
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    assert "per-source token attribution" in story_text
+    assert "Aggregate-only token totals are not sufficient" in story_text
+    # PR #1387's intentional change: the default render is a /context-style box.
+    assert "`/context`-style usage box" in story_text
+    assert "`--table`, `--json`, `--model`, and `--threshold`" in story_text
+    assert "does not make an LLM call" in story_text
+    assert "<pdd-reason>" not in story_text
+    assert "\"type\": \"cli\"" not in story_text
+
+
+def test_run_user_story_tests_passes_then_fails_for_harmful_context_prompt_change(tmp_path):
+    """Show the same `pdd context` story passing the original prompt and failing
+    after a harmful aggregate-only prompt mutation that drops the usage box."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+
+    prompt_one = prompts_dir / "context_python.prompt"
+    prompt_one.write_text(_CONTEXT_PROMPT_BASE, encoding="utf-8")
+    story = stories_dir / "story__context.md"
+    story.write_text(
+        "<!-- pdd-story-prompts: context_python.prompt -->\n\n"
+        f"{_CONTEXT_STORY_MD}",
+        encoding="utf-8",
+    )
+
+    harmful_changes = [
+        {
+            "prompt_name": "context_python.prompt",
+            "change_instructions": (
+                "Restore the per-source `Estimated usage by category` breakdown; "
+                "aggregate-only token totals violate the generated user story."
+            ),
+        }
+    ]
+    captured_prompt_inputs = []
+    detect_trace = []
+
+    def fake_detect(prompt_paths, story_content, *_args, **_kwargs):
+        captured_prompt_inputs.append(prompt_paths)
+        prompt_text = Path(prompt_paths[0]).read_text(encoding="utf-8")
+        assert "per-source token attribution" in story_content
+        assert "Aggregate-only token totals are not sufficient" in story_content
+        if "Attribute tokens per source segment" in prompt_text:
+            detect_trace.append("PASS: original prompt still requires per-source attribution")
+            return [], 0.1, "gpt-test"
+        if "Report only aggregate token totals" in prompt_text:
+            detect_trace.append("FAIL: mutated prompt reports aggregate-only totals")
+            return harmful_changes, 0.2, "gpt-test"
+        raise AssertionError("test fixture prompt must be original or aggregate-only mutation")
+
+    with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
+        baseline_passed, baseline_results, baseline_cost, baseline_model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+            quiet=True,
+            fail_fast=True,
+        )
+        prompt_one.write_text(_CONTEXT_PROMPT_AGGREGATE_ONLY, encoding="utf-8")
+        mutated_passed, mutated_results, mutated_cost, mutated_model = run_user_story_tests(
+            prompts_dir=str(prompts_dir),
+            stories_dir=str(stories_dir),
+            quiet=True,
+            fail_fast=True,
+        )
+
+    assert baseline_passed is True
+    assert baseline_results == [
+        {
+            "story": str(story),
+            "passed": True,
+            "changes": [],
+        }
+    ]
+    assert baseline_cost == pytest.approx(0.1)
+    assert baseline_model == "gpt-test"
+
+    assert mutated_passed is False
+    assert mutated_results == [
+        {
+            "story": str(story),
+            "passed": False,
+            "changes": harmful_changes,
+        }
+    ]
+    assert captured_prompt_inputs == [[str(prompt_one)], [str(prompt_one)]]
+    assert detect_trace == [
+        "PASS: original prompt still requires per-source attribution",
+        "FAIL: mutated prompt reports aggregate-only totals",
+    ]
+    assert mutated_cost == pytest.approx(0.2)
+    assert mutated_model == "gpt-test"
+
+
+def test_generate_user_story_fails_when_llm_errors(tmp_path):
+    """When the provider call fails (no key / offline / error), generation
+    fails instead of writing a deterministic substitute story."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", side_effect=RuntimeError("no provider key")
+    ):
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is False
+    assert "requires a valid LLM-authored story" in message
+    assert cost == 0.0
+    assert model == ""
+    assert story_file == ""
+    assert linked_prompts == []
+    mock_detect.assert_not_called()
+    assert not (tmp_path / "user_stories").exists()
+
+
+def test_generate_user_story_fails_when_llm_output_malformed(tmp_path):
+    """LLM output missing a required section is rejected without writing a
+    deterministic substitute story."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    # Missing '## Acceptance Criteria'.
+    malformed = "# User Story: x\n\n## Story\n\nAs a user, I can do things.\n"
+    bad_llm = {"result": malformed, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+    ):
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is False
+    assert "requires a valid LLM-authored story" in message
+    assert cost == pytest.approx(0.05)
+    assert model == "story-model"
+    assert story_file == ""
+    assert linked_prompts == []
+    mock_detect.assert_not_called()
+    assert not (tmp_path / "user_stories").exists()
+
+
+def test_generate_user_story_rejects_llm_story_missing_canonical_sections(tmp_path):
+    """Issue #1356: an LLM story carrying only `## Story` and
+    `## Acceptance Criteria` is incomplete and must be rejected without writing
+    a deterministic substitute story."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    # Only '## Story' + '## Acceptance Criteria' — every other canonical
+    # section (Covers, Context, Oracle, Non-Oracle, Negative Cases, Non-Goals,
+    # Notes) is missing, so this must not be written as-is.
+    incomplete = (
+        "# User Story: Upload\n\n"
+        "## Story\n\n"
+        "As a user, I can upload a file, so that I get a report.\n\n"
+        "## Acceptance Criteria\n\n"
+        "1. Given a file, when uploaded, then a report appears.\n"
+    )
+    bad_llm = {"result": incomplete, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+    ):
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is False
+    assert "requires a valid LLM-authored story" in message
+    assert cost == pytest.approx(0.05)
+    assert model == "story-model"
+    assert story_file == ""
+    assert linked_prompts == []
+    mock_detect.assert_not_called()
+    assert not (tmp_path / "user_stories").exists()
+
+
+def test_generate_user_story_fails_when_llm_output_contains_placeholders(tmp_path):
+    """LLM output containing template placeholders is rejected without fallback."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    placeholder_story = (
+        "# User Story: Placeholder\n\n"
+        "## Story\n\n"
+        "As a <persona>, I can <capability>, so that <benefit>.\n\n"
+        "## Acceptance Criteria\n\n"
+        "1. Given <state>, when <action>, then <detail>.\n"
+    )
+    bad_llm = {"result": placeholder_story, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+    ):
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is False
+    assert "requires a valid LLM-authored story" in message
+    assert cost == pytest.approx(0.05)
+    assert model == "story-model"
+    assert story_file == ""
+    assert linked_prompts == []
+    mock_detect.assert_not_called()
+    assert not (tmp_path / "user_stories").exists()
 
 
 def test_legacy_minimal_story_passes_validation(tmp_path):
@@ -603,6 +1136,7 @@ def test_legacy_minimal_story_passes_validation(tmp_path):
 def test_generate_user_story_missing_prompt_fails(tmp_path):
     success, message, cost, model, story_file, linked_prompts = generate_user_story(
         prompt_files=[str(tmp_path / "prompts" / "missing.prompt")],
+        issue=_write_issue(tmp_path),
         stories_dir=str(tmp_path / "user_stories"),
     )
 
@@ -612,6 +1146,176 @@ def test_generate_user_story_missing_prompt_fails(tmp_path):
     assert model == ""
     assert story_file == ""
     assert linked_prompts == []
+
+
+def test_generate_user_story_requires_issue(tmp_path):
+    """Issue #1356: without an issue source, generation fails with a clear
+    message and makes no LLM call -- it must not fall back to prompt-derived
+    authoring."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    with patch("pdd.llm_invoke.llm_invoke") as mock_llm, patch(
+        "pdd.user_story_tests._llm_generate_story_markdown"
+    ) as mock_author:
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=None,
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is False
+    assert "derives the story from a GitHub issue" in message
+    assert "--issue" in message
+    assert story_file == ""
+    assert linked_prompts == []
+    mock_llm.assert_not_called()
+    mock_author.assert_not_called()
+    assert not (tmp_path / "user_stories").exists()
+
+
+def test_generate_user_story_authors_from_issue_not_prompt(tmp_path):
+    """Independence guarantee: the LLM that authors the story receives the
+    ISSUE text and never the prompt body. This is what keeps the story an
+    independent TDD oracle."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    # A unique marker that must NEVER reach the story-authoring LLM.
+    prompt_one.write_text(
+        "PROMPT_ONLY_MARKER_should_not_leak_into_story", encoding="utf-8"
+    )
+
+    issue_src = _write_issue(
+        tmp_path,
+        body=(
+            "# Issue: Upload CSV\n\n"
+            "ISSUE_MARKER_must_drive_the_story. Users can upload a CSV file and "
+            "view a summary report.\n"
+        ),
+    )
+
+    captured = {}
+
+    def fake_llm(*, prompt, input_json, **_kwargs):
+        captured["input_json"] = input_json
+        return {"result": _LLM_STORY_MD, "cost": 0.05, "model_name": "story-model"}
+
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", side_effect=fake_llm
+    ) as mock_llm:
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=issue_src,
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert mock_llm.called
+    payload = "".join(str(v) for v in captured["input_json"].values())
+    # The issue text reaches the author...
+    assert "ISSUE_MARKER_must_drive_the_story" in payload
+    # ...but the prompt body must NOT.
+    assert "PROMPT_ONLY_MARKER_should_not_leak_into_story" not in payload
+    # The prompt is still linked for validation/regeneration.
+    assert linked_prompts == ["upload_python.prompt"]
+    mock_detect.assert_not_called()
+
+
+def test_generate_user_story_fails_when_issue_unresolvable(tmp_path):
+    """A garbage issue source that is neither a file, a URL, nor a number fails
+    generation before any LLM call."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    with patch("pdd.llm_invoke.llm_invoke") as mock_llm:
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue="not-a-real-issue-source",
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is False
+    assert "Could not resolve issue source" in message
+    assert story_file == ""
+    assert linked_prompts == []
+    mock_llm.assert_not_called()
+    assert not (tmp_path / "user_stories").exists()
+
+
+def test_resolve_issue_source_local_markdown_file(tmp_path):
+    issue_path = tmp_path / "issue.md"
+    issue_path.write_text(
+        "# Add a context command\n\nBody text here.\n", encoding="utf-8"
+    )
+
+    title, body, ref = resolve_issue_source(str(issue_path))
+
+    assert title == "Add a context command"
+    assert "Body text here." in body
+    assert ref == "issue.md"
+
+
+def test_resolve_issue_source_github_url_uses_gh(tmp_path):
+    with patch(
+        "pdd.user_story_tests._fetch_issue_via_gh",
+        return_value=("Issue title", "Issue body"),
+    ) as mock_fetch:
+        title, body, ref = resolve_issue_source(
+            "https://github.com/promptdriven/pdd/issues/789"
+        )
+
+    mock_fetch.assert_called_once_with("promptdriven/pdd", "789")
+    assert title == "Issue title"
+    assert body == "Issue body"
+    assert ref == "promptdriven/pdd#789"
+
+
+def test_resolve_issue_source_pull_url_uses_gh(tmp_path):
+    with patch(
+        "pdd.user_story_tests._fetch_issue_via_gh",
+        return_value=("PR title", "PR body"),
+    ) as mock_fetch:
+        title, body, ref = resolve_issue_source(
+            "https://github.com/promptdriven/pdd/pull/1387"
+        )
+
+    mock_fetch.assert_called_once_with("promptdriven/pdd", "1387")
+    assert ref == "promptdriven/pdd#1387"
+
+
+def test_resolve_issue_source_bare_number_infers_repo(tmp_path):
+    with patch(
+        "pdd.user_story_tests._infer_repo_slug", return_value="promptdriven/pdd"
+    ) as mock_repo, patch(
+        "pdd.user_story_tests._fetch_issue_via_gh",
+        return_value=("T", "B"),
+    ) as mock_fetch:
+        title, body, ref = resolve_issue_source("#1356")
+
+    mock_repo.assert_called_once()
+    mock_fetch.assert_called_once_with("promptdriven/pdd", "1356")
+    assert ref == "promptdriven/pdd#1356"
+
+
+def test_resolve_issue_source_unresolvable_returns_none(tmp_path):
+    assert resolve_issue_source("") == (None, None, None)
+    assert resolve_issue_source("not-a-source") == (None, None, None)
+    # A number with no inferable repo cannot be resolved.
+    with patch("pdd.user_story_tests._infer_repo_slug", return_value=None):
+        assert resolve_issue_source("123") == (None, None, None)
+    # gh failure surfaces as unresolved.
+    with patch("pdd.user_story_tests._fetch_issue_via_gh", return_value=None):
+        assert resolve_issue_source(
+            "https://github.com/promptdriven/pdd/issues/1"
+        ) == (None, None, None)
 
 
 def test_user_story_fix_happy_path(tmp_path):
@@ -633,6 +1337,7 @@ def test_user_story_fix_happy_path(tmp_path):
 
     with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
          patch("pdd.user_story_tests.detect_change") as mock_detect, \
+         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
          patch("pdd.change_main.change_main") as mock_change, \
          patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
         mock_discover.return_value = [prompt_path]
@@ -678,6 +1383,7 @@ def test_user_story_fix_uses_pdd_src_dir_override(tmp_path, monkeypatch):
 
     with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
          patch("pdd.user_story_tests.detect_change") as mock_detect, \
+         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
          patch("pdd.change_main.change_main") as mock_change, \
          patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
         mock_discover.return_value = [prompt_path]
@@ -716,6 +1422,7 @@ def test_user_story_fix_treats_plain_error_message_as_failure(tmp_path):
 
     with patch("pdd.user_story_tests.discover_prompt_files") as mock_discover, \
          patch("pdd.user_story_tests.detect_change") as mock_detect, \
+         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
          patch("pdd.change_main.change_main") as mock_change, \
          patch("pdd.user_story_tests.run_user_story_tests") as mock_story_tests:
         mock_discover.return_value = [prompt_path]
