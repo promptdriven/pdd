@@ -16,6 +16,12 @@ promoted to `docs/whitepaper_with_benchmarks/`; active infra lives here.
 - **[design.md](design.md)** — the design document: benchmark architecture,
   scenario format, distractor sourcing strategy (subset-and-regrow), instrumentation
   plan, and reporting format. Read this first.
+- **[agentic_cli_search.md](agentic_cli_search.md)** — background section (issue
+  [#1430](https://github.com/promptdriven/pdd/issues/1430)): how agentic coding CLIs
+  acquire code context, a mechanism-level taxonomy (agentic grep/read vs.
+  embedding/repo-map retrieval), per-agent profiles (Codex CLI, Claude Code, Aider,
+  Cursor, SWE-agent), and why the retrieval family predicts an agent's sensitivity to
+  repo bloat — motivating a pre-registered cross-agent extension. Cited.
 
 ## Planned layout
 
@@ -53,10 +59,11 @@ research/repo-bloat-benchmark/
 Still to confirm (does not block scenario authoring): exact Codex model id +
 reasoning effort, whether Codex exposes a supported seed, whether its
 transcript exposes per-request `usage` **and tool-result content** (for token-level
-context-penetration attribution), and whether Codex shells out for reads/search.
-Tool-result content, or a harness wrapper that captures surfaced read/search
-content, is a blocker for token-level context-penetration metrics; without it,
-token-dose thresholds must be demoted before runs.
+context-penetration attribution), and the pinned Codex read/search execution path
+(shell-spawned, direct local reads, or any server-side/MCP retrieval). Tool-result
+content, or a harness wrapper that captures surfaced read/search content, is a
+blocker for token-level context-penetration metrics; without it, token-dose
+thresholds must be demoted before runs.
 
 ## Ground rules (see design §2)
 
