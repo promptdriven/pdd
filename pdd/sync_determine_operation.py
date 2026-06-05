@@ -2060,7 +2060,7 @@ def sync_determine_operation(
 ) -> SyncDecision:
     """
     Core decision-making function for sync operations with skip flag awareness.
-    
+
     Args:
         basename: The base name for the PDD unit
         language: The programming language
@@ -2071,11 +2071,11 @@ def sync_determine_operation(
         skip_tests: If True, skip test generation and execution
         skip_verify: If True, skip verification operations
         read_only: If True, do not mutate metadata while analyzing state
-    
+
     Returns:
         SyncDecision object with the recommended operation
     """
-    
+
     analysis_read_only = read_only or log_mode
     if log_mode or read_only:
         # Skip locking for read-only analysis
@@ -2110,7 +2110,7 @@ def _perform_sync_analysis(
 ) -> SyncDecision:
     """
     Perform the sync state analysis without locking concerns.
-    
+
     Args:
         basename: The base name for the PDD unit
         language: The programming language
@@ -2120,21 +2120,21 @@ def _perform_sync_analysis(
         skip_tests: If True, skip test generation and execution
         skip_verify: If True, skip verification operations
         read_only: If True, avoid metadata mutations while analyzing state
-    
+
     Returns:
         SyncDecision object with the recommended operation
     """
     # 1. Check Runtime Signals First (Highest Priority)
     # Workflow Order (from whitepaper):
     # 1. auto-deps (find context/dependencies)
-    # 2. generate (create code module)  
+    # 2. generate (create code module)
     # 3. example (create usage example)
     # 4. crash (resolve crashes if code doesn't run)
     # 5. verify (verify example runs correctly after crash fix)
     # 6. test (generate unit tests)
     # 7. fix (resolve bugs found by tests)
     # 8. update (sync changes back to prompt)
-    
+
     # Issue #1211: resolve file paths first so fingerprint/run-report reads
     # below can locate the subproject .pdd/meta via upward .pddrc detection
     # from those paths — even when run CWD is above the subproject.
@@ -2242,7 +2242,7 @@ def _perform_sync_analysis(
                     'fingerprint_command': fingerprint.command
                 }
             )
-        
+
         # Check test failures (after crash verification check)
         if run_report.tests_failed > 0:
             # First check if the test file actually exists
@@ -2277,7 +2277,7 @@ def _perform_sync_analysis(
                         'test_file_exists': False
                     }
                 )
-        
+
         # Then check for runtime crashes (only if no test failures)
         if run_report.exit_code != 0:
             # Bug #349: If tests passed, ignore non-zero exit code (likely tooling noise)
@@ -2316,7 +2316,7 @@ def _perform_sync_analysis(
                             'decision_rationale': 'crash_without_history'
                         }
                     )
-        
+
         if run_report.coverage < target_coverage:
             if skip_tests:
                 # When tests are skipped but coverage is low, consider workflow complete
@@ -2409,6 +2409,25 @@ def _perform_sync_analysis(
                             'skip_reason': 'non-python language'
                         }
                     )
+
+                if os.environ.get("PDD_DISABLE_TEST_EXTEND", "").lower() in ("1", "true", "yes", "on"):
+                    return SyncDecision(
+                        operation='all_synced',
+                        reason=f'Tests pass ({run_report.tests_passed} passed) but test_extend is disabled by PDD_DISABLE_TEST_EXTEND - accepting as complete',
+                        confidence=0.90,
+                        estimated_cost=estimate_operation_cost('all_synced'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'current_coverage': run_report.coverage,
+                            'target_coverage': target_coverage,
+                            'tests_passed': run_report.tests_passed,
+                            'tests_failed': run_report.tests_failed,
+                            'test_extend_skipped': True,
+                            'language': language,
+                            'skip_reason': 'PDD_DISABLE_TEST_EXTEND'
+                        }
+                    )
+
                 # Return 'test_extend' to signal we need to ADD more tests, not regenerate
                 return SyncDecision(
                     operation='test_extend',
@@ -2459,13 +2478,13 @@ def _perform_sync_analysis(
                         'tests_failed': run_report.tests_failed
                     }
                 )
-    
+
     # 2. Analyze File State
     paths = get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)
     # Issue #522: Pass stored include deps so prompt hash accounts for dependency changes
     stored_deps = fingerprint.include_deps if fingerprint else None
     current_hashes = calculate_current_hashes(paths, stored_include_deps=stored_deps)
-    
+
     # 3. Implement the Decision Tree
     if not fingerprint:
         # No Fingerprint (New or Untracked Unit)
@@ -2509,22 +2528,22 @@ def _perform_sync_analysis(
                     'fingerprint_found': False
                 }
             )
-    
+
     # CRITICAL FIX: Validate expected files exist before hash comparison
     if fingerprint:
         file_validation = validate_expected_files(fingerprint, paths)
         missing_expected_files = [
-            file_type for file_type, exists in file_validation.items() 
+            file_type for file_type, exists in file_validation.items()
             if not exists
         ]
-        
+
         if missing_expected_files:
             # Files are missing that should exist - need to regenerate
             # This prevents the incorrect analyze_conflict decision
             return _handle_missing_expected_files(
                 missing_expected_files, paths, fingerprint, basename, language, prompts_dir, skip_tests, skip_verify, isolated_replay_or_repair
             )
-    
+
     # Compare hashes only for files that actually exist (prevents None != "hash" false positives)
     changes = []
     if fingerprint:
@@ -2537,7 +2556,7 @@ def _perform_sync_analysis(
             changes.append('example')
         if paths['test'].exists() and current_hashes.get('test_hash') != fingerprint.test_hash:
             changes.append('test')
-    
+
     if not changes:
         # No Changes (Hashes Match Fingerprint) - Progress workflow with skip awareness
         if _is_workflow_complete(paths, skip_tests, skip_verify, basename, language):
@@ -2563,7 +2582,7 @@ def _perform_sync_analysis(
             if not run_report or run_report.exit_code != 0:
                 # Bug #349: If tests passed, ignore non-zero exit code
                 tests_passed_successfully = run_report and run_report.tests_passed > 0 and run_report.tests_failed == 0
-                
+
                 if not tests_passed_successfully:
                     return SyncDecision(
                         operation='crash',
@@ -2601,7 +2620,7 @@ def _perform_sync_analysis(
             # Need to re-run tests to get accurate results
             # Bug #349: Also check if tests passed successfully even if exit_code != 0
             is_success = run_report and ((run_report.exit_code == 0) or (run_report.tests_passed > 0 and run_report.tests_failed == 0))
-            
+
             if is_success:
                 return SyncDecision(
                     operation='test',
@@ -2631,7 +2650,7 @@ def _perform_sync_analysis(
                     'example_exists': False
                 }
             )
-        
+
         if (paths['code'].exists() and paths['example'].exists() and
             not skip_tests and not paths['test'].exists()):
 
@@ -2722,7 +2741,7 @@ def _perform_sync_analysis(
                         'workflow_stage': 'test_generation'
                     }
                 )
-        
+
         # Some files are missing but no changes detected
         if not paths['code'].exists():
             if paths['prompt'].exists():
@@ -2741,7 +2760,7 @@ def _perform_sync_analysis(
                             'previous_command': fingerprint.command
                         }
                     )
-                
+
                 prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
                 if check_for_dependencies(prompt_content):
                     return SyncDecision(
@@ -2769,11 +2788,11 @@ def _perform_sync_analysis(
                             'has_dependencies': False
                         }
                     )
-    
+
     elif len(changes) == 1:
         # Simple Changes (Single File Modified)
         change = changes[0]
-        
+
         if change == 'prompt':
             prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
             if check_for_dependencies(prompt_content):
@@ -2802,7 +2821,7 @@ def _perform_sync_analysis(
                         'prompt_changed': True
                     }
                 )
-        
+
         elif change == 'code':
             return SyncDecision(
                 operation='update',
@@ -2815,7 +2834,7 @@ def _perform_sync_analysis(
                     'code_changed': True
                 }
             )
-        
+
         elif change == 'test':
             return SyncDecision(
                 operation='test',
@@ -2828,7 +2847,7 @@ def _perform_sync_analysis(
                     'test_changed': True
                 }
             )
-        
+
         elif change == 'example':
             return SyncDecision(
                 operation='verify',
@@ -2841,7 +2860,7 @@ def _perform_sync_analysis(
                     'example_changed': True
                 }
             )
-    
+
     else:
         # Complex Changes (Multiple Files Modified)
         # CRITICAL: Only treat as conflict if prompt changed along with derived artifacts
@@ -2950,7 +2969,7 @@ def _perform_sync_analysis(
                         'prompt_changed': False
                     }
                 )
-    
+
     # Fallback - should not reach here normally
     return SyncDecision(
         operation='nothing',
@@ -2964,8 +2983,6 @@ def _perform_sync_analysis(
             'fallback': True
         }
     )
-
-
 def analyze_conflict_with_llm(
     basename: str,
     language: str,
