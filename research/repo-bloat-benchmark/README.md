@@ -54,14 +54,20 @@ Still to confirm (does not block scenario authoring): exact Codex model id +
 reasoning effort, whether Codex exposes a supported seed, whether its
 transcript exposes per-request `usage` **and tool-result content** (for token-level
 context-penetration attribution), and whether Codex shells out for reads/search.
+Tool-result content, or a harness wrapper that captures surfaced read/search
+content, is a blocker for token-level context-penetration metrics; without it,
+token-dose thresholds must be demoted before runs.
 
 ## Ground rules (see design §2)
 
 - Determinism + content hashing before any model run.
 - Distractors are the upstream repo's own files outside the target's dependency
-  closure; contamination of the *fix* is precluded by seeding a novel bug.
+  closure; each seed needs a novelty audit because an oracle patch can otherwise
+  be an upstream-code restoration.
 - Hidden verifiers are physically isolated and never enter the agent's context.
 - Only distractor volume varies across sizes; everything else is held constant.
+- Every materialized size variant must pass the oracle equivalence gate: registered
+  baseline outcomes match and the oracle fix passes visible + hidden verification.
 - Hidden success is the sole verdict; a visible pass with a hidden failure is a failure.
 
 ## Status
@@ -69,8 +75,9 @@ context-penetration attribution), and whether Codex shells out for reads/search.
 - [x] Design document drafted.
 - [x] §10 pilot decisions locked.
 - [ ] Upstream OSS repos chosen + vendored as pinned snapshots (license/provenance recorded).
-- [ ] Scenarios defined (sliced cores + seeded bugs + hidden verifiers).
+- [ ] Scenarios defined (sliced cores + seeded bugs + hidden verifiers + seed-novelty audits).
 - [ ] Token-budgeted distractor manifests committed.
+- [ ] Oracle equivalence gate passed for every `(scenario, size)` variant.
 - [ ] Harness + instrumentation implemented.
 - [ ] Pilot runs + report.
 

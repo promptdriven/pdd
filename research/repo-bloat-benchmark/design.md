@@ -19,7 +19,7 @@ Operationalized:
 
 The benchmark holds the *task* constant and varies *only* the volume of irrelevant co-resident files, then measures whether the agent reads more, searches more, spends more tokens, edits the wrong files, or fails hidden tests as the repo grows. Critically, it also measures **how much of that irrelevant bulk actually crosses into the model's context window** (vs. is merely visited on disk and dropped), so the "effective context window" claim is tested against the *in-context distractor dose* in tokens — not just against on-disk repo size.
 
-**Where the repos come from.** Rather than hand-author repos and a synthetic distractor pool, each scenario is built from a **real open-source repository**, pinned to a commit, then *dependency-sliced* to a minimal runnable **core** into which we **seed one controlled bug**. The repo's own files that lie *outside* that core are the distractor pool; bloat is produced by deterministically **regrowing** those real files back to a token budget ([§5](#5-distractor-sourcing-strategy-subset-and-regrow)). This makes distractors intrinsically realistic (they are the project's actual code) while keeping the manipulation fully controlled and the fix itself absent from any training data.
+**Where the repos come from.** Rather than hand-author repos and a synthetic distractor pool, each scenario is built from a **real open-source repository**, pinned to a commit, then *dependency-sliced* to a minimal runnable **core** into which we **seed one controlled bug**. The repo's own files that lie *outside* that core are the distractor pool; bloat is produced by deterministically **regrowing** those real files back to a token budget ([§5](#5-distractor-sourcing-strategy-subset-and-regrow)). This makes distractors intrinsically realistic (they are the project's actual code) while keeping the manipulation fully controlled. Because public upstream code may be memorized, the design does **not** assert by default that the oracle fix is absent from training data; each seed must pass a seed-novelty audit or be reported under an explicit upstream-recall caveat.
 
 This document is the design deliverable for the pilot. It specifies, in order:
 
@@ -56,7 +56,7 @@ These constraints come directly from issue #1209's "Hold constant", "Distractor 
 - **Hidden-test isolation.** Hidden verifiers live outside the repo tree handed to the agent and are never placed in model context, never copied as distractors, and never used as grounding. Visible tests and hidden verifiers are physically separate trees.
 - **Only one thing varies.** Across sizes `S ∈ {1x, 5x, 20x, 50x}` for a given scenario, the **core** (the dependency-sliced slice the seeded bug lives in), task brief, target files, allowed edit scope, model, timeout, visible tests, and hidden verifier are byte-identical. The *only* difference is the set of regrown out-of-core distractor files.
 - **Realistic distractors, by construction.** Distractors are the **repo's own files that lie outside the target's dependency closure** — real, same-project code with the project's actual vocabulary, imports, and layout. A file is a distractor *iff* it is outside that closure, decided **statically before any run** (never by what the agent did). No random filler, no synthetic noise, no templated siblings, no files that change target behavior by merely existing, no import collisions, no leaked answers. (This replaces the prior hand-authored/templated pool and its "honesty cost" — see [§5.3](#53-sourcing-and-placing-distractor-files).)
-- **Contamination is controlled by the seed, not the repo.** The base repo may appear in model training data, but the **seeded bug and its hidden verifier are novel**, so the *fix* cannot be memorized. Residual "the agent may know the repo's layout from training" risk is mitigated by repo choice and recorded as a methodology caveat ([§7.4](#74-methodology-note), [§11](#11-non-goals-carried-from-the-issue)).
+- **Contamination is measured, not wished away.** The base repo may appear in model training data, and for a public OSS snapshot the oracle patch might be equivalent to restoring upstream code the model has seen. Before runs, each seed must pass a **seed-novelty audit** showing the oracle patch is not a byte-for-byte restoration of the upstream file and is not a trivial semantic restoration of the pre-seed behavior. Seeds that cannot clear that audit remain eligible only as a pre-registered caveat/stratum for upstream-code recall, not as evidence that the fix was novel. Residual layout-familiarity and upstream-recall risks are recorded in the methodology note ([§7.4](#74-methodology-note), [§11](#11-non-goals-carried-from-the-issue)).
 - **No benchmark tell.** Nothing the agent can observe inside the sandbox may reveal which files are distractors vs. target. The manifest is never mounted into the sandbox; distractors carry **no marker** — no `_distractors/` directory, no naming prefix, no tier label, no comment. They are interleaved into realistic locations and named like real code. A file may be distinguishable as irrelevant **only by genuine reasoning** (reachability, imports, test references) — never by a benchmark artifact. Distractor-vs-target classification for metrics is done **post-hoc** by the harness against the out-of-tree manifest, not by anything in the repo. *(See [§3.3](#33-determinism-and-isolation-guarantees), [§5.3](#53-sourcing-and-placing-distractor-files), [§6.2](#62-how-we-capture-it-defense-in-depth).)*
 - **Hidden success is the verdict.** A visible-test pass with a hidden-verifier failure counts as a failure. Token economy is secondary to whether the agent actually fixed the bug under the hidden contract.
 - **Reproducible by a third party.** The harness, raw traces, manifests, and analysis must let an external evaluator re-derive every table from raw logs.
@@ -175,7 +175,7 @@ Each scenario starts from a pinned upstream repository chosen so that:
 - it has a **permissive, redistribution-compatible license** (e.g. MIT/BSD/Apache-2.0) — recorded with provenance so the vendored snapshot can live in this branch;
 - it is **buildable and test-runnable fully offline** (no network/service deps at test time), so runs are deterministic and the [§8.1.1](#811-run-environment-freeze-review-3) network lockdown holds;
 - it is **large enough** that regrowing its own out-of-core files reaches the 50x token budget, yet a minimal core stays small enough to run inside the timeout;
-- it is **not so canonical** that its structure is trivially memorized (prefer mid-popularity / recent projects); contamination of *layout* is a recorded caveat, contamination of the *fix* is precluded by seeding (below).
+- it is **not so canonical** that its structure is trivially memorized (prefer mid-popularity / recent projects); contamination of *layout* is a recorded caveat, and contamination of the *fix* is handled by the seed-novelty audit below.
 
 To reduce single-codebase bias, the 3 scenarios should draw on **distinct repos / subsystems / vocabularies** (one language is fine for the pilot).
 
@@ -184,12 +184,29 @@ To reduce single-codebase bias, the 3 scenarios should draw on **distinct repos 
 For each chosen repo, the harness derives the scenario as a pure, recorded transform:
 
 1. **Pick a target site** — a file/function whose behavior is under-covered by the upstream visible tests (so a hidden verifier can pin down what they miss).
-2. **Seed one controlled bug** at that site (`seed.patch`) — a single, unambiguous behavior defect. The fix is therefore **novel and absent from training data**.
+2. **Seed one controlled bug** at that site (`seed.patch`) — a single, unambiguous behavior defect.
 3. **Compute the minimal core** — the dependency closure required for the relevant visible tests to run: start from `{target, its tests}`, add imports/fixtures until the visible suite executes, stop. `core_files.txt` records membership. This core is the 1x base repo.
 4. **Author the hidden verifier** for the seeded bug, exercising behavior the visible tests do not fully pin down; it lives out-of-tree (`hidden/`).
 5. **Define the distractor pool** as `snapshot ∖ core`. Every file outside the core is, by construction, a real same-project distractor ([§5](#5-distractor-sourcing-strategy-subset-and-regrow)).
+6. **Run the seed-novelty audit** before accepting the scenario:
+   - byte-compare the oracle-fixed target file(s) against the pinned upstream file(s); a byte-for-byte restoration fails the novelty claim;
+   - review the oracle patch for semantic restoration of upstream behavior (for example, simply undoing the seeded hunk with no new logic); if it restores upstream semantics, record the scenario as an upstream-recall stratum or replace the seed;
+   - commit `seed_novelty.md` with the audit result, reviewer, oracle patch hash, upstream target hash, and final classification (`novel`, `upstream_recall_caveat`, or `rejected`).
 
 A scenario must verify **deterministically** (no flakiness, wall-clock, or network dependence) and have a **localized ground-truth edit** (the seeded target file(s)) so "wrong-file edit" is well defined.
+
+### 4.1.2 Variant/oracle equivalence gate (pre-run)
+
+Subsetting from visible tests and then regrowing files at original paths can accidentally change behavior across sizes via hidden-verifier dependencies, dynamic imports, package discovery, plugins/config, optional dependencies, or import shadowing. Therefore every materialized variant must pass an **oracle equivalence gate** before any model run.
+
+For each `(scenario, size)` variant (`1x`, `5x`, `20x`, `50x`) under one fixed dependency environment, the harness records:
+
+- baseline visible-test result and baseline hidden-verifier result on the seeded bug;
+- oracle-fixed visible-test result and oracle-fixed hidden-verifier result;
+- dependency/runtime fingerprint used for both visible and hidden verification;
+- import/module resolution diff against the `1x` variant for target and verifier entrypoints.
+
+The required invariant is: baseline outcomes match the registered scenario expectation for every size, and the oracle fix passes visible + hidden verification for every size. Any hidden-verifier support files, runtime dependencies, fixtures, config, plugin metadata, or optional dependencies needed to make that invariant true are part of the invariant core or harness support, never the size-varying distractor pool. A variant that changes package discovery/import shadowing or verifier behavior is invalid until the core/pool boundary is repaired and all manifests are regenerated before runs.
 
 ### 4.2 `scenario.json` descriptor
 
@@ -310,7 +327,7 @@ If the pilot shows agents skip distractors regardless of size (flat `irrelevant_
 - no distractor is imported by the core (guaranteed by the dependency closure; re-asserted),
 - no distractor changes target behavior by existing (no `conftest`/plugin/`sitecustomize` side effects, no shadowing of a core import path) — upstream test-config files outside the core are excluded from the pool,
 - no hidden-verifier file or its content is ever included,
-- no distractor contains the seeded contract's answer (checked against a denylist of hidden-assertion tokens — cheap insurance even though the seeded fix is novel),
+- no distractor contains the seeded contract's answer (checked against a denylist of hidden-assertion tokens — cheap insurance alongside the seed-novelty audit),
 - admitted distractors import cleanly (dependency-closed grouping) so none is trivially ignorable as broken.
 
 ### 5.4 Determinism
@@ -390,9 +407,10 @@ For every run, segmented at the **first edit** boundary (the issue's key cut poi
 
 This family answers the question the FS tap *cannot*: of all the distractor material, what fraction the agent **pulled into its context window** versus merely **visited on disk and dropped**. It is the direct mechanism behind the "effective context window" claim.
 
-- `distractor_tokens_in_context` — input tokens attributable to **distractor-file content surfaced into model requests** (tool/read results that became part of a subsequent prompt), summed over the run; also split `_before_first_edit`. Provider-`usage`/transcript-derived, attributed to distractors post-hoc against the manifest ([§6.2](#62-how-we-capture-it-defense-in-depth)).
-- `distractor_context_share` = `distractor_tokens_in_context / input_tokens_per_run` — the fraction of the model's *consumed* context that was irrelevant bulk (window occupancy by distractors).
-- `distractor_pool_penetration` = `distractor_tokens_in_context / distractor_tokens_on_disk` — the fraction of the *provisioned* dose ([§5.1](#51-sizing-model-token-budgeted)) that actually crossed into the window.
+- `distractor_context_tokens_total` — repeat-counted input tokens attributable to **distractor-file content surfaced into model requests** (tool/read results that became part of a subsequent prompt), summed over the run; also split `_before_first_edit`. If the same snippet appears in three requests, it counts three times because it occupied three request windows.
+- `distractor_context_share` = `distractor_context_tokens_total / input_tokens_per_run` — the fraction of the model's *consumed* context that was irrelevant bulk (repeat-counted window occupancy by distractors).
+- `distractor_unique_tokens_entered_context` — de-duplicated distractor tokens whose file spans entered context at least once, capped per file/span so repeated resurfacing cannot inflate coverage.
+- `distractor_pool_coverage` = `distractor_unique_tokens_entered_context / distractor_tokens_on_disk` — the fraction of the *provisioned* distractor pool ([§5.1](#51-sizing-model-token-budgeted)) that crossed into the window at least once. This is a unique-coverage metric and is bounded to `[0, 1]`.
 - `distractor_files_entered_context` — distinct distractor files whose content reached a model request.
 - `distractor_files_visited_not_contextualized` — distractor files **opened/searched on disk (FS tap) but whose content never entered a model request** — the "visited but not added to context" set. (= FS-distractor-read set ∖ context-entered set; a non-trivial value here means the agent's search tooling shielded the window from bulk it physically touched.)
 
@@ -415,7 +433,7 @@ The agent arm may report some of this; we do **not** trust self-report alone. Th
    The container needs `/dev/fuse` + `CAP_SYS_ADMIN`. FUSE adds per-read latency, which inflates `wall_clock_seconds` (a secondary metric) but **not** the read/token *counts* that are the primary signal — flagged in the methodology note ([§7.4](#74-methodology-note)). This kernel/FS-boundary tap is chosen over an in-process shim precisely because Codex may shell out to tools (`ripgrep`, `grep`, subprocesses) whose reads a wrapper shim would miss.
 2. **Tool-call / transcript tap.** The agent runner emits a structured event log of tool invocations (search, read, edit, shell) and per-request token accounting from the provider response `usage` (input tokens, output tokens, with request timestamps). **All `input_tokens_*` metrics come exclusively from this provider accounting**, split at the first-edit boundary by request timestamp — never derived from filesystem bytes. The tool-call counts yield `search_or_tool_calls_before_first_edit`. (If Codex's emitted transcript does not expose per-request `usage`, that is a blocker resolved in [§8.1](#81-agentic_code_patch-pilot-required) before runs — token metrics must have a real source.) The `pdd context-audit` token accounting (#789, pending) and `pdd.server.token_counter` utilities are reused only for the deferred prompt-space arm.
 
-   **Content attribution for context-window penetration.** This tap also records, for every tool result that returns file content (read/search/grep output) and is carried into a subsequent request, the **content actually surfaced**. In analysis the harness attributes each surfaced span to a `core` / `distractor` / `hidden`(should-never-happen) path by matching it against the materialized tree + manifest, tokenizes the distractor spans with the pinned tokenizer, and reconciles the total against provider `usage` so attribution cannot exceed measured input tokens. This yields the [§6.1](#61-what-we-capture) penetration family (`distractor_tokens_in_context`, `distractor_context_share`, `distractor_pool_penetration`, `distractor_files_entered_context`). The "visited-but-not-contextualized" set is the FS-tap distractor-read set minus the set of distractor paths whose content appears in any request. *(Feasibility caveat, mirrored in [§8.1.1](#811-run-environment-freeze-review-3) "still to confirm": this requires the Codex transcript to expose tool-result content, or a wrapper that captures it; if only token counts are available, penetration is reported at file granularity from the FS↔request join and the token-level split is marked best-effort.)*
+   **Content attribution for context-window penetration.** This tap also records, for every tool result that returns file content (read/search/grep output) and is carried into a subsequent request, the **content actually surfaced**. In analysis the harness attributes each surfaced span to a `core` / `distractor` / `hidden`(should-never-happen) path by matching it against the materialized tree + manifest, tokenizes the distractor spans with the pinned tokenizer, and reconciles repeat-counted attribution against provider `usage` so attributed input cannot exceed measured input tokens for a request. It separately computes de-duplicated span coverage per distractor file for `distractor_unique_tokens_entered_context` and `distractor_pool_coverage`. This yields the [§6.1](#61-what-we-capture) penetration family (`distractor_context_tokens_total`, `distractor_context_share`, `distractor_unique_tokens_entered_context`, `distractor_pool_coverage`, `distractor_files_entered_context`). The "visited-but-not-contextualized" set is the FS-tap distractor-read set minus the set of distractor paths whose content appears in any request. **Pre-run blocker:** Codex's transcript must expose tool-result content, or the harness must wrap read/search tools to capture surfaced content. If neither is available, token-level context-penetration and token-dose thresholds are removed/demoted before runs; they are not reported from approximate attribution.
 3. **Git diff tap (ground truth for edits).** Post-run `git diff` against the pre-run baseline classifies every changed path as target / in-scope / wrong-file / forbidden, giving `wrong_file_edit_rate` and `forbidden_file_edits` independent of the transcript.
 
 The **first-edit boundary** is determined by the first write event that lands in the OverlayFS `upperdir` (tap 1), and is used to split tap-2 events into before/after. The git-diff tap (3) is retained as a redundant cross-check on the OverlayFS `upperdir`, not the primary edit source.
@@ -465,10 +483,11 @@ One JSONL line per run, plus pointers to raw trace artifacts:
   "forbidden_file_edits": 0,
 
   "distractor_tokens_on_disk": 97280,
-  "distractor_tokens_in_context": 0,
-  "distractor_tokens_in_context_before_first_edit": 0,
+  "distractor_context_tokens_total": 0,
+  "distractor_context_tokens_total_before_first_edit": 0,
   "distractor_context_share": 0.0,
-  "distractor_pool_penetration": 0.0,
+  "distractor_unique_tokens_entered_context": 0,
+  "distractor_pool_coverage": 0.0,
   "distractor_files_entered_context": 0,
   "distractor_files_visited_not_contextualized": 0,
 
@@ -539,9 +558,9 @@ The report turns run records into per-size tables, trend fits, and an explicit v
 | `input_tokens_per_run`            |    |    |     |     |
 | `input_tokens_per_hidden_success` |    |    |     |     |
 | `irrelevant_file_read_ratio`      |    |    |     |     |
-| `distractor_tokens_in_context`    |    |    |     |     |
+| `distractor_context_tokens_total` |    |    |     |     |
 | `distractor_context_share`        |    |    |     |     |
-| `distractor_pool_penetration`     |    |    |     |     |
+| `distractor_pool_coverage`        |    |    |     |     |
 | `wrong_file_edit_rate`            |    |    |     |     |
 | `wall_clock_seconds`              |    |    |     |     |
 | `max_request_input_tokens`        |    |    |     |     |
@@ -564,21 +583,21 @@ hidden_pass_rate       by S         (table + line)
 **Token-dose fits (the sharpened effective-context test).** Beyond the on-disk-size axis above, regress outcomes against the **realized in-context distractor dose** — the tokens that actually occupied the window — since that is the mechanism the claim names:
 
 ```
-hidden_pass_rate      ≈ α + β · distractor_tokens_in_context     (headline; expect β < 0 if claim holds)
-files_read_before_edit ≈ α + β · distractor_tokens_in_context
-distractor_pool_penetration  by S    (does more on-disk bloat actually reach the window, or does search shield it?)
+hidden_pass_rate      ≈ α + β · distractor_context_tokens_total     (headline; expect β < 0 if claim holds)
+files_read_before_edit ≈ α + β · distractor_context_tokens_total
+distractor_pool_coverage  by S    (does more on-disk bloat actually reach the window at least once, or does search shield it?)
 ```
 
-The directional read is: a positive `β` for cost metrics whose magnitude crosses the pre-registered practical threshold ([§7.5](#75-conclusion-required-pre-committed-interpretation)), and/or a `hidden_pass_rate` decline past its threshold (against either `S` *or* in-context dose), is the **supporting** signal; slopes within the threshold band are the **weakening** signal; trends swamped by replicate dispersion are **inconclusive**. The penetration axis also disambiguates a flat result: if `hidden_pass_rate` is flat *because* `distractor_pool_penetration` stays near zero (the agent never let the bulk into its window), that is a different finding from bloat entering the window without hurting success. We report effect sizes and let the thresholds — not a p-value on N=5 — drive the verdict.
+The directional read is: a positive `β` for cost metrics whose magnitude crosses the pre-registered practical threshold ([§7.5](#75-conclusion-required-pre-committed-interpretation)), and/or a `hidden_pass_rate` decline past its threshold (against either `S` *or* in-context dose), is the **supporting** signal; slopes within the threshold band are the **weakening** signal; trends swamped by replicate dispersion are **inconclusive**. The penetration axis also disambiguates a flat result: if `hidden_pass_rate` is flat *because* `distractor_pool_coverage` stays near zero (the agent never let the bulk into its window), that is a different finding from bloat entering the window without hurting success. We report effect sizes and let the thresholds — not a p-value on N=5 — drive the verdict.
 
 ### 7.3 Plots
 
 - `hidden_pass_rate` vs `S` (primary — the headline).
-- `hidden_pass_rate` vs `distractor_tokens_in_context` (token-dose headline — the sharpened effective-context view).
+- `hidden_pass_rate` vs `distractor_context_tokens_total` (token-dose headline — the sharpened effective-context view).
 - `input_tokens_per_run` vs `additional_repo_loc` (with slope fit).
 - `files_read_before_first_edit` vs `S`.
 - `irrelevant_file_read_ratio` vs `S`, stacked by distractor tier.
-- `distractor_pool_penetration` and `distractor_context_share` vs `S`, stacked by distractor tier (how much provisioned bulk actually reaches the window, and from which tiers).
+- `distractor_pool_coverage` and `distractor_context_share` vs `S`, stacked by distractor tier (how much provisioned bulk actually reaches the window, and from which tiers).
 - Failure-class breakdown per `S` (stacked bar).
 
 ### 7.4 Methodology note
@@ -586,9 +605,9 @@ The directional read is: a positive `β` for cost metrics whose magnitude crosse
 A short prose section recording, per the acceptance criteria:
 
 - what was held constant vs varied,
-- **upstream provenance** per scenario — repo, pinned commit, license, `snapshot_sha256` — and the `seed.patch` that introduced the bug (so the task is auditable and the fix is shown to be novel),
+- **upstream provenance** per scenario — repo, pinned commit, license, `snapshot_sha256` — and the `seed.patch` that introduced the bug, plus `seed_novelty.md` classifying whether the oracle fix is novel or an upstream-recall caveat,
 - **how the core was derived** — the dependency-closure procedure ([§4.1.1](#411-subsetting--seeding-procedure-deterministic-pre-run)) and the resulting `core_files.txt`, which defines distractor membership,
-- the **contamination caveat** — the base repo may appear in training data; the seeded bug/verifier are novel so the fix cannot be memorized, but any residual layout-familiarity effect is acknowledged (and is a reason a flat localization curve is interpreted cautiously),
+- the **contamination caveat** — the base repo may appear in training data; the seed-novelty audit reports whether the oracle fix could be upstream-code recall, and residual layout-familiarity is a reason a flat localization curve is interpreted cautiously,
 - how hidden-test isolation was enforced (and the harness assertion that proves the hidden tree never entered the agent sandbox),
 - how distractor-label isolation was enforced — that the manifest and full snapshot never entered the sandbox, that distractors were real files at their real upstream paths with no on-disk marker, and that distractor/core classification was applied post-hoc against `core_files.txt` + the manifest,
 - the **two token notions** kept separate (provisioned on-disk dose vs. realized in-context dose) and how in-context penetration was attributed to distractor paths and reconciled against provider `usage` ([§6.2](#62-how-we-capture-it-defense-in-depth)),
@@ -607,8 +626,8 @@ A short prose section recording, per the acceptance criteria:
 |-----------|-------------------------------------------|
 | Localization-cost rise | ≥ **2×** in `input_tokens_per_run` **or** in `files_read_before_first_edit`, monotone non-decreasing across `S` |
 | Targeting degradation | `irrelevant_file_read_ratio` rises by ≥ **0.20** absolute |
-| Context-window penetration | `distractor_context_share` rises by ≥ **0.20** absolute *and* `distractor_pool_penetration` is non-trivial (≥ **0.10**) at 50x — i.e. the bulk genuinely reaches the window rather than being shielded by search |
-| Hidden-success drop | `hidden_pass_rate` falls by ≥ **20 percentage points** across `S`, **or** a negative `hidden_pass_rate`-vs-`distractor_tokens_in_context` slope whose 1x→50x fitted drop is ≥ 20 pp |
+| Context-window penetration | `distractor_context_share` rises by ≥ **0.20** absolute *and* `distractor_pool_coverage` is non-trivial (≥ **0.10**) at 50x — i.e. the bulk genuinely reaches the window rather than being shielded by search |
+| Hidden-success drop | `hidden_pass_rate` falls by ≥ **20 percentage points** across `S`, **or** a negative `hidden_pass_rate`-vs-`distractor_context_tokens_total` slope whose 1x→50x fitted drop is ≥ 20 pp |
 | "Flat" (weakening evidence) | all of the above stay within half their threshold across every step |
 
 The report must then state, in plain language, whether the result:
@@ -660,12 +679,13 @@ A PDD-style prompt/test/spec context rendered from a fixed manifest. The key pro
 ## 9. Pilot execution checklist (maps to acceptance criteria)
 
 - [ ] 3 upstream OSS repos chosen (permissive license, offline-runnable), vendored as pinned snapshots with provenance + LICENSE recorded.
-- [ ] 3 frozen bug-fix scenarios defined (`scenario.json` + `task.md` + dependency-sliced `core/` + `core_files.txt` + `seed.patch` + hidden verifier); seeded fix shown to be novel.
+- [ ] 3 frozen bug-fix scenarios defined (`scenario.json` + `task.md` + dependency-sliced `core/` + `core_files.txt` + `seed.patch` + hidden verifier + `seed_novelty.md`); oracle fix classified as novel or upstream-recall caveat before runs.
 - [ ] Per-scenario size variants at 1x/5x/20x/50x by **token budget**, or a documented infeasibility reason.
+- [ ] Oracle equivalence gate passes for every materialized `(scenario, size)`: registered baseline outcomes match and the oracle fix passes visible + hidden verification under one fixed dependency environment.
 - [ ] Deterministic distractor manifests committed (+ `manifests.lock`) before any model run; distractors = real out-of-core files at upstream paths, admitted in dependency-closed groups, no on-disk marker.
 - [ ] Hidden verifiers physically separate from visible tests; harness asserts they never enter the agent sandbox.
 - [ ] Distractor manifest + full snapshot never mounted into the sandbox; distractor/core classification applied post-hoc against `core_files.txt`.
-- [ ] Context-window penetration captured (`distractor_tokens_in_context`, `distractor_context_share`, `distractor_pool_penetration`, visited-but-not-contextualized) and reconciled against provider `usage`.
+- [ ] Context-window penetration captured (`distractor_context_tokens_total`, `distractor_context_share`, `distractor_unique_tokens_entered_context`, `distractor_pool_coverage`, visited-but-not-contextualized) and reconciled against provider `usage`.
 - [ ] Codex run-environment frozen + fingerprinted (CLI version, model+effort, clean `CODEX_HOME`, no user config, ephemeral session, web/MCP/hook/network/cache settings explicit) — [§8.1.1](#811-run-environment-freeze-review-3).
 - [ ] Instrumentation calibration gate passes in-container before model runs — [§6.6](#66-instrumentation-calibration-gate-review-4).
 - [ ] Read-volume (`bytes_read_*`, FS tap) and token (`input_tokens_*`, provider `usage`) metrics kept separate; tokens never derived from bytes.
@@ -691,11 +711,11 @@ Frozen before any model run (pre-registration). A change to any of these is a ne
 
 1. **Exact Codex model id + reasoning-effort** setting to pin in the run config (must be stated in the report).
 2. **Codex read/search execution path** — confirm whether Codex shells out (e.g. `ripgrep`) vs reads in-process. Either way the kernel-level FUSE tap captures it; this only affects how we *reconcile* the transcript tap against the FS tap.
-3. **Tool-result content in the transcript** — confirm Codex's transcript exposes the *content* surfaced by read/search tools (not just token counts), so context-window penetration ([§6.1](#61-what-we-capture)) can be attributed to distractor paths at token granularity; otherwise penetration is reported at file granularity from the FS↔request join, with the token split marked best-effort.
+3. **Tool-result content in the transcript** — confirm Codex's transcript exposes the *content* surfaced by read/search tools (not just token counts), or add a harness wrapper that captures it. Without one of those sources, token-level context-penetration metrics and token-dose thresholds are blocked and must be demoted/removed before runs.
 
 ### Consequence of choice #3 (real-OSS subset-and-regrow) — contamination guardrail
 
-Real repos give organic realism for free — distractors are the project's own files — which **removes** the hand-authored "synthetic filler" risk entirely: the issue's non-goal ("no synthetic filler an agent would trivially ignore") is satisfied by construction, not by a plausibility review. The trade is **training-data contamination**: a public repo may be partly memorized. We guard it by (a) **seeding a novel bug** so the *fix* cannot be recalled, only located; (b) preferring mid-popularity / recent repos; and (c) recording residual layout-familiarity as a methodology caveat and reading a flat localization curve cautiously in its light ([§7.4](#74-methodology-note), [§11](#11-non-goals-carried-from-the-issue)). The pre-run freeze check is now a **license + offline-runnability + seed-novelty audit** rather than a synthetic-plausibility spot-check.
+Real repos give organic realism for free — distractors are the project's own files — which **removes** the hand-authored "synthetic filler" risk entirely: the issue's non-goal ("no synthetic filler an agent would trivially ignore") is satisfied by construction, not by a plausibility review. The trade is **training-data contamination**: a public repo may be partly memorized, and an oracle patch can accidentally be a restoration of memorized upstream code. We guard it by (a) requiring a **seed-novelty audit** that rejects byte-for-byte upstream restorations and classifies semantic restorations as upstream-recall caveats; (b) preferring mid-popularity / recent repos; and (c) recording residual layout-familiarity and upstream-recall risk as methodology caveats and stratification criteria ([§7.4](#74-methodology-note), [§11](#11-non-goals-carried-from-the-issue)). The pre-run freeze check is now a **license + offline-runnability + seed-novelty audit + oracle equivalence gate** rather than a synthetic-plausibility spot-check.
 
 ---
 
@@ -706,7 +726,7 @@ Real repos give organic realism for free — distractors are the project's own f
 - Final target code and hidden tests are never used as grounding or distractors.
 - A visible-test pass with hidden failure is never counted as success.
 - No synthetic filler an agent would trivially ignore (now satisfied by construction — distractors are the repo's own files, [§5.3](#53-sourcing-and-placing-distractor-files)).
-- Not claiming the upstream repo is unseen by the model. We control contamination of the **fix** (novel seeded bug) but do not assert the **repo layout** is novel; layout-familiarity is a recorded caveat, not eliminated ([§7.4](#74-methodology-note)).
+- Not claiming the upstream repo is unseen by the model, or that every seeded fix is automatically novel. The seed-novelty audit records whether the oracle patch could be upstream-code recall; layout-familiarity is a recorded caveat, not eliminated ([§7.4](#74-methodology-note)).
 - Not a study of whole-repo comprehension: the agent sees the dependency-sliced core + regrown distractors, never the entire upstream snapshot at once.
 
 ---
