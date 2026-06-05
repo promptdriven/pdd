@@ -127,12 +127,14 @@ from .prompt import prompt_lint
     is_flag=True,
     default=False,
     help=(
-        "Canonical final PR gate (issue #1406). Requires --pr and --issue. "
-        "Runs the PR-scoped checkup (Layer 1, no new PR) then the "
-        "reviewer/fixer review-loop (Layer 2) on the resulting PR head, and "
-        "returns a real ship verdict (exit non-zero unless the PR is "
-        "shippable). This is what \"ready for maintainer review\" means once a "
-        "PR exists. Cannot be combined with --review-loop, --no-fix, "
+        "Canonical final PR gate (issue #1406). Requires --pr; --issue is "
+        "optional (#1441) — with no issue the PR is reviewed on its own merits "
+        "and the issue-alignment check is skipped, with --issue the PR is also "
+        "verified for issue alignment. Runs the PR-scoped checkup (Layer 1, no "
+        "new PR) then the reviewer/fixer review-loop (Layer 2) on the resulting "
+        "PR head, and returns a real ship verdict (exit non-zero unless the PR "
+        "is shippable). This is what \"ready for maintainer review\" means once "
+        "a PR exists. Cannot be combined with --review-loop, --no-fix, "
         "--review-only, --start-step, --no-gates, or --test-scope targeted "
         "(the verdict requires the deterministic gates and the full suite)."
     ),
@@ -584,6 +586,16 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     # ``--issue`` (no ``--pr``) is rejected — a standalone issue belongs in
     # default issue mode as the positional TARGET, not the ``--pr`` companion.
     pr_mode = pr_url is not None
+    # ``--final-gate`` is PR-scoped (#1406); ``--issue`` is OPTIONAL (#1441).
+    # Reject a missing ``--pr`` with the final-gate-specific message BEFORE the
+    # generic ``--issue requires --pr`` / ``--test-scope`` guards so a user who
+    # typed ``--final-gate`` sees the gate's own requirement, not an unrelated
+    # flag error (mirrors the library boundary, which fails the same way).
+    if final_gate and not pr_mode:
+        raise click.BadParameter(
+            "--final-gate requires --pr.",
+            param_hint="'--final-gate'",
+        )
     if test_scope == "targeted" and not pr_mode:
         raise click.BadParameter(
             "--test-scope targeted requires --pr (PR mode).",
@@ -604,15 +616,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             param_hint="'--review-loop'",
         )
     # ``--final-gate`` is the canonical two-layer PR-readiness gate (#1406). It
-    # requires both ``--pr`` and ``--issue`` and owns the review-loop as Layer 2,
-    # so it cannot be combined with flags that would contradict or duplicate the
-    # two-layer contract.
+    # requires ``--pr`` (enforced above) and owns the review-loop as Layer 2, so
+    # it cannot be combined with flags that would contradict or duplicate the
+    # two-layer contract. ``--issue`` is OPTIONAL (#1441): with no issue the gate
+    # reviews the PR on its own merits and the issue-alignment gate is skipped
+    # (the same merit-review path a plain ``--pr`` run already takes, #1292).
     if final_gate:
-        if not pr_mode or issue_url_opt is None:
-            raise click.BadParameter(
-                "--final-gate requires --pr and --issue.",
-                param_hint="'--final-gate'",
-            )
         if review_loop:
             raise click.BadParameter(
                 "--final-gate already runs the review-loop as Layer 2; do not "

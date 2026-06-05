@@ -499,7 +499,7 @@ _pdd_checkup() {
     '--pr[Target PR number or URL]:pr:' \
     '--issue[Target issue number or URL]:issue:' \
     '--review-loop[Enable PR review loop]' \
-    '--final-gate[Canonical final PR gate: PR checkup then review-loop (needs --pr and --issue)]' \
+    '--final-gate[Canonical final PR gate: PR checkup then review-loop (needs --pr; --issue optional)]' \
     '--test-scope[PR-mode test scope]:scope:(full targeted)' \
     '--no-gates[Disable deterministic local gates (issue #1092)]' \
     '--gate-timeout[Per-gate wall-clock timeout in seconds (default 60)]:seconds:' \

@@ -4354,6 +4354,61 @@ class TestPromptInjection:
         assert "every valid" in prompt
         assert 'Do not use\n"focused"' in prompt
 
+    def test_review_prompt_merit_mode_when_no_issue(self, tmp_path: Path) -> None:
+        """Issue #1441: with no source issue (``has_issue=False``) the reviewer
+        must review the PR on its own merits — no "Original issue:" framing and
+        no demand for an issue-alignment verdict. Otherwise the live reviewer can
+        reasonably file a "no linked issue / cannot verify alignment" finding,
+        which blocks on the open-findings gate and the no-issue final gate could
+        never pass."""
+        import dataclasses
+
+        from pdd.checkup_review_loop import ReviewLoopState, _review_prompt
+
+        context = dataclasses.replace(
+            _ctx(tmp_path), has_issue=False, issue_url="", issue_content=""
+        )
+        prompt = _review_prompt(
+            reviewer="codex",
+            context=context,
+            round_number=1,
+            state=ReviewLoopState(),
+            config=self._make_config(("blocker", "critical")),
+            mode="review",
+            findings_to_verify=[],
+        )
+
+        # Merit framing replaces issue framing.
+        assert "on its own merits" in prompt
+        assert "Original issue:" not in prompt
+        # No alignment verdict is requested in the returned JSON shape.
+        assert '"issue_aligned"' not in prompt
+        # The general manual PR-review standard still applies.
+        assert "manual request" in prompt
+        assert "caller-compatibility sweep" in prompt
+        assert "runtime data-shape boundaries" in prompt
+
+    def test_review_prompt_keeps_issue_framing_with_issue(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression guard: the issue-coupled framing (and the alignment
+        verdict) is unchanged when an issue is present (the default)."""
+        from pdd.checkup_review_loop import ReviewLoopState, _review_prompt
+
+        prompt = _review_prompt(
+            reviewer="codex",
+            context=_ctx(tmp_path),
+            round_number=1,
+            state=ReviewLoopState(),
+            config=self._make_config(("blocker", "critical")),
+            mode="review",
+            findings_to_verify=[],
+        )
+
+        assert "Original issue:" in prompt
+        assert '"issue_aligned"' in prompt
+        assert "https://github.com/o/r/issues/2" in prompt
+
 
 class TestScrubSecretsPatterns:
     """Direct unit tests for ``_scrub_secrets`` redaction patterns.

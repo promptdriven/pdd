@@ -426,10 +426,12 @@ def run_agentic_checkup(
             is based on the PR's head branch.
         review_loop: When true in PR mode, run the primary-reviewer/fixer
             loop instead of the legacy single-pass checkup path.
-        final_gate: When true in PR mode (requires an issue), run the canonical
-            two-layer final gate (issue #1406): Layer 1 is the PR-scoped checkup
-            orchestrator (no new PR), Layer 2 is the primary-reviewer/fixer
-            review loop on the resulting PR head. Unlike ``review_loop`` — whose
+        final_gate: When true in PR mode (requires a PR; the issue is optional,
+            #1441), run the canonical two-layer final gate (issue #1406): Layer 1
+            is the PR-scoped checkup orchestrator (no new PR), Layer 2 is the
+            primary-reviewer/fixer review loop on the resulting PR head. With no
+            issue the gate reviews the PR on its own merits and the
+            issue-alignment gate is skipped. Unlike ``review_loop`` — whose
             success only means "trustworthy report produced" — the returned
             ``success`` is a real ship verdict derived from the review-loop's
             current-run ``final-state.json``. A Layer 1 failure short-circuits
@@ -469,6 +471,12 @@ def run_agentic_checkup(
         if not pr_parsed:
             return False, f"Invalid GitHub PR URL: {pr_url}", 0.0, ""
         pr_owner, pr_repo, pr_number = pr_parsed
+
+    # ``--final-gate`` is PR-scoped (#1441: the issue is optional, the PR is not).
+    # Fail with its canonical message before any issue work so a no-PR final gate
+    # does not fall through to the generic "nothing to check" guard below.
+    if final_gate and pr_url is None:
+        return False, "--final-gate requires --pr.", 0.0, ""
 
     # 3. Resolve the source issue. The issue is OPTIONAL in PR mode (#1292):
     #    with no issue the PR is reviewed on its own merits, the issue fetch
@@ -556,7 +564,11 @@ def run_agentic_checkup(
         pr_content: Optional[str] = None,
     ) -> Tuple[bool, str, float, str]:
         loop_context = ReviewLoopContext(
-            issue_url=issue_url,
+            # Use ``effective_issue_url`` ("" when no issue), never the raw
+            # ``issue_url`` (which may be ``None``): the loop renders this into
+            # the reviewer prompt and the final report, where a literal "None"
+            # would read as a real-but-broken issue reference (#1441).
+            issue_url=effective_issue_url,
             issue_content=_truncate_issue_context(raw_full_content, 60000),
             repo_owner=owner,
             repo_name=repo,
@@ -574,6 +586,9 @@ def run_agentic_checkup(
                 if pr_content is not None
                 else _fetch_pr_context(pr_owner, pr_repo, pr_number)
             ),
+            # With no source issue the reviewer reviews the PR on its own merits
+            # and no issue-alignment verdict is requested (#1441).
+            has_issue=has_issue,
         )
         loop_config = ReviewLoopConfig(
             reviewers=parse_reviewers(reviewers),
@@ -606,18 +621,19 @@ def run_agentic_checkup(
             use_github_state=use_github_state,
         )
 
-    pr_context_ready = (
-        has_issue
-        and pr_url is not None
+    pr_ready = (
+        pr_url is not None
         and pr_owner is not None
         and pr_repo is not None
         and pr_number is not None
     )
 
-    if final_gate and not pr_context_ready:
-        # The final gate is the two-layer PR-readiness path; it is issue-coupled
-        # and PR-scoped, so it never runs in plain issue mode.
-        return False, "--final-gate requires --pr and --issue.", 0.0, ""
+    if final_gate and not pr_ready:
+        # The final gate is the two-layer PR-readiness path; it is PR-scoped, so
+        # it never runs in plain issue mode. ``--issue`` is OPTIONAL (#1441):
+        # with no issue the gate reviews the PR on its own merits and the
+        # issue-alignment gate is skipped downstream (``has_issue=False``).
+        return False, "--final-gate requires --pr.", 0.0, ""
 
     if final_gate:
         # The CLI rejects these combinations, but ``run_agentic_checkup`` is the
@@ -680,9 +696,11 @@ def run_agentic_checkup(
             )
 
     if review_loop and not final_gate:
-        if not pr_context_ready:
-            # Review-loop is issue-coupled; review-loop-without-issue is a
-            # deferred follow-up (#1292).
+        if not (pr_ready and has_issue):
+            # Standalone ``--review-loop`` stays issue-coupled: the merit-review
+            # review-loop now exists (it is the final gate's Layer 2 with no
+            # issue), but exposing it via a bare ``--review-loop`` is out of
+            # scope for #1441, which only relaxes ``--final-gate``.
             return False, "--review-loop requires --pr and --issue.", 0.0, ""
         return _run_review_loop_layer()
 
@@ -734,8 +752,9 @@ def run_agentic_checkup(
         # Layer-1-pushed) PR head. Clear any stale verdict first so the
         # post-run read reflects THIS run only (a role/setup error returns
         # before ``_finalize`` writes a fresh one, which then reads as
-        # fail-closed). ``issue_number`` is the PR number when no issue was
-        # given, but the final gate always has an issue (validated above).
+        # fail-closed). ``issue_number`` aliases to the PR number when no issue
+        # was given (#1441); ``clear_final_state``/``load_final_state`` key on
+        # both, so the verdict round-trips on the PR-number artifacts.
         clear_final_state(project_root, issue_number, pr_number)
         if load_final_state(project_root, issue_number, pr_number) is not None:
             # ``clear_final_state`` swallows a non-fatal unlink error; if a stale
