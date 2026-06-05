@@ -1267,6 +1267,62 @@ class TestHealModule:
             pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
             assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "sync", "mod"]], f"unexpected cmds for op={op}: {pdd_cmds}"
 
+    @pytest.mark.parametrize("op", ["verify", "generate", "test", "crash"])
+    def test_pr_scope_guard_env_reaches_broad_sync_fallback_ops(self, op):
+        """Broad pdd sync fallbacks must receive the PR test_extend guard env."""
+        drift = DriftInfo("agentic_common", "python", op, f"{op} needed")
+        env = {
+            **self._make_env(),
+            "PDD_DISABLE_TEST_EXTEND": "1",
+        }
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, env)
+
+        assert result is True
+        pdd_calls = [c for c in mock_run.call_args_list if c.args[0][:1] == ["pdd"]]
+        assert pdd_calls, "heal_module should dispatch broad drift through pdd sync"
+        assert pdd_calls[0].args[0] == [
+            "pdd",
+            "--force",
+            "--strength",
+            "0.5",
+            "sync",
+            "agentic_common",
+        ]
+        assert pdd_calls[0].kwargs["env"]["PDD_DISABLE_TEST_EXTEND"] == "1"
+
+    def test_pr_scope_guard_env_does_not_block_example_drift(self):
+        """PR-scope suppression blocks coverage growth, not narrow example heals."""
+        drift = DriftInfo(
+            "agentic_common",
+            "python",
+            "example",
+            "review-only example drift",
+            code_path="/repo/agentic_common.py",
+            prompt_path="/repo/prompts/agentic_common_python.prompt",
+        )
+        env = {
+            **self._make_env(),
+            "PDD_DISABLE_TEST_EXTEND": "1",
+        }
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, env)
+
+        assert result is True
+        assert mock_run.call_args.args[0] == [
+            "pdd",
+            "--force",
+            "--strength",
+            "0.5",
+            "example",
+            "/repo/prompts/agentic_common_python.prompt",
+            "/repo/agentic_common.py",
+        ]
+
     def test_update_without_prompt_path_resolves_after_update(self):
         """Code-without-prompt flow: pdd update creates the prompt, then we
         resolve prompt_path lazily before the follow-up pdd example.
@@ -1845,6 +1901,79 @@ class TestMain:
         with patch("pdd.ci_drift_heal.detect_drift", return_value=([], [])) as mock_detect:
             main(modules=["auth"])
         mock_detect.assert_called_once_with(["auth"], diff_base=None)
+
+    def test_pr_main_sets_test_extend_guard_before_detection_and_heal(self):
+        """PR mode must suppress test_extend during detection and child sync."""
+        drift = DriftInfo(
+            "agentic_common",
+            "python",
+            "example",
+            "narrow example drift",
+            code_path="/repo/agentic_common.py",
+            prompt_path="/repo/prompts/agentic_common_python.prompt",
+        )
+        detection_guard_values = []
+        heal_guard_values = []
+
+        def fake_detect(*args, **kwargs):
+            detection_guard_values.append(os.environ.get("PDD_DISABLE_TEST_EXTEND"))
+            return ([], [drift])
+
+        def fake_heal(_drift, env):
+            heal_guard_values.append(env.get("PDD_DISABLE_TEST_EXTEND"))
+            return True
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("pdd.ci_drift_heal.detect_drift", side_effect=fake_detect) as mock_detect, \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=fake_heal) as mock_heal, \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(
+                modules=["agentic_common"],
+                diff_base="origin/main...HEAD",
+                skip_ci=False,
+            )
+
+        assert result == 0
+        mock_detect.assert_called_once_with(["agentic_common"], diff_base="origin/main...HEAD")
+        mock_heal.assert_called_once()
+        assert detection_guard_values == ["1"]
+        assert heal_guard_values == ["1"]
+
+    def test_push_to_main_keeps_test_extend_enabled_even_with_diff_base(self):
+        """Push-to-main uses --skip-ci, so diff_base alone must not disable test_extend."""
+        drift = DriftInfo("agentic_common", "python", "test", "needs full sync")
+        detection_guard_values = []
+        heal_guard_values = []
+
+        def fake_detect(*args, **kwargs):
+            detection_guard_values.append(os.environ.get("PDD_DISABLE_TEST_EXTEND"))
+            return ([], [drift])
+
+        def fake_heal(_drift, env):
+            heal_guard_values.append(env.get("PDD_DISABLE_TEST_EXTEND"))
+            return True
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("pdd.ci_drift_heal.detect_drift", side_effect=fake_detect), \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=fake_heal), \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(
+                modules=["agentic_common"],
+                diff_base="HEAD~1",
+                skip_ci=True,
+            )
+
+        assert result == 0
+        assert detection_guard_values == [None]
+        assert heal_guard_values == [None]
 
     def test_detection_failure_returns_one(self):
         """If detect_drift raises, returns 1."""

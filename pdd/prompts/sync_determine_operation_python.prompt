@@ -31,7 +31,7 @@ You are an expert Python developer. Your task is to implement the core decision-
         -   After `crash` command with `exit_code == 0` → `verify`.
         -   `tests_failed > 0` → `fix` (only if test file exists; else `test`).
         -   `exit_code != 0` → context-aware: `fix` if example has succeeded before (`_check_example_success_history`), else `crash`.
-    4.  Coverage gaps → `test_extend` (Python only) or `all_synced` (non-Python, since coverage tooling is Python-specific).
+    4.  Coverage gaps → `test_extend` (Python only) or `all_synced` (non-Python, since coverage tooling is Python-specific). When `PDD_DISABLE_TEST_EXTEND` is truthy (`1`, `true`, `yes`, or `on`, case-insensitive), Python coverage gaps MUST also return the existing `all_synced` no-op shape with `test_extend_skipped: True` and a skip reason citing the disabled `test_extend` guard instead of returning `test_extend`. This suppression affects only coverage-driven `test_extend`; all other operation priorities remain unchanged.
     5.  Missing derived files → code → example → test (respecting `skip_tests`/`skip_verify` flags).
     6.  Isolated replay/repair override → when `isolated_replay_or_repair=True`, missing or stale examples must not preempt code replay/repair decisions. Existing examples may be read as context, but the decision engine must not schedule `example` unless the caller explicitly requested example regeneration.
     7.  Conflict: prompt + derived files both changed → delete fingerprint/run-report, re-run analysis fresh. In read-only analysis, return the fresh-sync decision without deleting metadata. Derived-only changes → `verify` or `test` (not a conflict).

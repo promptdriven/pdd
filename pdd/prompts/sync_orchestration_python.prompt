@@ -238,7 +238,7 @@ The orchestrator executes these operations as determined by `sync_determine_oper
 4. **crash**: Fix runtime errors to make code executable
 5. **verify**: Verify against prompt intent (unless `--skip-verify`)
 6. **test**: Generate unit tests (unless `--skip-tests`)
-8. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages or when agentic_mode=True since code coverage tooling is Python-specific)
+8. **test_extend**: Extend existing tests to improve coverage toward target (Python only - skip for non-Python languages, when agentic_mode=True since code coverage tooling is Python-specific, or when `PDD_DISABLE_TEST_EXTEND` is truthy). When skipped because `PDD_DISABLE_TEST_EXTEND` is truthy, log the existing `test_extend_skipped` no-op event, accept the current coverage state, and write no test file so PR auto-heal cannot append unrelated generated tests.
 - **fix**: Resolve test failures (unless `--skip-tests`). Pass `compress_test_context`, `context_compression`, and `compression_fallback` to `fix_main`.
 
 9. **update**: Back-propagate learnings to prompt
