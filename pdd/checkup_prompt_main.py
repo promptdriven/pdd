@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional, Sequence
@@ -21,6 +20,7 @@ from .coverage_contracts import (
 from .gate_main import GateResult, run_gate_policy
 from .prompt_lint import LintResult, scan_prompt
 from .source_set_model import resolve_prompt_targets
+from .user_story_tests import _resolve_stories_dir
 
 logger = logging.getLogger(__name__)
 
@@ -203,14 +203,9 @@ def build_prompt_source_set_report(
     prompt_path = prompt_path.resolve()
     # Anchor coverage/gate source-set dirs to the resolved project root so that
     # `pdd checkup` invoked from outside the project still finds the right paths.
-    # PDD_USER_STORIES_DIR is honoured for consistency with other pdd commands.
+    # PDD_USER_STORIES_DIR is honoured via _resolve_stories_dir for consistency.
     if stories_dir is None:
-        env_stories = os.environ.get("PDD_USER_STORIES_DIR")
-        if env_stories:
-            p = Path(env_stories)
-            stories_dir = p if p.is_absolute() else root / p
-        else:
-            stories_dir = root / "user_stories"
+        stories_dir = _resolve_stories_dir(root=root)
     if tests_dir is None:
         tests_dir = root / "tests"
     report = PromptSourceSetReport(

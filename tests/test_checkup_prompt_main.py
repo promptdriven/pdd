@@ -178,8 +178,8 @@ def test_build_prompt_source_set_report_respects_pdd_user_stories_dir(
     # with pdd change/generate/test which all read the same env var.
     project = tmp_path / "proj"
     project.mkdir()
-    custom_stories = tmp_path / "custom_stories"
-    custom_stories.mkdir()
+    # Intentionally do NOT create project/user_stories — if the env var is
+    # silently ignored the scanner would fall back there and find nothing.
     (project / "tests").mkdir()
 
     prompt = project / "foo_python.prompt"
@@ -188,15 +188,31 @@ def test_build_prompt_source_set_report_respects_pdd_user_stories_dir(
         encoding="utf-8",
     )
 
+    # Place a story in the custom dir that covers R-001.  Stories with no
+    # pdd-story-prompts metadata apply to all prompts in the evaluated set.
+    custom_stories = tmp_path / "custom_stories"
+    custom_stories.mkdir()
+    (custom_stories / "story__r001.md").write_text(
+        "## Story\nAs a user I want foo.\n\n## Covers\nR-001\n",
+        encoding="utf-8",
+    )
+
     monkeypatch.setenv("PDD_USER_STORIES_DIR", str(custom_stories))
-    # No stories in custom_stories, so coverage runs but finds nothing — not an error.
     report = build_prompt_source_set_report(
         prompt,
         target="foo",
         project_root=project,
     )
     assert report.coverage is not None
-    assert report.coverage.error is None  # env-var path was used (no crash on missing dir)
+    assert report.coverage.error is None
+    # If the env var was honoured the story in custom_stories was scanned and
+    # R-001 is story-only (not unchecked).  If ignored, project/user_stories
+    # does not exist so the rule stays unchecked — the two paths are distinct.
+    from pdd.coverage_contracts import STATUS_UNCHECKED
+    rule_statuses = {r.rule_id: r.status for r in report.coverage.rules}
+    assert rule_statuses.get("R-001") != STATUS_UNCHECKED, (
+        "R-001 was unchecked — PDD_USER_STORIES_DIR was not honoured"
+    )
 
 
 def test_checkup_issue_url_still_uses_agentic_path() -> None:
