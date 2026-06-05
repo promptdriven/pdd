@@ -30,7 +30,7 @@ def main():  # pylint: disable=too-many-locals
     for directory in [prompts_dir, stories_dir, src_dir]:
         directory.mkdir(parents=True, exist_ok=True)
 
-    # 1. Create a dummy prompt file
+    # 1. Create a dummy prompt file and the issue text that should author the story.
     prompt_path = prompts_dir / "hello_python.prompt"
     prompt_path.write_text(
         "# Hello World Prompt\n"
@@ -39,17 +39,25 @@ def main():  # pylint: disable=too-many-locals
         "Write a Python function that prints hello world.",
         encoding="utf-8",
     )
+    issue_path = output_dir / "issue.md"
+    issue_path.write_text(
+        "# Issue: Hello command\n\n"
+        "Users need a small command that prints 'hello world' so they can "
+        "confirm the Python runtime is wired correctly.",
+        encoding="utf-8",
+    )
 
     # 2. Discover prompt files
     print("Discovering prompt files...")
     discovered_prompts = discover_prompt_files(str(prompts_dir))
     print(f"Found prompts: {[p.name for p in discovered_prompts]}\n")
 
-    # 3. Generate a user story based on the prompt
-    # This uses a deterministic template or an LLM if available to write the story.
+    # 3. Generate a user story based on the issue.
+    # Prompt content is linked as metadata but is not shown to the story author.
     print("Generating user story...")
     success, message, cost, model, story_path, linked_refs = generate_user_story(
         prompt_files=[str(prompt_path)],
+        issue=str(issue_path),
         stories_dir=str(stories_dir),
         prompts_dir=str(prompts_dir),
         strength=0.0,      # Use low strength for faster/cheaper generation if LLM is used
@@ -64,6 +72,10 @@ def main():  # pylint: disable=too-many-locals
     print(f"Model: {model}")
     print(f"Generated Story Path: {story_path}")
     print(f"Linked Prompts: {linked_refs}\n")
+
+    if not success:
+        print("Skipping validation because story generation failed.")
+        return
 
     # 4. Run user story validation tests
     # This checks if the story requires changes to the prompt files.

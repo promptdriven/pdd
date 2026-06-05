@@ -704,7 +704,10 @@ def test_test_story_generation_failure_exits_nonzero(runner):
                 "",
                 [],
             )
-            result = runner.invoke(generate_module.test, ["upload_python.prompt"])
+            result = runner.invoke(
+                generate_module.test,
+                ["--issue", "issue.md", "upload_python.prompt"],
+            )
 
     assert result.exit_code != 0
     assert "requires a valid LLM-authored story" in result.output
@@ -752,11 +755,15 @@ def test_test_story_generation_uses_env_dirs(runner, monkeypatch):
                 True, "ok", 0.0, "gpt-4",
                 "env_stories/story__upload_flow.md", ["upload_python.prompt"],
             )
-            result = runner.invoke(generate_module.test, ["upload_python.prompt"])
+            result = runner.invoke(
+                generate_module.test,
+                ["--issue", "issue.md", "upload_python.prompt"],
+            )
 
     assert result.exit_code == 0, result.output
     mock_gen.assert_called_once()
     kwargs = mock_gen.call_args[1]
+    assert kwargs["issue"] == "issue.md"
     assert kwargs["prompts_dir"] == "env_prompts"
     assert kwargs["stories_dir"] == "env_stories"
 
