@@ -2214,6 +2214,38 @@ def test_llm_invoke_cloud_anthropic_alias_passed_to_litellm(mock_set_llm_cache):
                 assert call_kwargs.get('api_key') == 'sk-ant-cloud-alias'
 
 
+def test_llm_invoke_cloud_fireworks_alias_passed_to_litellm(mock_set_llm_cache):
+    """PDD_LLM_INVOKE_FIREWORKS_API_KEY should satisfy Fireworks cloud rows."""
+    with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
+        mock_data = [{
+            'provider': 'Fireworks',
+            'model': 'fireworks_ai/accounts/fireworks/models/kimi-k2p6',
+            'input': 0.95, 'output': 4.0,
+            'coding_arena_elo': 1529,
+            'structured_output': False,
+            'base_url': '',
+            'api_key': 'FIREWORKS_API_KEY',
+            'reasoning_type': 'none',
+            'max_reasoning_tokens': 0,
+            'location': ''
+        }]
+        mock_df = pd.DataFrame(mock_data)
+        mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+        mock_load_data.return_value = mock_df
+
+        env_vars = {
+            'PDD_LLM_INVOKE_FIREWORKS_API_KEY': 'fw-cloud-alias',
+        }
+        with patch.dict(os.environ, env_vars, clear=False):
+            os.environ.pop('FIREWORKS_API_KEY', None)
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                mock_completion.return_value = create_mock_litellm_response("test")
+                llm_invoke("test {x}", {"x": "y"}, 0.5, 0.7, True)
+
+                call_kwargs = mock_completion.call_args[1]
+                assert call_kwargs.get('api_key') == 'fw-cloud-alias'
+
+
 def test_vertex_location_passed_from_csv(mock_set_llm_cache):
     """Test that location from CSV is passed as vertex_location to litellm."""
     with patch('pdd.llm_invoke._load_model_data') as mock_load_data:
