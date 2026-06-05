@@ -705,86 +705,108 @@ _LLM_STORY_MD = (
 )
 
 
-_CONTEXT_AUDIT_PROMPT_BASE = "\n".join(
+# PR #1387 renamed `pdd context-audit` to `pdd context` and made the default
+# output a Claude-Code `/context`-style usage box (the raw attribution table
+# moved behind `--table`). These fixtures model that command as a prompt input so
+# the issue-derived story can be exercised against both the faithful prompt and a
+# harmful aggregate-only mutation.
+_CONTEXT_PROMPT_BASE = "\n".join(
     [
-        "<pdd-reason>Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation.</pdd-reason>",
+        "<pdd-reason>Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation, displayed by default as a Claude-Code /context-style usage box.</pdd-reason>",
         "",
         "% Goal",
-        "Write the `pdd/commands/context_audit.py` module.",
+        "Write the `pdd/commands/context.py` module.",
         "",
         "% Requirements",
-        "1. Define a Click command named `context_audit` with a required `prompt_path` argument.",
-        "2. Provide options `--model`, `--json`, and `--threshold`.",
+        "1. Define a Click command named `context` with a required `prompt_path` argument.",
+        "2. Provide options `--model`, `--json`, `--table`, and `--threshold`.",
         "3. Preprocess the prompt file; do NOT make an LLM call.",
         "4. Detect dynamic tags such as `<shell>` and `<web>` and emit warnings.",
         "5. Attribute tokens per source segment, including `prompt_body` and one row per resolved include.",
+        "6. By default render a Claude-Code `/context`-style usage box with an "
+        "`Estimated usage by category` breakdown (one line per source); `--table` "
+        "shows the raw per-source attribution table.",
     ]
 )
 
 
-_CONTEXT_AUDIT_PROMPT_AGGREGATE_ONLY = "\n".join(
+_CONTEXT_PROMPT_AGGREGATE_ONLY = "\n".join(
     [
-        "<pdd-reason>Reports only aggregate token totals for a hydrated prompt so users can audit context-window cost before generation, without per-source attribution.</pdd-reason>",
+        "<pdd-reason>Reports only aggregate token totals for a hydrated prompt so users can audit context-window cost before generation, without per-source attribution or a usage-box breakdown.</pdd-reason>",
         "",
         "% Goal",
-        "Write the `pdd/commands/context_audit.py` module.",
+        "Write the `pdd/commands/context.py` module.",
         "",
         "% Requirements",
-        "1. Define a Click command named `context_audit` with a required `prompt_path` argument.",
-        "2. Provide options `--model`, `--json`, and `--threshold`.",
+        "1. Define a Click command named `context` with a required `prompt_path` argument.",
+        "2. Provide options `--model`, `--json`, `--table`, and `--threshold`.",
         "3. Preprocess the prompt file; do NOT make an LLM call.",
         "4. Detect dynamic tags such as `<shell>` and `<web>` and emit warnings.",
         "5. Report only aggregate token totals, without per-source attribution rows.",
+        "6. Render only the aggregate total; omit the per-source `Estimated usage by "
+        "category` breakdown from the usage box.",
     ]
 )
 
 
-_CONTEXT_AUDIT_STORY_MD = (
-    "# User Story: Context Audit\n\n"
+_CONTEXT_STORY_MD = (
+    "# User Story: Audit context-window usage by source\n\n"
     "## Covers\n\n"
-    "- context_audit_python.prompt: CLI users can run `pdd context-audit <prompt_path>` "
-    "to see per-source token attribution before generation.\n"
-    "- context_audit_python.prompt: The command supports `--json`, `--model`, and "
+    "- context_python.prompt: CLI users can run `pdd context <prompt_path>` to see "
+    "per-source token attribution rendered as a Claude-Code `/context`-style usage "
+    "box before generation.\n"
+    "- context_python.prompt: The command supports `--table`, `--json`, `--model`, and "
     "`--threshold` behavior without making an LLM call.\n\n"
     "## Story\n\n"
     "As a CLI user, I can audit a hydrated prompt's per-source token usage before "
-    "generation, so that I can identify which prompt body, include, test, example, "
-    "or grounding source consumes the context window.\n\n"
+    "generation, rendered like Claude Code's `/context` display, so that I can "
+    "identify which prompt body, include, test, example, or grounding source "
+    "consumes the context window.\n\n"
     "## Context\n\n"
-    "- `context_audit_python.prompt` defines the `pdd context-audit <prompt_path>` "
-    "command, JSON output, threshold exit behavior, dynamic-tag warnings, and "
-    "the no-LLM-call requirement.\n\n"
+    "- `context_python.prompt` defines the `pdd context <prompt_path>` command, the "
+    "default `/context`-style usage box, the `--table` attribution table, JSON "
+    "output, threshold exit behavior, dynamic-tag warnings, and the no-LLM-call "
+    "requirement.\n\n"
     "## Acceptance Criteria\n\n"
-    "1. Given a prompt with includes, when I run `pdd context-audit <prompt_path>`, "
-    "then the output reports token rows per source rather than only aggregate totals.\n"
-    "2. Given `--json` is passed, when the audit completes, then stdout is a JSON "
+    "1. Given a prompt with includes, when I run `pdd context <prompt_path>`, then "
+    "the default output is a Claude-Code `/context`-style usage box whose "
+    "`Estimated usage by category` breakdown reports token rows per source rather "
+    "than only an aggregate total.\n"
+    "2. Given `--table` is passed, when the audit completes, then the per-source "
+    "attribution table is shown with rows ordered largest-token-consumer first.\n"
+    "3. Given `--json` is passed, when the audit completes, then stdout is a JSON "
     "object with `total_tokens`, `context_limit`, `percent_used`, `model`, `rows`, "
     "`warnings`, and `threshold_exceeded`.\n"
-    "3. Given the threshold percentage is exceeded, when `--threshold` is nonzero, "
+    "4. Given the threshold percentage is exceeded, when `--threshold` is nonzero, "
     "then the command exits with code 2.\n"
-    "4. Given dynamic tags such as `<shell>` or `<web>` are present, when they are "
+    "5. Given dynamic tags such as `<shell>` or `<web>` are present, when they are "
     "not expanded, then warning entries are reported without making an LLM call.\n\n"
     "## Oracle\n\n"
     "These details matter for pass/fail:\n"
+    "- The default output is the Claude-Code `/context`-style usage box, with a "
+    "per-source `Estimated usage by category` breakdown.\n"
     "- Per-source attribution rows are present for prompt body and resolved includes.\n"
     "- Aggregate-only token totals are not sufficient.\n"
-    "- `--json`, `--model`, and `--threshold` behavior matches the prompt.\n"
+    "- `--table`, `--json`, `--model`, and `--threshold` behavior matches the prompt.\n"
     "- The command does not make an LLM call for local auditing.\n\n"
     "## Non-Oracle\n\n"
     "These details should not matter:\n"
+    "- The exact glyphs used in the usage box and the grid dimensions.\n"
     "- Private helper names.\n"
     "- Table styling.\n"
     "- Internal ordering beyond sorting rows by token count.\n\n"
     "## Negative Cases\n\n"
-    "- Reporting only aggregate totals with no per-source attribution.\n"
-    "- Calling an LLM during context audit.\n"
+    "- Reporting only an aggregate total with no per-source attribution.\n"
+    "- Dropping the per-source breakdown when rendering the `/context`-style box.\n"
+    "- Calling an LLM during the deterministic context audit.\n"
     "- Silently ignoring dynamic tags without warnings.\n\n"
     "## Non-Goals\n\n"
     "- Generating code from the audited prompt.\n"
     "- Fetching cloud grounding data locally.\n\n"
     "## Notes\n\n"
     "- This story should fail validation if the prompt changes from per-source "
-    "token attribution to aggregate-only token totals.\n"
+    "token attribution to aggregate-only token totals, or removes the default "
+    "`/context`-style usage box.\n"
 )
 
 
@@ -826,17 +848,18 @@ def test_generate_user_story_uses_llm_output(tmp_path):
     mock_detect.assert_not_called()
 
 
-def test_generate_user_story_context_audit_story_protects_per_source_attribution(tmp_path):
-    """Regression for PR #1387 as a prompt input: the generated story must
-    capture concrete requirements that make aggregate-only prompt drift fail."""
+def test_generate_user_story_context_story_protects_per_source_attribution(tmp_path):
+    """Regression for PR #1387 (`pdd context`) as a prompt input: the generated
+    story must capture concrete requirements -- the `/context`-style usage box and
+    per-source attribution -- that make aggregate-only prompt drift fail."""
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
-    prompt_one = prompts_dir / "context_audit_python.prompt"
-    prompt_one.write_text(_CONTEXT_AUDIT_PROMPT_BASE, encoding="utf-8")
+    prompt_one = prompts_dir / "context_python.prompt"
+    prompt_one.write_text(_CONTEXT_PROMPT_BASE, encoding="utf-8")
 
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_CONTEXT_AUDIT_STORY_MD, 0.05, "story-model"),
+        return_value=(_CONTEXT_STORY_MD, 0.05, "story-model"),
     ):
         success, _, _, _, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -846,40 +869,42 @@ def test_generate_user_story_context_audit_story_protects_per_source_attribution
         )
 
     assert success is True
-    assert linked_prompts == ["context_audit_python.prompt"]
+    assert linked_prompts == ["context_python.prompt"]
     mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "per-source token attribution" in story_text
     assert "Aggregate-only token totals are not sufficient" in story_text
-    assert "`--json`, `--model`, and `--threshold`" in story_text
+    # PR #1387's intentional change: the default render is a /context-style box.
+    assert "`/context`-style usage box" in story_text
+    assert "`--table`, `--json`, `--model`, and `--threshold`" in story_text
     assert "does not make an LLM call" in story_text
     assert "<pdd-reason>" not in story_text
     assert "\"type\": \"cli\"" not in story_text
 
 
-def test_run_user_story_tests_passes_then_fails_for_harmful_context_audit_prompt_change(tmp_path):
-    """Show the same story passing the original prompt and failing after a
-    harmful aggregate-only prompt mutation."""
+def test_run_user_story_tests_passes_then_fails_for_harmful_context_prompt_change(tmp_path):
+    """Show the same `pdd context` story passing the original prompt and failing
+    after a harmful aggregate-only prompt mutation that drops the usage box."""
     prompts_dir = tmp_path / "prompts"
     stories_dir = tmp_path / "user_stories"
     prompts_dir.mkdir()
     stories_dir.mkdir()
 
-    prompt_one = prompts_dir / "context_audit_python.prompt"
-    prompt_one.write_text(_CONTEXT_AUDIT_PROMPT_BASE, encoding="utf-8")
-    story = stories_dir / "story__context_audit.md"
+    prompt_one = prompts_dir / "context_python.prompt"
+    prompt_one.write_text(_CONTEXT_PROMPT_BASE, encoding="utf-8")
+    story = stories_dir / "story__context.md"
     story.write_text(
-        "<!-- pdd-story-prompts: context_audit_python.prompt -->\n\n"
-        f"{_CONTEXT_AUDIT_STORY_MD}",
+        "<!-- pdd-story-prompts: context_python.prompt -->\n\n"
+        f"{_CONTEXT_STORY_MD}",
         encoding="utf-8",
     )
 
     harmful_changes = [
         {
-            "prompt_name": "context_audit_python.prompt",
+            "prompt_name": "context_python.prompt",
             "change_instructions": (
-                "Restore per-source token attribution rows; aggregate-only "
-                "token totals violate the generated user story."
+                "Restore the per-source `Estimated usage by category` breakdown; "
+                "aggregate-only token totals violate the generated user story."
             ),
         }
     ]
@@ -906,7 +931,7 @@ def test_run_user_story_tests_passes_then_fails_for_harmful_context_audit_prompt
             quiet=True,
             fail_fast=True,
         )
-        prompt_one.write_text(_CONTEXT_AUDIT_PROMPT_AGGREGATE_ONLY, encoding="utf-8")
+        prompt_one.write_text(_CONTEXT_PROMPT_AGGREGATE_ONLY, encoding="utf-8")
         mutated_passed, mutated_results, mutated_cost, mutated_model = run_user_story_tests(
             prompts_dir=str(prompts_dir),
             stories_dir=str(stories_dir),
