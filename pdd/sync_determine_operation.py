@@ -2127,7 +2127,7 @@ def _perform_sync_analysis(
     # 1. Check Runtime Signals First (Highest Priority)
     # Workflow Order (from whitepaper):
     # 1. auto-deps (find context/dependencies)
-    # 2. generate (create code module)  
+    # 2. generate (create code module)
     # 3. example (create usage example)
     # 4. crash (resolve crashes if code doesn't run)
     # 5. verify (verify example runs correctly after crash fix)
@@ -2159,7 +2159,7 @@ def _perform_sync_analysis(
             reason='Auto-deps completed - regenerate code with updated prompt',
             confidence=0.90,
             estimated_cost=estimate_operation_cost('generate'),
-            details={ 
+            details={
                 'decision_type': 'heuristic',
                 'previous_command': 'auto-deps',
                 'code_exists': paths['code'].exists() if paths.get('code') else False,
@@ -2265,13 +2265,13 @@ def _perform_sync_analysis(
                 )
             # If test file doesn't exist but we have test failures in run report,
             # we need to generate the test first
-            else: 
+            else:
                 return SyncDecision(
                     operation='test',
                     reason='Test failures reported but test file missing - need to generate tests',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('test'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'run_report_shows_failures': True,
                         'test_file_exists': False
@@ -2294,7 +2294,7 @@ def _perform_sync_analysis(
                         reason='Runtime error detected but example has run successfully before - prefer fix over crash',
                         confidence=0.90,
                         estimated_cost=estimate_operation_cost('fix'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'exit_code': run_report.exit_code,
                             'timestamp': run_report.timestamp,
@@ -2302,13 +2302,13 @@ def _perform_sync_analysis(
                             'decision_rationale': 'prefer_fix_over_crash'
                         }
                     )
-                else: 
+                else:
                     return SyncDecision(
                         operation='crash',
                         reason='Runtime error detected in last run - no successful example history',
                         confidence=0.95,
                         estimated_cost=estimate_operation_cost('crash'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'exit_code': run_report.exit_code,
                             'timestamp': run_report.timestamp,
@@ -2326,7 +2326,7 @@ def _perform_sync_analysis(
                     reason=f'Coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}% but tests skipped',
                     confidence=0.90,
                     estimated_cost=estimate_operation_cost('all_synced'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'current_coverage': run_report.coverage,
                         'target_coverage': target_coverage,
@@ -2364,7 +2364,7 @@ def _perform_sync_analysis(
                         reason='Code file missing with stale metadata - regenerate from prompt',
                         confidence=0.95,
                         estimated_cost=estimate_operation_cost('generate'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'code_file_exists': False,
                             'test_file_exists': test_file_exists,
@@ -2381,7 +2381,7 @@ def _perform_sync_analysis(
                         reason='Example validated but test file missing - generate tests',
                         confidence=0.90,
                         estimated_cost=estimate_operation_cost('test'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'run_report_tests_passed': run_report.tests_passed,
                             'test_file_exists': False,
@@ -2398,7 +2398,7 @@ def _perform_sync_analysis(
                         reason=f'Tests pass ({run_report.tests_passed} passed). Coverage {run_report.coverage:.1f}% below target but test_extend not supported for {language} - accepting as complete',
                         confidence=0.90,
                         estimated_cost=estimate_operation_cost('all_synced'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'current_coverage': run_report.coverage,
                             'target_coverage': target_coverage,
@@ -2416,7 +2416,7 @@ def _perform_sync_analysis(
                         reason=f'Tests pass ({run_report.tests_passed} passed) but test_extend is disabled by PDD_DISABLE_TEST_EXTEND - accepting as complete',
                         confidence=0.90,
                         estimated_cost=estimate_operation_cost('all_synced'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'current_coverage': run_report.coverage,
                             'target_coverage': target_coverage,
@@ -2434,7 +2434,7 @@ def _perform_sync_analysis(
                     reason=f'Tests pass ({run_report.tests_passed} passed) but coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}% - extending tests',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('test'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'current_coverage': run_report.coverage,
                         'target_coverage': target_coverage,
@@ -2455,7 +2455,7 @@ def _perform_sync_analysis(
                         reason=f'Tests completed (exit_code=0) but coverage {run_report.coverage:.1f}% could not be verified - accepting as complete',
                         confidence=0.70,
                         estimated_cost=estimate_operation_cost('all_synced'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'current_coverage': run_report.coverage,
                             'target_coverage': target_coverage,
@@ -2470,7 +2470,7 @@ def _perform_sync_analysis(
                     reason=f'Coverage {run_report.coverage:.1f}% below target {target_coverage:.1f}%',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('test'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'current_coverage': run_report.coverage,
                         'target_coverage': target_coverage,
@@ -2496,7 +2496,7 @@ def _perform_sync_analysis(
                     reason='New prompt with dependencies detected',
                     confidence=0.80,
                     estimated_cost=estimate_operation_cost('auto-deps'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'prompt_path': str(paths['prompt']),
                         'fingerprint_found': False,
@@ -2509,7 +2509,7 @@ def _perform_sync_analysis(
                     reason='New prompt ready for code generation',
                     confidence=0.90,
                     estimated_cost=estimate_operation_cost('generate'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'prompt_path': str(paths['prompt']),
                         'fingerprint_found': False,
@@ -2522,7 +2522,7 @@ def _perform_sync_analysis(
                 reason='No prompt file and no history - nothing to do',
                 confidence=1.0,
                 estimated_cost=estimate_operation_cost('nothing'),
-                details={ 
+                details={
                     'decision_type': 'heuristic',
                     'prompt_exists': False,
                     'fingerprint_found': False
@@ -2533,7 +2533,7 @@ def _perform_sync_analysis(
     if fingerprint:
         file_validation = validate_expected_files(fingerprint, paths)
         missing_expected_files = [
-            file_type for file_type, exists in file_validation.items() 
+            file_type for file_type, exists in file_validation.items()
             if not exists
         ]
 
@@ -2565,7 +2565,7 @@ def _perform_sync_analysis(
                 reason=f'All required files synchronized (skip_tests={skip_tests}, skip_verify={skip_verify})',
                 confidence=1.0,
                 estimated_cost=estimate_operation_cost('nothing'),
-                details={ 
+                details={
                     'decision_type': 'heuristic',
                     'skip_tests': skip_tests,
                     'skip_verify': skip_verify,
@@ -2590,7 +2590,7 @@ def _perform_sync_analysis(
                                (' - no run_report' if not run_report else f' - exit_code={run_report.exit_code}'),
                         confidence=0.85,
                         estimated_cost=estimate_operation_cost('crash'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'all_files_exist': True,
                             'run_report_missing': not run_report,
@@ -2606,7 +2606,7 @@ def _perform_sync_analysis(
                     reason='All files exist but verification not completed',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('verify'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'all_files_exist': True,
                         'last_command': fingerprint.command,
@@ -2627,7 +2627,7 @@ def _perform_sync_analysis(
                     reason='Run report is stale - need to re-run tests to verify current state',
                     confidence=0.9,
                     estimated_cost=estimate_operation_cost('test'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'all_files_exist': True,
                         'run_report_stale': True,
@@ -2643,7 +2643,7 @@ def _perform_sync_analysis(
                 reason='Code exists but example missing - progress workflow',
                 confidence=0.85,
                 estimated_cost=estimate_operation_cost('example'),
-                details={ 
+                details={
                     'decision_type': 'heuristic',
                     'code_path': str(paths['code']),
                     'code_exists': True,
@@ -2670,7 +2670,7 @@ def _perform_sync_analysis(
                     reason=f'Tests pass ({run_report.tests_passed} passed) via agentic test generation - workflow complete',
                     confidence=0.90,
                     estimated_cost=estimate_operation_cost('all_synced'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'tests_passed': run_report.tests_passed,
                         'tests_failed': run_report.tests_failed,
@@ -2688,7 +2688,7 @@ def _perform_sync_analysis(
                     reason='Example exists but needs runtime testing before test generation',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('crash'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'code_path': str(paths['code']),
                         'example_path': str(paths['example']),
@@ -2704,7 +2704,7 @@ def _perform_sync_analysis(
                     reason='Example crashes - fix runtime errors before test generation',
                     confidence=0.90,
                     estimated_cost=estimate_operation_cost('crash'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'exit_code': run_report.exit_code,
                         'workflow_stage': 'crash_fix'
@@ -2717,7 +2717,7 @@ def _perform_sync_analysis(
                     reason='Example runs but needs verification before test generation',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('verify'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'exit_code': run_report.exit_code,
                         'last_command': fingerprint.command,
@@ -2731,7 +2731,7 @@ def _perform_sync_analysis(
                     reason='Example validated - ready for test generation',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('test'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'code_path': str(paths['code']),
                         'example_path': str(paths['example']),
@@ -2752,7 +2752,7 @@ def _perform_sync_analysis(
                         reason='Auto-deps completed, now generate missing code file',
                         confidence=0.90,
                         estimated_cost=estimate_operation_cost('generate'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'prompt_path': str(paths['prompt']),
                             'code_exists': False,
@@ -2763,12 +2763,12 @@ def _perform_sync_analysis(
 
                 prompt_content = paths['prompt'].read_text(encoding='utf-8', errors='ignore')
                 if check_for_dependencies(prompt_content):
-                    return SyncDecision( 
+                    return SyncDecision(
                         operation='auto-deps',
                         reason='Missing code file, prompt has dependencies',
                         confidence=0.80,
                         estimated_cost=estimate_operation_cost('auto-deps'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'prompt_path': str(paths['prompt']),
                             'code_exists': False,
@@ -2781,7 +2781,7 @@ def _perform_sync_analysis(
                         reason='Missing code file - generate from prompt',
                         confidence=0.90,
                         estimated_cost=estimate_operation_cost('generate'),
-                        details={ 
+                        details={
                             'decision_type': 'heuristic',
                             'prompt_path': str(paths['prompt']),
                             'code_exists': False,
@@ -2801,7 +2801,7 @@ def _perform_sync_analysis(
                     reason='Prompt changed and dependencies need updating',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('auto-deps'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'changed_file': 'prompt',
                         'has_dependencies': True,
@@ -2814,7 +2814,7 @@ def _perform_sync_analysis(
                     reason='Prompt changed - regenerate code',
                     confidence=0.90,
                     estimated_cost=estimate_operation_cost('generate'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'changed_file': 'prompt',
                         'has_dependencies': False,
@@ -2828,7 +2828,7 @@ def _perform_sync_analysis(
                 reason='Code changed - update prompt to reflect changes',
                 confidence=0.85,
                 estimated_cost=estimate_operation_cost('update'),
-                details={ 
+                details={
                     'decision_type': 'heuristic',
                     'changed_file': 'code',
                     'code_changed': True
@@ -2841,7 +2841,7 @@ def _perform_sync_analysis(
                 reason='Test changed - run new tests',
                 confidence=0.80,
                 estimated_cost=estimate_operation_cost('test'),
-                details={ 
+                details={
                     'decision_type': 'heuristic',
                     'changed_file': 'test',
                     'test_changed': True
@@ -2854,7 +2854,7 @@ def _perform_sync_analysis(
                 reason='Example changed - verify new example',
                 confidence=0.80,
                 estimated_cost=estimate_operation_cost('verify'),
-                details={ 
+                details={
                     'decision_type': 'heuristic',
                     'changed_file': 'example',
                     'example_changed': True
@@ -2894,7 +2894,7 @@ def _perform_sync_analysis(
                     reason=reason,
                     confidence=0.90,
                     estimated_cost=estimate_operation_cost(operation),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'changed_files': changes,
                         'read_only': True,
@@ -2936,7 +2936,7 @@ def _perform_sync_analysis(
                     reason='Derived files changed (prompt unchanged) - verify code works',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('verify'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'changed_files': changes,
                         'num_changes': len(changes),
@@ -2951,7 +2951,7 @@ def _perform_sync_analysis(
                     reason='Example changed (prompt unchanged) - verify example runs',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('verify'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'changed_files': changes,
                         'prompt_changed': False
@@ -2963,7 +2963,7 @@ def _perform_sync_analysis(
                     reason='Test changed (prompt unchanged) - run tests',
                     confidence=0.85,
                     estimated_cost=estimate_operation_cost('test'),
-                    details={ 
+                    details={
                         'decision_type': 'heuristic',
                         'changed_files': changes,
                         'prompt_changed': False
@@ -2976,7 +2976,7 @@ def _perform_sync_analysis(
         reason='No clear operation determined',
         confidence=0.50,
         estimated_cost=estimate_operation_cost('nothing'),
-        details={ 
+        details={
             'decision_type': 'heuristic',
             'fingerprint_exists': fingerprint is not None,
             'changes': changes,

@@ -31,10 +31,6 @@ MAX_CONSECUTIVE_CRASHES = 3  # Allow up to 3 consecutive crash attempts (Bug #15
 MAX_CONSECUTIVE_FIXES = 5  # Allow up to 5 consecutive fix attempts (Issue #1203: only fires when not making progress)
 TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
 
-
-def _is_truthy_env(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in TRUTHY_ENV_VALUES
-
 # --- Real PDD Component Imports ---
 from .sync_tui import SyncApp
 from .operation_log import (
@@ -84,6 +80,10 @@ from .pytest_output import extract_failing_files_from_output, _find_project_root
 from . import DEFAULT_STRENGTH
 from .core.errors import record_core_dump_error
 from .core.llm_trace import set_current_operation, pop_last_pair
+
+
+def _is_truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in TRUTHY_ENV_VALUES
 
 
 def _truncate_text(text: str, limit_chars: int) -> str:
