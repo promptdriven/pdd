@@ -208,6 +208,10 @@ if _AnthropicConfigOpus47 is not None:
                             if k not in merged:
                                 merged[k] = v
                         result["thinking"] = merged
+                if isinstance(non_default_params, dict) and "output_config" not in result:
+                    reasoning_effort = non_default_params.get("reasoning_effort")
+                    if reasoning_effort:
+                        result["output_config"] = {"effort": reasoning_effort}
                 return result
             _patched_map_openai_params._pdd_opus_4_7_thinking_patched = True
             _AnthropicConfigOpus47.map_openai_params = _patched_map_openai_params
