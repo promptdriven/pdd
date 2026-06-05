@@ -11,7 +11,7 @@ import subprocess
 import requests
 import tempfile
 import sys
-from typing import Optional, Tuple, Dict, Any, List, Set
+from typing import Optional, Tuple, Dict, Any, List, Set, Mapping
 
 import click
 from rich.console import Console
@@ -42,6 +42,7 @@ from .grounding_provenance import (
     stash_grounding_overrides_on_ctx,
     warn_cloud_examples_not_preapproved,
 )
+from .compressed_sync_context import compressed_context_is_active, render_for_prompt
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -3203,6 +3204,7 @@ def code_generator_main(
     output_from_config: bool = False,
     compress: bool = False,
     snapshot_context: bool = False,
+    compressed_context: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -3326,18 +3328,20 @@ def code_generator_main(
                 output_path = output
 
         # --- Unit Test Inclusion Logic ---
+        # When compressed sync context is active, tests are supplied via the
+        # bounded package instead of full <unit_test_content> expansion (#878).
         test_files_to_include: List[str] = []
-        if unit_test_file:
-            test_files_to_include.append(unit_test_file)
-        elif not exclude_tests:
-            # Try to find default test files
-            tests_dir = resolved_config.get("tests_dir")
-            found_tests = _find_default_test_files(tests_dir, output_path)
-            if found_tests:
-                if verbose:
-                    console.print(f"[info]Found default test files: {', '.join(found_tests)}[/info]")
-                test_files_to_include.extend(found_tests)
-        
+        if not compressed_context_is_active(compressed_context):
+            if unit_test_file:
+                test_files_to_include.append(unit_test_file)
+            elif not exclude_tests:
+                tests_dir = resolved_config.get("tests_dir")
+                found_tests = _find_default_test_files(tests_dir, output_path)
+                if found_tests:
+                    if verbose:
+                        console.print(f"[info]Found default test files: {', '.join(found_tests)}[/info]")
+                    test_files_to_include.extend(found_tests)
+
         if test_files_to_include:
             prompt_content += "\n\n<unit_test_content>\n"
             prompt_content += (
@@ -3376,6 +3380,9 @@ def code_generator_main(
                 f"{repair_directive_env.strip()}\n"
                 "</architecture_repair_directive>\n"
             )
+        rendered_compressed_context = render_for_prompt(compressed_context)
+        if rendered_compressed_context:
+            prompt_content += "\n\n" + rendered_compressed_context
 
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")

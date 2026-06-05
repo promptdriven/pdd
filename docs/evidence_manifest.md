@@ -68,6 +68,8 @@ Schema version 2 records:
 - available validation outcomes and references to existing logs
 - `generation.grounding` provenance (added in schema v2; see "Grounding
   Provenance" below). Older manifests emitted with schema v1 omit this object.
+- optional `generation.compression` and `generation.agentic_fallback` metadata
+  for sync runs that used compressed context or agentic fallback.
 
 `expanded_sha256` is the SHA-256 of the prompt after `pdd.preprocess` with
 `recursive=True` and `double_curly_brackets=False` (the same deterministic
@@ -132,6 +134,52 @@ See `docs/grounding_policy.md` for the optional CI policy that consumes this
 provenance (`.pdd/grounding_policy.yaml`, future grounding `pdd checkup gate`
 integration). Contract waivers appear under `contracts.waivers` when prompts
 include `<waivers>` blocks.
+
+### Sync Compression and Agentic Fallback
+
+Sync runs may also record additive metadata under `generation`:
+
+```json
+"generation": {
+  "compression": {
+    "enabled": true,
+    "requested": true,
+    "used": true,
+    "mode": "compressed-sync-context",
+    "phases": [
+      {"phase": "generate", "used": true, "source_count": 4},
+      {"phase": "verify", "used": true, "source_count": 5},
+      {"phase": "fix", "used": false, "unavailable_reason": "prompt source missing"}
+    ],
+    "source_counts": {"tests": 3, "examples": 1},
+    "source_hashes": [{"path": "tests/test_refund.py", "sha256": "..."}],
+    "compressed_sha256": "...",
+    "budget_tokens": 6000,
+    "original_tokens_estimate": 18000,
+    "compressed_tokens_estimate": 4200,
+    "unavailable_reason": null
+  },
+  "agentic_fallback": {
+    "attempted": true,
+    "used": false,
+    "phases": ["fix"],
+    "reason": "local fix loop succeeded",
+    "provider": "codex",
+    "tool": "agentic-fix"
+  }
+}
+```
+
+`generation.compression` records whether compressed sync context was requested
+and used, which phases received it, source counts/hashes, size estimates, and a
+reason when compression was unavailable. `phases` may be a compact list of phase
+names for callers that only have summary data, or a list of per-phase metadata
+objects from sync's phase package builder. It must not include raw compressed
+prompt, test, example, contract, or repair text.
+
+`generation.agentic_fallback` records whether an agentic fallback was attempted
+or used, which phases were involved, why fallback occurred, and provider/tool
+metadata when available.
 
 ## Verification
 

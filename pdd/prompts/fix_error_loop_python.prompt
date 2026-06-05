@@ -6,7 +6,7 @@
   "module": {
     "functions": [
       {"name": "cloud_fix_errors", "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)", "returns": "Tuple[bool, bool, str, str, str, float, str]"},
-      {"name": "fix_error_loop", "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False, compress_test_context=False, context_compression=None, compression_fallback=None)", "returns": "Tuple[bool, str, str, int, float, str]"}
+      {"name": "fix_error_loop", "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False, compress_test_context=False, context_compression=None, compression_fallback=None, compressed_context=None, agentic_fallback_events=None)", "returns": "Tuple[bool, str, str, int, float, str]"}
     ]
   }
 }
@@ -14,6 +14,7 @@
 
 <pdd-dependency>failure_classification_python.prompt</pdd-dependency>
 <pdd-dependency>fix_focus_python.prompt</pdd-dependency>
+<pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
 
 % You are an expert Python Software Engineer. Your goal is to write a robust Python module containing the `fix_error_loop` function and its associated helpers. This module implements an iterative, agentic workflow to fix errors in unit tests and their corresponding code files using an LLM.
 
@@ -40,7 +41,7 @@ The module supports both local and cloud execution modes:
 9.  **Cloud Execution Support:** Implement `cloud_fix_errors` function that calls the cloud fixCode endpoint with the same interface as `fix_errors_from_unit_tests`. This enables hybrid mode where LLM calls go to the cloud while test execution stays local. When passing failure context to the cloud, **prepend** a `[PDD failure classification] ...` line (or equivalent prefix) to the `errors` string payload so the remote fix step sees the same classification as local `fix_errors_from_unit_tests`. <pdd>`protect_tests` should be forwarded in the payload (as `protectTests`) and accepted in the `cloud_fix_errors` signature. The hosted `fixCode` backend does not yet read this field, so it is a forward-looking no-op in cloud mode — the flag is fully honored in local mode. Keep the param so the contract matches local `fix_errors_from_unit_tests` and flips on when the backend adds support.</pdd>
 10. **Output Contract:** Return a 6-tuple: `(success, final_unit_test, final_code, total_attempts, total_cost, model_name)`.
     *   *Note:* If checks pass initially, return actual file contents, `0` for `total_attempts`, `0.0` for `total_cost`, and the same model-name convention as implementation (`""` for Python initial pass; `"N/A"` for non-Python initial pass).
-11. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available.
+11. **Result Normalization:** Implement `_normalize_agentic_result` to handle various return shapes (2, 3, 4, or 5 elements) from the agentic fix to ensure a consistent internal state, specifically extracting `changed_files` if available. Track whether agentic fallback was attempted and used in internal stats or optional metadata while preserving the existing 6-tuple return contract for legacy callers.
 
 12. **Focused repair for large dev units:** When the code file exceeds 500 lines OR the test file exceeds 1000 lines, activate two-phase focused repair instead of passing full file contents to the LLM:
     - **Fast-path:** If the traceback names 1–3 specific functions, skip Phase 1 and send only those function slices plus their failing tests directly to `fix_errors_from_unit_tests`.
@@ -60,6 +61,8 @@ The module supports both local and cloud execution modes:
     - **Local fix call:** Ensure each `fix_errors_from_unit_tests` invocation receives sufficient failure classification context (same spirit as cloud: structured hint or prefixed error text).
     - Use keyword arguments for local fix calls so `time`, `verbose`, `protect_tests`, `language`, and `failure_classification` are forwarded to their matching parameters without positional drift.
     - When `failure_aware_retries=False`, skip all of the above early-exit branches; only `max_attempts` / `budget` / existing loop guards apply.
+
+14. **Compressed repair context:** Accept optional compressed repair context. Include it in local and cloud LLM fix calls as supplemental context, but never replace the concrete pytest output, verification output, failure classification, or raw failure signature used for early exits. For non-Python agentic fallback, pass the compressed context through when supported or record an explicit unavailable reason.
 
 ### Public Interface:
 

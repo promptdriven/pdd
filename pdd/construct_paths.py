@@ -141,6 +141,7 @@ _PDDRC_DEFAULTS_KEYS = {
     "temperature",
     "budget",
     "max_attempts",
+    "compressed_context",
     "outputs",
     "auto_deps_csv_path",
     "context_compression",

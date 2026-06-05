@@ -132,6 +132,52 @@ def test_write_evidence_manifest_serializes_cloud_grounding(tmp_path: Path) -> N
     assert manifest["generation"]["grounding_examples"] == grounding["selected_examples"]
 
 
+def test_write_evidence_manifest_serializes_compression_and_fallback_metadata(
+    tmp_path: Path,
+) -> None:
+    prompt = tmp_path / "prompts" / "payments_python.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text("Generate payments.\n", encoding="utf-8")
+
+    manifest_path = write_evidence_manifest(
+        command="pdd sync payments",
+        prompt_file=prompt,
+        project_root=tmp_path,
+        compression={
+            "enabled": True,
+            "requested": True,
+            "used": True,
+            "mode": "compressed-sync-context",
+            "phases": ["generate", "fix"],
+            "source_counts": {"tests": 2},
+            "source_hashes": [{"path": "tests/test_payments.py", "sha256": "abc"}],
+            "compressed_sha256": "def",
+            "budget_tokens": 6000,
+            "compressed_content": "raw context must not be persisted",
+        },
+        agentic_fallback={
+            "attempted": True,
+            "used": False,
+            "phases": ["fix"],
+            "reason": "local loop succeeded",
+            "provider": "codex",
+            "tool": "agentic-fix",
+            "raw_context": "raw fallback context must not be persisted",
+        },
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    jsonschema.validate(instance=manifest, schema=_schema())
+    compression = manifest["generation"]["compression"]
+    fallback = manifest["generation"]["agentic_fallback"]
+    assert compression["enabled"] is True
+    assert compression["phases"] == ["generate", "fix"]
+    assert "compressed_content" not in compression
+    assert fallback["attempted"] is True
+    assert fallback["reason"] == "local loop succeeded"
+    assert "raw_context" not in fallback
+
+
 def test_grounding_kwargs_from_ctx_merges_review_decisions() -> None:
     kwargs = grounding_kwargs_from_ctx(
         {

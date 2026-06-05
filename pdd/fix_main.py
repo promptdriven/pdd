@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Tuple, Optional
+from typing import Any, Mapping, Tuple, Optional
 import json
 import click
 from rich import print as rprint
@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 
 from .preprocess import preprocess
+from .compressed_sync_context import render_for_prompt
 
 from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
@@ -69,6 +70,8 @@ def fix_main(
     compress_test_context: bool | None = None,
     context_compression: str | None = None,
     compression_fallback: str | None = None,
+    compressed_context: Mapping[str, Any] | None = None,
+    agentic_fallback_events: list[dict[str, Any]] | None = None,
 ) -> Tuple[bool, str, str, int, float, str]:
     """
     Main function to fix errors in code and unit tests.
@@ -418,6 +421,8 @@ def fix_main(
                 compress_test_context=compress_test_context,
                 context_compression=context_compression,
                 compression_fallback=compression_fallback,
+                compressed_context=compressed_context,
+                agentic_fallback_events=agentic_fallback_events,
             )
         elif not cloud_execution_succeeded:
             # Use fix_errors_from_unit_tests for single-pass fixing (local fallback)
@@ -615,7 +620,7 @@ def fix_main(
                             timeout=auth_timeout_s,
                         ))
                         processed_prompt = preprocess(
-                            input_strings["prompt_file"],
+                            input_strings["prompt_file"] + ("\n\n" + render_for_prompt(compressed_context) if render_for_prompt(compressed_context) else ""),
                             recursive=False,
                             double_curly_brackets=True
                         )
