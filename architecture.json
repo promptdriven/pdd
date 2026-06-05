@@ -470,7 +470,7 @@
     "dependencies": [],
     "priority": 18,
     "filename": "resurface_check_Python.prompt",
-    "filepath": "extensions/recruiting/resurface_check.py",
+    "filepath": "prompts/resurface_check_Python.prompt",
     "tags": [
       "backend",
       "api",
@@ -2865,8 +2865,8 @@
     "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 75,
-    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
+    "filename": "agentic_bug_step5_reproduce_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step5_reproduce_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -2987,8 +2987,8 @@
     "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
     "dependencies": [],
     "priority": 80,
-    "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
+    "filename": "agentic_bug_step12_pr_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step12_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3341,30 +3341,6 @@
     },
     "position": {
       "x": 3000,
-      "y": 0
-    }
-  },
-  {
-    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
-    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 95,
-    "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
-    "tags": [
-      "config",
-      "extraction",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 1800,
       "y": 0
     }
   },
@@ -3957,7 +3933,7 @@
     "dependencies": [],
     "priority": 119,
     "filename": "pdd_theme_json.prompt",
-    "filepath": "pdd_theme.json",
+    "filepath": "prompts/pdd_theme_json.prompt",
     "tags": [
       "config"
     ],
@@ -4148,7 +4124,7 @@
     "dependencies": [],
     "priority": 124,
     "filename": "regression_analysis_log.prompt",
-    "filepath": "regression_analysis.log",
+    "filepath": "prompts/regression_analysis_log.prompt",
     "tags": [
       "config"
     ],
@@ -4169,7 +4145,7 @@
     "dependencies": [],
     "priority": 125,
     "filename": "regression_bash.prompt",
-    "filepath": "regression.sh",
+    "filepath": "prompts/regression_bash.prompt",
     "tags": [
       "cli",
       "shell"
@@ -4235,7 +4211,7 @@
     "dependencies": [],
     "priority": 127,
     "filename": "run_generated_python.prompt",
-    "filepath": "pdd/run_generated.py",
+    "filepath": "prompts/run_generated_python.prompt",
     "tags": [
       "generation",
       "module",
@@ -4937,7 +4913,7 @@
     "dependencies": [],
     "priority": 143,
     "filename": "prompt_tester_python.prompt",
-    "filepath": "pdd/prompt_tester.py",
+    "filepath": "prompts/prompt_tester_python.prompt",
     "tags": [
       "module",
       "python",
@@ -5395,7 +5371,8 @@
       "context_generator_main_python.prompt",
       "operation_log_python.prompt",
       "template_registry_python.prompt",
-      "track_cost_python.prompt"
+      "track_cost_python.prompt",
+      "user_story_tests_python.prompt"
     ],
     "priority": 234,
     "filename": "commands/generate_python.prompt",
@@ -5416,7 +5393,7 @@
           },
           {
             "name": "test",
-            "description": "Generate or enhance tests through agentic issue mode or manual prompt/code mode."
+            "description": "Generate or enhance unit tests, or generate/link prompt user stories."
           },
           {
             "name": "example",
@@ -5594,8 +5571,8 @@
     "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
     "dependencies": [],
     "priority": 166,
-    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "filename": "agentic_bug_step7_prompt_classification_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step7_prompt_classification_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5618,8 +5595,8 @@
     "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
     "dependencies": [],
     "priority": 167,
-    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
+    "filename": "agentic_bug_step11_e2e_test_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step11_e2e_test_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8279,7 +8256,7 @@
           },
           {
             "name": "getPromptTemplate",
-            "signature": "(name: string, language: string, description?: string)",
+            "signature": "function getPromptTemplate(name: string, language: string, description?: string): string",
             "returns": "string"
           }
         ]
@@ -9066,7 +9043,7 @@
         "functions": [
           {
             "name": "Job",
-            "signature": "(id, command, args, options, status, result, error, cost, ...)",
+            "signature": "dataclass Job(id: str, command: str, args: Dict[str, Any], options: Dict[str, Any], status: JobStatus, result: Optional[Any], error: Optional[str], cost: float, created_at: datetime, started_at: Optional[datetime], completed_at: Optional[datetime], live_stdout: str, live_stderr: str)",
             "returns": "Job"
           },
           {
@@ -9687,7 +9664,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path",
+            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path",
             "returns": "Path"
           },
           {
@@ -9697,7 +9674,7 @@
           },
           {
             "name": "resolve_generate_output_paths",
-            "signature": "(prompt_file, *, output=None, ...) -> list[str]",
+            "signature": "(prompt_file: str | Path, *, output: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]",
             "returns": "list[str]"
           }
         ]
