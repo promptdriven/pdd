@@ -24,7 +24,7 @@ from .process_csv_change import process_csv_change
 from .get_extension import get_extension
 from .user_story_tests import run_user_story_tests, discover_prompt_files
 from .validate_prompt_includes import sanitize_prompt_output
-from .prompt_gate import maybe_run_workflow_prompt_gate
+from .prompt_gate import maybe_run_workflow_prompt_gate, prompt_gate_block_message
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -520,10 +520,7 @@ def change_main(
                 quiet=quiet,
             )
             if not should_continue:
-                msg = (
-                    "Prompt checkup blocked downstream change steps "
-                    f"(exit {gate_exit})."
-                )
+                msg = prompt_gate_block_message(gate_exit)
                 if not quiet:
                     rprint(f"[bold red]{msg}[/bold red]")
                 return msg, total_cost, model_name or ""

@@ -20,6 +20,8 @@ from pdd.prompt_gate import (
     filter_changed_prompt_paths,
     load_prompt_gate_config,
     maybe_run_workflow_prompt_gate,
+    parse_prompt_gate_block_exit,
+    prompt_gate_block_message,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -185,8 +187,7 @@ def test_generate_agentic_calls_prompt_gate_after_prompt_writes() -> None:
 
     with patch("pdd.agentic_architecture.run_agentic_architecture") as run_arch:
         run_arch.return_value = (True, "ok", 0.0, "codex", output_files)
-        with patch("pdd.commands.generate._maybe_run_prompt_gate") as gate:
-            gate.return_value = True
+        with patch("pdd.commands.generate._enforce_prompt_gate_or_exit") as gate:
             result = runner.invoke(
                 generate,
                 ["https://github.com/org/repo/issues/99", "--prompt-checkup", "warn"],
@@ -196,6 +197,45 @@ def test_generate_agentic_calls_prompt_gate_after_prompt_writes() -> None:
     assert result.exit_code == 0
     gate.assert_called_once()
     assert gate.call_args.kwargs["prompt_checkup"] == "warn"
+
+
+def test_generate_agentic_strict_gate_block_exits_non_zero() -> None:
+    runner = CliRunner()
+    output_files = [str(VAGUE_FIXTURE)]
+
+    with patch("pdd.agentic_architecture.run_agentic_architecture") as run_arch:
+        run_arch.return_value = (True, "ok", 0.0, "codex", output_files)
+        result = runner.invoke(
+            generate,
+            ["https://github.com/org/repo/issues/99", "--prompt-checkup", "strict"],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    assert result.exit_code == 2
+
+
+def test_manual_change_strict_gate_block_exits_non_zero() -> None:
+    runner = CliRunner()
+
+    with patch("pdd.commands.modify.change_main") as change_main:
+        change_main.return_value = (prompt_gate_block_message(2), 0.1, "codex")
+        with patch("pathlib.Path.exists", return_value=True):
+            with patch("pathlib.Path.is_dir", return_value=False):
+                result = runner.invoke(
+                    change,
+                    [
+                        "--manual",
+                        "change_python.prompt",
+                        "module.py",
+                        "input_python.prompt",
+                        "--prompt-checkup",
+                        "strict",
+                    ],
+                    obj={"quiet": True},
+                )
+
+    assert result.exit_code == 2
+    assert parse_prompt_gate_block_exit(change_main.return_value[0]) == 2
 
 
 def test_checkup_devunit_target_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -20,7 +20,7 @@ from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from ..operation_log import log_operation
 from ..evidence_manifest import write_evidence_manifest
-from ..prompt_gate import maybe_run_workflow_prompt_gate
+from ..prompt_gate import maybe_run_workflow_prompt_gate, parse_prompt_gate_block_exit
 
 console = Console()
 
@@ -309,6 +309,13 @@ def change(
                 use_csv=csv,
                 budget=budget
             )
+            gate_exit = (
+                parse_prompt_gate_block_exit(result)
+                if isinstance(result, str)
+                else None
+            )
+            if gate_exit is not None:
+                raise click.exceptions.Exit(gate_exit)
             if evidence:
                 write_evidence_manifest(
                     command="pdd change",

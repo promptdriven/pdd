@@ -17,6 +17,32 @@ logger = logging.getLogger(__name__)
 
 _PROMPT_GATE_MODES = frozenset({"off", "warn", "strict"})
 _DEFAULT_MODE = "warn"
+_PROMPT_GATE_BLOCKED_PREFIX = "Prompt checkup blocked"
+
+
+def prompt_gate_block_message(gate_exit: int) -> str:
+    """Return the standard message when strict prompt checkup blocks a workflow."""
+    return (
+        f"{_PROMPT_GATE_BLOCKED_PREFIX} downstream change steps "
+        f"(exit {gate_exit})."
+    )
+
+
+def parse_prompt_gate_block_exit(message: str) -> Optional[int]:
+    """Return the gate exit code when *message* is a strict block message."""
+    if not message.startswith(_PROMPT_GATE_BLOCKED_PREFIX):
+        return None
+    marker = "(exit "
+    start = message.rfind(marker)
+    if start == -1:
+        return 2
+    end = message.find(")", start)
+    if end == -1:
+        return 2
+    try:
+        return int(message[start + len(marker) : end])
+    except ValueError:
+        return 2
 
 
 def _normalize_prompt_gate_mode(raw: object, *, source: str) -> Optional[str]:

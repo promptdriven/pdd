@@ -43,19 +43,40 @@ def _maybe_run_prompt_gate(
     project_root: Optional[str],
     quiet: bool,
     dry_run: bool = False,
-) -> bool:
-    """Return False when strict prompt checkup blocks downstream work."""
+) -> tuple[bool, int]:
+    """Run the prompt gate; return ``(should_continue, exit_code)``."""
     if dry_run:
-        return True
+        return True, 0
     root = Path(project_root or Path.cwd()).resolve()
-    should_continue, _exit_code = maybe_run_workflow_prompt_gate(
+    return maybe_run_workflow_prompt_gate(
         output_files,
         cli_prompt_checkup=prompt_checkup,
         no_prompt_checkup=no_prompt_checkup,
         project_root=root,
         quiet=quiet,
     )
-    return should_continue
+
+
+def _enforce_prompt_gate_or_exit(
+    *,
+    output_files: Tuple[str, ...] | List[str],
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
+    project_root: Optional[str],
+    quiet: bool,
+    dry_run: bool = False,
+) -> None:
+    """Raise ``click.Exit`` when strict prompt checkup blocks downstream work."""
+    should_continue, exit_code = _maybe_run_prompt_gate(
+        output_files=output_files,
+        prompt_checkup=prompt_checkup,
+        no_prompt_checkup=no_prompt_checkup,
+        project_root=project_root,
+        quiet=quiet,
+        dry_run=dry_run,
+    )
+    if not should_continue:
+        raise click.exceptions.Exit(exit_code)
 
 class GenerateCommand(click.Command):
     """
@@ -320,15 +341,15 @@ def generate(
                     temperature=obj.get("temperature", 0.0),
                     **grounding_kwargs_from_ctx(ctx.obj),
                 )
-            if success and not _maybe_run_prompt_gate(
-                output_files=output_files,
-                prompt_checkup=prompt_checkup,
-                no_prompt_checkup=no_prompt_checkup,
-                project_root=project_root,
-                quiet=quiet,
-                dry_run=dry_run,
-            ):
-                return None
+            if success:
+                _enforce_prompt_gate_or_exit(
+                    output_files=output_files,
+                    prompt_checkup=prompt_checkup,
+                    no_prompt_checkup=no_prompt_checkup,
+                    project_root=project_root,
+                    quiet=quiet,
+                    dry_run=dry_run,
+                )
             return (message, cost, model) if success else None
 
         if dry_run:
@@ -368,14 +389,14 @@ def generate(
                     basename="agentic-generate",
                     **grounding_kwargs_from_ctx(ctx.obj),
                 )
-            if success and not _maybe_run_prompt_gate(
-                output_files=output_files,
-                prompt_checkup=prompt_checkup,
-                no_prompt_checkup=no_prompt_checkup,
-                project_root=project_root,
-                quiet=quiet,
-            ):
-                return None
+            if success:
+                _enforce_prompt_gate_or_exit(
+                    output_files=output_files,
+                    prompt_checkup=prompt_checkup,
+                    no_prompt_checkup=no_prompt_checkup,
+                    project_root=project_root,
+                    quiet=quiet,
+                )
             return (message, cost, model) if success else None
 
         if project_root:
@@ -446,7 +467,7 @@ def generate(
             )
         return generated_code, cost, model
 
-    except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+    except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False

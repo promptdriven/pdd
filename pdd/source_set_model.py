@@ -96,8 +96,6 @@ def resolve_prompt_targets(
             return [nested.resolve()]
         if nested.is_dir():
             return _discover_prompt_files(nested.resolve())
-        if nested.is_dir():
-            return _discover_prompt_files(nested.resolve())
 
     if kind == CheckupTargetKind.DEVUNIT:
         return resolve_devunit_prompts(raw, root)

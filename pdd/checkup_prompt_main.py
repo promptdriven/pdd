@@ -207,7 +207,7 @@ def build_prompt_source_set_report(
     contract_status = "pass" if report.contract_passed else "fail"
     if report.contract_passed and contract_result.warn_count:
         contract_status = "warn"
-        _record_check(report, "contract", status=contract_status)
+    _record_check(report, "contract", status=contract_status)
     for index, issue in enumerate(contract_result.issues):
         report.findings.append(
             SourceSetFinding(

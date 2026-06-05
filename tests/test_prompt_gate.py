@@ -9,10 +9,17 @@ import yaml
 from pdd.prompt_gate import (
     filter_changed_prompt_paths,
     load_prompt_gate_config,
+    parse_prompt_gate_block_exit,
+    prompt_gate_block_message,
     resolve_prompt_gate_mode,
     run_automatic_prompt_gate,
 )
 
+
+def test_prompt_gate_block_message_round_trip() -> None:
+    message = prompt_gate_block_message(2)
+    assert parse_prompt_gate_block_exit(message) == 2
+    assert parse_prompt_gate_block_exit("unrelated message") is None
 
 def test_filter_changed_prompt_paths() -> None:
     paths = filter_changed_prompt_paths(

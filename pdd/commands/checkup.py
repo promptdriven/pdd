@@ -22,7 +22,6 @@ from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .gate import gate_cmd
 from .drift import drift_cmd
-from .gate import gate_cmd
 from .prompt import prompt_lint
 
 
