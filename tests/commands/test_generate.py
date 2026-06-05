@@ -662,12 +662,23 @@ def test_test_story_generation_mode_from_prompt_inputs(runner):
                 "user_stories/story__upload_flow.md",
                 ["upload_python.prompt"],
             )
-            result = runner.invoke(generate_module.test, ["upload_python.prompt", "notify_python.prompt"])
+            result = runner.invoke(
+                generate_module.test,
+                [
+                    "--issue",
+                    "https://github.com/promptdriven/pdd/issues/1356",
+                    "upload_python.prompt",
+                    "notify_python.prompt",
+                ],
+            )
 
     assert result.exit_code == 0
     mock_generate_story.assert_called_once()
     kwargs = mock_generate_story.call_args[1]
     assert kwargs["prompt_files"] == ["upload_python.prompt", "notify_python.prompt"]
+    # Issue #1356: the issue source is threaded through to story generation so
+    # the story is authored from the issue, not the prompt.
+    assert kwargs["issue"] == "https://github.com/promptdriven/pdd/issues/1356"
     assert kwargs["output"] is None
     assert kwargs["stories_dir"] is None
     assert kwargs["prompts_dir"] is None
@@ -675,6 +686,32 @@ def test_test_story_generation_mode_from_prompt_inputs(runner):
     assert kwargs["temperature"] == 0.0
     assert kwargs["time"] == 0.25
     assert kwargs["verbose"] is False
+
+
+def test_test_story_generation_failure_exits_nonzero(runner):
+    """Story generation failure must fail the CLI instead of silently
+    succeeding without writing an LLM-authored story."""
+    with runner.isolated_filesystem():
+        with open("upload_python.prompt", "w") as f:
+            f.write("Upload prompt")
+
+        with patch.object(generate_module, "generate_user_story") as mock_generate_story:
+            mock_generate_story.return_value = (
+                False,
+                "User story generation requires a valid LLM-authored story.",
+                0.0,
+                "",
+                "",
+                [],
+            )
+            result = runner.invoke(
+                generate_module.test,
+                ["--issue", "issue.md", "upload_python.prompt"],
+            )
+
+    assert result.exit_code != 0
+    assert "requires a valid LLM-authored story" in result.output
+    mock_generate_story.assert_called_once()
 
 
 def test_test_story_mode_links_uses_env_prompts_dir(runner, monkeypatch):
@@ -718,11 +755,15 @@ def test_test_story_generation_uses_env_dirs(runner, monkeypatch):
                 True, "ok", 0.0, "gpt-4",
                 "env_stories/story__upload_flow.md", ["upload_python.prompt"],
             )
-            result = runner.invoke(generate_module.test, ["upload_python.prompt"])
+            result = runner.invoke(
+                generate_module.test,
+                ["--issue", "issue.md", "upload_python.prompt"],
+            )
 
     assert result.exit_code == 0, result.output
     mock_gen.assert_called_once()
     kwargs = mock_gen.call_args[1]
+    assert kwargs["issue"] == "issue.md"
     assert kwargs["prompts_dir"] == "env_prompts"
     assert kwargs["stories_dir"] == "env_stories"
 
