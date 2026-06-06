@@ -33,6 +33,21 @@ ISSUE_URL = "https://github.com/o/r/issues/2"
 PR_URL = "https://github.com/o/r/pull/1"
 
 
+def test_step5_targeted_prompt_forbids_broad_suites_for_docs_only_prs() -> None:
+    root = Path(__file__).resolve().parents[1]
+    prompt_paths = [
+        root / "prompts" / "agentic_checkup_step5_test_LLM.prompt",
+        root / "pdd" / "prompts" / "agentic_checkup_step5_test_LLM.prompt",
+    ]
+
+    for prompt_path in prompt_paths:
+        prompt = prompt_path.read_text(encoding="utf-8")
+        assert "Targeted PR mode hard rule" in prompt
+        assert "do NOT run broad aggregators" in prompt
+        assert "docs/assets-only PRs" in prompt
+        assert "status: pass" in prompt
+
+
 def _fake_gh(cmd, *_a, **_kw):  # noqa: ANN001
     if len(cmd) >= 2 and cmd[0] == "api" and "/issues/" in cmd[1]:
         return (True, '{"title": "stub", "body": "stub", "comments_url": ""}')

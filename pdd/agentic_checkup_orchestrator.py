@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -1872,6 +1873,237 @@ def _format_pr_changed_files_for_prompt(
     )
 
 
+_NON_CODE_PR_SUFFIXES = {
+    ".adoc",
+    ".bmp",
+    ".csv",
+    ".drawio",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".md",
+    ".mdx",
+    ".pdf",
+    ".png",
+    ".rst",
+    ".svg",
+    ".txt",
+    ".webp",
+}
+
+_CODE_OR_CONFIG_PR_SUFFIXES = {
+    ".bash",
+    ".c",
+    ".cc",
+    ".cfg",
+    ".cjs",
+    ".cpp",
+    ".cs",
+    ".css",
+    ".go",
+    ".graphql",
+    ".h",
+    ".hpp",
+    ".html",
+    ".ini",
+    ".java",
+    ".js",
+    ".json",
+    ".jsx",
+    ".kt",
+    ".kts",
+    ".mjs",
+    ".php",
+    ".proto",
+    ".py",
+    ".rb",
+    ".rs",
+    ".sass",
+    ".scala",
+    ".scss",
+    ".sh",
+    ".sql",
+    ".svelte",
+    ".swift",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".vue",
+    ".yaml",
+    ".yml",
+    ".zsh",
+}
+
+_CODE_OR_CONFIG_PR_BASENAMES = {
+    ".babelrc",
+    ".dockerignore",
+    ".eslintrc",
+    ".gitignore",
+    ".npmrc",
+    ".prettierrc",
+    "dockerfile",
+    "jest.config.js",
+    "makefile",
+    "package-lock.json",
+    "package.json",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "pyproject.toml",
+    "pytest.ini",
+    "requirements-dev.txt",
+    "requirements.txt",
+    "tsconfig.json",
+    "uv.lock",
+    "vite.config.js",
+    "yarn.lock",
+}
+
+
+def _pr_changed_paths_for_targeted_checks(changed_files_text: str) -> List[str]:
+    """Extract changed paths from ``_format_pr_changed_files_for_prompt`` text."""
+    paths: List[str] = []
+    seen: Set[str] = set()
+    row_re = re.compile(r"^\s*-\s+[A-Z][A-Z0-9]*:\s*(.+?)\s*$")
+    for line in (changed_files_text or "").splitlines():
+        match = row_re.match(line)
+        if not match:
+            continue
+        path_text = match.group(1).strip().strip("`")
+        candidates = (
+            [part.strip() for part in path_text.split(" -> ", 1)]
+            if " -> " in path_text
+            else [path_text]
+        )
+        for candidate in candidates:
+            candidate = candidate.strip().strip("`")
+            if not candidate or candidate.startswith("NOTE:"):
+                continue
+            normalized = Path(candidate).as_posix().lstrip("./")
+            if normalized and normalized not in seen:
+                paths.append(normalized)
+                seen.add(normalized)
+    return paths
+
+
+def _is_obviously_non_code_pr_path(path: str) -> bool:
+    """Return True only for paths that should not trigger executable tests."""
+    normalized = path.strip().strip("/").lower()
+    if not normalized:
+        return False
+    path_obj = Path(normalized)
+    basename = path_obj.name
+    if basename.startswith("requirements") and basename.endswith(".txt"):
+        return False
+    if basename in _CODE_OR_CONFIG_PR_BASENAMES:
+        return False
+    if path_obj.suffix in _CODE_OR_CONFIG_PR_SUFFIXES:
+        return False
+    if path_obj.suffix in _NON_CODE_PR_SUFFIXES:
+        return True
+    parts = path_obj.parts
+    if parts and parts[0] in {"docs", "documentation"}:
+        return True
+    return False
+
+
+def _targeted_non_code_step5_result(
+    context: Dict[str, str],
+    step_cwd: Path,
+    *,
+    iteration: int,
+) -> Optional[Tuple[bool, str, float, str]]:
+    """Return a deterministic Step 5 result for docs/assets-only PRs."""
+    if context.get("pr_mode") != "true" or context.get("pr_test_scope") != "targeted":
+        return None
+
+    changed_files_text = context.get("pr_changed_files", "")
+    base_match = re.search(r"^Base:\s+(.+?)\s*$", changed_files_text, re.MULTILINE)
+    if not base_match:
+        return None
+
+    changed_paths = _pr_changed_paths_for_targeted_checks(changed_files_text)
+    if not changed_paths:
+        return None
+    if not all(_is_obviously_non_code_pr_path(path) for path in changed_paths):
+        return None
+
+    git_cmd, git_env = _trusted_gate_git(step_cwd)
+    if not git_cmd or git_env is None:
+        return None
+
+    base_ref = base_match.group(1).strip()
+    args = [git_cmd, "diff", "--check", f"{base_ref}...HEAD", "--", *changed_paths]
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=step_cwd,
+            capture_output=True,
+            env=git_env,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired):
+        return None
+
+    display_args = [
+        "git",
+        "diff",
+        "--check",
+        f"{base_ref}...HEAD",
+        "--",
+        *changed_paths,
+    ]
+    command = " ".join(shlex.quote(part) for part in display_args)
+    raw_output = (completed.stdout or "") + (completed.stderr or "")
+    raw_output = raw_output.strip()
+    status = "pass" if completed.returncode == 0 else "fail"
+    failure_rows = (
+        "None. Changed files are docs/assets only; no executable tests were applicable."
+        if status == "pass"
+        else "| git diff --check | configuration_error | Whitespace errors in PR diff |"
+    )
+    output_text = (
+        raw_output
+        if raw_output
+        else (
+            "Changed files are docs/assets only; no executable tests were "
+            "applicable. git diff --check passed for the PR diff."
+        )
+    )
+    indented_output = "\n".join(f"  {line}" for line in output_text.splitlines())
+    report = f"""<step_report>
+## Step 5/8: Test Execution (Iteration {iteration})
+
+### Test Runner
+`{command}`
+
+### Results Summary
+- **Total:** 0 executable tests
+- **Passed:** 0
+- **Failed:** {0 if status == "pass" else 1}
+- **Skipped:** 0
+- **Errors:** 0
+
+### Failures
+{failure_rows}
+
+---
+*Proceeding to Step 6: Fix Issues*
+</step_report>
+
+```failure_signal
+command: {command}
+exit_code: {completed.returncode}
+status: {status}
+failing_ids:
+artifact_path: inline
+output: |
+{indented_output}
+```"""
+    return (True, report, 0.0, "deterministic-step5")
+
+
 # ---------------------------------------------------------------------------
 # Internal: run a single step
 # ---------------------------------------------------------------------------
@@ -2869,15 +3101,25 @@ def _run_agentic_checkup_orchestrator_inner(
                     f"{description}..."
                 )
 
-            result = _run_single_step(
-                step_num, name, context,
-                cwd=cwd, step_cwd=nofix_step_cwd,
-                verbose=verbose, quiet=quiet,
-                label=f"step{step_num}",
-                timeout_adder=timeout_adder,
-                reasoning_time=reasoning_time,
-                steers=_issue_step_steers() or None,
+            result = (
+                _targeted_non_code_step5_result(
+                    context,
+                    nofix_step_cwd,
+                    iteration=fix_verify_iteration or 1,
+                )
+                if step_num == 5
+                else None
             )
+            if result is None:
+                result = _run_single_step(
+                    step_num, name, context,
+                    cwd=cwd, step_cwd=nofix_step_cwd,
+                    verbose=verbose, quiet=quiet,
+                    label=f"step{step_num}",
+                    timeout_adder=timeout_adder,
+                    reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
+                )
 
             if result is None:
                 template_name = f"agentic_checkup_step{step_num}_{name}_LLM"
@@ -3300,15 +3542,25 @@ def _run_agentic_checkup_orchestrator_inner(
                         f"{description} (iter {fix_verify_iteration})..."
                     )
 
-                result = _run_single_step(
-                    step_num, name, context,
-                    cwd=cwd, step_cwd=step_cwd,
-                    verbose=verbose, quiet=quiet,
-                    label=iter_label,
-                    timeout_adder=timeout_adder,
-                    reasoning_time=reasoning_time,
-                    steers=_issue_step_steers() or None,
+                result = (
+                    _targeted_non_code_step5_result(
+                        context,
+                        step_cwd,
+                        iteration=fix_verify_iteration,
+                    )
+                    if step_num == 5
+                    else None
                 )
+                if result is None:
+                    result = _run_single_step(
+                        step_num, name, context,
+                        cwd=cwd, step_cwd=step_cwd,
+                        verbose=verbose, quiet=quiet,
+                        label=iter_label,
+                        timeout_adder=timeout_adder,
+                        reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
+                    )
 
                 if result is None:
                     tmpl_name = f"agentic_checkup_step{step_str}_{name}_LLM"

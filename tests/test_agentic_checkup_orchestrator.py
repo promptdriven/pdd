@@ -5,8 +5,8 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from unittest.mock import MagicMock, call, patch
+from typing import Dict, List, Optional
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,6 +26,7 @@ from pdd.agentic_checkup_orchestrator import (
     _parse_expansion_items,
     _parse_failure_signal_block,
     _pr_base_tracking_ref,
+    _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
 )
 
@@ -1038,6 +1039,57 @@ class TestChangedFilesTracking:
         assert f"Base: {base_ref}" in result
         assert "- M: app.py" in result
         assert "- A: tests/test_app.py" in result
+
+    def test_targeted_step5_docs_only_uses_diff_check_fast_path(self, tmp_path):
+        """Docs-only targeted PRs should not ask the agent to run full suites."""
+        self._init_git_repo(tmp_path)
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "branch", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "staging2_checkup.md").write_text("marker\n", encoding="utf-8")
+        subprocess.run(["git", "add", "staging2_checkup.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "docs"], cwd=tmp_path, check=True)
+        base_ref = _pr_base_tracking_ref(77)
+        subprocess.run(["git", "update-ref", base_ref, "base"], cwd=tmp_path, check=True)
+        changed_files = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "base", "base_local_ref": base_ref},
+        )
+
+        result = _targeted_non_code_step5_result(
+            {
+                "pr_mode": "true",
+                "pr_test_scope": "targeted",
+                "pr_changed_files": changed_files,
+            },
+            tmp_path,
+            iteration=1,
+        )
+
+        assert result is not None
+        success, output, cost, model = result
+        assert success is True
+        assert cost == 0.0
+        assert model == "deterministic-step5"
+        assert "git diff --check" in output
+        assert "status: pass" in output
+        assert "0 executable tests" in output
+
+    def test_targeted_step5_code_change_uses_agent_path(self, tmp_path):
+        """Code-like paths still need normal targeted test selection."""
+        result = _targeted_non_code_step5_result(
+            {
+                "pr_mode": "true",
+                "pr_test_scope": "targeted",
+                "pr_changed_files": "Base: refs/pdd/base\n- A: src/app.py",
+            },
+            tmp_path,
+            iteration=1,
+        )
+
+        assert result is None
 
     def test_format_pr_changed_files_includes_all_pr_commits(self, tmp_path):
         """Merge-base diff should not collapse multi-commit PRs to HEAD~1."""
