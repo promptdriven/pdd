@@ -2073,20 +2073,16 @@ def _is_package_manager_lockfile_path(path: str) -> bool:
     return Path(path.strip().strip("/")).name in _PACKAGE_MANAGER_LOCKFILE_BASENAMES
 
 
-def _discard_clean_run_tooling_side_effects(
+def _discard_clean_run_side_effects(
     worktree: Path,
     changed_files: List[str],
 ) -> Tuple[List[str], List[str]]:
-    """Restore known tooling noise created when no fixer ran."""
-    prompt_source_map = _load_prompt_source_map(worktree) or {}
-    generated_code_paths = set(prompt_source_map)
-    discardable = [
-        path for path in changed_files
-        if (
-            _is_package_manager_lockfile_path(path)
-            or Path(path).as_posix().lstrip("./") in generated_code_paths
-        )
-    ]
+    """Restore worktree dirt created when no fixer ran."""
+    # When Steps 3/4/5 are clean, the fixer is skipped. Any remaining
+    # worktree dirt came from discovery/verification/tooling side effects,
+    # not from a causal fix. Restore it so the PR can pass without pushing
+    # unrelated edits.
+    discardable = list(changed_files)
     if not discardable:
         return changed_files, []
 
@@ -3622,9 +3618,9 @@ def _run_agentic_checkup_orchestrator_inner(
 
         # Codex round-3 Finding 2: track whether the fixer (Steps 6.1/6.2/6.3)
         # ever actually ran. Defaults to False so that a clean-run PR (Steps
-        # 3/4/5 all clean) cannot push side-effect edits left in the worktree
-        # by other steps or tooling. Non-PR mode skips the side-effect refusal
-        # path entirely (regular checkup commits its fixes the usual way).
+        # 3/4/5 all clean) can restore side-effect edits left in the worktree
+        # by other steps or tooling before the push path. Non-PR mode skips
+        # this PR-only clean-run side-effect path entirely.
         #
         # Codex round-6 Finding 3 / round-7 Finding 2: a resume that skips
         # ahead bypasses the assignment that would otherwise flip the
@@ -3632,7 +3628,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # guard would refuse the dirty changes the previous run's fixer
         # produced. Seed ONLY from persisted ``step_outputs`` so a manual
         # ``--start-step 7`` (no prior fixer execution, no persisted 6_x
-        # outputs) does NOT bypass the side-effect guard for dirty files
+        # outputs) does NOT bypass the clean-run side-effect handling for dirty files
         # left by tooling. The earlier ``or start_step > 6`` clause made
         # that bypass possible.
         fixer_invoked = any(
@@ -4148,12 +4144,12 @@ def _run_agentic_checkup_orchestrator_inner(
                     (
                         guard_changed_files,
                         discarded_tooling_side_effects,
-                    ) = _discard_clean_run_tooling_side_effects(
+                    ) = _discard_clean_run_side_effects(
                         worktree_path,
                         guard_changed_files,
                     )
                     if discarded_tooling_side_effects:
-                        context["clean_run_discarded_tooling_side_effects"] = (
+                        context["clean_run_discarded_side_effects"] = (
                             ", ".join(sorted(discarded_tooling_side_effects))
                         )
                 pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
@@ -4281,14 +4277,9 @@ def _run_agentic_checkup_orchestrator_inner(
                         last_model_used,
                     )
 
-                # Codex round-3 Finding 2: when Steps 3/4/5 were all clean
-                # the fixer (6.1/6.2/6.3) was skipped, so any dirty files in
-                # the worktree are side effects from non-fixer steps (Step 7
-                # tooling, ad-hoc agent edits, etc.). Pushing them would
-                # recreate the non-convergent clean-run failure where each
-                # rerun publishes a new "checkup fix" commit that nobody
-                # asked for. Refuse the push, record the artifact, and post
-                # the canonical Step 7 verdict instead.
+                # Defensive fallback: clean-run side effects should already
+                # have been restored above. If anything remains, refuse the
+                # push rather than publishing unrelated non-fixer edits.
                 if (
                     not fixer_invoked
                     and not no_changes_clean_run
