@@ -31,10 +31,13 @@ pdd checkup ... --prompt-repair best-effort
 
 ## What the Repair Loop Fixes
 
-The repair brief consumes the complete prompt source-set report, including lint,
-contract, coverage, gate, snapshot, and drift findings. It applies the smallest
-coherent prompt-only update through the internal `pdd change` implementation,
-then rebuilds the complete report.
+The repair brief consumes prompt-fixable findings from the structured source-set
+report: lint, contract, and coverage (for example unchecked requirements or missing
+contract rules). External-only findings such as gate `missing_evidence`, drift
+readiness notes, and snapshot policy failures that require evidence capture do
+not drive automated repair. The loop applies the smallest coherent prompt-only
+update through the internal `pdd change` implementation, then rebuilds the
+complete report.
 
 The repair loop does **not** edit generated code, tests, stories, or other files.
 

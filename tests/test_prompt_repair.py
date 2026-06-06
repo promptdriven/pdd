@@ -1,6 +1,7 @@
 """Tests for pdd.prompt_repair bounded repair loop."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -103,6 +104,7 @@ def test_non_lint_source_set_findings_trigger_change_and_full_recheck(
 
     assert result.repair_skipped is False
     assert result.rounds_used == 1
+    assert result.message != "no lint issues"
     assert result.findings_after == []
     assert prompt.read_text(encoding="utf-8") == repaired
     # coverage is actionable (prompt-fixable) so it must appear in the brief.
@@ -260,6 +262,23 @@ def test_format_token_delta_summary() -> None:
     assert "40 tokens are reusable contract preamble" in summary
 
 
+def test_load_prompt_repair_defaults_ignores_pddrc(tmp_path: Path) -> None:
+    """Defaults come from pyproject.toml [tool.pdd.checkup], not .pddrc."""
+    (tmp_path / ".pddrc").write_text(
+        """
+contexts:
+  default:
+    checkup:
+      prompt_repair: strict
+      max_prompt_repair_rounds: 9
+""".strip(),
+        encoding="utf-8",
+    )
+    config = load_prompt_repair_defaults(tmp_path)
+    assert config.mode == "off"
+    assert config.max_rounds == 1
+
+
 def test_load_prompt_repair_defaults_from_pyproject(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         """
@@ -311,6 +330,118 @@ def test_repair_brief_includes_non_lint_findings() -> None:
     )
     assert '"source_check": "coverage"' in brief
     assert "pdd checkup coverage sample" in brief
+
+
+def test_coverage_only_clean_lint_triggers_change_path(tmp_path: Path) -> None:
+    """Regression: zero lint issues must not skip repair when coverage fails."""
+    prompt = tmp_path / "clean.prompt"
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
+    prompt.write_text(original, encoding="utf-8")
+    source_set_report = {
+        "schema": "pdd.prompt_source_set_report.v1",
+        "status": "warn",
+        "target": str(prompt),
+        "findings": [
+            {
+                "source_check": "coverage",
+                "severity": "warn",
+                "code": "unchecked",
+                "message": "R1 is not covered",
+                "recommended_action": "Add a coverage line for R1.",
+            },
+        ],
+    }
+    repaired = original + "\n% R1: documented requirement.\n"
+
+    with (
+        patch(
+            "pdd.prompt_repair.change",
+            return_value=(repaired, 0.0, "mock"),
+        ) as mock_change,
+        patch(
+            "pdd.prompt_repair._recheck_source_set",
+            return_value={
+                "schema": "pdd.prompt_source_set_report.v1",
+                "status": "pass",
+                "target": str(prompt),
+                "findings": [],
+            },
+        ) as mock_recheck,
+    ):
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort"),
+            context={"source_set_report": source_set_report},
+            cwd=tmp_path,
+            quiet=True,
+        )
+
+    assert result.repair_skipped is False
+    assert result.rounds_used == 1
+    assert result.message != "no lint issues"
+    assert result.message != "no actionable source-set findings"
+    mock_change.assert_called_once()
+    kwargs = mock_change.call_args.kwargs
+    assert kwargs["input_prompt"] == original
+    assert "source_set_report" in kwargs["input_code"]
+    assert "MODIFIED_PROMPT" in kwargs["change_prompt"] or "change()" in kwargs["change_prompt"]
+    mock_recheck.assert_called_once()
+    assert result.audit_path is not None
+    audit = json.loads(result.audit_path.read_text(encoding="utf-8"))
+    assert audit["apply_method"] == "pdd.change.change"
+    assert audit["applied_operations"] == ["CHANGE"]
+
+
+def test_gate_only_missing_evidence_skips_repair(tmp_path: Path) -> None:
+    """External-only gate findings cannot be fixed by prompt edits alone."""
+    prompt = tmp_path / "clean.prompt"
+    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    source_set_report = {
+        "schema": "pdd.prompt_source_set_report.v1",
+        "status": "warn",
+        "target": str(prompt),
+        "findings": [
+            {
+                "source_check": "gate",
+                "severity": "warn",
+                "code": "missing_evidence",
+                "message": "No evidence manifest",
+            },
+        ],
+    }
+
+    with patch("pdd.prompt_repair.change") as mock_change:
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort"),
+            context={"source_set_report": source_set_report},
+            cwd=tmp_path,
+            quiet=True,
+        )
+
+    assert result.repair_skipped is True
+    assert result.rounds_used == 0
+    assert result.message == "no actionable source-set findings"
+    mock_change.assert_not_called()
+
+
+def test_change_apply_validates_delimiters_before_write(tmp_path: Path) -> None:
+    prompt = tmp_path / "vague.prompt"
+    original = (FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8")
+    prompt.write_text(original, encoding="utf-8")
+    leaked = "<<<MODIFIED_PROMPT>>>\n% broken\n<<<END_MODIFIED_PROMPT>>>"
+
+    with patch("pdd.prompt_repair.change", return_value=(leaked, 0.0, "mock")):
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort"),
+            cwd=tmp_path,
+            quiet=True,
+        )
+
+    assert result.success is True
+    assert result.message == "invalid change result"
+    assert prompt.read_text(encoding="utf-8") == original
 
 
 @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)

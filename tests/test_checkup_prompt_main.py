@@ -215,6 +215,74 @@ def test_build_prompt_source_set_report_respects_pdd_user_stories_dir(
     )
 
 
+def test_checkup_prompt_target_runs_repair_then_full_recheck(tmp_path: Path) -> None:
+    """Issue #1422: failed prompt checkup → repair → full re-check."""
+    from pdd.prompt_repair import RepairResult
+
+    prompt = tmp_path / "sample_python.prompt"
+    prompt.write_text("% Sample\n", encoding="utf-8")
+
+    failing_report = type(
+        "Report",
+        (),
+        {
+            "status": "warn",
+            "passed": False,
+            "as_dict": lambda self: {
+                "schema": "pdd.prompt_source_set_report.v1",
+                "status": "warn",
+                "target": str(prompt),
+                "findings": [
+                    {
+                        "source_check": "coverage",
+                        "severity": "warn",
+                        "code": "unchecked",
+                        "message": "R1 unchecked",
+                    }
+                ],
+            },
+            "recommended_actions": lambda self: ["Add coverage for R1."],
+        },
+    )()
+
+    with (
+        patch(
+            "pdd.commands.checkup.run_checkup_prompt",
+            side_effect=[
+                (False, "check failed", 0.0, "mock", 1),
+                (True, "check passed", 0.0, "mock", 0),
+            ],
+        ) as mock_checkup,
+        patch(
+            "pdd.commands.checkup.build_prompt_source_set_report",
+            return_value=failing_report,
+        ) as mock_build_report,
+        patch(
+            "pdd.commands.checkup.run_prompt_repair_loop",
+            return_value=RepairResult(
+                success=True,
+                rounds_used=1,
+                repair_skipped=False,
+                message="repaired",
+            ),
+        ) as mock_repair,
+    ):
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            [str(prompt), "--prompt-repair", "best-effort"],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    assert result.exit_code == 0
+    assert mock_checkup.call_count == 2
+    mock_build_report.assert_called_once()
+    mock_repair.assert_called_once()
+    repair_context = mock_repair.call_args.kwargs["context"]
+    assert "source_set_report" in repair_context
+    assert "recommended_actions" in repair_context
+
+
 def test_checkup_issue_url_still_uses_agentic_path() -> None:
     runner = CliRunner()
     with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:

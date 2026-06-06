@@ -79,7 +79,7 @@ pdd checkup lint prompts/my_feature_python.prompt --llm
 ```
 Review the advisory warnings, refine any vague terms, and build a precise `<vocabulary>` block in the prompt to define what ambiguous terms mean in your domain. Rerun the linter until the scan is clean.
 
-When `checkup.prompt_repair: best-effort` is set in `.pddrc` (or `--prompt-repair best-effort` is passed), a failed lint automatically triggers a bounded, non-interactive repair pass — adding missing vocabulary definitions, normalizing contract rule IDs, filling coverage gaps — before re-running the lint. See [docs/prompt_repair.md](prompt_repair.md) for configuration and safety details.
+When `prompt_repair = "best-effort"` is set in `pyproject.toml` `[tool.pdd.checkup]` (or `--prompt-repair best-effort` is passed), a failed prompt source-set checkup automatically triggers a bounded, non-interactive repair pass — adding missing vocabulary definitions, normalizing contract rule IDs, filling coverage gaps — before re-running the full source-set check. See [docs/prompt_repair.md](prompt_repair.md) for configuration and safety details.
 
 ### Step 3: Generate Code
 Once the prompt contract is clean and deterministic, generate the initial implementation:

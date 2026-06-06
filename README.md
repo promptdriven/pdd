@@ -59,7 +59,7 @@ For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waive
 
 For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
 
-For non-interactive bounded prompt repair after a failed lint checkup, see [docs/prompt_repair.md](docs/prompt_repair.md).
+For non-interactive bounded prompt repair after a failed prompt source-set checkup, see [docs/prompt_repair.md](docs/prompt_repair.md).
 
 ## Installation
 

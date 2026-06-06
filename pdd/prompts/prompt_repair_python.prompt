@@ -31,11 +31,15 @@ report after every round. It edits only the target prompt file.
    and audit path.
 2. Accept the structured report from `context["source_set_report"]` as either a JSON
    string or dictionary. Validate that its schema is `pdd.prompt_source_set_report.v1`.
-3. Treat every finding in that report as a repair trigger. Coverage, contract, gate,
-   snapshot, and drift findings must trigger repair even when `scan_prompt()` returns
-   zero lint issues.
+3. Treat prompt-fixable source-set findings as first-class repair triggers even when
+   `scan_prompt()` returns zero lint issues. Prompt-fixable checks are lint, contract,
+   and coverage (for example unchecked requirements or missing contract rules).
+   External-only findings (gate `missing_evidence`, drift readiness notes, snapshot
+   policy failures that require evidence capture) must not block or drive repair when
+   no prompt-fixable findings remain.
 4. When no structured report is supplied, retain compatibility by representing current
-   lint issues as source-set findings. Skip only when the active finding set is empty.
+   lint issues as source-set findings. Skip only when the active prompt-fixable finding
+   set is empty.
 5. Build a bounded repair brief containing all current findings and caller-provided
    supporting context. Require minimal prompt-only edits that preserve the public
    interface and unrelated requirements.
