@@ -579,13 +579,17 @@ def run_agentic_checkup(
 
         strict_failures: List[str] = []
         work_cwd = cwd if cwd is not None else Path.cwd()
+        # Forward strictness so warnings are treated as errors consistently in
+        # all three phases (initial check, repair loop re-checks, post-repair
+        # check).  Mirrors the commands/checkup.py path which passes strict=strict.
+        is_strict = prompt_repair == "strict"
         for prompt_path in discover_prompt_paths(work_cwd):
             # Step 1: run the full structured checkup to decide if repair is needed
             src_report = build_prompt_source_set_report(
                 prompt_path,
                 target=str(prompt_path),
                 project_root=project_root,
-                strict=False,
+                strict=is_strict,
             )
             if src_report.status == "pass":
                 continue  # no repair needed for this prompt
@@ -600,6 +604,7 @@ def run_agentic_checkup(
                 cwd=project_root,
                 verbose=verbose,
                 quiet=quiet,
+                strict=is_strict,
             )
             summary = format_token_delta_summary(repair_result)
             if summary:
@@ -611,7 +616,7 @@ def run_agentic_checkup(
                 prompt_path,
                 target=str(prompt_path),
                 project_root=project_root,
-                strict=False,
+                strict=is_strict,
             )
             if post_report.status != "pass" and prompt_repair == "strict":
                 strict_failures.append(str(prompt_path))

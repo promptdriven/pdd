@@ -57,8 +57,10 @@ report after every round. It edits only the target prompt file.
    `build_prompt_source_set_report()`. Use its findings, not lint alone, to stop early
    or drive the next repair round.
 9. Honor the wall-clock and round bounds. `strict` succeeds only when no source-set
-   findings remain. `best-effort` may succeed with remaining findings after at least
-   one applied round.
+   findings remain. `best-effort` always succeeds unless a hard error occurs (LLM
+   failure, unreadable file): remaining findings after completed rounds are non-fatal,
+   and a zero-round configuration (`max_rounds=0`) is treated as a skip
+   (`repair_skipped=True, success=True`) rather than a hard failure.
 10. Write an audit note under `.pdd/evidence/prompt_repair/` recording token metrics,
     source-set finding counts, lint issue counts, rounds, and `pdd.change.change` as the
     apply method. Audit failures must not raise.

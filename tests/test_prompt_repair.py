@@ -498,6 +498,23 @@ def test_checkup_help_exposes_prompt_repair_flags(flag: str) -> None:
     assert flag in result.output
 
 
+def test_best_effort_max_rounds_zero_is_a_skip_not_failure(tmp_path: Path) -> None:
+    """max_rounds=0 with actionable findings must be a skip (success=True) in best-effort."""
+    prompt = tmp_path / "vague.prompt"
+    prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    with patch("pdd.prompt_repair.change") as mock_change:
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort", max_rounds=0),
+            cwd=tmp_path,
+            quiet=True,
+        )
+    mock_change.assert_not_called()
+    assert result.success is True, "best-effort with max_rounds=0 must succeed (skip, not failure)"
+    assert result.repair_skipped is True
+    assert result.rounds_used == 0
+
+
 def test_repair_llm_failure_preserves_existing_issues(tmp_path: Path) -> None:
     """Regression: when the LLM call fails, RepairResult.issues_after must reflect the
     actual remaining issues, not an empty list that would cause callers to skip retries.

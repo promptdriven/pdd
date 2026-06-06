@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -13,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .change import MODIFIED_PROMPT_END, MODIFIED_PROMPT_START, change
+from .json_atomic import atomic_write_json, atomic_write_text
 from .prompt_lint import LintIssue, scan_prompt
 from .server.token_counter import count_tokens
 
@@ -58,26 +57,8 @@ class RepairResult:  # pylint: disable=too-many-instance-attributes
     findings_after: List[Dict[str, Any]] = field(default_factory=list)
 
 
-def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
-    """Write *text* to *path* atomically using a temp file and ``os.replace()``.
-
-    Flushes and fsyncs before renaming so a crash during the write cannot leave
-    the target file in a partially-written state.
-    """
-    dir_ = path.parent
-    fd, tmp = tempfile.mkstemp(dir=dir_, prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding=encoding) as fh:
-            fh.write(text)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
+# Atomic text writes use atomic_write_text from pdd.json_atomic, which shares
+# the same flush+fsync+rename contract as atomic_write_json.
 
 
 def load_prompt_repair_defaults(project_root: Path) -> PromptRepairConfig:
@@ -280,7 +261,7 @@ def _validate_changed_prompt(original: str, candidate: str) -> Optional[str]:
 def _recheck_source_set(
     path: Path,
     *,
-    initial_report: Dict[str, Any],
+    target: str,
     project_root: Path,
     strict: bool = False,
 ) -> Dict[str, Any]:
@@ -291,7 +272,7 @@ def _recheck_source_set(
 
     report = build_prompt_source_set_report(
         path,
-        target=str(initial_report.get("target") or path),
+        target=target,
         project_root=project_root,
         strict=strict,
     )
@@ -328,7 +309,7 @@ def _write_audit_note(
             "apply_method": "pdd.change.change",
             "status": "repaired" if result.success else "failed",
         }
-        audit_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        atomic_write_json(audit_path, payload)
         return audit_path
     except OSError as exc:
         logger.warning("Failed to write prompt repair audit note: %s", exc)
@@ -354,7 +335,7 @@ def _maybe_rollback_strict(
     """
     if config.mode == "strict" and rounds_used > 0 and current_text != original_text:
         try:
-            _atomic_write_text(path, original_text)
+            atomic_write_text(path, original_text)
             return original_text
         except OSError as exc:
             logger.warning(
@@ -416,8 +397,17 @@ def run_prompt_repair_loop(
         tokens_before = -1
 
     preamble_estimate = _estimate_preamble_tokens(original_text)
-    issues_before = _lint_issues(path)
     initial_report = _source_set_report(context)
+    # Extract the target slug from the structured report so re-checks use the
+    # same target identifier as the initial check.  Fall back to the file path.
+    _report_target = str((initial_report or {}).get("target") or path)
+    # Only call _lint_issues when no structured report is supplied — it reads and
+    # parses the entire prompt file from disk, which is redundant when a full
+    # source-set report (including lint findings) is already available.
+    if initial_report is None:
+        issues_before = _lint_issues(path)
+    else:
+        issues_before = []
     all_findings_before = (
         _report_findings(initial_report)
         if initial_report is not None
@@ -440,8 +430,10 @@ def run_prompt_repair_loop(
             preamble_estimate=preamble_estimate,
             repair_skipped=True,
             message="no actionable source-set findings",
-            findings_before=all_findings_before,
-            findings_after=all_findings_before,
+            # Use filtered findings_before (empty) for consistency with the run path:
+            # both paths expose only actionable findings in this field.
+            findings_before=findings_before,
+            findings_after=findings_before,
         )
 
     current_text = original_text
@@ -457,14 +449,15 @@ def run_prompt_repair_loop(
             current_text = _maybe_rollback_strict(
                 path, original_text, current_text, config=config, rounds_used=rounds_used
             )
+            _ta = count_tokens(current_text) if tokens_before >= 0 else -1
             result = RepairResult(
                 success=False,
                 issues_before=issues_before,
                 issues_after=issues_after,
                 rounds_used=rounds_used,
                 tokens_before=tokens_before,
-                tokens_after=count_tokens(current_text) if tokens_before >= 0 else -1,
-                token_delta=0,
+                tokens_after=_ta,
+                token_delta=_ta - tokens_before if tokens_before >= 0 and _ta >= 0 else 0,
                 preamble_estimate=preamble_estimate,
                 message="repair timeout",
                 findings_before=findings_before,
@@ -611,14 +604,14 @@ def run_prompt_repair_loop(
             )
             return result
 
-        _atomic_write_text(path, validated)
+        atomic_write_text(path, validated)
         current_text = validated
         rounds_used += 1
         applied_operations.append("CHANGE")
         if initial_report is not None:
             current_report = _recheck_source_set(
                 path,
-                initial_report=initial_report,
+                target=_report_target,
                 project_root=project_root,
                 strict=strict,
             )
@@ -636,7 +629,7 @@ def run_prompt_repair_loop(
     needs_rollback = rounds_used == 0 or (config.mode == "strict" and bool(findings_after))
     if needs_rollback and current_text != original_text:
         try:
-            _atomic_write_text(path, original_text)
+            atomic_write_text(path, original_text)
             current_text = original_text
         except OSError as exc:
             logger.warning("Failed to restore original prompt %s: %s", path, exc)
@@ -661,7 +654,11 @@ def run_prompt_repair_loop(
     if config.mode == "strict":
         success = len(findings_after) == 0
     else:
-        success = not no_repair_ran or not findings_after
+        # In best-effort, a zero-round configuration (e.g. max_rounds=0) is a
+        # skip, not a hard failure.  repair_skipped=True lets callers distinguish
+        # "not attempted" from "ran and left issues".  Remaining findings after
+        # completed rounds are also non-fatal in best-effort mode.
+        success = True
 
     message = (
         "repaired"
