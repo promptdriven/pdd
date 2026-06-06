@@ -706,6 +706,8 @@ class ReviewLoopContext:
     project_root: Path
     pr_content: str = ""
     has_issue: bool = True
+    full_suite_source: str = "local"
+    test_scope: str = "full"
 
 
 @dataclass
@@ -7139,6 +7141,9 @@ def _render_machine_verdict_block(
         "pr_url": context.pr_url,
         "issue_url": context.issue_url,
         "issue_aligned": _json_bool_or_none(issue_aligned),
+        "full_suite_source": context.full_suite_source,
+        "test_scope": context.test_scope,
+        "github_ci_gate_used": context.full_suite_source == "github-checks",
         "active_reviewer": state.active_reviewer or "unknown",
         "reviewer_status": reviewer_status,
         "fresh_final_status": state.fresh_final_status,
@@ -7215,6 +7220,8 @@ def _render_final_report(
         f"fresh-final-review: {state.fresh_final_status}",
         f"verified-head-sha: {verified_sha_line}",
         f"remote-pr-head-sha: {remote_sha_line}",
+        f"test-scope: {context.test_scope}",
+        f"full-suite-source: {context.full_suite_source}",
         f"max-rounds-reached: {str(state.max_rounds_reached).lower()}",
         f"max-cost-reached: {str(state.max_cost_reached).lower()}",
         f"max-duration-reached: {str(state.max_duration_reached).lower()}",
@@ -7222,12 +7229,29 @@ def _render_final_report(
         "### Summary",
         "",
         state.stop_reason or "Review loop completed.",
-        "",
-        "### Per-Reviewer Status",
-        "",
-        "| Reviewer | Status |",
-        "|----------|--------|",
     ]
+    if context.full_suite_source == "none":
+        lines.extend(
+            [
+                "",
+                "Verification scope: targeted; full GitHub CI was not used as a gate.",
+            ]
+        )
+    elif context.full_suite_source == "github-checks":
+        lines.extend(["", "Verification scope: targeted with GitHub checks gate."])
+    elif context.test_scope == "full":
+        lines.extend(["", "Verification scope: local full suite plus Layer 2 review-loop."])
+    else:
+        lines.extend(["", f"Verification scope: {context.test_scope}."])
+    lines.extend(
+        [
+            "",
+            "### Per-Reviewer Status",
+            "",
+            "| Reviewer | Status |",
+            "|----------|--------|",
+        ]
+    )
     fallback_took_over = (
         state.active_reviewer is not None
         and bool(reviewers)

@@ -93,8 +93,8 @@ If issues remain after this verification, the workflow may loop back to steps 3-
      PR-scoped only when it touches `<pr_changed_files>`, local fixes from
      Steps 6.1-6.3, or a regression/contract test required for the source
      issue. Repo-wide failures outside that scope may be reported as
-     out-of-scope context, but they are not blocking Layer 1 because the
-     authoritative full-suite signal comes from the GitHub checks gate.
+     out-of-scope context, but they are not blocking Layer 1 because this
+     targeted mode is not claiming full-suite coverage.
 
 4. **Frame the verdict by mode** — this is the question Step 7 actually answers:
 
@@ -199,4 +199,4 @@ Your markdown summary should follow this format:
 - In issue mode, post your findings as a GitHub comment before outputting the JSON
 - In PR mode, do NOT post GitHub comments from Step 7; output the markdown summary and JSON only
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
-- **Exit signal**: If the required verification for the active mode passes, you MUST include the exact text "All Issues Fixed" in your output. In issue mode, required verification means ALL tests pass (unit + integration + e2e) and the build succeeds with no remaining blocking issues. In PR mode, required verification means PR-scoped tests plus any required regression/e2e/contract tests pass, and either the full suite/CI is clean or the report truthfully states that verification was targeted only; when an issue IS provided, `issue_aligned` must also be true, but when no issue is provided the exit signal depends on code findings only (no alignment requirement). In targeted PR scope, unrelated out-of-diff repo-wide build/project issues do not block this exit signal because the full-suite truth is delegated to the GitHub checks gate. If any required PR-scoped test fails, any blocking PR-scoped build issue remains, or full-suite evidence is required but missing, do NOT output "All Issues Fixed" — instead clearly list remaining blocking issues so the next iteration can fix them
+- **Exit signal**: If the required verification for the active mode passes, you MUST include the exact text "All Issues Fixed" in your output. In issue mode, required verification means ALL tests pass (unit + integration + e2e) and the build succeeds with no remaining blocking issues. In PR mode, required verification means PR-scoped tests plus any required regression/e2e/contract tests pass, and either the full suite/CI is clean or the report truthfully states that verification was targeted only; when an issue IS provided, `issue_aligned` must also be true, but when no issue is provided the exit signal depends on code findings only (no alignment requirement). In targeted PR scope, unrelated out-of-diff repo-wide build/project issues do not block this exit signal because targeted mode is not claiming full-suite coverage. If targeted PR scope is used, explicitly state "full GitHub CI was not used as a gate." If any required PR-scoped test fails, any blocking PR-scoped build issue remains, or full-suite evidence is required but missing, do NOT output "All Issues Fixed" — instead clearly list remaining blocking issues so the next iteration can fix them

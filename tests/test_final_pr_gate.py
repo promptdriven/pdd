@@ -299,6 +299,56 @@ class TestFinalGateLibrary:
         checks_mock.assert_called_once()
         loop_mock.assert_called_once()
 
+    def test_none_full_suite_source_skips_github_gate_and_runs_layer2(
+        self, tmp_path: Path
+    ) -> None:
+        order: list[str] = []
+
+        def orch(*_a, **_kw):
+            order.append("layer1")
+            return (True, "targeted checkup ok", 1.0, "model")
+
+        def loop(*_a, **_kw):
+            order.append("layer2")
+            _write_final_state(
+                tmp_path, issue_number=2, pr_number=1, payload=_clean_final_state()
+            )
+            return (True, "review ok", 2.0, "codex")
+
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._fetch_pr_context", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator", side_effect=orch
+        ), patch(
+            "pdd.agentic_checkup.run_github_checks_gate"
+        ) as checks_mock, patch(
+            "pdd.agentic_checkup.run_checkup_review_loop", side_effect=loop
+        ) as loop_mock:
+            success, msg, _cost, _model = run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                no_fix=False,
+                use_github_state=False,
+                pr_url=PR_URL,
+                final_gate=True,
+                test_scope="targeted",
+                full_suite_source="none",
+            )
+
+        assert success is True, msg
+        assert order == ["layer1", "layer2"]
+        checks_mock.assert_not_called()
+        loop_mock.assert_called_once()
+        assert "full GitHub CI was not used as a gate" in msg
+
     def test_github_checks_failure_skips_layer2(self, tmp_path: Path) -> None:
         with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
             "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
@@ -734,6 +784,28 @@ class TestFinalGateCli:
         assert kwargs["full_suite_source"] == "github-checks"
         assert kwargs["test_scope"] == "targeted"
 
+    def test_forwards_none_full_suite_source(self) -> None:
+        runner = CliRunner()
+        with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+            run_checkup.return_value = (True, "clean", 0.25, "codex")
+            result = runner.invoke(
+                checkup,
+                [
+                    "--pr", PR_URL,
+                    "--issue", ISSUE_URL,
+                    "--final-gate",
+                    "--full-suite-source", "none",
+                    "--test-scope", "targeted",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+        assert result.exit_code == 0, result.output
+        kwargs = run_checkup.call_args.kwargs
+        assert kwargs["final_gate"] is True
+        assert kwargs["full_suite_source"] == "none"
+        assert kwargs["test_scope"] == "targeted"
+
     def test_rejects_combination_with_review_loop(self) -> None:
         runner = CliRunner()
         result = runner.invoke(
@@ -792,6 +864,21 @@ class TestFinalGateCli:
                 "--issue", ISSUE_URL,
                 "--final-gate",
                 "--full-suite-source", "github-checks",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+        assert result.exit_code == 2
+        assert "--test-scope targeted" in result.output
+
+    def test_none_source_requires_targeted_test_scope(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr", PR_URL,
+                "--issue", ISSUE_URL,
+                "--final-gate",
+                "--full-suite-source", "none",
             ],
             obj={"quiet": True, "verbose": False},
         )

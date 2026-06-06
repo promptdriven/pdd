@@ -398,6 +398,11 @@ def _format_layer1_failure_report(
 ) -> str:
     """Render a parseable final-gate failure report for Layer 1 failures."""
     reason = (layer1_message or "Layer 1 checkup failed.").strip()
+    scope_note = (
+        " full GitHub CI was not used as a gate."
+        if full_suite_source == "none"
+        else ""
+    )
     payload_reason = reason
     if len(payload_reason) > 4000:
         payload_reason = payload_reason[:4000].rstrip() + "...[truncated]"
@@ -443,7 +448,10 @@ def _format_layer1_failure_report(
             "",
             "### Summary",
             "",
-            "Layer 1 PR checkup failed before the GitHub checks gate or Layer 2 review loop could run.",
+            (
+                "Layer 1 PR checkup failed before Layer 2 review loop could run."
+                f"{scope_note}"
+            ),
             "",
             "### Machine Verdict",
             "",
@@ -617,6 +625,8 @@ def run_agentic_checkup(
             the historical contract: Layer 1 must run the full local suite.
             ``github-checks`` makes Layer 1 run targeted local checks and then
             gates on GitHub checks for the current PR head before Layer 2.
+            ``none`` makes Layer 1 targeted and runs Layer 2 without using full
+            GitHub CI as a gate.
         final_gate: When true in PR mode, run the canonical two-layer final
             gate (issue #1406): Layer 1 is the PR-scoped checkup orchestrator
             (no new PR), Layer 2 is the primary-reviewer/fixer review loop on
@@ -739,13 +749,11 @@ def run_agentic_checkup(
         console.print("[bold]Running agentic checkup...[/bold]")
 
     full_suite_source = (full_suite_source or "local").strip().lower()
-    if full_suite_source not in {"local", "github-checks"}:
+    if full_suite_source not in {"local", "github-checks", "none"}:
         return (
             False,
-            (
-                "--full-suite-source must be 'local' or 'github-checks', "
-                f"got {full_suite_source!r}."
-            ),
+            "--full-suite-source must be 'local', 'github-checks', or 'none', "
+            f"got {full_suite_source!r}.",
             0.0,
             "",
         )
@@ -779,6 +787,8 @@ def run_agentic_checkup(
                 else _fetch_pr_context(pr_owner, pr_repo, pr_number)
             ),
             has_issue=has_issue,
+            full_suite_source=full_suite_source,
+            test_scope=test_scope,
         )
         loop_config = ReviewLoopConfig(
             reviewers=parse_reviewers(reviewers),
@@ -847,6 +857,10 @@ def run_agentic_checkup(
                 (
                     "test_scope!=targeted (--test-scope full)",
                     full_suite_source == "github-checks" and test_scope != "targeted",
+                ),
+                (
+                    "test_scope!=targeted (--test-scope full)",
+                    full_suite_source == "none" and test_scope != "targeted",
                 ),
             )
             if set_
@@ -1032,9 +1046,14 @@ def run_agentic_checkup(
                 orch_model,
             )
         if not quiet:
+            scope_clause = (
+                " Full GitHub CI was not used as a gate."
+                if full_suite_source == "none"
+                else ""
+            )
             console.print(
                 "[bold]Final gate Layer 1 (PR checkup) passed; running "
-                "Layer 2 (review-loop)...[/bold]"
+                f"Layer 2 (review-loop)...{scope_clause}[/bold]"
             )
         loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
             pr_content=final_gate_pr_content
@@ -1045,9 +1064,15 @@ def run_agentic_checkup(
         )
         total_cost = orch_cost + loop_cost
         checks_clause = "GitHub checks gate passed; " if github_checks_message else ""
+        no_ci_clause = (
+            "full GitHub CI was not used as a gate; "
+            if full_suite_source == "none"
+            else ""
+        )
         message = (
             "Final gate: Layer 1 (PR checkup) passed; "
             f"{checks_clause}"
+            f"{no_ci_clause}"
             f"Layer 2 (review-loop): {loop_message}"
         )
         if not ship and loop_success:

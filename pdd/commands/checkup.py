@@ -117,14 +117,15 @@ from .prompt import prompt_lint
 @click.option(
     "--full-suite-source",
     "full_suite_source",
-    type=click.Choice(["local", "github-checks"]),
+    type=click.Choice(["local", "github-checks", "none"]),
     default="local",
     show_default=True,
     help=(
         "Final-gate full-suite source. 'local' requires --test-scope full and "
         "uses Layer 1 local full-suite evidence. 'github-checks' requires "
         "--test-scope targeted and gates on GitHub checks for the current PR "
-        "head before Layer 2."
+        "head before Layer 2. 'none' requires --test-scope targeted and runs "
+        "targeted Layer 1 plus Layer 2 without a full-suite gate."
     ),
 )
 @click.option(
@@ -668,8 +669,14 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 "--final-gate requires full test scope; --test-scope targeted "
                 "would return a ship verdict without running the full suite. "
                 "Use --full-suite-source github-checks to pair targeted Layer 1 "
-                "tests with GitHub checks.",
+                "tests with GitHub checks, or --full-suite-source none to run "
+                "without a full-suite gate.",
                 param_hint="'--final-gate'",
+            )
+        if full_suite_source == "none" and test_scope != "targeted":
+            raise click.BadParameter(
+                "--full-suite-source none requires --test-scope targeted.",
+                param_hint="'--full-suite-source'",
             )
     if review_loop and start_step is not None:
         raise click.BadParameter(
