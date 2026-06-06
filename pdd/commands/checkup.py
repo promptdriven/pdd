@@ -20,7 +20,6 @@ from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .gate import gate_cmd
 from .drift import drift_cmd
-from .gate import gate_cmd
 from .prompt import prompt_lint
 
 
@@ -116,6 +115,19 @@ from .prompt import prompt_lint
     ),
 )
 @click.option(
+    "--full-suite-source",
+    "full_suite_source",
+    type=click.Choice(["local", "github-checks"]),
+    default="local",
+    show_default=True,
+    help=(
+        "Final-gate full-suite source. 'local' requires --test-scope full and "
+        "uses Layer 1 local full-suite evidence. 'github-checks' requires "
+        "--test-scope targeted and gates on GitHub checks for the current PR "
+        "head before Layer 2."
+    ),
+)
+@click.option(
     "--review-loop",
     is_flag=True,
     default=False,
@@ -127,14 +139,14 @@ from .prompt import prompt_lint
     is_flag=True,
     default=False,
     help=(
-        "Canonical final PR gate (issue #1406). Requires --pr and --issue. "
+        "Canonical final PR gate (issue #1406). Requires --pr. "
         "Runs the PR-scoped checkup (Layer 1, no new PR) then the "
         "reviewer/fixer review-loop (Layer 2) on the resulting PR head, and "
         "returns a real ship verdict (exit non-zero unless the PR is "
         "shippable). This is what \"ready for maintainer review\" means once a "
         "PR exists. Cannot be combined with --review-loop, --no-fix, "
         "--review-only, --start-step, --no-gates, or --test-scope targeted "
-        "(the verdict requires the deterministic gates and the full suite)."
+        "unless --full-suite-source github-checks is also set."
     ),
 )
 @click.option(
@@ -344,6 +356,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     pr_url: Optional[str],
     issue_url_opt: Optional[str],
     test_scope: str,
+    full_suite_source: str,
     review_loop: bool,
     final_gate: bool,
     review_only: bool,
@@ -604,13 +617,14 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             param_hint="'--review-loop'",
         )
     # ``--final-gate`` is the canonical two-layer PR-readiness gate (#1406). It
-    # requires both ``--pr`` and ``--issue`` and owns the review-loop as Layer 2,
-    # so it cannot be combined with flags that would contradict or duplicate the
-    # two-layer contract.
+    # requires ``--pr`` and owns the review-loop as Layer 2, so it cannot be
+    # combined with flags that would contradict or duplicate the two-layer
+    # contract. ``--issue`` remains optional in PR mode; without it, the
+    # issue-alignment gate is skipped.
     if final_gate:
-        if not pr_mode or issue_url_opt is None:
+        if not pr_mode:
             raise click.BadParameter(
-                "--final-gate requires --pr and --issue.",
+                "--final-gate requires --pr.",
                 param_hint="'--final-gate'",
             )
         if review_loop:
@@ -643,10 +657,18 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 "an LLM-only review could pass over a failing gate.",
                 param_hint="'--final-gate'",
             )
-        if test_scope != "full":
+        if full_suite_source == "github-checks" and test_scope != "targeted":
+            raise click.BadParameter(
+                "--full-suite-source github-checks requires --test-scope targeted; "
+                "GitHub checks provide the full-suite truth.",
+                param_hint="'--full-suite-source'",
+            )
+        if full_suite_source == "local" and test_scope != "full":
             raise click.BadParameter(
                 "--final-gate requires full test scope; --test-scope targeted "
-                "would return a ship verdict without running the full suite.",
+                "would return a ship verdict without running the full suite. "
+                "Use --full-suite-source github-checks to pair targeted Layer 1 "
+                "tests with GitHub checks.",
                 param_hint="'--final-gate'",
             )
     if review_loop and start_step is not None:
@@ -744,6 +766,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
             pr_url=pr_url,
             test_scope=test_scope,
+            full_suite_source=full_suite_source,
             start_step_override=start_step_override,
             review_loop=review_loop,
             final_gate=final_gate,

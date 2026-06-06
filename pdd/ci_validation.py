@@ -23,11 +23,14 @@ MAX_LOG_CHARS = 20000
 PASS_BUCKETS = {"pass", "skipping"}
 FAIL_BUCKETS = {"fail", "cancel"}
 PENDING_BUCKETS = {"pending"}
+SKIP_BUCKETS = {"skip", "skipped", "skipping"}
+FINAL_GATE_PASS_BUCKETS = {"pass"}
 
 # Substring gh CLI prints to stderr when no required checks are configured.
 # Centralised so tests can reference the same constant instead of duplicating
 # a magic string.
 GH_NO_REQUIRED_CHECKS_PHRASE = "no required checks"
+GH_NO_CHECKS_PHRASES = (GH_NO_REQUIRED_CHECKS_PHRASE, "no checks")
 
 
 def detect_ci_system(cwd: Path) -> str:
@@ -223,8 +226,9 @@ def _poll_required_checks(
     *,
     expected_head_sha: str,
     quiet: bool,
+    required_only: bool = True,
 ) -> Tuple[str, List[Dict[str, str]]]:
-    """Poll required checks until they pass, fail, or time out."""
+    """Poll PR checks until they pass, fail, or time out."""
     saw_checks = False
     saw_ambiguous_error = False
     matched_expected_head = not bool(expected_head_sha)
@@ -243,19 +247,11 @@ def _poll_required_checks(
                 time.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
-        result = _run_gh(
-            repo_owner,
-            repo_name,
-            cwd,
-            [
-                "pr",
-                "checks",
-                str(pr_number),
-                "--required",
-                "--json",
-                "name,state,bucket,link",
-            ],
-        )
+        check_args = ["pr", "checks", str(pr_number)]
+        if required_only:
+            check_args.append("--required")
+        check_args.extend(["--json", "name,state,bucket,link"])
+        result = _run_gh(repo_owner, repo_name, cwd, check_args)
 
         latest_checks = []
         if result.stdout.strip():
@@ -272,7 +268,7 @@ def _poll_required_checks(
         # accompany permission/config errors (issue #1114).
         if result.returncode == 1:
             stderr_lower = (result.stderr or "").lower()
-            if GH_NO_REQUIRED_CHECKS_PHRASE in stderr_lower:
+            if any(phrase in stderr_lower for phrase in GH_NO_CHECKS_PHRASES):
                 return "no_checks", []
             # GitHub App installation token may lack checks:read on fork repos.
             # "resource not accessible by integration" means we can't read check
@@ -323,6 +319,105 @@ def _poll_required_checks(
     if not saw_checks and matched_expected_head and not saw_ambiguous_error:
         return "no_checks", []
     return "timeout", latest_checks
+
+
+def run_github_checks_gate(
+    cwd: Path,
+    repo_owner: str,
+    repo_name: str,
+    pr_number: int,
+    *,
+    quiet: bool,
+    expected_head_sha: Optional[str] = None,
+    required_only: bool = False,
+) -> Tuple[bool, str, str]:
+    """Strict final-gate check over GitHub PR checks.
+
+    Unlike ``run_ci_validation_loop``, this is verify-only and fail-closed:
+    missing, unreadable, skipped, pending, failed, stale, or wrong-head checks
+    all fail because this path uses GitHub checks as the full-suite source of
+    truth.
+    """
+    head_sha = (expected_head_sha or "").strip() or _get_pr_head_sha(
+        repo_owner, repo_name, pr_number, cwd
+    )
+    source_name = "required GitHub checks" if required_only else "GitHub checks"
+
+    if not head_sha:
+        return False, f"{source_name} gate could not read the current PR head SHA.", ""
+
+    if not quiet:
+        console.print(
+            f"[bold]Final gate: waiting for {source_name} on PR #{pr_number} "
+            f"head {head_sha[:8]}...[/bold]"
+        )
+
+    status, checks = _poll_required_checks(
+        repo_owner,
+        repo_name,
+        pr_number,
+        cwd,
+        expected_head_sha=head_sha,
+        quiet=quiet,
+        required_only=required_only,
+    )
+    summary = _render_check_summary(checks)
+    skipped = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() in SKIP_BUCKETS
+        or check.get("state", "").lower() in SKIP_BUCKETS
+    ]
+    unknown = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() not in (
+            FINAL_GATE_PASS_BUCKETS | FAIL_BUCKETS | PENDING_BUCKETS | SKIP_BUCKETS
+        )
+    ]
+
+    if status == "passed" and checks and not skipped and not unknown:
+        return True, f"{source_name} passed on PR head {head_sha[:8]}.\n{summary}", head_sha
+    if status == "passed" and not checks:
+        return False, f"{source_name} were missing for PR head {head_sha[:8]}.", head_sha
+    if skipped:
+        return (
+            False,
+            f"{source_name} included skipped checks on PR head {head_sha[:8]}:\n{summary}",
+            head_sha,
+        )
+    if unknown:
+        return (
+            False,
+            f"{source_name} included unknown check states on PR head {head_sha[:8]}:\n{summary}",
+            head_sha,
+        )
+    if status == "failed":
+        return False, f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}", head_sha
+    if status == "no_checks":
+        return (
+            False,
+            (
+                f"{source_name} were missing or unreadable for PR head "
+                f"{head_sha[:8]}; final gate requires GitHub checks as "
+                "full-suite truth."
+            ),
+            head_sha,
+        )
+    if status == "timeout":
+        return (
+            False,
+            (
+                f"{source_name} were pending, stale, or not reported for PR "
+                f"head {head_sha[:8]} before the polling timeout:\n{summary}"
+            ),
+            head_sha,
+        )
+    return (
+        False,
+        f"{source_name} returned unexpected status {status!r} on PR head {head_sha[:8]}:\n{summary}",
+        head_sha,
+    )
 
 
 def _load_failed_runs(
@@ -565,7 +660,7 @@ def post_ci_failure_comment(
         "What was attempted:",
         f"- Polled required CI checks for PR #{pr_number}",
         f"- Ran automated CI fix iterations: {attempts}",
-        f"- Retrieved failure logs or check URLs for each failing check",
+        "- Retrieved failure logs or check URLs for each failing check",
         "",
         "Remaining required check failures:",
     ]

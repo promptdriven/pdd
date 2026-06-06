@@ -67,6 +67,7 @@ ROLE_TO_PROVIDER: Dict[str, str] = {
 
 DEFAULT_BLOCKING_SEVERITIES: Tuple[str, ...] = ("blocker", "critical", "medium")
 DEFAULT_CLEAN_REVIEWER_STATES: Tuple[str, ...] = ("clean",)
+FINAL_GATE_REPORT_SCHEMA = "pdd.checkup.final_gate.v1"
 PR_API_CHANGED_FILES_MAX_LINES = 300
 PR_API_CHANGED_FILES_MAX_CHARS = 20000
 # R8: cover every suffix Python can import as a module under ``pdd/``.
@@ -7092,6 +7093,70 @@ def _resolve_issue_aligned(state: ReviewLoopState) -> str:
     return "true" if not _remaining_findings(state) else "false"
 
 
+def _json_bool_or_none(value: str) -> Optional[bool]:
+    if value == "true":
+        return True
+    if value == "false":
+        return False
+    return None
+
+
+def _render_machine_verdict_block(
+    *,
+    context: ReviewLoopContext,
+    state: ReviewLoopState,
+    reviewers: Sequence[str],
+    issue_aligned: str,
+    verified_sha_line: str,
+    remote_sha_line: str,
+    remaining_findings: Sequence[ReviewFinding],
+) -> List[str]:
+    reviewer_status = {
+        reviewer: state.reviewer_status.get(reviewer, "missing")
+        for reviewer in reviewers
+    }
+    reviewer_status["fresh-final"] = state.fresh_final_status
+    has_clean_reviewer = any(
+        status == "clean" for reviewer, status in reviewer_status.items()
+        if reviewer != "fresh-final"
+    )
+    passed = (
+        not remaining_findings
+        and has_clean_reviewer
+        and state.fresh_final_status == "clean"
+        and issue_aligned != "false"
+        and not state.max_rounds_reached
+        and not state.max_cost_reached
+        and not state.max_duration_reached
+    )
+    payload = {
+        "schema": FINAL_GATE_REPORT_SCHEMA,
+        "stage": "review-loop",
+        "status": "passed" if passed else "failed",
+        "reason": state.stop_reason or "Review loop completed.",
+        "pr_url": context.pr_url,
+        "issue_url": context.issue_url,
+        "issue_aligned": _json_bool_or_none(issue_aligned),
+        "active_reviewer": state.active_reviewer or "unknown",
+        "reviewer_status": reviewer_status,
+        "fresh_final_status": state.fresh_final_status,
+        "verified_head_sha": verified_sha_line,
+        "remote_pr_head_sha": remote_sha_line,
+        "max_rounds_reached": state.max_rounds_reached,
+        "max_cost_reached": state.max_cost_reached,
+        "max_duration_reached": state.max_duration_reached,
+        "findings": [finding.to_dict() for finding in remaining_findings],
+    }
+    return [
+        "",
+        "### Machine Verdict",
+        "",
+        "```json",
+        json.dumps(payload, indent=2, sort_keys=True),
+        "```",
+    ]
+
+
 def _has_hard_not_clean_state(state: ReviewLoopState) -> bool:
     if state.fresh_final_status in HARD_NOT_CLEAN_STATES:
         return True
@@ -7179,6 +7244,17 @@ def _render_final_report(
             cell = status
         lines.append(f"| {reviewer} | {cell} |")
     lines.append(f"| fresh-final | {state.fresh_final_status} |")
+    lines.extend(
+        _render_machine_verdict_block(
+            context=context,
+            state=state,
+            reviewers=reviewers,
+            issue_aligned=issue_aligned,
+            verified_sha_line=verified_sha_line,
+            remote_sha_line=remote_sha_line,
+            remaining_findings=remaining_findings,
+        )
+    )
 
     # Reviewer Diagnostics — only render when at least one reviewer
     # ended in a non-clean state with captured detail. This keeps the

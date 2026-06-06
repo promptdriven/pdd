@@ -14,6 +14,7 @@ from pdd.ci_validation import (
     _poll_required_checks,
     detect_ci_system,
     post_ci_failure_comment,
+    run_github_checks_gate,
     run_ci_validation_loop,
 )
 
@@ -168,6 +169,91 @@ def test_run_ci_validation_loop_returns_no_checks_when_ci_absent(tmp_path: Path)
     assert success is True
     assert message == "No CI checks detected"
     assert cost == 0.0
+
+
+def test_github_checks_gate_passes_all_checks_on_current_head(tmp_path: Path) -> None:
+    """Final gate strict mode should pass only when real checks pass."""
+    passing_checks = [
+        {"name": "lint", "state": "SUCCESS", "bucket": "pass", "link": "https://example.test/lint"}
+    ]
+    captured: dict[str, object] = {}
+
+    def fake_poll(*_args, **kwargs):  # noqa: ANN001
+        captured.update(kwargs)
+        return "passed", passing_checks
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", side_effect=fake_poll):
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is True
+    assert head_sha == "sha123"
+    assert "passed on PR head sha123" in message
+    assert captured["expected_head_sha"] == "sha123"
+    assert captured["required_only"] is False
+
+
+def test_github_checks_gate_fails_when_checks_missing(tmp_path: Path) -> None:
+    """No checks is success for the legacy CI-fix loop, but failure for final gate."""
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("no_checks", [])):
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert head_sha == "sha123"
+    assert "missing or unreadable" in message
+
+
+def test_github_checks_gate_fails_when_any_check_skipped(tmp_path: Path) -> None:
+    """Skipped GitHub checks are not full-suite evidence."""
+    skipped_checks = [
+        {"name": "full suite", "state": "SKIPPING", "bucket": "skipping", "link": ""}
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("passed", skipped_checks)):
+        success, message, _head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "skipped checks" in message
+
+
+def test_github_checks_gate_fails_unknown_check_bucket(tmp_path: Path) -> None:
+    """Unknown check states are not trustworthy full-suite evidence."""
+    unknown_checks = [
+        {"name": "full suite", "state": "SUCCESS", "bucket": "", "link": ""}
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("passed", unknown_checks)):
+        success, message, _head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "unknown check states" in message
 
 
 def test_run_ci_validation_loop_retries_and_commits_fix(tmp_path: Path) -> None:

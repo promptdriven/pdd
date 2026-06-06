@@ -384,6 +384,9 @@ class TestCheckupReviewLoopRuntime:
         assert round(cost, 2) == 0.1
         assert model == "codex"
         assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
+        assert '"schema": "pdd.checkup.final_gate.v1"' in report
+        assert '"stage": "review-loop"' in report
+        assert '"fresh-final": "clean"' in report
         assert ("codex", "checkup-review-loop-review-codex-round1") in calls
         assert not any("review-claude" in label for _, label in calls)
         assert not any("fresh-final" in label for _, label in calls)
@@ -784,7 +787,6 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 "base_ref": "main",
                 "head_sha": "a" * 40,
             },
@@ -3195,7 +3197,6 @@ class TestCheckupReviewLoopRuntime:
         different role into the reviewer slot, the fixer-fallback must not
         name that promoted role either."""
         from pdd.checkup_review_loop import (
-            FixResult,
             ReviewFinding,
             ReviewLoopState,
             _maybe_run_fallback_fixer,
@@ -10214,7 +10215,6 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 # Iter-23 Finding 1: gates fail closed when metadata
                 # has no base_ref (gh-API failure semantics). Supply
                 # a base_ref so the default _patch_io still
@@ -11321,7 +11321,6 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             },
@@ -11379,7 +11378,6 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             },
@@ -11443,7 +11441,6 @@ class TestReviewLoopDeterministicGates:
             return {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             }

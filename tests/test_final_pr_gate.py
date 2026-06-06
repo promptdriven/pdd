@@ -58,7 +58,16 @@ def _clean_final_state(*, reviewer: str = "codex", head: str = "deadbeef") -> di
     }
 
 
-def _run_final_gate(tmp_path: Path, *, orch_return, loop_side_effect=None, loop_return=None):
+def _run_final_gate(
+    tmp_path: Path,
+    *,
+    orch_return,
+    loop_side_effect=None,
+    loop_return=None,
+    issue_url=ISSUE_URL,
+    test_scope: str = "full",
+    full_suite_source: str = "local",
+):
     """Drive run_agentic_checkup(final_gate=True) with both layers mocked."""
     with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
         "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
@@ -78,12 +87,14 @@ def _run_final_gate(tmp_path: Path, *, orch_return, loop_side_effect=None, loop_
         return_value=loop_return,
     ) as loop_mock:
         result = run_agentic_checkup(
-            issue_url=ISSUE_URL,
+            issue_url=issue_url,
             quiet=True,
             no_fix=False,
             use_github_state=False,
             pr_url=PR_URL,
             final_gate=True,
+            test_scope=test_scope,
+            full_suite_source=full_suite_source,
         )
     return result, orch_mock, loop_mock
 
@@ -220,6 +231,143 @@ class TestFinalGateLibrary:
         orch_mock.assert_called_once()
         loop_mock.assert_not_called()
         assert cost == 0.5
+
+    def test_github_checks_gate_runs_between_layer1_and_layer2(self, tmp_path: Path) -> None:
+        order: list[str] = []
+
+        def orch(*_a, **_kw):
+            order.append("layer1")
+            return (True, "targeted checkup ok", 1.0, "model")
+
+        def checks(*_a, **_kw):
+            order.append("github-checks")
+            return (True, "GitHub checks passed", "abc123")
+
+        def loop(*_a, **_kw):
+            order.append("layer2")
+            _write_final_state(
+                tmp_path, issue_number=2, pr_number=1, payload=_clean_final_state()
+            )
+            return (True, "review ok", 2.0, "codex")
+
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._fetch_pr_context", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator", side_effect=orch
+        ) as orch_mock, patch(
+            "pdd.agentic_checkup.run_github_checks_gate", side_effect=checks
+        ) as checks_mock, patch(
+            "pdd.agentic_checkup.run_checkup_review_loop", side_effect=loop
+        ) as loop_mock:
+            success, msg, _cost, _model = run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                no_fix=False,
+                use_github_state=False,
+                pr_url=PR_URL,
+                final_gate=True,
+                test_scope="targeted",
+                full_suite_source="github-checks",
+            )
+
+        assert success is True, msg
+        assert order == ["layer1", "github-checks", "layer2"]
+        assert orch_mock.call_args.kwargs["test_scope"] == "targeted"
+        checks_mock.assert_called_once()
+        loop_mock.assert_called_once()
+
+    def test_github_checks_failure_skips_layer2(self, tmp_path: Path) -> None:
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._fetch_pr_context", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=(True, "targeted checkup ok", 1.0, "model"),
+        ), patch(
+            "pdd.agentic_checkup.run_github_checks_gate",
+            return_value=(False, "GitHub checks failed", "abc123"),
+        ) as checks_mock, patch(
+            "pdd.agentic_checkup.run_checkup_review_loop"
+        ) as loop_mock:
+            success, msg, cost, _model = run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                no_fix=False,
+                use_github_state=False,
+                pr_url=PR_URL,
+                final_gate=True,
+                test_scope="targeted",
+                full_suite_source="github-checks",
+            )
+
+        assert success is False
+        assert "GitHub checks failed" in msg
+        assert cost == 1.0
+        checks_mock.assert_called_once()
+        loop_mock.assert_not_called()
+
+    def test_github_checks_failure_posts_parseable_gate_report(self, tmp_path: Path) -> None:
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._fetch_pr_context", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=(True, "targeted checkup ok", 1.0, "model"),
+        ), patch(
+            "pdd.agentic_checkup.run_github_checks_gate",
+            return_value=(False, "GitHub checks failed", "abc123"),
+        ), patch(
+            "pdd.agentic_checkup.run_checkup_review_loop"
+        ) as loop_mock, patch(
+            "pdd.agentic_checkup.post_pr_comment", return_value=True
+        ) as post_pr, patch(
+            "pdd.agentic_checkup.post_step_comment", return_value=True
+        ) as post_issue:
+            success, msg, _cost, _model = run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                no_fix=False,
+                use_github_state=True,
+                pr_url=PR_URL,
+                final_gate=True,
+                test_scope="targeted",
+                full_suite_source="github-checks",
+            )
+
+        assert success is False
+        assert "GitHub checks failed" in msg
+        loop_mock.assert_not_called()
+        post_pr.assert_called_once()
+        body = post_pr.call_args.args[3]
+        assert "final-gate-status: failed" in body
+        assert "final-gate-stage: github-checks" in body
+        assert '"schema": "pdd.checkup.final_gate.v1"' in body
+        assert '"stage": "github-checks"' in body
+        assert '"layer2_status": "skipped"' in body
+        assert "| blocker | github-checks |" in body
+        post_issue.assert_called_once()
 
     def test_non_clean_verdict_fails_even_when_loop_succeeds(self, tmp_path: Path) -> None:
         """run_checkup_review_loop returns success=True for a non-clean report;
@@ -406,21 +554,30 @@ class TestFinalGateLibrary:
         assert "could not clear" in msg.lower()
         loop_mock.assert_not_called()
 
-    def test_final_gate_requires_issue(self, tmp_path: Path) -> None:
+    def test_final_gate_allows_no_issue(self, tmp_path: Path) -> None:
+        def loop(*_a, **_kw):
+            _write_final_state(
+                tmp_path, issue_number=1, pr_number=1, payload=_clean_final_state()
+            )
+            return (True, "review ok", 1.0, "codex")
+
         with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
             "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
-        ), patch(
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
             "pdd.agentic_checkup._find_project_root", return_value=tmp_path
         ), patch(
             "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
         ), patch(
             "pdd.agentic_checkup._load_pddrc_content", return_value=""
         ), patch(
-            "pdd.agentic_checkup.run_agentic_checkup_orchestrator"
+            "pdd.agentic_checkup._fetch_pr_context", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=(True, "checkup ok", 1.0, "model"),
         ) as orch_mock, patch(
-            "pdd.agentic_checkup.run_checkup_review_loop"
+            "pdd.agentic_checkup.run_checkup_review_loop", side_effect=loop
         ) as loop_mock:
-            success, msg, _cost, _model = run_agentic_checkup(
+            success, msg, cost, _model = run_agentic_checkup(
                 issue_url=None,
                 quiet=True,
                 no_fix=False,
@@ -428,10 +585,10 @@ class TestFinalGateLibrary:
                 pr_url=PR_URL,
                 final_gate=True,
             )
-        assert success is False
-        assert "--final-gate" in msg or "final gate" in msg.lower()
-        orch_mock.assert_not_called()
-        loop_mock.assert_not_called()
+        assert success is True, msg
+        assert cost == 2.0
+        orch_mock.assert_called_once()
+        loop_mock.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +616,7 @@ class TestFinalGateCli:
         assert result.exit_code == 0, result.output
         kwargs = run_checkup.call_args.kwargs
         assert kwargs["final_gate"] is True
+        assert kwargs["full_suite_source"] == "local"
         assert kwargs["reviewer"] == "codex"
         assert kwargs["fixer"] == "claude"
         assert kwargs["max_review_rounds"] == 3
@@ -475,15 +633,42 @@ class TestFinalGateCli:
         assert result.exit_code == 2
         assert "--pr" in result.output
 
-    def test_requires_issue(self) -> None:
+    def test_allows_no_issue(self) -> None:
         runner = CliRunner()
-        result = runner.invoke(
-            checkup,
-            ["--pr", PR_URL, "--final-gate"],
-            obj={"quiet": True, "verbose": False},
-        )
-        assert result.exit_code == 2
-        assert "--final-gate" in result.output
+        with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+            run_checkup.return_value = (True, "clean", 0.25, "codex")
+            result = runner.invoke(
+                checkup,
+                ["--pr", PR_URL, "--final-gate"],
+                obj={"quiet": True, "verbose": False},
+            )
+
+        assert result.exit_code == 0, result.output
+        kwargs = run_checkup.call_args.kwargs
+        assert kwargs["final_gate"] is True
+        assert kwargs["issue_url"] is None
+
+    def test_forwards_github_checks_full_suite_source(self) -> None:
+        runner = CliRunner()
+        with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
+            run_checkup.return_value = (True, "clean", 0.25, "codex")
+            result = runner.invoke(
+                checkup,
+                [
+                    "--pr", PR_URL,
+                    "--issue", ISSUE_URL,
+                    "--final-gate",
+                    "--full-suite-source", "github-checks",
+                    "--test-scope", "targeted",
+                ],
+                obj={"quiet": True, "verbose": False},
+            )
+
+        assert result.exit_code == 0, result.output
+        kwargs = run_checkup.call_args.kwargs
+        assert kwargs["final_gate"] is True
+        assert kwargs["full_suite_source"] == "github-checks"
+        assert kwargs["test_scope"] == "targeted"
 
     def test_rejects_combination_with_review_loop(self) -> None:
         runner = CliRunner()
@@ -519,7 +704,7 @@ class TestFinalGateCli:
 
     def test_rejects_targeted_test_scope(self) -> None:
         """Targeted scope skips the full suite; the final-readiness verdict must
-        run the full suite."""
+        run the full suite unless GitHub checks are the source."""
         runner = CliRunner()
         result = runner.invoke(
             checkup,
@@ -533,6 +718,21 @@ class TestFinalGateCli:
         )
         assert result.exit_code == 2
         assert "full test scope" in result.output
+
+    def test_github_checks_source_requires_targeted_test_scope(self) -> None:
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            [
+                "--pr", PR_URL,
+                "--issue", ISSUE_URL,
+                "--final-gate",
+                "--full-suite-source", "github-checks",
+            ],
+            obj={"quiet": True, "verbose": False},
+        )
+        assert result.exit_code == 2
+        assert "--test-scope targeted" in result.output
 
     def test_rejects_nonpositive_review_budget(self) -> None:
         """The gate runs the review loop as Layer 2, so its budget knobs must be
