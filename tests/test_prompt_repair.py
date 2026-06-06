@@ -164,7 +164,8 @@ def test_llm_failure_does_not_raise(tmp_path: Path) -> None:
         )
 
     assert result.success is False
-    assert result.issues_after == []
+    # issues_after must reflect actual remaining issues, not [] (which would cause callers to skip retries)
+    assert len(result.issues_after) > 0
 
 
 def test_strict_mode_fails_with_remaining_issues(tmp_path: Path) -> None:
