@@ -10,7 +10,15 @@ import click
 
 from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
-from ..prompt_repair import load_prompt_repair_defaults
+from ..checkup_prompt_main import build_prompt_source_set_report, run_checkup_prompt
+from ..checkup_target import is_prompt_shaped_target
+from ..prompt_repair import (
+    PromptRepairConfig,
+    discover_prompt_paths,
+    format_token_delta_summary,
+    load_prompt_repair_defaults,
+    run_prompt_repair_loop,
+)
 from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
@@ -21,8 +29,24 @@ from .contracts import contracts_check, contracts_cli
 from .coverage import coverage_cmd
 from .gate import gate_cmd
 from .drift import drift_cmd
-from .gate import gate_cmd
 from .prompt import prompt_lint
+
+
+def _forward_subcommand_json(
+    args: list[str],
+    *,
+    as_json: bool,
+    after: Optional[str] = None,
+) -> list[str]:
+    """Forward parent ``--json`` to focused checkup subcommands."""
+    if not as_json or "--json" in args:
+        return list(args)
+    forwarded = list(args)
+    if after is not None and after in forwarded:
+        forwarded.insert(forwarded.index(after) + 1, "--json")
+    else:
+        forwarded.insert(0, "--json")
+    return forwarded
 
 
 @click.command(
@@ -325,7 +349,7 @@ from .prompt import prompt_lint
     type=click.Choice(["off", "best-effort", "strict"]),
     default=None,
     help=(
-        "Non-interactive prompt repair when changed prompts fail lint. "
+        "With prompt targets: run repair after a failed checkup, then re-check. "
         "Overrides pyproject.toml [tool.pdd.checkup].prompt_repair (default: off)."
     ),
 )
@@ -348,6 +372,19 @@ from .prompt import prompt_lint
     help="Wall-clock timeout for the prompt repair loop in seconds (default: 120).",
 )
 @click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="With prompt targets: emit ``pdd.prompt_source_set_report.v1`` JSON.",
+)
+@click.option(
+    "--explain",
+    is_flag=True,
+    default=False,
+    help="With prompt targets: read-only finding summary (non-fatal; no exit-code change).",
+)
+@click.option(
     "-h",
     "--help",
     "show_help",
@@ -365,6 +402,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     validate_arch_includes: bool,
     project_root: Optional[Path],
     strict: bool,
+    as_json: bool,
+    explain: bool,
     no_fix: bool,
     timeout_adder: float,
     start_step: Optional[str],
@@ -398,9 +437,27 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     max_prompt_repair_seconds: Optional[float],
 ) -> Optional[Tuple[str, float, str]]:
     """
-    Run agentic health checkup from a GitHub issue, or local diagnostics.
+    pdd checkup = verifier namespace
+
+    Run agentic health checkup from a GitHub issue, or local prompt diagnostics.
 
     \b
+    Prompt targets (source-set health):
+      pdd checkup prompts/foo_python.prompt
+      pdd checkup prompts/
+      pdd checkup <devunit>
+          → Is this prompt source-set clear, covered, evidenced, and ready to generate from?
+    Focused prompt checks (CI / debugging):
+      pdd checkup lint ...
+      pdd checkup contract check ...
+      pdd checkup coverage ...
+      pdd checkup gate ...
+      pdd checkup snapshot ...
+      pdd checkup drift ...
+    Issue / PR checkup:
+      pdd checkup <issue-url>
+      pdd checkup --pr <pr-url>
+
     GitHub mode (default): TARGET is an issue URL.
     PR mode: pass --pr <pr-url> to run the full checkup against an existing
              PR. With no --issue the PR is reviewed on its own merits;
@@ -442,7 +499,11 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target in {"contract", "contracts"}:
-        contract_args = list(ctx.args)
+        contract_args = _forward_subcommand_json(
+            list(ctx.args),
+            as_json=as_json,
+            after="check",
+        )
         if strict:
             # Forward strict to the subcommand scope, not the group scope.
             if contract_args and contract_args[0] == "check":
@@ -525,7 +586,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "lint":
-        lint_args = list(ctx.args)
+        lint_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
         if strict:
             lint_args.insert(0, "--strict")
         if not lint_args or show_help:
@@ -550,7 +611,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             )
             return None
         exit_code = coverage_cmd.main(
-            args=list(ctx.args),
+            args=_forward_subcommand_json(list(ctx.args), as_json=as_json),
             prog_name="pdd checkup coverage",
             standalone_mode=False,
             obj=ctx.obj,
@@ -560,7 +621,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "gate":
-        gate_args = list(ctx.args)
+        gate_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
         if show_help and not gate_args:
             click.echo(
                 gate_cmd.get_help(click.Context(gate_cmd, info_name="pdd checkup gate"))
@@ -577,7 +638,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "drift":
-        drift_args = list(ctx.args)
+        drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
         if not drift_args or show_help:
             click.echo(
                 drift_cmd.get_help(click.Context(drift_cmd, info_name="pdd checkup drift"))
@@ -607,6 +668,85 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
         run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
         return "validate-arch-includes: ok", 0.0, ""
+
+    if pr_url is None and target is not None and is_prompt_shaped_target(
+        target,
+        project_root=project_root,
+    ):
+        import json as _json  # pylint: disable=import-outside-toplevel
+
+        quiet = ctx.obj.get("quiet", False)
+        _repair_defaults = load_prompt_repair_defaults(Path.cwd())
+        _effective_repair = prompt_repair if prompt_repair is not None else _repair_defaults.mode
+
+        passed, message, cost, model, exit_code = run_checkup_prompt(
+            target,
+            explain=explain,
+            as_json=as_json,
+            quiet=quiet or as_json,
+            strict=strict,
+            project_root=project_root,
+        )
+
+        # check → repair → recheck cycle (Issue #1422)
+        # Repair runs only after a failed structured checkup and never with --json.
+        if not passed and _effective_repair not in (None, "off") and not as_json:
+            _root = project_root if project_root is not None else Path.cwd()
+            _repair_cfg = PromptRepairConfig(
+                mode=_effective_repair,
+                max_rounds=(
+                    max_prompt_repair_rounds if max_prompt_repair_rounds is not None
+                    else _repair_defaults.max_rounds
+                ),
+                max_token_growth=(
+                    max_prompt_token_growth if max_prompt_token_growth is not None
+                    else _repair_defaults.max_token_growth
+                ),
+                max_seconds=(
+                    max_prompt_repair_seconds if max_prompt_repair_seconds is not None
+                    else _repair_defaults.max_seconds
+                ),
+            )
+            _target_path = Path(target)
+            if _target_path.is_file() and _target_path.suffix == ".prompt":
+                _prompt_paths = [_target_path]
+            else:
+                _prompt_paths = discover_prompt_paths(_root)
+            for _pp in _prompt_paths:
+                # Feed the full structured report (coverage/contract/gate findings,
+                # recommended_action) as repair context, not just lint.
+                _report = build_prompt_source_set_report(
+                    _pp,
+                    target=target,
+                    project_root=_root,
+                    strict=strict,
+                )
+                _repair_context = {
+                    "source_set_report": _json.dumps(_report.as_dict(), indent=2),
+                    "recommended_actions": "\n".join(_report.recommended_actions()),
+                }
+                _rr = run_prompt_repair_loop(
+                    _pp, _repair_cfg, context=_repair_context, cwd=_root, quiet=quiet,
+                )
+                if not quiet:
+                    _summary = format_token_delta_summary(_rr)
+                    if _summary:
+                        click.echo(_summary)
+            # Re-check after repair
+            passed, message, cost, model, exit_code = run_checkup_prompt(
+                target,
+                explain=explain,
+                as_json=as_json,
+                quiet=quiet or as_json,
+                strict=strict,
+                project_root=project_root,
+            )
+
+        if not quiet and not as_json:
+            echo_model_line(model)
+        if exit_code:
+            raise click.exceptions.Exit(exit_code)
+        return message, cost, model
 
     # PR-mode argument validation.
     #
@@ -742,7 +882,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     else:
         if not target:
             raise click.UsageError(
-                "Missing argument 'TARGET'. For local checks use "
+                "Missing argument 'TARGET'. For prompt source-set checks use "
+                "`pdd checkup <file.prompt|prompts/|devunit>`. For local checks use "
                 "`pdd checkup --validate-arch-includes`. To review a PR use "
                 "`pdd checkup --pr <pr-url> [--issue <issue-url>]`."
             )
@@ -750,7 +891,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         if not _is_github_issue_url(target):
             raise click.BadParameter(
                 "TARGET must be a GitHub issue URL "
-                "(e.g., https://github.com/org/repo/issues/123), "
+                "(e.g., https://github.com/org/repo/issues/123), a prompt target "
+                "(e.g., prompts/foo_python.prompt, prompts/, or a devunit name), "
                 "or use --pr/--issue for PR verification, "
                 "or --validate-arch-includes for architecture / include validation.",
                 param_hint="'TARGET'",

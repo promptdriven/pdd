@@ -57,6 +57,7 @@ from .sync_determine_operation import (
     calculate_sha256,
     calculate_current_hashes,
     _safe_basename,
+    is_test_extend_disabled,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import (
@@ -2442,6 +2443,24 @@ def sync_orchestration(
                             break
 
                     if operation == 'test_extend':
+                        # PR auto-heal scope guard (#1403): when test_extend is
+                        # disabled, accept the current state as complete instead
+                        # of appending coverage-driven tests. This is the
+                        # execution-time backstop for the detection-layer guard
+                        # in sync_determine_operation — even if a `pdd sync`
+                        # child re-derives a coverage gap, no unrelated test
+                        # block is written. Accept regardless of coverage
+                        # (the gap is known and intentionally not closed).
+                        if is_test_extend_disabled():
+                            current_rr = read_run_report(basename, language, paths=pdd_files)
+                            log_event(basename, language, "test_extend_skipped", {
+                                "reason": "test_extend disabled by PDD_DISABLE_TEST_EXTEND (PR auto-heal scope guard)",
+                                "coverage": current_rr.coverage if current_rr else None,
+                                "coverage_ok": True
+                            }, invocation_mode="sync", paths=pdd_files)
+                            success = True
+                            break
+
                         # Skip test_extend for non-Python languages - code coverage tooling is Python-specific.
                         # Python always has working coverage tools, so test_extend runs even in agentic mode.
                         if language.lower() != 'python':

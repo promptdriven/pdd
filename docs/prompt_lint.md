@@ -17,6 +17,17 @@ The PDD Prompt Linter analyzes prompt files (`*.prompt`) and user stories (`stor
 
 For day-to-day prompt authoring, use `--llm`. The default scan is deterministic and needs no network access.
 
+For a unified pass across lint, contract, coverage, gate readiness, and snapshot
+policy, use the prompt source-set report:
+
+```bash
+pdd checkup prompts/my_feature_python.prompt
+pdd checkup my_feature
+```
+
+See [checkup_verifier.md](checkup_verifier.md) and
+[checkup_prompt_quality_gate.md](checkup_prompt_quality_gate.md).
+
 ---
 
 ## Out of Scope (Follow-up)

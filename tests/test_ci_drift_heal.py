@@ -601,6 +601,45 @@ class TestDetectDriftWithDiffBase:
         assert prompt_drifts == []
         assert example_drifts == []
 
+    def test_all_synced_with_code_only_change_reclassified_as_update(self):
+        """#1403: an 'all_synced' coverage-gap no-op whose code changed without
+        its prompt must still be promoted to 'update' (the guard's all_synced
+        skip runs AFTER git reclassification, not before)."""
+        decision = MagicMock(operation="all_synced", reason="coverage gap accepted (test_extend disabled)")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        changed_files = {"pdd/auth.py"}
+        mock_paths = {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
+
+        assert len(prompt_drifts) == 1
+        assert prompt_drifts[0].operation == "update"
+        assert prompt_drifts[0].code_path == "pdd/auth.py"
+        assert example_drifts == []
+
+    def test_all_synced_terminal_is_skipped_not_unknown_operation(self):
+        """#1403: a terminal 'all_synced' (no reclassifying change) is dropped as
+        'no drift', never surfaced as an unknown actionable operation."""
+        decision = MagicMock(operation="all_synced", reason="coverage gap accepted (test_extend disabled)")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        changed_files = {"tests/test_unrelated.py"}
+        mock_paths = {"code": Path("pdd/auth.py"), "prompt": Path("prompts/auth_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
+
+        assert prompt_drifts == []
+        assert example_drifts == []
+
     def test_no_diff_base_skips_reclassification(self):
         """Without diff_base, no git-based reclassification occurs."""
         decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
@@ -1267,6 +1306,25 @@ class TestHealModule:
             pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
             assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "sync", "mod"]], f"unexpected cmds for op={op}: {pdd_cmds}"
 
+    @pytest.mark.parametrize("op", ["verify", "generate", "test", "crash"])
+    def test_pr_scope_guard_env_reaches_broad_sync_fallback_ops(self, op):
+        """#1403: the broad `pdd sync` fallback must receive the test_extend guard
+        env so an internally re-derived coverage gap cannot escalate to test_extend."""
+        drift = DriftInfo("agentic_common", "python", op, f"{op} needed")
+        env = {**self._make_env(), "PDD_DISABLE_TEST_EXTEND": "1"}
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, env)
+
+        assert result is True
+        pdd_calls = [c for c in mock_run.call_args_list if c.args[0][:1] == ["pdd"]]
+        assert pdd_calls, "heal_module should dispatch broad drift through pdd sync"
+        assert pdd_calls[0].args[0] == [
+            "pdd", "--force", "--strength", "0.5", "sync", "agentic_common",
+        ]
+        assert pdd_calls[0].kwargs["env"]["PDD_DISABLE_TEST_EXTEND"] == "1"
+
     def test_update_without_prompt_path_resolves_after_update(self):
         """Code-without-prompt flow: pdd update creates the prompt, then we
         resolve prompt_path lazily before the follow-up pdd example.
@@ -1851,6 +1909,96 @@ class TestMain:
         with patch("pdd.ci_drift_heal.detect_drift", side_effect=RuntimeError("fail")):
             result = main()
         assert result == 1
+
+    def test_pr_mode_restores_test_extend_env_even_when_detection_raises(self):
+        """#1403: the in-process guard flag must be restored to its prior value
+        on every path, including when detect_drift raises."""
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("pdd.ci_drift_heal.detect_drift", side_effect=RuntimeError("boom")):
+                result = main(modules=["auth"], diff_base="HEAD~1", skip_ci=False)
+            assert result == 1
+            # set-then-restored: must not leak past main()
+            assert "PDD_DISABLE_TEST_EXTEND" not in os.environ
+
+        # A pre-existing value must be restored exactly, not clobbered.
+        with patch.dict(os.environ, {"PDD_DISABLE_TEST_EXTEND": "preexisting"}, clear=True):
+            with patch("pdd.ci_drift_heal.detect_drift", side_effect=RuntimeError("boom")):
+                main(modules=["auth"], diff_base="HEAD~1", skip_ci=False)
+            assert os.environ["PDD_DISABLE_TEST_EXTEND"] == "preexisting"
+
+    def test_pr_main_sets_test_extend_guard_before_detection_and_heal(self):
+        """#1403: PR mode must suppress test_extend during in-process detection
+        (os.environ) and during child `pdd sync` (env dict)."""
+        drift = DriftInfo(
+            "agentic_common", "python", "example", "narrow example drift",
+            code_path="/repo/agentic_common.py",
+            prompt_path="/repo/prompts/agentic_common_python.prompt",
+        )
+        detection_guard_values = []
+        heal_guard_values = []
+
+        def fake_detect(*args, **kwargs):
+            detection_guard_values.append(os.environ.get("PDD_DISABLE_TEST_EXTEND"))
+            return ([], [drift])
+
+        def fake_heal(_drift, env):
+            heal_guard_values.append(env.get("PDD_DISABLE_TEST_EXTEND"))
+            return True
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("pdd.ci_drift_heal.detect_drift", side_effect=fake_detect) as mock_detect, \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=fake_heal) as mock_heal, \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(
+                modules=["agentic_common"],
+                diff_base="origin/main...HEAD",
+                skip_ci=False,
+            )
+
+        assert result == 0
+        mock_detect.assert_called_once_with(["agentic_common"], diff_base="origin/main...HEAD")
+        mock_heal.assert_called_once()
+        assert detection_guard_values == ["1"]
+        assert heal_guard_values == ["1"]
+        # The in-process flag must not leak past main() (restored in finally).
+        assert "PDD_DISABLE_TEST_EXTEND" not in os.environ
+
+    def test_push_to_main_keeps_test_extend_enabled_even_with_diff_base(self):
+        """#1403 regression guard: push-to-main uses --skip-ci, so diff_base alone
+        must NOT disable test_extend (full-scan coverage growth still allowed)."""
+        drift = DriftInfo("agentic_common", "python", "test", "needs full sync")
+        detection_guard_values = []
+        heal_guard_values = []
+
+        def fake_detect(*args, **kwargs):
+            detection_guard_values.append(os.environ.get("PDD_DISABLE_TEST_EXTEND"))
+            return ([], [drift])
+
+        def fake_heal(_drift, env):
+            heal_guard_values.append(env.get("PDD_DISABLE_TEST_EXTEND"))
+            return True
+
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("pdd.ci_drift_heal.detect_drift", side_effect=fake_detect), \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=fake_heal), \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True), \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(
+                modules=["agentic_common"],
+                diff_base="HEAD~1",
+                skip_ci=True,
+            )
+
+        assert result == 0
+        assert detection_guard_values == [None]
+        assert heal_guard_values == [None]
 
     def test_successful_heal_and_commit(self, capsys):
         """Successful heal + commit returns 0."""
