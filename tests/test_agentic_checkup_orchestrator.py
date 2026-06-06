@@ -3344,6 +3344,46 @@ def _pr_patches_1212(
     )
 
 
+class TestTargetedPrStep7Exit:
+    """Targeted PR mode can exit on the structured Step 7 verdict."""
+
+    def test_structured_targeted_pass_exits_without_legacy_marker(self, tmp_path):
+        labels: List[str] = []
+        targeted_step7_pass = (
+            "## Step 7/8: Verification & Final Report\n"
+            "Targeted verification passed; full suite not run here.\n"
+            "```json\n"
+            '{"success": true, '
+            '"message": "Verification scope: targeted — full suite not run. '
+            'Project-wide build issues remain but are outside PR scope.", '
+            '"issue_aligned": true, '
+            '"issues": [{"severity": "critical", "fixed": false, '
+            '"description": "tsc fails because src is missing", '
+            '"module": "frontend", "file": "frontend/"}], '
+            '"changed_files": ["docs/checkup.md"]}\n'
+            "```"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            labels.append(kwargs.get("label", ""))
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, targeted_step7_pass, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        assert "step7_iter1" in labels
+        assert "step3_iter2" not in labels
+
+
 class TestIssue1212Bug1Step5FailureSignalPropagation:
     """Bug 1: Step 5 failure output must flow to Step 6's context and user-visible logs."""
 
@@ -6426,6 +6466,29 @@ class TestStep7PassedMeritReview:
         '"description": "null deref", "module": "x.py"}]}\n'
         '```'
     )
+    TARGETED_OUT_OF_DIFF_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run. '
+        'Project-wide build issues remain but are outside PR scope.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "tsc fails because src is missing", '
+        '"module": "frontend", "file": "frontend/"}], '
+        '"changed_files": ["docs/checkup.md"]}\n'
+        '```'
+    )
+    TARGETED_CHANGED_FILE_CRITICAL_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "package is invalid", '
+        '"module": "frontend", "file": "frontend/package.json"}], '
+        '"changed_files": ["frontend/package.json"]}\n'
+        '```'
+    )
 
     def test_issue_aligned_required_when_issue_present(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
@@ -6459,6 +6522,41 @@ class TestStep7PassedMeritReview:
 
         passed, _ = _step7_passed(self.MERIT_VERDICT, pr_mode=True)
         assert not passed  # issue_aligned still required by default
+
+    def test_targeted_pr_ignores_out_of_diff_repo_wide_critical(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_DIFF_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed, reason
+
+    def test_targeted_pr_still_blocks_changed_file_critical(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_CHANGED_FILE_CRITICAL_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert not passed
+        assert "package is invalid" in reason
+
+    def test_full_pr_scope_still_blocks_out_of_diff_critical(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_DIFF_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="full",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
 
 
 class TestNoIssuePrModePosting:

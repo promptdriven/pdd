@@ -853,8 +853,81 @@ def _scrub_secrets(text: str) -> str:
     return fn(text)
 
 
+def _normalise_step7_path(value: Any) -> str:
+    """Return a comparable path-ish string from a Step 7 JSON field."""
+    path = str(value or "").strip().strip("`").replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path.strip("/")
+
+
+def _paths_overlap(left: str, right: str) -> bool:
+    """Return True when two normalized repo paths are equal or nested."""
+    if not left or not right:
+        return False
+    return left == right or left.startswith(f"{right}/") or right.startswith(f"{left}/")
+
+
+def _step7_unfixed_critical_blocks_targeted_pr(
+    issue: Dict[str, Any],
+    *,
+    changed_files: List[str],
+    payload_message: str,
+) -> bool:
+    """Decide whether an unfixed critical Step 7 finding blocks targeted PR mode."""
+    blocking = issue.get("blocking")
+    if blocking is False:
+        return False
+
+    in_scope = issue.get("in_scope")
+    if in_scope is False:
+        return False
+
+    scope = str(
+        issue.get("scope")
+        or issue.get("verification_scope")
+        or issue.get("pr_scope")
+        or ""
+    ).strip().lower().replace("_", "-")
+    if scope in {"out-of-scope", "project", "project-wide", "repo", "repository", "global", "baseline"}:
+        return False
+    if scope in {"pr", "pr-diff", "changed-file", "changed-files", "in-scope", "blocking"}:
+        return True
+
+    issue_paths = [
+        _normalise_step7_path(issue.get("file")),
+        _normalise_step7_path(issue.get("module")),
+    ]
+    if changed_files:
+        description = str(issue.get("description") or "").lower()
+        for changed in changed_files:
+            if any(_paths_overlap(issue_path, changed) for issue_path in issue_paths):
+                return True
+            if changed.lower() in description:
+                return True
+        return False
+
+    out_of_scope_phrases = (
+        "out of scope",
+        "outside scope",
+        "outside pr",
+        "outside the pr",
+        "outside pr's targeted",
+        "outside the pr's targeted",
+        "project-wide",
+        "repo-wide",
+    )
+    if any(phrase in payload_message for phrase in out_of_scope_phrases):
+        return False
+
+    return True
+
+
 def _step7_passed(
-    step7_output: str, pr_mode: bool, has_issue: bool = True
+    step7_output: str,
+    pr_mode: bool,
+    has_issue: bool = True,
+    pr_test_scope: str = "full",
 ) -> Tuple[bool, str]:
     """Parse Step 7's JSON report and decide whether the checkup may proceed.
 
@@ -878,6 +951,9 @@ def _step7_passed(
       ``True``; with no issue (#1292) the alignment gate is dropped and the
       verdict rests on code findings alone (review the PR on its own merits);
     * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
+      In targeted PR mode, unfixed critical findings outside the PR diff are
+      informational because the full-suite truth comes from the GitHub checks
+      gate.
 
     Fails closed: if no JSON object can be extracted, returns
     ``(False, "Step 7 verdict JSON could not be parsed: ...")`` so the
@@ -921,6 +997,17 @@ def _step7_passed(
             f"{payload.get('message') or '<no message>'}",
         )
 
+    raw_changed_files = payload.get("changed_files")
+    changed_files: List[str] = []
+    if isinstance(raw_changed_files, list):
+        changed_files = [
+            _normalise_step7_path(path)
+            for path in raw_changed_files
+            if _normalise_step7_path(path)
+        ]
+    payload_message = str(payload.get("message") or "").lower()
+    targeted_pr_mode = pr_mode and pr_test_scope == "targeted"
+
     issues = payload.get("issues")
     if isinstance(issues, list):
         unfixed_critical: List[str] = []
@@ -931,6 +1018,12 @@ def _step7_passed(
             if severity != "critical":
                 continue
             if issue.get("fixed") is True:
+                continue
+            if targeted_pr_mode and not _step7_unfixed_critical_blocks_targeted_pr(
+                issue,
+                changed_files=changed_files,
+                payload_message=payload_message,
+            ):
                 continue
             module = issue.get("module") or issue.get("file") or "<unknown>"
             desc = (
@@ -2861,18 +2954,27 @@ def _run_agentic_checkup_orchestrator_inner(
         abort = _handle_step_result(7, success, output, cost, model)
         if abort is not None:
             return abort
-        if not success or "All Issues Fixed" not in output:
-            return (
-                False,
-                "Post-push verification did not confirm the final rebased PR head is clean.",
-                total_cost,
-                last_model_used,
-            )
         # Round-4 Finding 1 follow-through: re-apply the strict JSON gate
         # to the post-push reverify output. The "All Issues Fixed" string
         # alone is just a loop-exit sentinel; the structured verdict is
         # what tells us the rebased tree actually satisfies the contract.
-        passed, reason = _step7_passed(output, pr_mode=pr_mode, has_issue=has_issue)
+        passed, reason = _step7_passed(
+            output,
+            pr_mode=pr_mode,
+            has_issue=has_issue,
+            pr_test_scope=pr_test_scope,
+        )
+        structured_targeted_pass = pr_mode and pr_test_scope == "targeted" and passed
+        if not success or (
+            "All Issues Fixed" not in output and not structured_targeted_pass
+        ):
+            return (
+                False,
+                "Post-push verification did not confirm the final rebased PR "
+                f"head is clean. {reason}".strip(),
+                total_cost,
+                last_model_used,
+            )
         if not passed:
             return (
                 False,
@@ -3282,7 +3384,10 @@ def _run_agentic_checkup_orchestrator_inner(
         # return tuple. Returning success when Step 7 reported failure
         # would be the same anti-pattern as the fix-mode push case.
         nofix_gate_passed, nofix_gate_reason = _step7_passed(
-            nofix_step7_output, pr_mode=pr_mode, has_issue=has_issue
+            nofix_step7_output,
+            pr_mode=pr_mode,
+            has_issue=has_issue,
+            pr_test_scope=pr_test_scope,
         )
 
         # Skip step 8.
@@ -3737,8 +3842,20 @@ def _run_agentic_checkup_orchestrator_inner(
                 if step_num == 7:
                     step7_output = output
 
-            # Check exit condition: "All Issues Fixed" in step 7 output.
-            if "All Issues Fixed" in step7_output:
+            step7_gate_passed, _step7_gate_reason = _step7_passed(
+                step7_output,
+                pr_mode=pr_mode,
+                has_issue=has_issue,
+                pr_test_scope=pr_test_scope,
+            )
+            structured_targeted_pass = (
+                pr_mode
+                and pr_test_scope == "targeted"
+                and step7_gate_passed
+            )
+
+            # Check exit condition: legacy marker or targeted structured pass.
+            if "All Issues Fixed" in step7_output or structured_targeted_pass:
                 if not quiet:
                     console.print("[green]All issues fixed — exiting loop.[/green]")
                 break
@@ -3756,7 +3873,10 @@ def _run_agentic_checkup_orchestrator_inner(
             )
             max_reason = max_msg
             max_gate_passed, max_gate_reason = _step7_passed(
-                step7_output, pr_mode=pr_mode, has_issue=has_issue
+                step7_output,
+                pr_mode=pr_mode,
+                has_issue=has_issue,
+                pr_test_scope=pr_test_scope,
             )
             if not max_gate_passed:
                 max_reason = f"{max_msg} {max_gate_reason}"
@@ -3792,7 +3912,12 @@ def _run_agentic_checkup_orchestrator_inner(
         # with `issue_aligned: false` or unfixed critical issues could be
         # marked green by downstream consumers.
         # --------------------------------------------------------------
-        gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode, has_issue=has_issue)
+        gate_passed, gate_reason = _step7_passed(
+            step7_output,
+            pr_mode=pr_mode,
+            has_issue=has_issue,
+            pr_test_scope=pr_test_scope,
+        )
         if not gate_passed:
             if not quiet:
                 console.print(
