@@ -19,6 +19,9 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Ensure the PR checkout is imported, not whatever pdd is on sys.path already.
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "prompt_lint" / "clean.prompt"
 
 
