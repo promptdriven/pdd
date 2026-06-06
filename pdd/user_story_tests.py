@@ -43,10 +43,22 @@ STORY_PROMPT_REFERENCE_RE = re.compile(
 logger = logging.getLogger(__name__)
 
 
-def _resolve_stories_dir(stories_dir: Optional[str] = None) -> Path:
-    """Resolve the directory containing story markdown files."""
+def _resolve_stories_dir(
+    stories_dir: Optional[str] = None,
+    *,
+    root: Optional[Path] = None,
+) -> Path:
+    """Resolve the directory containing story markdown files.
+
+    When *root* is provided, relative paths (from the argument or from
+    ``PDD_USER_STORIES_DIR``) are anchored to it so that callers invoked from
+    outside the project directory still find the right location.
+    """
     resolved = stories_dir or os.environ.get("PDD_USER_STORIES_DIR") or DEFAULT_STORIES_DIR
-    return Path(resolved)
+    p = Path(resolved)
+    if root is not None and not p.is_absolute():
+        return root / p
+    return p
 
 
 def _resolve_prompts_dir(prompts_dir: Optional[str] = None) -> Path:

@@ -233,8 +233,8 @@ def gate_cmd(  # pylint: disable=too-many-arguments,too-many-locals
                 project_root,
                 policy_path=Path(evidence_policy_path) if evidence_policy_path else None,
                 target=target,
-                stories_dir=Path(stories_dir) if stories_dir else None,
-                tests_dir=Path(tests_dir) if tests_dir else None,
+                stories_dir=Path(stories_dir) if stories_dir else project_root / "user_stories",
+                tests_dir=Path(tests_dir) if tests_dir else project_root / "tests",
             )
         except FileNotFoundError as exc:
             raise click.ClickException(str(exc)) from exc
