@@ -283,6 +283,80 @@ def test_checkup_prompt_target_runs_repair_then_full_recheck(tmp_path: Path) -> 
     assert "recommended_actions" in repair_context
 
 
+def test_source_set_repair_smoke_zero_lint_contract_fix(tmp_path: Path) -> None:
+    """End-to-end smoke: zero lint + contract MISSING_MODAL triggers source-set repair.
+
+    Uses the real build_prompt_source_set_report; only the LLM call is mocked.
+    Verifies: initial state has zero lint errors but actionable contract findings;
+    the repair path is invoked with source_set_report context; the file is updated;
+    the post-repair recheck shows fewer (or zero) contract findings.
+    """
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
+    prompt = tmp_path / "contract_smoke_python.prompt"
+    prompt.write_text(original, encoding="utf-8")
+
+    # Confirm fixture preconditions: zero lint errors, has contract MISSING_MODAL warnings.
+    initial_report = build_prompt_source_set_report(
+        prompt, target=str(prompt), project_root=tmp_path
+    )
+    assert initial_report.lint is not None
+    assert initial_report.lint.error_count == 0, "fixture must have zero lint errors"
+    initial_contract = [f for f in initial_report.findings if f.source_check == "contract"]
+    assert len(initial_contract) > 0, "fixture must have contract MISSING_MODAL warnings"
+    assert initial_report.status != "pass", "fixture must start with non-pass status"
+
+    # Repaired prompt: add MUST to each contract rule so MISSING_MODAL is resolved.
+    repaired = (
+        original
+        .replace(
+            "1. The function returns an integer exit code of 0 on success, 1 on failure.",
+            "1. The function MUST return an integer exit code of 0 on success, 1 on failure.",
+        )
+        .replace(
+            "2. If the input file does not exist, raises FileNotFoundError.",
+            "2. If the input file does not exist, the function MUST raise FileNotFoundError.",
+        )
+        .replace(
+            "3. Writes output to the path specified by the --output flag.",
+            "3. The function MUST write output to the path specified by the --output flag.",
+        )
+        .replace(
+            "4. Logs the request ID to stdout before processing begins.",
+            "4. The function MUST log the request ID to stdout before processing begins.",
+        )
+    )
+
+    with patch("pdd.prompt_repair.change", return_value=(repaired, 0.02, "test-model")) as mock_change:
+        runner = CliRunner()
+        cli_result = runner.invoke(
+            checkup,
+            [str(prompt), "--prompt-repair", "best-effort"],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    # LLM was called exactly once (one repair round).
+    mock_change.assert_called_once()
+    # The repair brief included the structured source-set report as context.
+    call_kwargs = mock_change.call_args.kwargs
+    assert "source_set_report" in call_kwargs.get("input_code", ""), (
+        "change() must receive source_set_report context, not lint-only"
+    )
+
+    # File was updated with the repaired content.
+    assert prompt.read_text(encoding="utf-8") == repaired, "prompt file must be rewritten"
+
+    # Post-repair recheck: contract findings reduced (MUST added resolves MISSING_MODAL).
+    final_report = build_prompt_source_set_report(
+        prompt, target=str(prompt), project_root=tmp_path
+    )
+    final_contract = [f for f in final_report.findings if f.source_check == "contract"]
+    assert len(final_contract) < len(initial_contract), (
+        f"contract findings must decrease after repair: {len(initial_contract)} → {len(final_contract)}"
+    )
+
+    assert cli_result.exit_code in {0, 1}
+
+
 def test_checkup_issue_url_still_uses_agentic_path() -> None:
     runner = CliRunner()
     with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:
