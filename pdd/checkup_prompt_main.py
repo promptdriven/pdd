@@ -17,6 +17,7 @@ from .coverage_contracts import (
     CoverageResult,
     build_coverage,
 )
+from .construct_paths import _strip_language_suffix
 from .gate_main import GateResult, run_gate_policy
 from .prompt_lint import LintResult, scan_prompt
 from .source_set_model import resolve_prompt_targets
@@ -150,12 +151,12 @@ class PromptSourceSetReport:
                 )
         if self.gate and not self.gate.passed:
             actions.append(
-                f"pdd checkup gate {self.prompt_path.stem.removesuffix('_python')}"
+                f"pdd checkup gate {_strip_language_suffix(self.prompt_path)}"
             )
         if any(finding.source_check == "snapshot" for finding in self.findings):
             actions.append(f"pdd checkup snapshot {_display_path(self.prompt_path)}")
         if any(finding.source_check == "drift" for finding in self.findings):
-            basename = self.prompt_path.stem.removesuffix("_python")
+            basename = _strip_language_suffix(self.prompt_path)
             actions.append(f"pdd checkup drift {basename}")
         if not actions:
             actions.append("Source set looks ready to generate from.")
@@ -326,9 +327,7 @@ def build_prompt_source_set_report(
                 )
         _record_check(report, "coverage", status=coverage_status)
 
-    basename = prompt_path.stem
-    if basename.endswith("_python"):
-        basename = basename[: -len("_python")]
+    basename = _strip_language_suffix(prompt_path)
 
     from .evidence_store import devunits_dir, resolve_prompt_path
 
@@ -340,15 +339,33 @@ def build_prompt_source_set_report(
     )
 
     if latest_manifest.is_file():
-        report.gate = run_gate_policy(
-            root,
-            target=basename,
-            stories_dir=stories_dir,
-            tests_dir=tests_dir,
-        )
-        gate_status = "pass" if report.gate.passed else "fail"
-        _record_check(report, "gate", status=gate_status)
-        for index, failure in enumerate(report.gate.failures):
+        try:
+            report.gate = run_gate_policy(
+                root,
+                target=basename,
+                stories_dir=stories_dir,
+                tests_dir=tests_dir,
+            )
+        except (ValueError, OSError) as exc:
+            logger.warning("Gate policy check failed for %s: %s", basename, exc)
+            _record_check(report, "gate", status="fail")
+            report.findings.append(
+                SourceSetFinding(
+                    finding_id=_finding_id("gate", prompt_path, 0, "gate_error"),
+                    source_check="gate",
+                    severity="error",
+                    file=prompt_path,
+                    message=f"Gate check failed (manifest may be corrupt): {exc}",
+                    recommended_action="Re-capture evidence or delete the corrupt manifest.",
+                    fix_command=f"pdd --evidence generate {basename}",
+                    code="gate_error",
+                )
+            )
+            report.gate = None
+        if report.gate is not None:
+            gate_status = "pass" if report.gate.passed else "fail"
+            _record_check(report, "gate", status=gate_status)
+        for index, failure in enumerate((report.gate.failures if report.gate else [])):
             severity = "error"
             report.findings.append(
                 SourceSetFinding(

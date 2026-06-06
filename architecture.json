@@ -7334,11 +7334,12 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow \u2014 fetches the GitHub issue when one is provided (optional in PR mode), loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
-    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, or (final_gate) the canonical two-layer final PR gate (issue #1406): Layer 1 PR-scoped checkup then Layer 2 review-loop on the resulting head, returning a real ship verdict derived from the review-loop final-state.json. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
+    "reason": "Entry point for the agentic checkup workflow; in PR mode the linked issue is optional (own-merits review).",
+    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, optionally runs a bounded non-interactive prompt repair loop on changed .prompt files, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, or (final_gate) the canonical two-layer final PR gate (issue #1406): Layer 1 PR-scoped checkup then Layer 2 review-loop on the resulting head, returning a real ship verdict derived from the review-loop final-state.json. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
-      "checkup_review_loop_python.prompt"
+      "checkup_review_loop_python.prompt",
+      "prompt_repair_python.prompt"
     ],
     "priority": 217,
     "filename": "agentic_checkup_python.prompt",
@@ -7354,7 +7355,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: Optional[str] = None, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, final_gate: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Fetches the GitHub issue (when provided) and PR context via gh api",
@@ -7393,6 +7394,22 @@
             "returns": "str",
             "sideEffects": [
               "Reads PR metadata, changed files, PR comments, and PR reviews with gh api"
+            ]
+          },
+          {
+            "name": "_discover_prompt_paths",
+            "signature": "(cwd: Path) -> List[Path]",
+            "returns": "List[Path]",
+            "sideEffects": [
+              "Runs git diff to detect tracked/new .prompt files; falls back to glob"
+            ]
+          },
+          {
+            "name": "_review_loop_ship_verdict",
+            "signature": "(final_state: Optional[Dict[str, Any]], *, has_issue: bool) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
             ]
           }
         ]
@@ -8114,10 +8131,13 @@
     }
   },
   {
-    "reason": "Registers the pdd checkup CLI command for project health checks and lint dispatch.",
+    "reason": "Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.",
     "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
     "dependencies": [
-      "agentic_checkup_python.prompt"
+      "agentic_checkup_python.prompt",
+      "commands/prompt_python.prompt",
+      "commands/contracts_python.prompt",
+      "commands/gate_python.prompt"
     ],
     "priority": 236,
     "filename": "commands/checkup_python.prompt",
@@ -9912,7 +9932,7 @@
   },
   {
     "reason": "Single blocking pre-checkup gate that drift-syncs and build/smoke-verifies a PR before handing off to checkup --pr.",
-    "description": "A blocking pre-checkup quality gate invoked by both the change/feature and fix/bug e2e orchestrators immediately before `pdd checkup --pr`. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block the handoff. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "description": "A blocking pre-checkup quality gate invoked by both the change/feature and fix/bug e2e orchestrators immediately before `pdd checkup --pr`. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block the handoff. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it \u2014 the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate \u2014 so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
     "dependencies": [
       "checkup_gates_python.prompt",
       "ci_drift_heal_python.prompt",
@@ -9937,6 +9957,34 @@
             "name": "run_pre_checkup_gate",
             "signature": "(worktree: Path, changed_files: Sequence[str], *, base_ref: Optional[str] = None, repo_owner: str = '', repo_name: str = '', issue_number: Optional[int] = None, strict: Optional[bool] = None, quiet: bool = False, timeout_per_check: float = 300.0) -> Tuple[bool, str, float]",
             "returns": "Tuple[bool, str, float]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Non-interactive prompt source-set repair orchestrator using the internal change() contract.",
+    "description": "Implements run_prompt_repair_loop(): consumes pdd.prompt_source_set_report.v1 findings and supporting context, synthesizes bounded change instructions, applies the complete prompt through pdd.change.change(), enforces token growth, rebuilds the full source-set report after each round, and writes an audit artifact to .pdd/evidence/prompt_repair/.",
+    "dependencies": [
+      "change_python.prompt",
+      "checkup_prompt_main_python.prompt",
+      "prompt_lint_python.prompt"
+    ],
+    "priority": 250,
+    "filename": "prompt_repair_python.prompt",
+    "filepath": "pdd/prompt_repair.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_prompt_repair_loop",
+            "signature": "(path: Path, config: PromptRepairConfig, *, context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None) -> RepairResult",
+            "returns": "RepairResult"
           }
         ]
       }
