@@ -4503,6 +4503,63 @@ class TestIssue1215Round3CleanRunSideEffect:
         assert success is False
         assert "side-effect" in (msg or "").lower()
 
+    def test_clean_run_discards_lockfile_tooling_noise(self, tmp_path):
+        """Lockfile-only non-fixer dirt is restored, not treated as Layer 1 failure."""
+        wt = tmp_path / "wt"
+        (wt / "frontend").mkdir(parents=True)
+        (wt / "frontend" / "package-lock.json").write_text(
+            '{"lockfileVersion":3}\n',
+            encoding="utf-8",
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value=dict(_PR_META_REAL_API),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=step_side_effect,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            side_effect=[["frontend/package-lock.json"], []],
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._trusted_gate_git",
+            return_value=("git", os.environ.copy()),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed 1 file"),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+            return_value=None,
+        ), patch("pdd.agentic_checkup_orchestrator.console"):
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        push_mock.assert_not_called()
+        assert not (wt / "frontend" / "package-lock.json").exists()
+
 
 class TestIssue1215Round3FailureSignalContentValidation:
     """Round-3 Finding 4: failure_signal must have non-empty fields on fail status."""

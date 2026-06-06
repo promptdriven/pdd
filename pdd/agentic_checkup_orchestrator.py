@@ -2052,6 +2052,76 @@ _CODE_OR_CONFIG_PR_BASENAMES = {
     "yarn.lock",
 }
 
+_PACKAGE_MANAGER_LOCKFILE_BASENAMES = {
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+}
+
+
+def _is_package_manager_lockfile_path(path: str) -> bool:
+    return Path(path.strip().strip("/")).name in _PACKAGE_MANAGER_LOCKFILE_BASENAMES
+
+
+def _discard_clean_run_lockfile_side_effects(
+    worktree: Path,
+    changed_files: List[str],
+) -> Tuple[List[str], List[str]]:
+    """Restore package-manager lockfile noise created when no fixer ran."""
+    discardable = [
+        path for path in changed_files
+        if _is_package_manager_lockfile_path(path)
+    ]
+    if not discardable:
+        return changed_files, []
+
+    git_cmd, git_env = _trusted_gate_git(worktree)
+    if not git_cmd or git_env is None:
+        return changed_files, []
+
+    discarded: List[str] = []
+    for rel_path in discardable:
+        rel = Path(rel_path)
+        if rel.is_absolute() or ".." in rel.parts:
+            continue
+        rel_posix = rel.as_posix()
+        tracked = subprocess.run(
+            [git_cmd, "ls-files", "--error-unmatch", "--", rel_posix],
+            cwd=worktree,
+            capture_output=True,
+            env=git_env,
+            text=True,
+        )
+        if tracked.returncode == 0:
+            restored = subprocess.run(
+                [git_cmd, "restore", "--worktree", "--staged", "--", rel_posix],
+                cwd=worktree,
+                capture_output=True,
+                env=git_env,
+                text=True,
+            )
+            if restored.returncode == 0:
+                discarded.append(rel_posix)
+            continue
+
+        target = worktree / rel
+        try:
+            if target.is_file() or target.is_symlink():
+                target.unlink()
+                discarded.append(rel_posix)
+        except OSError:
+            continue
+
+    if not discarded:
+        return changed_files, []
+
+    refreshed = [
+        path for path in _git_changed_files(worktree)
+        if not path.startswith(".pdd/")
+    ]
+    return refreshed, discarded
+
 
 def _pr_changed_paths_for_targeted_checks(changed_files_text: str) -> List[str]:
     """Extract changed paths from ``_format_pr_changed_files_for_prompt`` text."""
@@ -4059,6 +4129,19 @@ def _run_agentic_checkup_orchestrator_inner(
                     f for f in _raw_guard_changed_files
                     if not f.startswith(".pdd/")
                 ]
+                discarded_lockfile_side_effects: List[str] = []
+                if not fixer_invoked and guard_changed_files:
+                    (
+                        guard_changed_files,
+                        discarded_lockfile_side_effects,
+                    ) = _discard_clean_run_lockfile_side_effects(
+                        worktree_path,
+                        guard_changed_files,
+                    )
+                    if discarded_lockfile_side_effects:
+                        context["clean_run_discarded_lockfile_side_effects"] = (
+                            ", ".join(sorted(discarded_lockfile_side_effects))
+                        )
                 pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
 
                 registry_refusal = _check_architecture_registry_edit_guard(
