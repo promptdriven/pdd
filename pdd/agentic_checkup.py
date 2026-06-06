@@ -389,6 +389,77 @@ def _format_github_checks_gate_failure_report(
     )
 
 
+def _format_layer1_failure_report(
+    *,
+    pr_url: str,
+    issue_url: str,
+    layer1_message: str,
+    full_suite_source: str,
+) -> str:
+    """Render a parseable final-gate failure report for Layer 1 failures."""
+    reason = (layer1_message or "Layer 1 checkup failed.").strip()
+    payload_reason = reason
+    if len(payload_reason) > 4000:
+        payload_reason = payload_reason[:4000].rstrip() + "...[truncated]"
+    finding = _markdown_table_cell(
+        "Layer 1 checkup failed before Layer 2: "
+        f"{payload_reason}"
+    )
+    issue_line = issue_url or "none"
+    issue_aligned = "unknown" if issue_url else "n/a"
+    machine_payload = {
+        "schema": FINAL_GATE_REPORT_SCHEMA,
+        "stage": "layer1",
+        "status": "failed",
+        "reason": payload_reason,
+        "pr_url": pr_url,
+        "issue_url": issue_url,
+        "issue_aligned": None,
+        "full_suite_source": full_suite_source,
+        "layer1_status": "failed",
+        "layer2_status": "skipped",
+        "reviewer_status": {},
+        "fresh_final_status": "missing",
+        "findings": [
+            {
+                "severity": "blocker",
+                "area": "layer1",
+                "location": "",
+                "finding": f"Layer 1 checkup failed before Layer 2: {payload_reason}",
+                "required_fix": "Resolve the Layer 1 checkup failure or push-guard refusal, then re-run the final gate.",
+                "status": "open",
+            }
+        ],
+    }
+    return "\n".join(
+        [
+            "## Step 7/8: Final Gate Report",
+            "",
+            f"PR: {pr_url}",
+            f"Issue: {issue_line}",
+            "final-gate-status: failed",
+            "final-gate-stage: layer1",
+            f"issue_aligned: {issue_aligned}",
+            "",
+            "### Summary",
+            "",
+            "Layer 1 PR checkup failed before the GitHub checks gate or Layer 2 review loop could run.",
+            "",
+            "### Machine Verdict",
+            "",
+            "```json",
+            json.dumps(machine_payload, indent=2, sort_keys=True),
+            "```",
+            "",
+            "### Issues Summary",
+            "",
+            "| Severity | Module | Description | Fixed |",
+            "|----------|--------|-------------|-------|",
+            f"| blocker | layer1 | {finding} | No |",
+        ]
+    )
+
+
 def _post_final_gate_report(
     *,
     owner: str,
@@ -867,6 +938,32 @@ def run_agentic_checkup(
 
     if not orch_success:
         # Layer 1 failure short-circuits the final gate before Layer 2 runs.
+        if final_gate:
+            assert pr_owner is not None and pr_repo is not None and pr_number is not None
+            report = _format_layer1_failure_report(
+                pr_url=pr_url or "",
+                issue_url=issue_url or "",
+                layer1_message=orch_message,
+                full_suite_source=full_suite_source,
+            )
+            post_suffix = _post_final_gate_report(
+                owner=owner,
+                repo=repo,
+                issue_number=issue_number,
+                pr_owner=pr_owner,
+                pr_repo=pr_repo,
+                pr_number=pr_number,
+                has_issue=has_issue,
+                body=report,
+                cwd=project_root,
+                use_github_state=use_github_state,
+            )
+            return (
+                False,
+                f"Final gate Layer 1 failed: {orch_message}{post_suffix}",
+                orch_cost,
+                orch_model,
+            )
         return False, orch_message, orch_cost, orch_model
 
     if final_gate:

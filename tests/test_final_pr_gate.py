@@ -369,6 +369,54 @@ class TestFinalGateLibrary:
         assert "| blocker | github-checks |" in body
         post_issue.assert_called_once()
 
+    def test_layer1_failure_posts_parseable_gate_report(self, tmp_path: Path) -> None:
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
+        ), patch("pdd.agentic_checkup._fetch_comments", return_value=""), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._fetch_pr_context", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=(
+                False,
+                "generated-code-only fix refused: pdd/foo.py is generated from pdd/prompts/foo.prompt.",
+                1.0,
+                "model",
+            ),
+        ), patch(
+            "pdd.agentic_checkup.run_checkup_review_loop"
+        ) as loop_mock, patch(
+            "pdd.agentic_checkup.post_pr_comment", return_value=True
+        ) as post_pr, patch(
+            "pdd.agentic_checkup.post_step_comment", return_value=True
+        ) as post_issue:
+            success, msg, _cost, _model = run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                no_fix=False,
+                use_github_state=True,
+                pr_url=PR_URL,
+                final_gate=True,
+            )
+
+        assert success is False
+        assert "Final gate Layer 1 failed" in msg
+        loop_mock.assert_not_called()
+        post_pr.assert_called_once()
+        body = post_pr.call_args.args[3]
+        assert "final-gate-status: failed" in body
+        assert "final-gate-stage: layer1" in body
+        assert '"schema": "pdd.checkup.final_gate.v1"' in body
+        assert '"stage": "layer1"' in body
+        assert '"layer2_status": "skipped"' in body
+        assert "generated-code-only fix refused" in body
+        post_issue.assert_called_once()
+
     def test_non_clean_verdict_fails_even_when_loop_succeeds(self, tmp_path: Path) -> None:
         """run_checkup_review_loop returns success=True for a non-clean report;
         the final gate must still fail because the verdict is not shippable."""
