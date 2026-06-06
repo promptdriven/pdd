@@ -27,15 +27,20 @@ Entry point for the agentic checkup workflow. Accepts an optional GitHub issue U
 11c. Prompt repair (non-interactive): After loading project context and before dispatching to the
    orchestrator, review loop, or final gate, if `prompt_repair != "off"`, discover modified prompt
    files in the current working directory via `_discover_prompt_paths(cwd or Path.cwd())`. Import
-   `run_prompt_repair_loop` and `PromptRepairConfig` from `pdd.prompt_repair`. For each discovered
-   `.prompt` file run `run_prompt_repair_loop(path, PromptRepairConfig(mode=prompt_repair,
-   max_rounds=max_prompt_repair_rounds, max_token_growth=max_prompt_token_growth,
-   max_seconds=max_prompt_repair_seconds))`. Log any repair results at INFO level including the
-   token delta summary. Repair failure (LLM error, token-budget exceeded) must NOT crash the
-   caller — log a WARNING and continue. In `strict` mode, if any prompt still has lint issues
-   after all repair rounds, return `(False, "Prompt repair strict mode: unresolved lint issues
-   in <paths>", 0.0, "")` before entering the orchestrator. In `best-effort` mode, log remaining
-   issues as warnings and continue.
+   `run_prompt_repair_loop` and `PromptRepairConfig` from `pdd.prompt_repair`, and import
+   `build_prompt_source_set_report` from `pdd.checkup_prompt_main`. For each discovered `.prompt`
+   file: (a) build its structured source-set report via `build_prompt_source_set_report(path,
+   project_root=project_root)`; (b) skip the file if `report.status == "pass"` — no repair
+   needed; (c) pass the full report as context when calling `run_prompt_repair_loop(path,
+   PromptRepairConfig(mode=prompt_repair, max_rounds=max_prompt_repair_rounds,
+   max_token_growth=max_prompt_token_growth, max_seconds=max_prompt_repair_seconds),
+   context={"source_set_report": json.dumps(report.as_dict())})`. Log any repair results at INFO
+   level including the token delta summary. Repair failure (LLM error, token-budget exceeded) must
+   NOT crash the caller — log a WARNING and continue. In `strict` mode, if any prompt's
+   source-set report still has a non-"pass" status after all repair rounds, return `(False,
+   "Prompt repair strict mode: unresolved source-set findings in <paths>", 0.0, "")` before
+   entering the orchestrator. In `best-effort` mode, log remaining findings as warnings and
+   continue.
 11d. `final_gate=True` is the canonical final PR gate (issue #1406): one explicit two-layer path that proves a PR is "ready for maintainer review" once it exists. It requires PR mode AND a real source issue (same coupling as `review_loop`); return `(False, "--final-gate requires --pr and --issue.", 0.0, "")` when either is missing. It runs Layer 1 = the PR-scoped checkup orchestrator (the same `run_agentic_checkup_orchestrator` path used by a plain `--pr` run, which never creates a new PR and pushes only to the existing PR head), and then Layer 2 = `run_checkup_review_loop()` on the resulting PR head. A Layer 1 failure short-circuits and returns its failure tuple BEFORE Layer 2 runs. Compose cost across both layers. Unlike `review_loop` — whose `success` only means "trustworthy report produced" — the returned `success` for `final_gate` is a REAL ship verdict derived via `_review_loop_ship_verdict` from the review-loop's current-run `final-state.json` (loaded with `load_final_state` from `checkup_review_loop`). Before Layer 2, call `clear_final_state` (from `checkup_review_loop`) so the post-run read reflects only this run — a role/setup error that returns before the loop finalizes writes no file, which then reads as fail-closed; then re-read with `load_final_state` and, if a stale verdict still survives the clear (the unlink was a non-fatal swallowed error), fail closed BEFORE running Layer 2 rather than risk trusting a prior run's verdict. `final_gate` is the real contract boundary (the CLI's same checks are a convenience): reject it directly when combined with `no_fix`, `review_only`, `review_loop`, `start_step_override`, `enable_gates=False` (the deterministic gates must stay on), or `test_scope != "full"` (the full suite must run), and reject an invalid Layer-2 review budget BEFORE Layer 1 spends cost or mutates the PR — `max_review_rounds` must be an actual positive integer (a direct caller is not bound by the `int` hint, so reject `bool`, non-`int`, and `1.5`/`nan`/`inf`, not just `< 1`), and `max_review_cost`/`max_review_minutes` must be finite-and-`> 0`. Fetch the PR context ONCE before Layer 1 and pass it into Layer 2 so the reviewer does not ingest Layer 1's own freshly-posted checkup report. Share the Layer-2 `ReviewLoopContext`/`ReviewLoopConfig` construction with the `review_loop` branch (e.g. a single inner builder) rather than duplicating it. `final_gate` must not be combined with `review_loop` (it owns the loop as Layer 2). This is the gate `pdd-issue`'s final verification (`agentic_e2e_fix_orchestrator._run_final_checkup_on_pr`) calls instead of choosing between the legacy PR checkup and the review loop.
 12. Otherwise dispatch to `run_agentic_checkup_orchestrator()` with all gathered context. Pass the effective issue URL (the real URL when `has_issue`, else `""`), the issue content/title (empty strings in no-issue mode), and `repo_owner`/`repo_name`/`issue_number` (aliased to the PR in no-issue mode). Include `pr_url`/`pr_owner`/`pr_repo`/`pr_number` when in PR mode (else `None`) and `start_step_override` when supplied. When loading local context, use the explicit `cwd` argument if provided, otherwise fall back to `Path.cwd()`.
 13. Post error comment on GitHub issue if the legacy orchestrator raises an exception

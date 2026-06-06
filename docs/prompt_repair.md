@@ -40,13 +40,13 @@ The repair loop does **not** edit generated code, tests, stories, or other files
 
 ## Configuration
 
-```yaml
-# .pddrc or pyproject.toml [tool.pdd]
-checkup:
-  prompt_repair: best-effort   # off | best-effort | strict
-  max_prompt_repair_rounds: 1
-  max_prompt_token_growth: 1000
-  max_prompt_repair_seconds: 120
+```toml
+# pyproject.toml
+[tool.pdd.checkup]
+prompt_repair = "best-effort"   # off | best-effort | strict
+max_prompt_repair_rounds = 1
+max_prompt_token_growth = 1000
+max_prompt_repair_seconds = 120
 ```
 
 | Key | Default | Description |
@@ -58,7 +58,7 @@ checkup:
 
 ## CLI Flags
 
-The following flags can be passed to `pdd checkup` (and related commands that invoke checkup) to override `.pddrc` defaults:
+The following flags can be passed to `pdd checkup` (and related commands that invoke checkup) to override `pyproject.toml [tool.pdd.checkup]` defaults:
 
 | Flag | Default | Description |
 |------|---------|-------------|
