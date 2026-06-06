@@ -558,26 +558,45 @@ def run_agentic_checkup(
     if not quiet:
         console.print("[bold]Running agentic checkup...[/bold]")
 
+    # check → repair → recheck cycle for changed prompt files (Issue #1422).
+    # Uses the full pdd.prompt_source_set_report.v1 structured report as the
+    # repair oracle (not just lint), then re-verifies before the orchestrator runs.
     if prompt_repair != "off":
+        from .checkup_prompt_main import build_prompt_source_set_report  # pylint: disable=import-outside-toplevel
+
         repair_config = PromptRepairConfig(
             mode=prompt_repair,
             max_rounds=max_prompt_repair_rounds,
             max_token_growth=max_prompt_token_growth,
             max_seconds=max_prompt_repair_seconds,
         )
-        repair_context: Dict[str, str] = {}
+        # Base context from issue/PR content (oracle enrichment)
+        issue_context: Dict[str, str] = {}
         if raw_full_content.strip():
-            repair_context["issue"] = raw_full_content
+            issue_context["issue"] = raw_full_content
         if pr_url and pr_owner and pr_repo and pr_number is not None:
-            repair_context["pr"] = _fetch_pr_context(pr_owner, pr_repo, pr_number)
+            issue_context["pr"] = _fetch_pr_context(pr_owner, pr_repo, pr_number)
 
         strict_failures: List[str] = []
         work_cwd = cwd if cwd is not None else Path.cwd()
         for prompt_path in discover_prompt_paths(work_cwd):
+            # Step 1: run the full structured checkup to decide if repair is needed
+            src_report = build_prompt_source_set_report(
+                prompt_path,
+                target=str(prompt_path),
+                project_root=project_root,
+                strict=False,
+            )
+            if src_report.passed:
+                continue  # no repair needed for this prompt
+            # Step 2: repair using the structured report + issue context as oracle
+            repair_context = dict(issue_context)
+            repair_context["source_set_report"] = json.dumps(src_report.as_dict(), indent=2)
+            repair_context["recommended_actions"] = "\n".join(src_report.recommended_actions())
             repair_result = run_prompt_repair_loop(
                 prompt_path,
                 repair_config,
-                context=repair_context or None,
+                context=repair_context,
                 cwd=project_root,
                 verbose=verbose,
                 quiet=quiet,
@@ -587,20 +606,27 @@ def run_agentic_checkup(
                 logger.info("%s: %s", prompt_path, summary.replace("\n", "; "))
                 if not quiet:
                     console.print(f"[cyan]{summary}[/cyan]")
-            if repair_result.issues_after and prompt_repair == "strict":
+            # Step 3: re-check with the structured report after repair
+            post_report = build_prompt_source_set_report(
+                prompt_path,
+                target=str(prompt_path),
+                project_root=project_root,
+                strict=False,
+            )
+            if not post_report.passed and prompt_repair == "strict":
                 strict_failures.append(str(prompt_path))
-            elif repair_result.issues_after:
+            elif not post_report.passed:
                 logger.warning(
-                    "Prompt repair left %s lint issue(s) in %s",
-                    len(repair_result.issues_after),
+                    "Prompt repair left issues in %s: %s",
                     prompt_path,
+                    ", ".join(f.code for f in post_report.findings if f.is_error),
                 )
 
         if strict_failures:
             paths = ", ".join(strict_failures)
             return (
                 False,
-                f"Prompt repair strict mode: unresolved lint issues in {paths}",
+                f"Prompt repair strict mode: unresolved issues in {paths}",
                 0.0,
                 "",
             )

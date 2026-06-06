@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -300,30 +300,26 @@ def test_extract_json_array_from_text() -> None:
 @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
 @patch("pdd.agentic_checkup.discover_prompt_paths")
 @patch("pdd.agentic_checkup.run_prompt_repair_loop")
+@patch("pdd.checkup_prompt_main.build_prompt_source_set_report")
 @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
 def test_agentic_checkup_strict_repair_blocks_before_orchestrator(
     mock_orchestrator,
+    mock_build_report,
     mock_repair,
     mock_discover,
     *_mocks,
 ) -> None:
     from pdd.agentic_checkup import run_agentic_checkup
-    from pdd.prompt_lint import LintIssue
     from pdd.prompt_repair import RepairResult
 
     mock_discover.return_value = [Path("prompts/x_python.prompt")]
-    mock_repair.return_value = RepairResult(
-        success=False,
-        issues_after=[
-            LintIssue(
-                level="warn",
-                term="valid",
-                section="contract_rules",
-                line="x",
-                message="m",
-            )
-        ],
-    )
+    # Both pre-repair and post-repair structured reports show failure
+    failing_report = MagicMock()
+    failing_report.passed = False
+    failing_report.as_dict.return_value = {"status": "fail", "findings": []}
+    failing_report.recommended_actions.return_value = []
+    mock_build_report.return_value = failing_report
+    mock_repair.return_value = RepairResult(success=False, issues_after=[])
 
     success, message, cost, _model = run_agentic_checkup(
         issue_url="https://github.com/o/r/issues/1",
@@ -334,7 +330,8 @@ def test_agentic_checkup_strict_repair_blocks_before_orchestrator(
     assert success is False
     assert "Prompt repair strict mode" in message
     assert cost == 0.0
-    mock_orchestrator.assert_not_called()
+    mock_repair.assert_called_once()  # repair ran
+    mock_orchestrator.assert_not_called()  # orchestrator blocked by strict failure
 
 
 @pytest.mark.parametrize("flag", ["--prompt-repair", "--max-prompt-repair-rounds"])

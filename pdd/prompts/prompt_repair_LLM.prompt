@@ -1,13 +1,13 @@
 <pdd-reason>LLM step: receives lint failures and prompt text, produces bounded JSON patch proposals for prompt repair.</pdd-reason>
 <pdd-interface>
-{
+{{
   "type": "command",
-  "command": {
+  "command": {{
     "commands": [
-      {"name": "prompt_repair_LLM", "description": "Produce schema-aware patch proposals (vocabulary, rule IDs, coverage lines, contract skeleton) for a prompt that failed lint checks"}
+      {{"name": "prompt_repair_LLM", "description": "Produce schema-aware patch proposals (vocabulary, rule IDs, coverage lines, contract skeleton) for a prompt that failed lint checks"}}
     ]
-  }
-}
+  }}
+}}
 </pdd-interface>
 <pdd-dependency>prompt_repair_python.prompt</pdd-dependency>
 
@@ -62,22 +62,22 @@
 %
 % Output format — JSON array only:
 % [
-%   {
+%   {{
 %     "type": "ADD_VOCABULARY",
 %     "term": "graceful error handling",
 %     "definition": "graceful error handling: returns a structured error response without crashing; logs at WARNING level",
 %     "addresses_issue": "undefined vague term 'graceful error handling' in contract_rules"
-%   },
-%   {
+%   }},
+%   {{
 %     "type": "NORMALIZE_RULE_ID",
 %     "old_id": "rule 1",
 %     "new_id": "R1",
 %     "addresses_issue": "non-canonical rule ID 'rule 1'"
-%   },
-%   {
+%   }},
+%   {{
 %     "type": "ADD_COVERAGE_LINE",
 %     "rule_id": "R3",
 %     "coverage_text": "R3: TODO add story before production use",
 %     "addresses_issue": "R3 has no coverage entry"
-%   }
+%   }}
 % ]

@@ -93,36 +93,50 @@ def load_prompt_repair_defaults(project_root: Path) -> PromptRepairConfig:
 
 
 def discover_prompt_paths(cwd: Path) -> List[Path]:
-    """Return changed ``.prompt`` files under *cwd*, excluding ``*_LLM.prompt``."""
+    """Return changed ``.prompt`` files under *cwd*, excluding ``*_LLM.prompt``.
+
+    Uses ``origin/main...HEAD`` (three-dot merge-base diff) so that the result
+    reflects the PR's own changes even in a clean worktree, not uncommitted edits
+    relative to the current commit.  Falls back to all prompts in ``pdd/prompts/``
+    then ``prompts/`` when the git range produces nothing (e.g. no upstream yet).
+    """
     candidates: List[Path] = []
-    try:
-        proc = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=AM", "HEAD"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        if proc.returncode == 0 and proc.stdout.strip():
-            for line in proc.stdout.splitlines():
-                rel = line.strip()
-                if not rel.endswith(".prompt") or rel.endswith("_LLM.prompt"):
-                    continue
-                path = (cwd / rel).resolve()
-                if path.is_file():
-                    candidates.append(path)
-    except (OSError, subprocess.SubprocessError):
-        candidates = []
+
+    # Try PR-aware range: files added or modified relative to origin/main
+    for diff_range in ("origin/main...HEAD", "HEAD"):
+        try:
+            proc = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=AMR", diff_range],
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                for line in proc.stdout.splitlines():
+                    rel = line.strip()
+                    if not rel.endswith(".prompt") or rel.endswith("_LLM.prompt"):
+                        continue
+                    path = (cwd / rel).resolve()
+                    if path.is_file():
+                        candidates.append(path)
+                if candidates:
+                    break
+        except (OSError, subprocess.SubprocessError):
+            pass
 
     if not candidates:
-        prompts_dir = cwd / "prompts"
-        if prompts_dir.is_dir():
-            candidates = sorted(
-                p.resolve()
-                for p in prompts_dir.glob("*.prompt")
-                if p.is_file() and not p.name.endswith("_LLM.prompt")
-            )
+        # Fallback: prompts under pdd/prompts/ or prompts/ (package-level)
+        for prompts_dir in (cwd / "pdd" / "prompts", cwd / "prompts"):
+            if prompts_dir.is_dir():
+                candidates = sorted(
+                    p.resolve()
+                    for p in prompts_dir.glob("*.prompt")
+                    if p.is_file() and not p.name.endswith("_LLM.prompt")
+                )
+                if candidates:
+                    break
     return sorted(set(candidates))
 
 
@@ -473,12 +487,25 @@ def run_prompt_repair_loop(
             )
             return result
 
-        path.write_text(current_text, encoding="utf-8")
+        # Atomic-ish write: write to a sibling temp file then rename so a
+        # crash between rounds leaves the backup intact.
+        _tmp = path.with_suffix(".prompt.repair_tmp")
+        try:
+            _tmp.write_text(current_text, encoding="utf-8")
+            _tmp.replace(path)
+        except OSError:
+            _tmp.unlink(missing_ok=True)
+            raise
         rounds_used += 1
         applied_types.extend(str(p["type"]) for p in accepted)
         issues_after = _lint_issues(path)
         if not issues_after:
             break
+
+    # Rollback to original if no round improved the file, to avoid leaving a
+    # half-repaired prompt on disk when the LLM failed every attempt.
+    if rounds_used == 0 and path.read_text(encoding="utf-8") != original_text:
+        path.write_text(original_text, encoding="utf-8")
 
     try:
         tokens_after = count_tokens(path.read_text(encoding="utf-8"))
