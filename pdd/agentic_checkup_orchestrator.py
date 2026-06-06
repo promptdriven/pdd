@@ -3946,20 +3946,29 @@ def _run_agentic_checkup_orchestrator_inner(
             is_first_loop_pass = False
             _save_state()
 
-        if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and "All Issues Fixed" not in step7_output:
+        final_step7_gate_passed, final_step7_gate_reason = _step7_passed(
+            step7_output,
+            pr_mode=pr_mode,
+            has_issue=has_issue,
+            pr_test_scope=pr_test_scope,
+        )
+        final_structured_targeted_pass = (
+            pr_mode
+            and pr_test_scope == "targeted"
+            and final_step7_gate_passed
+        )
+        final_loop_verified = (
+            "All Issues Fixed" in step7_output or final_structured_targeted_pass
+        )
+
+        if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and not final_loop_verified:
             max_msg = (
                 f"Checkup did not verify all issues fixed after "
                 f"{MAX_FIX_VERIFY_ITERATIONS} fix-verify iterations."
             )
             max_reason = max_msg
-            max_gate_passed, max_gate_reason = _step7_passed(
-                step7_output,
-                pr_mode=pr_mode,
-                has_issue=has_issue,
-                pr_test_scope=pr_test_scope,
-            )
-            if not max_gate_passed:
-                max_reason = f"{max_msg} {max_gate_reason}"
+            if not final_step7_gate_passed:
+                max_reason = f"{max_msg} {final_step7_gate_reason}"
             if not quiet:
                 console.print(
                     f"[red]{max_reason} Not pushing fixes or creating a PR.[/red]"

@@ -3384,6 +3384,44 @@ class TestTargetedPrStep7Exit:
         assert "step7_iter1" in labels
         assert "step3_iter2" not in labels
 
+    def test_structured_targeted_pass_on_final_iteration_does_not_fail_max(
+        self, tmp_path
+    ):
+        labels: List[str] = []
+        targeted_step7_pass = (
+            "## Step 7/8: Verification & Final Report\n"
+            "Targeted verification passed; full suite not run here.\n"
+            "```json\n"
+            '{"success": true, '
+            '"message": "Verification scope: targeted — full suite not run.", '
+            '"issue_aligned": true, '
+            '"issues": [], '
+            '"changed_files": ["docs/checkup.md"]}\n'
+            "```"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7 and label == "step7_iter3":
+                return (True, targeted_step7_pass, 0.1, "model")
+            if step_num == 7:
+                return (True, "Issues remain", 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        assert "did not verify all issues fixed" not in msg.lower()
+        assert "step7_iter3" in labels
+
 
 class TestIssue1212Bug1Step5FailureSignalPropagation:
     """Bug 1: Step 5 failure output must flow to Step 6's context and user-visible logs."""
