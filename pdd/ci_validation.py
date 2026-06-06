@@ -80,6 +80,15 @@ def _run_gh(repo_owner: str, repo_name: str, cwd: Path, args: List[str]) -> subp
     return _run_command(["gh", *args, "--repo", f"{repo_owner}/{repo_name}"], cwd)
 
 
+def _run_gh_api(cwd: Path, args: List[str]) -> subprocess.CompletedProcess[str]:
+    """Run a gh api command.
+
+    ``gh api`` endpoints already include the repository path and do not support
+    the global ``--repo`` flag.
+    """
+    return _run_command(["gh", "api", *args], cwd)
+
+
 def _run_gh_bytes(
     repo_owner: str,
     repo_name: str,
@@ -390,11 +399,9 @@ def _poll_check_runs_for_head(
     start = time.monotonic()
 
     while time.monotonic() - start < MAX_POLL_SECONDS:
-        result = _run_gh(
-            repo_owner,
-            repo_name,
+        result = _run_gh_api(
             cwd,
-            ["api", f"repos/{repo_owner}/{repo_name}/commits/{head_sha}/check-runs?per_page=100"],
+            [f"repos/{repo_owner}/{repo_name}/commits/{head_sha}/check-runs?per_page=100"],
         )
 
         latest_checks = []

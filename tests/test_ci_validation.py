@@ -304,7 +304,7 @@ def test_poll_check_runs_for_head_passes_completed_success(tmp_path: Path) -> No
     }
     result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
 
-    with patch("pdd.ci_validation._run_gh", return_value=result) as mock_run, \
+    with patch("pdd.ci_validation._run_gh_api", return_value=result) as mock_run, \
          patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
         status, checks = _poll_check_runs_for_head(
             repo_owner="owner",
@@ -323,7 +323,7 @@ def test_poll_check_runs_for_head_passes_completed_success(tmp_path: Path) -> No
             "link": "https://example.test/check",
         }
     ]
-    assert "check-runs?per_page=100" in mock_run.call_args.args[3][1]
+    assert mock_run.call_args.args[1] == ["repos/owner/repo/commits/sha123/check-runs?per_page=100"]
 
 
 def test_poll_check_runs_for_head_fails_completed_failure(tmp_path: Path) -> None:
@@ -340,7 +340,7 @@ def test_poll_check_runs_for_head_fails_completed_failure(tmp_path: Path) -> Non
     }
     result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
 
-    with patch("pdd.ci_validation._run_gh", return_value=result), \
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
          patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
         status, checks = _poll_check_runs_for_head(
             repo_owner="owner",
@@ -368,7 +368,7 @@ def test_poll_check_runs_for_head_pending_times_out(tmp_path: Path) -> None:
     }
     result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
 
-    with patch("pdd.ci_validation._run_gh", return_value=result), \
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
          patch("pdd.ci_validation.time.sleep", return_value=None), \
          patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
         status, checks = _poll_check_runs_for_head(
