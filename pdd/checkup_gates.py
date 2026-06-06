@@ -3802,13 +3802,13 @@ def run_doc_contract_check(
     current_file = None
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
-            match = re.search(r" b/(.+)$", line)
+            match = re.search(r" b/(\S+)", line)
             if match:
                 current_file = match.group(1)
                 added_lines_by_file[current_file] = []
         elif line.startswith("+++ "):
             pass
-        elif line.startswith("+") and not line.startswith("+++ "):
+        elif line.startswith("+") and not line.startswith("+++"):
             if current_file:
                 added_lines_by_file[current_file].append(line[1:])
 

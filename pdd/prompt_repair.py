@@ -1,39 +1,20 @@
-"""
-Non-interactive bounded repair loop for prompt files that fail lint.
-
-Invokes an LLM patch-proposal pass, validates proposals against an allowlist
-of schema-aware edit types, applies accepted patches, re-runs the deterministic
-lint oracle, measures token delta, and writes an audit artifact.
-"""
+"""Non-interactive check, change, and re-check loop for prompt source sets."""
 from __future__ import annotations
 
 import json
 import logging
-import math
-import re
 import subprocess
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
-from .agentic_common import run_agentic_task
-from .load_prompt_template import load_prompt_template
-from .prompt_lint import LintIssue, LintResult, scan_prompt
+from .change import MODIFIED_PROMPT_END, MODIFIED_PROMPT_START, change
+from .prompt_lint import LintIssue, scan_prompt
 from .server.token_counter import count_tokens
 
 logger = logging.getLogger(__name__)
-
-ALLOWED_PATCH_TYPES = frozenset({
-    "ADD_VOCABULARY",
-    "NORMALIZE_RULE_ID",
-    "ADD_COVERAGE_LINE",
-    "ADD_STORY_TODO",
-    "ADD_WAIVER_PLACEHOLDER",
-    "CLARIFY_VAGUE_TERM",
-    "ADD_CONTRACT_SKELETON",
-})
 
 _PROMPT_REPAIR_MODES = frozenset({"off", "best-effort", "strict"})
 
@@ -49,7 +30,7 @@ class PromptRepairConfig:
 
 
 @dataclass
-class RepairResult:
+class RepairResult:  # pylint: disable=too-many-instance-attributes
     """Outcome of a prompt repair attempt."""
 
     success: bool
@@ -63,6 +44,8 @@ class RepairResult:
     repair_skipped: bool = False
     audit_path: Optional[Path] = None
     message: str = ""
+    findings_before: List[Dict[str, Any]] = field(default_factory=list)
+    findings_after: List[Dict[str, Any]] = field(default_factory=list)
 
 
 def load_prompt_repair_defaults(project_root: Path) -> PromptRepairConfig:
@@ -72,7 +55,7 @@ def load_prompt_repair_defaults(project_root: Path) -> PromptRepairConfig:
     if not pyproject.is_file():
         return config
     try:
-        import tomllib
+        import tomllib  # pylint: disable=import-outside-toplevel
 
         data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
     except (OSError, ValueError, ImportError):
@@ -157,128 +140,105 @@ def _estimate_preamble_tokens(text: str) -> int:
     return count_tokens(preamble) if preamble else 0
 
 
-def _extract_json_array_from_text(text: str) -> Optional[List[Dict[str, Any]]]:
-    """Parse the last JSON array found in agent output."""
-    if not text or not text.strip():
-        return None
-    decoder = json.JSONDecoder()
-    last_match: Optional[List[Dict[str, Any]]] = None
-    search_from = 0
-    while True:
-        idx = text.find("[", search_from)
-        if idx == -1:
-            break
+def _source_set_report(context: Optional[Dict[str, str]]) -> Optional[Dict[str, Any]]:
+    """Return the structured source-set report supplied by a checkup caller."""
+    raw = (context or {}).get("source_set_report")
+    if isinstance(raw, dict):
+        report = raw
+    elif isinstance(raw, str):
         try:
-            obj, end = decoder.raw_decode(text, idx)
+            report = json.loads(raw)
         except json.JSONDecodeError:
-            search_from = idx + 1
-            continue
-        if isinstance(obj, list) and all(isinstance(item, dict) for item in obj):
-            last_match = obj
-        search_from = end if end > idx else idx + 1
-    return last_match
+            return None
+    else:
+        return None
+    if report.get("schema") != "pdd.prompt_source_set_report.v1":
+        return None
+    return report
 
 
-def _validate_proposal(proposal: Dict[str, Any]) -> bool:
-    patch_type = proposal.get("type")
-    if patch_type not in ALLOWED_PATCH_TYPES:
-        return False
-    if patch_type == "ADD_VOCABULARY":
-        return bool(proposal.get("term")) and bool(proposal.get("definition"))
-    if patch_type == "NORMALIZE_RULE_ID":
-        return bool(proposal.get("old_id")) and bool(proposal.get("new_id"))
-    if patch_type == "ADD_COVERAGE_LINE":
-        return bool(proposal.get("rule_id")) and bool(proposal.get("coverage_text"))
-    if patch_type == "ADD_STORY_TODO":
-        return bool(proposal.get("coverage_text"))
-    if patch_type == "ADD_WAIVER_PLACEHOLDER":
-        return bool(proposal.get("waiver_text"))
-    if patch_type == "CLARIFY_VAGUE_TERM":
-        return bool(proposal.get("term")) and bool(proposal.get("replacement"))
-    if patch_type == "ADD_CONTRACT_SKELETON":
-        return True
-    return False
+def _report_findings(report: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not report:
+        return []
+    findings = report.get("findings", [])
+    if not isinstance(findings, list):
+        return []
+    return [finding for finding in findings if isinstance(finding, dict)]
 
 
-def _ensure_xml_section(text: str, tag: str, inner: str) -> str:
-    pattern = re.compile(
-        rf"(<{tag}\s*>)(.*?)(</{tag}>)",
-        re.IGNORECASE | re.DOTALL,
-    )
-    match = pattern.search(text)
-    if match:
-        existing = match.group(2).rstrip()
-        addition = inner if not existing else f"{existing}\n{inner}"
-        return (
-            text[: match.start()]
-            + f"{match.group(1)}{addition}\n{match.group(3)}"
-            + text[match.end() :]
-        )
-    insertion = f"<{tag}>\n{inner}\n</{tag}>\n"
-    contract_idx = text.lower().find("<contract_rules>")
-    if contract_idx != -1:
-        return text[:contract_idx] + insertion + text[contract_idx:]
-    return text.rstrip() + "\n\n" + insertion
+def _lint_findings(issues: Sequence[LintIssue]) -> List[Dict[str, Any]]:
+    return [
+        {
+            "source_check": "lint",
+            "severity": issue.level,
+            "code": issue.code,
+            "line": issue.line,
+            "message": issue.message,
+            "evidence": issue.section,
+        }
+        for issue in issues
+    ]
 
 
-def _apply_patch(text: str, proposal: Dict[str, Any]) -> str:
-    patch_type = proposal["type"]
-    if patch_type == "ADD_VOCABULARY":
-        definition = str(proposal["definition"]).strip()
-        return _ensure_xml_section(text, "vocabulary", definition)
-    if patch_type == "NORMALIZE_RULE_ID":
-        return text.replace(str(proposal["old_id"]), str(proposal["new_id"]))
-    if patch_type == "ADD_COVERAGE_LINE":
-        return _ensure_xml_section(text, "coverage", str(proposal["coverage_text"]).strip())
-    if patch_type == "ADD_STORY_TODO":
-        return _ensure_xml_section(text, "coverage", str(proposal["coverage_text"]).strip())
-    if patch_type == "ADD_WAIVER_PLACEHOLDER":
-        return _ensure_xml_section(text, "waivers", str(proposal["waiver_text"]).strip())
-    if patch_type == "CLARIFY_VAGUE_TERM":
-        term = str(proposal["term"])
-        replacement = str(proposal["replacement"])
-        # Use a lambda so the replacement is treated as a literal string,
-        # not a regex replacement pattern (avoids re.error on \1, \g<name>, etc.)
-        return re.sub(re.escape(term), lambda _: replacement, text, count=1)
-    if patch_type == "ADD_CONTRACT_SKELETON":
-        if re.search(r"<contract_rules\s*>", text, re.IGNORECASE):
-            return text
-        return text.rstrip() + "\n\n<contract_rules>\n</contract_rules>\n"
-    return text
-
-
-def _projected_token_growth(original: str, patched: str) -> int:
-    return max(0, count_tokens(patched) - count_tokens(original))
-
-
-def _invoke_repair_llm(
-    *,
-    prompt_content: str,
-    lint_issues: Sequence[LintIssue],
+def _repair_brief(
+    findings: Sequence[Dict[str, Any]],
     context: Optional[Dict[str, str]],
-    cwd: Path,
-    verbose: bool,
-    quiet: bool,
-    max_seconds: float = 120.0,
-) -> Tuple[bool, str, float, str]:
-    template = load_prompt_template("prompt_repair_LLM")
-    if not template:
-        return False, "prompt_repair_LLM template not found", 0.0, ""
-    context_text = json.dumps(context or {}, indent=2)
-    issues_json = json.dumps([issue.as_dict() for issue in lint_issues], indent=2)
-    instruction = template.format(
-        lint_issues=issues_json,
-        context=context_text,
-        prompt_content=prompt_content,
+) -> str:
+    """Synthesize bounded instructions for the internal ``change()`` operation."""
+    supporting_context = {
+        key: value
+        for key, value in (context or {}).items()
+        if key != "source_set_report" and value
+    }
+    return "\n".join(
+        [
+            "Repair this PDD prompt so the complete prompt source-set check passes.",
+            "Address every finding in the structured repair brief below, including "
+            "coverage, contract, gate, snapshot, drift, and lint findings.",
+            "Make the smallest coherent prompt-only changes. Preserve the module "
+            "interface, existing requirements, and unrelated content.",
+            "Do not edit generated code, tests, stories, or other files. Do not add "
+            "waivers or invent requirements unless the supplied context supports them.",
+            "Return the complete modified prompt using change()'s required "
+            f"{MODIFIED_PROMPT_START} and {MODIFIED_PROMPT_END} delimiters.",
+            "",
+            "SOURCE-SET FINDINGS:",
+            json.dumps(list(findings), indent=2),
+            "",
+            "SUPPORTING CONTEXT:",
+            json.dumps(supporting_context, indent=2),
+        ]
     )
-    return run_agentic_task(
-        instruction,
-        cwd,
-        verbose=verbose,
-        quiet=quiet,
-        label="prompt_repair_LLM",
-        timeout=max_seconds,
+
+
+def _validate_changed_prompt(original: str, candidate: str) -> Optional[str]:
+    """Validate the complete prompt returned by ``change()``."""
+    stripped = candidate.strip()
+    if not stripped or stripped == original.strip():
+        return None
+    if MODIFIED_PROMPT_START in stripped or MODIFIED_PROMPT_END in stripped:
+        return None
+    return stripped + ("\n" if original.endswith("\n") else "")
+
+
+def _recheck_source_set(
+    path: Path,
+    *,
+    initial_report: Dict[str, Any],
+    project_root: Path,
+) -> Dict[str, Any]:
+    """Rebuild the same full source-set report after a repair round."""
+    from .checkup_prompt_main import (  # pylint: disable=import-outside-toplevel
+        build_prompt_source_set_report,
     )
+
+    report = build_prompt_source_set_report(
+        path,
+        target=str(initial_report.get("target") or path),
+        project_root=project_root,
+        strict=False,
+    )
+    return report.as_dict()
 
 
 def _write_audit_note(
@@ -287,7 +247,7 @@ def _write_audit_note(
     path: Path,
     config: PromptRepairConfig,
     result: RepairResult,
-    applied_types: Sequence[str],
+    applied_operations: Sequence[str],
 ) -> Optional[Path]:
     slug = path.stem.replace("_", "-")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -305,7 +265,10 @@ def _write_audit_note(
             "preamble_estimate": result.preamble_estimate,
             "issues_before": len(result.issues_before),
             "issues_after": len(result.issues_after),
-            "applied_patch_types": list(applied_types),
+            "findings_before": len(result.findings_before),
+            "findings_after": len(result.findings_after),
+            "applied_operations": list(applied_operations),
+            "apply_method": "pdd.change.change",
             "status": "repaired" if result.success else "failed",
         }
         audit_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -319,6 +282,8 @@ def _lint_issues(path: Path) -> List[LintIssue]:
     return list(scan_prompt(path).issues)
 
 
+# pylint: disable=too-many-arguments,too-many-locals
+# pylint: disable=too-many-return-statements,too-many-branches,too-many-statements
 def run_prompt_repair_loop(
     path: Path,
     config: PromptRepairConfig,
@@ -328,7 +293,7 @@ def run_prompt_repair_loop(
     verbose: bool = False,
     quiet: bool = False,
 ) -> RepairResult:
-    """Run a bounded repair-and-recheck loop for one prompt file."""
+    """Run a bounded source-set check, ``change()``, and full re-check loop."""
     work_cwd = cwd or path.parent
     project_root = work_cwd
     for parent in [work_cwd, *work_cwd.parents]:
@@ -359,24 +324,34 @@ def run_prompt_repair_loop(
 
     preamble_estimate = _estimate_preamble_tokens(original_text)
     issues_before = _lint_issues(path)
-    if not issues_before:
+    initial_report = _source_set_report(context)
+    findings_before = (
+        _report_findings(initial_report)
+        if initial_report is not None
+        else _lint_findings(issues_before)
+    )
+    if not findings_before:
         return RepairResult(
             success=True,
-            issues_before=[],
-            issues_after=[],
+            issues_before=issues_before,
+            issues_after=issues_before,
             rounds_used=0,
             tokens_before=tokens_before,
             tokens_after=tokens_before,
             token_delta=0,
             preamble_estimate=preamble_estimate,
             repair_skipped=True,
-            message="no lint issues",
+            message="no source-set findings",
+            findings_before=[],
+            findings_after=[],
         )
 
     current_text = original_text
     rounds_used = 0
-    applied_types: List[str] = []
+    applied_operations: List[str] = []
     issues_after = issues_before
+    findings_after = findings_before
+    current_report = initial_report
 
     for _round in range(config.max_rounds):
         if time.monotonic() - started >= config.max_seconds:
@@ -391,33 +366,54 @@ def run_prompt_repair_loop(
                 token_delta=0,
                 preamble_estimate=preamble_estimate,
                 message="repair timeout",
+                findings_before=findings_before,
+                findings_after=findings_after,
             )
             result.audit_path = _write_audit_note(
                 project_root=project_root,
                 path=path,
                 config=config,
                 result=result,
-                applied_types=applied_types,
+                applied_operations=applied_operations,
             )
             return result
 
         current_issues = _lint_issues(path)
-        if not current_issues:
-            issues_after = []
+        current_findings = (
+            _report_findings(current_report)
+            if current_report is not None
+            else _lint_findings(current_issues)
+        )
+        if not current_findings:
+            issues_after = current_issues
+            findings_after = []
             break
 
         remaining = max(1.0, config.max_seconds - (time.monotonic() - started))
-        llm_ok, llm_output, _, _ = _invoke_repair_llm(
-            prompt_content=current_text,
-            lint_issues=current_issues,
-            context=context,
-            cwd=work_cwd,
-            verbose=verbose,
-            quiet=quiet,
-            max_seconds=remaining,
+        brief = _repair_brief(current_findings, context)
+        change_context = json.dumps(
+            {
+                "prompt_path": str(path),
+                "source_set_report": current_report,
+                "supporting_context": {
+                    key: value
+                    for key, value in (context or {}).items()
+                    if key != "source_set_report"
+                },
+            },
+            indent=2,
         )
-        if not llm_ok:
-            logger.warning("Prompt repair LLM call failed for %s", path)
+        try:
+            candidate, _, _ = change(
+                input_prompt=current_text,
+                input_code=change_context,
+                change_prompt=brief,
+                temperature=0.0,
+                time=max(0.01, remaining / 3600.0),
+                verbose=verbose and not quiet,
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            logger.warning("Prompt repair change() call failed for %s: %s", path, exc)
             result = RepairResult(
                 success=False,
                 issues_before=issues_before,
@@ -426,21 +422,22 @@ def run_prompt_repair_loop(
                 tokens_before=tokens_before,
                 tokens_after=-1,
                 preamble_estimate=preamble_estimate,
-                message="llm failure",
+                message="change failure",
+                findings_before=findings_before,
+                findings_after=current_findings,
             )
             result.audit_path = _write_audit_note(
                 project_root=project_root,
                 path=path,
                 config=config,
                 result=result,
-                applied_types=applied_types,
+                applied_operations=applied_operations,
             )
             return result
 
-        proposals = _extract_json_array_from_text(llm_output) or []
-        valid = [p for p in proposals if _validate_proposal(p)]
-        if not valid:
-            logger.warning("Prompt repair produced no valid proposals for %s", path)
+        validated = _validate_changed_prompt(current_text, candidate)
+        if validated is None:
+            logger.warning("Prompt repair change() returned an invalid prompt for %s", path)
             result = RepairResult(
                 success=config.mode != "strict",
                 issues_before=issues_before,
@@ -449,31 +446,32 @@ def run_prompt_repair_loop(
                 tokens_before=tokens_before,
                 tokens_after=count_tokens(current_text) if tokens_before >= 0 else -1,
                 preamble_estimate=preamble_estimate,
-                message="no valid proposals",
+                message="invalid change result",
+                findings_before=findings_before,
+                findings_after=current_findings,
             )
             result.audit_path = _write_audit_note(
                 project_root=project_root,
                 path=path,
                 config=config,
                 result=result,
-                applied_types=applied_types,
+                applied_operations=applied_operations,
             )
             return result
 
-        accepted: List[Dict[str, Any]] = []
-        # Skip the budget guard entirely when token counting is unavailable.
-        budget = math.inf if tokens_before < 0 else config.max_token_growth
-        for proposal in valid:
-            candidate = _apply_patch(current_text, proposal)
-            current_growth = _projected_token_growth(original_text, candidate)
-            if current_growth > budget:
-                logger.debug("Dropping patch %s: projected growth %s > %s", proposal.get("type"), current_growth, budget)
-                continue
-            accepted.append(proposal)
-            current_text = candidate
-
-        if not accepted:
-            logger.warning("Prompt repair dropped all proposals for token budget on %s", path)
+        try:
+            projected_growth = max(
+                0, count_tokens(validated) - count_tokens(original_text)
+            )
+        except Exception:  # pylint: disable=broad-exception-caught
+            projected_growth = 0
+        if tokens_before >= 0 and projected_growth > config.max_token_growth:
+            logger.warning(
+                "Prompt repair change exceeds token budget for %s: %s > %s",
+                path,
+                projected_growth,
+                config.max_token_growth,
+            )
             result = RepairResult(
                 success=config.mode != "strict",
                 issues_before=issues_before,
@@ -483,29 +481,33 @@ def run_prompt_repair_loop(
                 tokens_after=count_tokens(current_text) if tokens_before >= 0 else -1,
                 preamble_estimate=preamble_estimate,
                 message="token budget exceeded",
+                findings_before=findings_before,
+                findings_after=current_findings,
             )
             result.audit_path = _write_audit_note(
                 project_root=project_root,
                 path=path,
                 config=config,
                 result=result,
-                applied_types=applied_types,
+                applied_operations=applied_operations,
             )
             return result
 
-        # Atomic-ish write: write to a sibling temp file then rename so a
-        # crash between rounds leaves the backup intact.
-        _tmp = path.with_suffix(".prompt.repair_tmp")
-        try:
-            _tmp.write_text(current_text, encoding="utf-8")
-            _tmp.replace(path)
-        except OSError:
-            _tmp.unlink(missing_ok=True)
-            raise
+        path.write_text(validated, encoding="utf-8")
+        current_text = validated
         rounds_used += 1
-        applied_types.extend(str(p["type"]) for p in accepted)
+        applied_operations.append("CHANGE")
         issues_after = _lint_issues(path)
-        if not issues_after:
+        if initial_report is not None:
+            current_report = _recheck_source_set(
+                path,
+                initial_report=initial_report,
+                project_root=project_root,
+            )
+            findings_after = _report_findings(current_report)
+        else:
+            findings_after = _lint_findings(issues_after)
+        if not findings_after:
             break
 
     # Rollback to original if no round improved the file, to avoid leaving a
@@ -528,14 +530,18 @@ def run_prompt_repair_loop(
         )
 
     # rounds_used==0 with issues still present means no repair ran (e.g. max_rounds=0).
-    no_repair_ran = rounds_used == 0 and bool(issues_after)
+    no_repair_ran = rounds_used == 0 and bool(findings_after)
 
     if config.mode == "strict":
-        success = len(issues_after) == 0
+        success = len(findings_after) == 0
     else:
-        success = not no_repair_ran or not issues_after
+        success = not no_repair_ran or not findings_after
 
-    message = "repaired" if success and not issues_after else ("repair skipped" if no_repair_ran else "issues remain")
+    message = (
+        "repaired"
+        if success and not findings_after
+        else ("repair skipped" if no_repair_ran else "findings remain")
+    )
     result = RepairResult(
         success=success,
         issues_before=issues_before,
@@ -547,15 +553,19 @@ def run_prompt_repair_loop(
         preamble_estimate=preamble_estimate,
         repair_skipped=no_repair_ran,
         message=message,
+        findings_before=findings_before,
+        findings_after=findings_after,
     )
     result.audit_path = _write_audit_note(
         project_root=project_root,
         path=path,
         config=config,
         result=result,
-        applied_types=applied_types,
+        applied_operations=applied_operations,
     )
     return result
+# pylint: enable=too-many-arguments,too-many-locals
+# pylint: enable=too-many-return-statements,too-many-branches,too-many-statements
 
 
 def format_token_delta_summary(result: RepairResult) -> str:

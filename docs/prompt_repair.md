@@ -29,19 +29,14 @@ pdd checkup ... --prompt-repair off
 pdd checkup ... --prompt-repair best-effort
 ```
 
-## What the Repair Loop Fixes (v1)
+## What the Repair Loop Fixes
 
-Schema-aware, bounded edits only:
+The repair brief consumes the complete prompt source-set report, including lint,
+contract, coverage, gate, snapshot, and drift findings. It applies the smallest
+coherent prompt-only update through the internal `pdd change` implementation,
+then rebuilds the complete report.
 
-- Add missing `<vocabulary>` definitions for flagged vague terms
-- Normalize contract rule IDs (e.g., `R1`, `R2`, ...)
-- Add missing `<coverage>` lines for existing rules
-- Add TODO-style story/test action recommendations in `<coverage>`
-- Add waiver placeholders when policy allows
-- Clarify vague terms with structured patches (not a full rewrite)
-- Add `<contract_rules>` skeleton when requirements exist but no contracts
-
-The repair loop does **not** perform full-file rewrites or edit generated code.
+The repair loop does **not** edit generated code, tests, stories, or other files.
 
 ## Configuration
 
@@ -85,8 +80,8 @@ A warning is emitted if growth exceeds `max_prompt_token_growth`.
 
 ## Safety
 
-- Deterministic checkup remains the authority — repair proposals are validated before write
-- No arbitrary full-file rewrites in v1
+- Deterministic source-set checkup remains the authority after every repair round
+- Prompt changes use `pdd.change.change()` and its modified-prompt delimiter contract
 - No generated code edits
 - Audit note written under `.pdd/evidence/prompt_repair/<slug>-<timestamp>.json`
 

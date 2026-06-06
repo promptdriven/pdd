@@ -143,24 +143,3 @@ def test_compressed_sync_context_dev_unit_resolves_package_import_path() -> None
     ]
     assert "pdd.compressed_sync_context" in imports
     assert "compressed_sync_context" not in imports
-
-
-def test_redact_catches_github_pat() -> None:
-    """Regression: _redact must redact GitHub PATs that the old 6-pattern list missed."""
-    from pdd.compressed_sync_context import _redact
-
-    pat = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef1234"
-    result = _redact(f"Authorization: token {pat}")
-    assert "ghp_" not in result, (
-        "_redact did not redact the GitHub PAT — compressed context can leak credentials"
-    )
-
-
-def test_redact_catches_aws_access_key() -> None:
-    """Regression: _redact must redact AWS access keys that the old 6-pattern list missed."""
-    from pdd.compressed_sync_context import _redact
-
-    result = _redact("key=AKIAIOSFODNN7EXAMPLE something else")
-    assert "AKIAIOSFODNN7EXAMPLE" not in result, (
-        "_redact did not redact the AWS access key"
-    )

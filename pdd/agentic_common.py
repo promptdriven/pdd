@@ -205,6 +205,7 @@ def issue_update_should_clear_workflow_state(
         repo_owner, repo_name, issue_number, scratch, cwd=cwd
     )
     if pending:
+        merge_steer_state(scratch, state)
         return False
 
     if clarification_step_numbers and workflow_awaiting_clarification(
@@ -5184,12 +5185,10 @@ def drain_issue_steers(
         if not isinstance(comment, dict):
             continue
         cid = comment.get("id")
-        if cid is None:
-            continue
         try:
-            cid_val = int(cid)
+            cid_val = int(cid) if cid is not None else 0
         except (ValueError, TypeError):
-            continue
+            cid_val = 0
         if cid_val <= last_id_val:
             continue
 

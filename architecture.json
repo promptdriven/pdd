@@ -9963,9 +9963,11 @@
     }
   },
   {
-    "reason": "Non-interactive bounded repair loop that patches prompt files after failed prompt lint.",
-    "description": "Implements run_prompt_repair_loop(): bounded, non-interactive loop that fires after scan_prompt() failure, invokes an LLM patch-proposal pass, validates proposals (7 allowed types), enforces max_token_growth before write, re-runs the deterministic lint oracle, and writes an audit artifact to .pdd/evidence/prompt_repair/.",
+    "reason": "Non-interactive prompt source-set repair orchestrator using the internal change() contract.",
+    "description": "Implements run_prompt_repair_loop(): consumes pdd.prompt_source_set_report.v1 findings and supporting context, synthesizes bounded change instructions, applies the complete prompt through pdd.change.change(), enforces token growth, rebuilds the full source-set report after each round, and writes an audit artifact to .pdd/evidence/prompt_repair/.",
     "dependencies": [
+      "change_python.prompt",
+      "checkup_prompt_main_python.prompt",
       "prompt_lint_python.prompt"
     ],
     "priority": 250,
@@ -9983,31 +9985,6 @@
             "name": "run_prompt_repair_loop",
             "signature": "(path: Path, config: PromptRepairConfig, *, context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None) -> RepairResult",
             "returns": "RepairResult"
-          }
-        ]
-      }
-    }
-  },
-  {
-    "reason": "LLM step: receives lint failures and prompt text, produces bounded JSON patch proposals for prompt repair.",
-    "description": "LLM template invoked by run_prompt_repair_loop(). Receives lint issues as JSON, the prompt text, and optional context (stories, tests, PRD). Produces a JSON array of schema-aware patch proposals constrained to 7 allowed types: ADD_VOCABULARY, NORMALIZE_RULE_ID, ADD_COVERAGE_LINE, ADD_STORY_TODO, ADD_WAIVER_PLACEHOLDER, CLARIFY_VAGUE_TERM, ADD_CONTRACT_SKELETON. Full rewrites and code edits are explicitly forbidden.",
-    "dependencies": [
-      "prompt_repair_python.prompt"
-    ],
-    "priority": 251,
-    "filename": "prompt_repair_LLM.prompt",
-    "filepath": null,
-    "tags": [
-      "llm",
-      "prompt"
-    ],
-    "interface": {
-      "type": "command",
-      "command": {
-        "commands": [
-          {
-            "name": "prompt_repair_LLM",
-            "description": "Produce schema-aware patch proposals (vocabulary, rule IDs, coverage lines, contract skeleton) for a prompt that failed lint checks"
           }
         ]
       }

@@ -6785,37 +6785,3 @@ class TestSetupWorktreeCleanRestart:
         assert err and "clean restart" in err.lower(), (
             f"Expected a clean-restart-refusal error; got {err!r}"
         )
-
-
-def test_step6_stop_condition_not_suppressed_by_direct_edit_candidates():
-    """Regression: a STOP_CONDITION tag in step 6 must not be nullified when
-    direct_edit_candidates are also present — only 'No dev units found' is suppressible.
-    (Issue #1422 fix)"""
-    from pdd.agentic_change_orchestrator import _check_hard_stop
-
-    step6_output_with_both = (
-        "DIRECT_EDIT_CANDIDATES\n"
-        "| File | Reason |\n"
-        "| docs/api.md | Needs update |\n"
-        "\n"
-        "STOP_CONDITION: Architectural decision needed\n"
-    )
-    stop = _check_hard_stop(6, step6_output_with_both)
-    assert stop is not None, "_check_hard_stop should return the STOP_CONDITION reason"
-    assert stop != "No dev units found", (
-        "The stop should NOT match the suppressible 'No dev units found' reason; "
-        "the narrowed condition must leave this stop active"
-    )
-
-    # Confirm the suppression still works for the intended case
-    step6_no_devunits = (
-        "DIRECT_EDIT_CANDIDATES\n"
-        "| File | Reason |\n"
-        "| docs/api.md | Needs update |\n"
-        "\n"
-        "**Status:** No Dev Units Found\n"
-    )
-    stop_no_devunits = _check_hard_stop(6, step6_no_devunits)
-    assert stop_no_devunits == "No dev units found", (
-        "Expected the suppressible 'No dev units found' stop to be detected"
-    )

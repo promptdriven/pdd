@@ -587,7 +587,7 @@ def run_agentic_checkup(
                 project_root=project_root,
                 strict=False,
             )
-            if src_report.passed:
+            if src_report.status == "pass":
                 continue  # no repair needed for this prompt
             # Step 2: repair using the structured report + issue context as oracle
             repair_context = dict(issue_context)
@@ -613,13 +613,13 @@ def run_agentic_checkup(
                 project_root=project_root,
                 strict=False,
             )
-            if not post_report.passed and prompt_repair == "strict":
+            if post_report.status != "pass" and prompt_repair == "strict":
                 strict_failures.append(str(prompt_path))
-            elif not post_report.passed:
+            elif post_report.status != "pass":
                 logger.warning(
                     "Prompt repair left issues in %s: %s",
                     prompt_path,
-                    ", ".join(f.code for f in post_report.findings if f.is_error),
+                    ", ".join(f.code for f in post_report.findings),
                 )
 
         if strict_failures:

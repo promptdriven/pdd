@@ -2016,7 +2016,7 @@ def run_agentic_change_orchestrator(
                 console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
 
         stop_reason = _check_hard_stop(step_num, step_output)
-        if step_num == 6 and stop_reason == "No dev units found" and context.get("direct_edit_candidates"):
+        if step_num == 6 and stop_reason and context.get("direct_edit_candidates"):
             stop_reason = None
         if stop_reason:
             post_step_comment(

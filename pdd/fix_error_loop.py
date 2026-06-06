@@ -602,10 +602,8 @@ def fix_error_loop(
             Path(unit_test_file).write_text(next_test, encoding="utf-8")
         verification_ok, verification_output = _run_verification_program(verification_program, code_file)
         if not verification_ok:
-            if update_code:
-                shutil.copy(str(code_backup), code_file)
-                if update_test and not protect_tests:
-                    shutil.copy(str(test_backup), unit_test_file)
+            shutil.copy(str(test_backup), unit_test_file)
+            shutil.copy(str(code_backup), code_file)
             next_code = Path(code_file).read_text(encoding="utf-8")
             next_test = Path(unit_test_file).read_text(encoding="utf-8")
             verification_output += "\nRestored previous code/test backup after verification failure."

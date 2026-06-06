@@ -1,7 +1,6 @@
 """Tests for pdd.prompt_repair bounded repair loop."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -9,9 +8,9 @@ import pytest
 
 from pdd.prompt_repair import (
     PromptRepairConfig,
-    _apply_patch,
-    _extract_json_array_from_text,
-    _validate_proposal,
+    _repair_brief,
+    _source_set_report,
+    _validate_changed_prompt,
     discover_prompt_paths,
     format_token_delta_summary,
     load_prompt_repair_defaults,
@@ -52,57 +51,81 @@ def test_clean_prompt_skips_repair(tmp_path: Path) -> None:
     assert result.success is True
 
 
+def test_non_lint_source_set_findings_trigger_change_and_full_recheck(
+    tmp_path: Path,
+) -> None:
+    prompt = tmp_path / "clean.prompt"
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
+    prompt.write_text(original, encoding="utf-8")
+    source_set_report = {
+        "schema": "pdd.prompt_source_set_report.v1",
+        "status": "warn",
+        "target": str(prompt),
+        "findings": [
+            {
+                "source_check": "coverage",
+                "severity": "warn",
+                "code": "unchecked",
+                "message": "R1 is not covered",
+            },
+            {
+                "source_check": "gate",
+                "severity": "warn",
+                "code": "missing_evidence",
+                "message": "Required evidence is missing",
+            },
+        ],
+    }
+    repaired = original + "\n% R1 coverage and gate evidence documented.\n"
+
+    with (
+        patch(
+            "pdd.prompt_repair.change",
+            return_value=(repaired, 0.0, "mock"),
+        ) as mock_change,
+        patch(
+            "pdd.prompt_repair._recheck_source_set",
+            return_value={
+                "schema": "pdd.prompt_source_set_report.v1",
+                "status": "pass",
+                "target": str(prompt),
+                "findings": [],
+            },
+        ) as mock_recheck,
+    ):
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort"),
+            context={"source_set_report": source_set_report},
+            cwd=tmp_path,
+            quiet=True,
+        )
+
+    assert result.repair_skipped is False
+    assert result.rounds_used == 1
+    assert result.findings_after == []
+    assert prompt.read_text(encoding="utf-8") == repaired
+    assert "coverage" in mock_change.call_args.kwargs["change_prompt"]
+    assert "gate" in mock_change.call_args.kwargs["change_prompt"]
+    mock_recheck.assert_called_once()
+
+
 def test_repair_adds_vocabulary_and_reclean(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
     prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
-    proposals = json.dumps([
-        {
-            "type": "ADD_VOCABULARY",
-            "term": "valid",
-            "definition": "valid: passes schema and business rules checks",
-            "addresses_issue": "undefined vague term 'valid'",
-        },
-        {
-            "type": "ADD_VOCABULARY",
-            "term": "reasonable",
-            "definition": "reasonable: completes within 2000 ms on CI hardware",
-            "addresses_issue": "undefined vague term 'reasonable'",
-        },
-        {
-            "type": "ADD_VOCABULARY",
-            "term": "gracefully",
-            "definition": "gracefully: returns HTTP 4xx without raising",
-            "addresses_issue": "undefined vague term 'gracefully'",
-        },
-        {
-            "type": "ADD_VOCABULARY",
-            "term": "authorized",
-            "definition": "authorized: caller holds a valid session token",
-            "addresses_issue": "undefined vague term 'authorized'",
-        },
-        {
-            "type": "ADD_VOCABULARY",
-            "term": "duplicate",
-            "definition": "duplicate: same idempotency key seen within 24h",
-            "addresses_issue": "undefined vague term 'duplicate'",
-        },
-        {
-            "type": "ADD_VOCABULARY",
-            "term": "active",
-            "definition": "active: account status is enabled",
-            "addresses_issue": "undefined vague term 'active'",
-        },
-        {
-            "type": "ADD_VOCABULARY",
-            "term": "complete",
-            "definition": "complete: all required fields are non-empty",
-            "addresses_issue": "undefined vague term 'complete'",
-        },
-    ])
+    repaired = prompt.read_text(encoding="utf-8") + (
+        "\n<vocabulary>\nvalid: passes schema and business rules checks\n"
+        "reasonable: completes within 2000 ms on CI hardware\n"
+        "gracefully: returns HTTP 4xx without raising\n"
+        "authorized: caller holds a valid session token\n"
+        "duplicate: same idempotency key seen within 24h\n"
+        "active: account status is enabled\n"
+        "complete: all required fields are non-empty\n</vocabulary>\n"
+    )
 
     with patch(
-        "pdd.prompt_repair._invoke_repair_llm",
-        return_value=(True, proposals, 0.0, "mock"),
+        "pdd.prompt_repair.change",
+        return_value=(repaired, 0.0, "mock"),
     ):
         result = run_prompt_repair_loop(
             prompt,
@@ -123,20 +146,11 @@ def test_max_rounds_respected(tmp_path: Path) -> None:
     prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
     calls = {"count": 0}
 
-    partial = json.dumps([
-        {
-            "type": "ADD_VOCABULARY",
-            "term": "valid",
-            "definition": "valid: passes validation rules",
-            "addresses_issue": "valid",
-        }
-    ])
-
-    def _fake_llm(**_kwargs):
+    def _fake_change(**kwargs):
         calls["count"] += 1
-        return True, partial, 0.0, "mock"
+        return kwargs["input_prompt"] + f"\n% repair round {calls['count']}\n", 0.0, "mock"
 
-    with patch("pdd.prompt_repair._invoke_repair_llm", side_effect=_fake_llm):
+    with patch("pdd.prompt_repair.change", side_effect=_fake_change):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort", max_rounds=2),
@@ -153,8 +167,8 @@ def test_llm_failure_does_not_raise(tmp_path: Path) -> None:
     prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
 
     with patch(
-        "pdd.prompt_repair._invoke_repair_llm",
-        return_value=(False, "provider error", 0.0, ""),
+        "pdd.prompt_repair.change",
+        side_effect=RuntimeError("provider error"),
     ):
         result = run_prompt_repair_loop(
             prompt,
@@ -172,7 +186,10 @@ def test_strict_mode_fails_with_remaining_issues(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
     prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
 
-    with patch("pdd.prompt_repair._invoke_repair_llm", return_value=(True, "[]", 0.0, "mock")):
+    with patch(
+        "pdd.prompt_repair.change",
+        side_effect=lambda **kwargs: (kwargs["input_prompt"], 0.0, "mock"),
+    ):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="strict", max_rounds=1),
@@ -188,7 +205,10 @@ def test_best_effort_continues_with_remaining_issues(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
     prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
 
-    with patch("pdd.prompt_repair._invoke_repair_llm", return_value=(True, "[]", 0.0, "mock")):
+    with patch(
+        "pdd.prompt_repair.change",
+        side_effect=lambda **kwargs: (kwargs["input_prompt"], 0.0, "mock"),
+    ):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort", max_rounds=1),
@@ -203,17 +223,12 @@ def test_best_effort_continues_with_remaining_issues(tmp_path: Path) -> None:
 def test_token_budget_drops_patches(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
     prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
-    huge_definition = "x" * 5000
-    proposals = json.dumps([
-        {
-            "type": "ADD_VOCABULARY",
-            "term": "valid",
-            "definition": huge_definition,
-            "addresses_issue": "valid",
-        }
-    ])
+    huge_prompt = prompt.read_text(encoding="utf-8") + ("x" * 5000)
 
-    with patch("pdd.prompt_repair._invoke_repair_llm", return_value=(True, proposals, 0.0, "mock")):
+    with patch(
+        "pdd.prompt_repair.change",
+        return_value=(huge_prompt, 0.0, "mock"),
+    ):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort", max_token_growth=10),
@@ -275,20 +290,24 @@ def test_discover_prompt_paths_fallback_to_prompts_dir(tmp_path: Path) -> None:
     assert all(not p.name.endswith("_LLM.prompt") for p in paths)
 
 
-def test_validate_proposal_rejects_unknown_type() -> None:
-    assert _validate_proposal({"type": "FULL_REWRITE"}) is False
+def test_validate_changed_prompt_rejects_delimiter_leak() -> None:
+    assert _validate_changed_prompt(
+        "% original\n",
+        "<<<MODIFIED_PROMPT>>>\n% changed\n<<<END_MODIFIED_PROMPT>>>",
+    ) is None
 
 
-def test_apply_patch_adds_contract_skeleton() -> None:
-    text = "% Goal\nDo something observable.\n"
-    patched = _apply_patch(text, {"type": "ADD_CONTRACT_SKELETON"})
-    assert "<contract_rules>" in patched
+def test_source_set_report_requires_schema() -> None:
+    assert _source_set_report({"source_set_report": '{"status": "warn"}'}) is None
 
 
-def test_extract_json_array_from_text() -> None:
-    text = 'analysis\n```json\n[{"type": "ADD_VOCABULARY"}]\n```'
-    parsed = _extract_json_array_from_text(text)
-    assert parsed == [{"type": "ADD_VOCABULARY"}]
+def test_repair_brief_includes_non_lint_findings() -> None:
+    brief = _repair_brief(
+        [{"source_check": "coverage", "code": "unchecked"}],
+        {"recommended_actions": "pdd checkup coverage sample"},
+    )
+    assert '"source_check": "coverage"' in brief
+    assert "pdd checkup coverage sample" in brief
 
 
 @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
@@ -316,6 +335,7 @@ def test_agentic_checkup_strict_repair_blocks_before_orchestrator(
     # Both pre-repair and post-repair structured reports show failure
     failing_report = MagicMock()
     failing_report.passed = False
+    failing_report.status = "fail"
     failing_report.as_dict.return_value = {"status": "fail", "findings": []}
     failing_report.recommended_actions.return_value = []
     mock_build_report.return_value = failing_report
@@ -355,7 +375,7 @@ def test_repair_llm_failure_preserves_existing_issues(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with patch("pdd.prompt_repair._invoke_repair_llm", return_value=(False, "", 0, 0)):
+    with patch("pdd.prompt_repair.change", side_effect=RuntimeError("failed")):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort"),
