@@ -481,6 +481,14 @@ def detect_drift(
                 elif not code_in_changes and not prompt_in_changes:
                     continue
 
+        # A still-terminal 'all_synced' (e.g. a coverage gap accepted as
+        # complete, including the PR auto-heal test_extend guard of #1403) is
+        # fully synced — no drift. This is checked AFTER git reclassification so
+        # an all_synced module whose code changed without its prompt is still
+        # promoted to 'update' above rather than being dropped here.
+        if op == "all_synced":
+            continue
+
         drift = DriftInfo(
             basename=basename,
             language=language,
@@ -1649,11 +1657,27 @@ def main(
     diff_base: Optional[str] = None,
 ) -> int:
     """Detect drift, heal modules, and commit healed changes."""
+    # PR auto-heal scope guard (#1403): in PR mode (no --skip-ci), suppress
+    # coverage-driven test_extend so a narrow fix PR is never re-bloated with
+    # unrelated generated tests. The flag is set on os.environ only for the
+    # in-process detect_drift call (restored immediately after); the `pdd sync`
+    # subprocess receives it explicitly via the env dict below. Push-to-main
+    # (--skip-ci) keeps test_extend enabled for whole-module coverage growth.
+    is_pr_mode = not skip_ci
+    _prev_disable_test_extend = os.environ.get("PDD_DISABLE_TEST_EXTEND")
+    if is_pr_mode:
+        os.environ["PDD_DISABLE_TEST_EXTEND"] = "1"
     try:
         prompt_drifts, example_drifts = detect_drift(modules, diff_base=diff_base)
     except Exception as exc:
         console.print(f"[red]detect_drift failed: {exc}[/red]")
         return 1
+    finally:
+        if is_pr_mode:
+            if _prev_disable_test_extend is None:
+                os.environ.pop("PDD_DISABLE_TEST_EXTEND", None)
+            else:
+                os.environ["PDD_DISABLE_TEST_EXTEND"] = _prev_disable_test_extend
 
     all_drifts: List[DriftInfo] = list(prompt_drifts) + list(example_drifts)
     if not all_drifts:
@@ -1666,6 +1690,11 @@ def main(
     Path(cost_path).write_text("operation,cost\n", encoding="utf-8")
 
     env = _build_ci_env(cost_path)
+    if is_pr_mode:
+        # Execution-time half of the #1403 guard: the `pdd sync` subprocess
+        # honors this so an internally re-derived coverage gap cannot escalate
+        # into test_extend and append unrelated tests.
+        env["PDD_DISABLE_TEST_EXTEND"] = "1"
 
     healed: List[DriftInfo] = []
     failed: List[str] = []
@@ -1736,7 +1765,6 @@ def main(
     has_failures = bool(failed)
     has_healed = bool(healed)
     has_skipped = bool(skipped)
-    is_pr_mode = not skip_ci
     _print_final_summary(healed, failed, skipped)
 
     if revert_blocks_commit:

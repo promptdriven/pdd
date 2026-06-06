@@ -96,6 +96,24 @@ def _safe_basename(basename: str) -> str:
     return basename.replace('/', '_')
 
 
+def is_test_extend_disabled() -> bool:
+    """Return True when coverage-driven ``test_extend`` is opted out via env.
+
+    The ``PDD_DISABLE_TEST_EXTEND`` flag is the PR auto-heal scope guard
+    (issue #1403): when set, a Python module whose tests pass but whose
+    coverage is below target is accepted as complete instead of escalating
+    into ``test_extend``, which would append unrelated generated tests and
+    re-bloat a narrowly scoped fix PR. Honored by both the in-process
+    detection call and the ``pdd sync`` subprocess that inherits the flag.
+    """
+    return os.environ.get("PDD_DISABLE_TEST_EXTEND", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
 def _extract_name_part(basename: str) -> tuple:
     """Extract directory and name parts from a subdirectory basename.
 
@@ -2387,6 +2405,29 @@ def _perform_sync_analysis(
                             'test_file_exists': False,
                             'has_real_test_hash': has_real_test_hash,
                             'workflow_stage': 'test_generation_needed'
+                        }
+                    )
+
+                # PR auto-heal scope guard (#1403): when test_extend is disabled,
+                # accept the coverage gap as complete for ALL languages (incl.
+                # Python) instead of escalating into coverage-driven test_extend.
+                # This single branch covers both the in-process detection call
+                # and the `pdd sync` subprocess that re-derives the same decision.
+                if is_test_extend_disabled():
+                    return SyncDecision(
+                        operation='all_synced',
+                        reason=f'Tests pass ({run_report.tests_passed} passed). Coverage {run_report.coverage:.1f}% below target but test_extend disabled (PDD_DISABLE_TEST_EXTEND / PR auto-heal scope guard) - accepting as complete',
+                        confidence=0.90,
+                        estimated_cost=estimate_operation_cost('all_synced'),
+                        details={
+                            'decision_type': 'heuristic',
+                            'current_coverage': run_report.coverage,
+                            'target_coverage': target_coverage,
+                            'tests_passed': run_report.tests_passed,
+                            'tests_failed': run_report.tests_failed,
+                            'test_extend_skipped': True,
+                            'language': language,
+                            'skip_reason': 'PDD_DISABLE_TEST_EXTEND'
                         }
                     )
 
