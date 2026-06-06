@@ -631,6 +631,15 @@ def _git_changed_files(worktree: Path) -> List[str]:
     return fn(worktree)
 
 
+def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
+    """Lazy wrapper around the review-loop prompt source map helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _load_prompt_source_map as fn,
+    )
+
+    return fn(worktree)
+
+
 def _git_rev_parse_head(worktree: Path) -> str:
     """Lazy wrapper around the review-loop HEAD-SHA helper."""
     from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
@@ -2064,14 +2073,19 @@ def _is_package_manager_lockfile_path(path: str) -> bool:
     return Path(path.strip().strip("/")).name in _PACKAGE_MANAGER_LOCKFILE_BASENAMES
 
 
-def _discard_clean_run_lockfile_side_effects(
+def _discard_clean_run_tooling_side_effects(
     worktree: Path,
     changed_files: List[str],
 ) -> Tuple[List[str], List[str]]:
-    """Restore package-manager lockfile noise created when no fixer ran."""
+    """Restore known tooling noise created when no fixer ran."""
+    prompt_source_map = _load_prompt_source_map(worktree) or {}
+    generated_code_paths = set(prompt_source_map)
     discardable = [
         path for path in changed_files
-        if _is_package_manager_lockfile_path(path)
+        if (
+            _is_package_manager_lockfile_path(path)
+            or Path(path).as_posix().lstrip("./") in generated_code_paths
+        )
     ]
     if not discardable:
         return changed_files, []
@@ -4129,18 +4143,18 @@ def _run_agentic_checkup_orchestrator_inner(
                     f for f in _raw_guard_changed_files
                     if not f.startswith(".pdd/")
                 ]
-                discarded_lockfile_side_effects: List[str] = []
+                discarded_tooling_side_effects: List[str] = []
                 if not fixer_invoked and guard_changed_files:
                     (
                         guard_changed_files,
-                        discarded_lockfile_side_effects,
-                    ) = _discard_clean_run_lockfile_side_effects(
+                        discarded_tooling_side_effects,
+                    ) = _discard_clean_run_tooling_side_effects(
                         worktree_path,
                         guard_changed_files,
                     )
-                    if discarded_lockfile_side_effects:
-                        context["clean_run_discarded_lockfile_side_effects"] = (
-                            ", ".join(sorted(discarded_lockfile_side_effects))
+                    if discarded_tooling_side_effects:
+                        context["clean_run_discarded_tooling_side_effects"] = (
+                            ", ".join(sorted(discarded_tooling_side_effects))
                         )
                 pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
 

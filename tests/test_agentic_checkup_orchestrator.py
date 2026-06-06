@@ -4560,6 +4560,79 @@ class TestIssue1215Round3CleanRunSideEffect:
         push_mock.assert_not_called()
         assert not (wt / "frontend" / "package-lock.json").exists()
 
+    def test_clean_run_discards_prompt_generated_tooling_noise(self, tmp_path):
+        """Generated-code non-fixer dirt is restored before prompt-source guard."""
+        wt = tmp_path / "wt"
+        (wt / "app").mkdir(parents=True)
+        (wt / "app" / "async_helpers.py").write_text("dirty\n", encoding="utf-8")
+        (wt / "requirements.txt").write_text("dirty\n", encoding="utf-8")
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                **dict(_PR_META_REAL_API),
+                "api_changed_files": "- A: staging2_marker.md",
+                "api_changed_files_full": "- A: staging2_marker.md",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=step_side_effect,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            side_effect=[
+                ["app/async_helpers.py", "requirements.txt"],
+                [],
+            ],
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._load_prompt_source_map",
+            return_value={
+                "app/async_helpers.py": "pdd/prompts/async_helpers_Python.prompt",
+                "requirements.txt": "pdd/prompts/backend_requirements_Text.prompt",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._trusted_gate_git",
+            return_value=("git", os.environ.copy()),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed 1 file"),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+            return_value=None,
+        ) as registry_guard_mock, patch(
+            "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+            side_effect=lambda _wt, changed: (
+                "generated-code-only fix refused" if changed else None
+            ),
+        ) as prompt_guard_mock, patch("pdd.agentic_checkup_orchestrator.console"):
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        push_mock.assert_not_called()
+        registry_guard_mock.assert_called_once_with(wt, [])
+        prompt_guard_mock.assert_called_once_with(wt, [])
+        assert not (wt / "app" / "async_helpers.py").exists()
+        assert not (wt / "requirements.txt").exists()
+
 
 class TestIssue1215Round3FailureSignalContentValidation:
     """Round-3 Finding 4: failure_signal must have non-empty fields on fail status."""
