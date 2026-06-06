@@ -357,6 +357,75 @@ def test_source_set_repair_smoke_zero_lint_contract_fix(tmp_path: Path) -> None:
     assert cli_result.exit_code in {0, 1}
 
 
+def test_checkup_cli_strict_repair_blocks_on_remaining_findings(tmp_path: Path) -> None:
+    """--prompt-repair strict must yield non-zero exit when findings persist after repair.
+
+    Regression target: the local checkup.py repair path must propagate a failed
+    recheck exit code, and run_prompt_repair_loop must be called with mode='strict'.
+    """
+    from pdd.prompt_repair import RepairResult
+
+    prompt = tmp_path / "sample_python.prompt"
+    prompt.write_text("% Sample\n", encoding="utf-8")
+
+    failing_report = type(
+        "Report",
+        (),
+        {
+            "status": "warn",
+            "as_dict": lambda self: {
+                "schema": "pdd.prompt_source_set_report.v1",
+                "status": "warn",
+                "target": str(prompt),
+                "findings": [{"source_check": "contract", "severity": "warn",
+                               "code": "MISSING_MODAL", "message": "rule lacks MUST"}],
+            },
+            "recommended_actions": lambda self: [],
+        },
+    )()
+
+    with (
+        patch(
+            "pdd.commands.checkup.run_checkup_prompt",
+            side_effect=[
+                (False, "initial check failed", 0.0, "mock", 1),   # first check fails → triggers repair
+                (False, "recheck still failing", 0.0, "mock", 1),  # recheck after repair also fails
+            ],
+        ),
+        patch(
+            "pdd.commands.checkup.build_prompt_source_set_report",
+            return_value=failing_report,
+        ),
+        patch(
+            "pdd.commands.checkup.run_prompt_repair_loop",
+            return_value=RepairResult(
+                success=False,
+                rounds_used=1,
+                repair_skipped=False,
+                message="findings remain",
+            ),
+        ) as mock_repair,
+    ):
+        runner = CliRunner()
+        result = runner.invoke(
+            checkup,
+            [str(prompt), "--prompt-repair", "strict"],
+            obj={"quiet": True, "verbose": False},
+        )
+
+    # run_prompt_repair_loop was invoked with mode="strict"
+    mock_repair.assert_called_once()
+    repair_config = mock_repair.call_args.args[1]
+    assert repair_config.mode == "strict", (
+        f"PromptRepairConfig.mode must be 'strict', got {repair_config.mode!r}"
+    )
+
+    # The final exit code is non-zero — recheck after repair still failed
+    assert result.exit_code != 0, (
+        "CLI must propagate non-zero exit when recheck fails after strict repair"
+    )
+
+
 def test_checkup_issue_url_still_uses_agentic_path() -> None:
     runner = CliRunner()
     with patch("pdd.commands.checkup.run_agentic_checkup") as run_checkup:

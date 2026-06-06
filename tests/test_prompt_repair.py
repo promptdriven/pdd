@@ -423,6 +423,9 @@ def test_gate_only_missing_evidence_skips_repair(tmp_path: Path) -> None:
     assert result.rounds_used == 0
     assert result.message == "no actionable source-set findings"
     mock_change.assert_not_called()
+    # findings_after must match findings_before in the skip path (both empty here
+    # because gate findings are filtered out as non-actionable).
+    assert result.findings_after == result.findings_before
 
 
 def test_change_apply_validates_delimiters_before_write(tmp_path: Path) -> None:
@@ -487,6 +490,15 @@ def test_agentic_checkup_strict_repair_blocks_before_orchestrator(
     mock_repair.assert_called_once()  # repair ran
     mock_orchestrator.assert_not_called()  # orchestrator blocked by strict failure
 
+    # Regression: is_strict must be forwarded to build_prompt_source_set_report on all
+    # calls (initial check and post-repair recheck).  If is_strict is hardcoded False,
+    # strict-mode warnings are silently downgraded to non-blocking in both phases.
+    assert mock_build_report.call_count > 0, "build_prompt_source_set_report must be called"
+    for _call in mock_build_report.call_args_list:
+        assert _call.kwargs.get("strict") is True, (
+            f"is_strict not forwarded to build_prompt_source_set_report: {_call}"
+        )
+
 
 @pytest.mark.parametrize("flag", ["--prompt-repair", "--max-prompt-repair-rounds"])
 def test_checkup_help_exposes_prompt_repair_flags(flag: str) -> None:
@@ -513,6 +525,11 @@ def test_best_effort_max_rounds_zero_is_a_skip_not_failure(tmp_path: Path) -> No
     assert result.success is True, "best-effort with max_rounds=0 must succeed (skip, not failure)"
     assert result.repair_skipped is True
     assert result.rounds_used == 0
+    # Skip path must preserve findings — callers inspect findings_after to decide
+    # whether to retry or report; an empty list would silently hide existing issues.
+    assert result.findings_after == result.findings_before, (
+        "skip path must expose findings_before through findings_after"
+    )
 
 
 def test_repair_llm_failure_preserves_existing_issues(tmp_path: Path) -> None:
