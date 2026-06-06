@@ -2623,3 +2623,53 @@ def test_fix_error_loop_records_agentic_fallback_used_on_success(setup_files):
 
     assert len(events) == 2
     assert events[1]["used"] is True
+
+
+def test_verification_failure_does_not_restore_test_when_code_unchanged(setup_files):
+    """Regression: when update_code=False and verification fails, the improved test must
+    survive intact into the next iteration — not rolled back to the pre-attempt backup.
+    Verified by having the next pytest run succeed, so the returned test content reflects
+    whether the test was preserved or rolled back. (Issue #1422 fix)"""
+    files = setup_files
+    improved_test = "# improved test content\nimport pytest\n"
+
+    # run 1 (initial): 1 failure → enter loop
+    # run 2 (post-fix, still failing to force loop end via max_attempts): 1 failure
+    # We rely on the returned best-state test to observe whether the rollback occurred.
+    # To make the fix observable without needing a second attempt, we set max_attempts=2
+    # and let the second iteration succeed, so next_test (improved or original) propagates.
+    pytest_side_effects = [
+        (1, 0, 0, "1 failing"),   # initial run before loop
+        (0, 0, 0, ""),            # run after attempt 1 — success → loop exits early
+    ]
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file", side_effect=pytest_side_effects):
+        with patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_fix:
+            # update_test=True, update_code=False — only the test was improved
+            mock_fix.return_value = (
+                True, False,
+                improved_test,
+                files["code_file"].read_text(),
+                "analysis", 0.01, "mock-model",
+            )
+            with patch("pdd.fix_error_loop._run_verification_program") as mock_verify:
+                mock_verify.return_value = (False, "verification failed")
+                success, returned_test, _code, *_ = fix_error_loop(
+                    unit_test_file=str(files["test_file"]),
+                    code_file=str(files["code_file"]),
+                    prompt_file="dummy_prompt.txt",
+                    prompt="Fix it",
+                    verification_program=str(files["verify_file"]),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_attempts=2,
+                    budget=10.0,
+                    error_log_file=str(files["error_log"]),
+                    agentic_fallback=False,
+                )
+
+    assert success is True
+    assert returned_test == improved_test, (
+        "test was incorrectly rolled back during verification failure despite update_code=False; "
+        f"got: {returned_test!r}"
+    )

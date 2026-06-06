@@ -14,14 +14,6 @@ from xml.sax.saxutils import escape
 DEFAULT_BUDGET = 12000
 # Reserve space for XML wrapper + compact metadata in render_for_prompt().
 _RENDER_WRAPPER_RESERVE = 320
-_SECRET_PATTERNS = [
-    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+"),
-    re.compile(r"(?i)(api[_-]?key\s*[=:]\s*)[^\s,;]+"),
-    re.compile(r"(?i)(token\s*[=:]\s*)[^\s,;]+"),
-    re.compile(r"(?i)(secret\s*[=:]\s*)[^\s,;]+"),
-    re.compile(r"(?i)(authorization\s*:\s*)[^\n]+"),
-    re.compile(r"(?i)(https?://[^:\s/]+:)[^@\s/]+(@)"),
-]
 
 
 @dataclass(frozen=True)
@@ -49,10 +41,9 @@ def _sha256_text(value: str) -> str:
 
 
 def _redact(value: str) -> str:
-    text = value
-    for pattern in _SECRET_PATTERNS:
-        text = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]{match.group(2) if match.lastindex and match.lastindex >= 2 else ''}", text)
-    return text
+    from pdd.context_snapshot import redact_snapshot_text
+    redacted, _, _ = redact_snapshot_text(value)
+    return redacted
 
 
 def _read_source(path: str | Path | None, label: str, missing: list[str]) -> tuple[str, str] | None:

@@ -288,20 +288,19 @@ def _check_critical_rules(
 def _check_cost_limits(manifest: ManifestView, policy: GatePolicy) -> list[GateFailure]:
     failures: list[GateFailure] = []
     max_cost = policy.limits.max_cost_usd
-    if max_cost is None:
-        return failures
-    cost = float(manifest.generation.get("cost_usd") or 0.0)
-    if cost > max_cost:
-        failures.append(
-            GateFailure(
-                code="cost_limit",
-                message=(
-                    f"{manifest.basename}: run cost ${cost:.2f} exceeds "
-                    f"policy limit ${max_cost:.2f}"
-                ),
-                fix_command="Lower model cost or raise limits.max_cost_usd in policy",
+    if max_cost is not None:
+        cost = float(manifest.generation.get("cost_usd") or 0.0)
+        if cost > max_cost:
+            failures.append(
+                GateFailure(
+                    code="cost_limit",
+                    message=(
+                        f"{manifest.basename}: run cost ${cost:.2f} exceeds "
+                        f"policy limit ${max_cost:.2f}"
+                    ),
+                    fix_command="Lower model cost or raise limits.max_cost_usd in policy",
+                )
             )
-        )
     max_ctx = policy.limits.max_nondeterministic_context_items
     ctx_items = int(manifest.generation.get("nondeterministic_context_items") or 0)
     if ctx_items > max_ctx:
@@ -435,6 +434,8 @@ def run_gate_policy(
     checked = 0
     for manifest in manifests:
         checked += 1
+        if manifest.schema == "missing":
+            continue
         failures.extend(
             evaluate_manifest(
                 manifest,

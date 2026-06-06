@@ -401,7 +401,7 @@ def run_prompt_repair_loop(
             result = RepairResult(
                 success=False,
                 issues_before=issues_before,
-                issues_after=[],
+                issues_after=current_issues,
                 rounds_used=rounds_used,
                 tokens_before=tokens_before,
                 tokens_after=-1,

@@ -344,3 +344,30 @@ def test_checkup_help_exposes_prompt_repair_flags(flag: str) -> None:
     result = CliRunner().invoke(cli, ["--quiet", "checkup", "--help"])
     assert result.exit_code == 0
     assert flag in result.output
+
+
+def test_repair_llm_failure_preserves_existing_issues(tmp_path: Path) -> None:
+    """Regression: when the LLM call fails, RepairResult.issues_after must reflect the
+    actual remaining issues, not an empty list that would cause callers to skip retries.
+    (Issue #1422 fix)"""
+    prompt = tmp_path / "vague.prompt"
+    prompt.write_text(
+        (Path(__file__).parent / "fixtures" / "prompt_lint" / "vague_undefined.prompt")
+        .read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    with patch("pdd.prompt_repair._invoke_repair_llm", return_value=(False, "", 0, 0)):
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort"),
+            cwd=tmp_path,
+        )
+
+    assert result.success is False
+    assert len(result.issues_after) > 0, (
+        "issues_after is empty after LLM failure — callers will skip retries incorrectly"
+    )
+    assert len(result.issues_after) == len(result.issues_before), (
+        "issues_after should match issues_before when no repair was applied"
+    )
