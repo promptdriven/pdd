@@ -105,8 +105,11 @@ def test_non_lint_source_set_findings_trigger_change_and_full_recheck(
     assert result.rounds_used == 1
     assert result.findings_after == []
     assert prompt.read_text(encoding="utf-8") == repaired
+    # coverage is actionable (prompt-fixable) so it must appear in the brief.
     assert "coverage" in mock_change.call_args.kwargs["change_prompt"]
-    assert "gate" in mock_change.call_args.kwargs["change_prompt"]
+    # gate/missing_evidence is not prompt-fixable and must be filtered from the
+    # repair brief so the LLM is not asked to do impossible work.
+    assert "missing_evidence" not in mock_change.call_args.kwargs["change_prompt"]
     mock_recheck.assert_called_once()
 
 

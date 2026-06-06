@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
+import tempfile
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +19,14 @@ from .server.token_counter import count_tokens
 logger = logging.getLogger(__name__)
 
 _PROMPT_REPAIR_MODES = frozenset({"off", "best-effort", "strict"})
+
+# Source-check categories that can be resolved by editing the prompt file.
+# gate, drift, and snapshot findings require external commands and cannot
+# be fixed by prompt editing alone.
+_PROMPT_FIXABLE_CHECKS = frozenset({"lint", "contract", "coverage"})
+# Individual finding codes that are informational-only or require external
+# actions to resolve; never drive an automated repair attempt.
+_NON_FIXABLE_CODES = frozenset({"drift_readiness", "missing_evidence", "gate_error"})
 
 
 @dataclass
@@ -46,6 +56,28 @@ class RepairResult:  # pylint: disable=too-many-instance-attributes
     message: str = ""
     findings_before: List[Dict[str, Any]] = field(default_factory=list)
     findings_after: List[Dict[str, Any]] = field(default_factory=list)
+
+
+def _atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Write *text* to *path* atomically using a temp file and ``os.replace()``.
+
+    Flushes and fsyncs before renaming so a crash during the write cannot leave
+    the target file in a partially-written state.
+    """
+    dir_ = path.parent
+    fd, tmp = tempfile.mkstemp(dir=dir_, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def load_prompt_repair_defaults(project_root: Path) -> PromptRepairConfig:
@@ -153,6 +185,11 @@ def _source_set_report(context: Optional[Dict[str, str]]) -> Optional[Dict[str, 
     else:
         return None
     if report.get("schema") != "pdd.prompt_source_set_report.v1":
+        logger.warning(
+            "source_set_report schema %r != expected 'pdd.prompt_source_set_report.v1';"
+            " falling back to lint-only repair",
+            report.get("schema"),
+        )
         return None
     return report
 
@@ -164,6 +201,21 @@ def _report_findings(report: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not isinstance(findings, list):
         return []
     return [finding for finding in findings if isinstance(finding, dict)]
+
+
+def _actionable_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return only findings addressable by editing the prompt file.
+
+    Excludes severity='info' findings and those whose ``source_check`` requires
+    external commands (gate, drift, snapshot) or whose ``code`` marks them as
+    never prompt-fixable (missing_evidence, drift_readiness, gate_error).
+    """
+    return [
+        f for f in findings
+        if f.get("severity") in ("error", "warn")
+        and f.get("source_check") in _PROMPT_FIXABLE_CHECKS
+        and f.get("code") not in _NON_FIXABLE_CODES
+    ]
 
 
 def _lint_findings(issues: Sequence[LintIssue]) -> List[Dict[str, Any]]:
@@ -193,8 +245,8 @@ def _repair_brief(
     return "\n".join(
         [
             "Repair this PDD prompt so the complete prompt source-set check passes.",
-            "Address every finding in the structured repair brief below, including "
-            "coverage, contract, gate, snapshot, drift, and lint findings.",
+            "Address every finding in the structured repair brief below "
+            "(lint, contract, and coverage findings that are fixable by editing the prompt).",
             "Make the smallest coherent prompt-only changes. Preserve the module "
             "interface, existing requirements, and unrelated content.",
             "Do not edit generated code, tests, stories, or other files. Do not add "
@@ -216,7 +268,11 @@ def _validate_changed_prompt(original: str, candidate: str) -> Optional[str]:
     stripped = candidate.strip()
     if not stripped or stripped == original.strip():
         return None
-    if MODIFIED_PROMPT_START in stripped or MODIFIED_PROMPT_END in stripped:
+    # Reject only when the output starts with the start delimiter, which indicates
+    # extract_between_delimiters failed to unwrap the LLM output.  Content that
+    # legitimately references these delimiter strings elsewhere in the prompt is
+    # accepted.
+    if stripped.startswith(MODIFIED_PROMPT_START):
         return None
     return stripped + ("\n" if original.endswith("\n") else "")
 
@@ -226,6 +282,7 @@ def _recheck_source_set(
     *,
     initial_report: Dict[str, Any],
     project_root: Path,
+    strict: bool = False,
 ) -> Dict[str, Any]:
     """Rebuild the same full source-set report after a repair round."""
     from .checkup_prompt_main import (  # pylint: disable=import-outside-toplevel
@@ -236,7 +293,7 @@ def _recheck_source_set(
         path,
         target=str(initial_report.get("target") or path),
         project_root=project_root,
-        strict=False,
+        strict=strict,
     )
     return report.as_dict()
 
@@ -282,6 +339,32 @@ def _lint_issues(path: Path) -> List[LintIssue]:
     return list(scan_prompt(path).issues)
 
 
+def _maybe_rollback_strict(
+    path: Path,
+    original_text: str,
+    current_text: str,
+    *,
+    config: PromptRepairConfig,
+    rounds_used: int,
+) -> str:
+    """Restore *original_text* atomically when a strict-mode repair fails mid-run.
+
+    Returns the effective on-disk text: ``original_text`` if a rollback was
+    performed, ``current_text`` otherwise.
+    """
+    if config.mode == "strict" and rounds_used > 0 and current_text != original_text:
+        try:
+            _atomic_write_text(path, original_text)
+            return original_text
+        except OSError as exc:
+            logger.warning(
+                "Failed to restore original prompt %s after failed strict-mode repair: %s",
+                path,
+                exc,
+            )
+    return current_text
+
+
 # pylint: disable=too-many-arguments,too-many-locals
 # pylint: disable=too-many-return-statements,too-many-branches,too-many-statements
 def run_prompt_repair_loop(
@@ -292,8 +375,18 @@ def run_prompt_repair_loop(
     cwd: Optional[Path] = None,
     verbose: bool = False,
     quiet: bool = False,
+    strict: bool = False,
 ) -> RepairResult:
-    """Run a bounded source-set check, ``change()``, and full re-check loop."""
+    """Run a bounded source-set check, ``change()``, and full re-check loop.
+
+    Parameters
+    ----------
+    strict:
+        When ``True``, pass ``strict=True`` to ``build_prompt_source_set_report``
+        inside ``_recheck_source_set`` so that lint/contract warnings are treated
+        as errors during re-checks, matching the strictness used by the caller's
+        initial check.
+    """
     work_cwd = cwd or path.parent
     project_root = work_cwd
     for parent in [work_cwd, *work_cwd.parents]:
@@ -325,11 +418,16 @@ def run_prompt_repair_loop(
     preamble_estimate = _estimate_preamble_tokens(original_text)
     issues_before = _lint_issues(path)
     initial_report = _source_set_report(context)
-    findings_before = (
+    all_findings_before = (
         _report_findings(initial_report)
         if initial_report is not None
         else _lint_findings(issues_before)
     )
+    # Only actionable (prompt-fixable) findings drive repair and measure success.
+    # Non-actionable findings (drift, snapshot, missing_evidence) cannot be
+    # resolved by prompt editing; including them wastes LLM calls and distorts
+    # the success signal.
+    findings_before = _actionable_findings(all_findings_before)
     if not findings_before:
         return RepairResult(
             success=True,
@@ -341,9 +439,9 @@ def run_prompt_repair_loop(
             token_delta=0,
             preamble_estimate=preamble_estimate,
             repair_skipped=True,
-            message="no source-set findings",
-            findings_before=[],
-            findings_after=[],
+            message="no actionable source-set findings",
+            findings_before=all_findings_before,
+            findings_after=all_findings_before,
         )
 
     current_text = original_text
@@ -356,6 +454,9 @@ def run_prompt_repair_loop(
     for _round in range(config.max_rounds):
         if time.monotonic() - started >= config.max_seconds:
             logger.warning("Prompt repair timed out after %.1fs for %s", config.max_seconds, path)
+            current_text = _maybe_rollback_strict(
+                path, original_text, current_text, config=config, rounds_used=rounds_used
+            )
             result = RepairResult(
                 success=False,
                 issues_before=issues_before,
@@ -378,12 +479,17 @@ def run_prompt_repair_loop(
             )
             return result
 
-        current_issues = _lint_issues(path)
-        current_findings = (
-            _report_findings(current_report)
-            if current_report is not None
-            else _lint_findings(current_issues)
-        )
+        # Recompute current findings from the latest report.
+        # Avoid a redundant lint scan when a structured source-set report is
+        # available — build_prompt_source_set_report (called by _recheck_source_set
+        # after each write) already includes lint findings.
+        if current_report is None:
+            current_issues = _lint_issues(path)
+            current_findings = _lint_findings(current_issues)
+        else:
+            current_issues = []
+            current_findings = _actionable_findings(_report_findings(current_report))
+
         if not current_findings:
             issues_after = current_issues
             findings_after = []
@@ -409,11 +515,17 @@ def run_prompt_repair_loop(
                 input_code=change_context,
                 change_prompt=brief,
                 temperature=0.0,
-                time=max(0.01, remaining / 3600.0),
+                # Normalise remaining wall-clock seconds to the 0–1 relative
+                # thinking budget that change()/llm_invoke() expects.
+                # Clamped to [0.01, 1.0] to avoid zero or over-budget reasoning.
+                time=min(1.0, max(0.01, remaining / config.max_seconds)),
                 verbose=verbose and not quiet,
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("Prompt repair change() call failed for %s: %s", path, exc)
+            current_text = _maybe_rollback_strict(
+                path, original_text, current_text, config=config, rounds_used=rounds_used
+            )
             result = RepairResult(
                 success=False,
                 issues_before=issues_before,
@@ -438,6 +550,9 @@ def run_prompt_repair_loop(
         validated = _validate_changed_prompt(current_text, candidate)
         if validated is None:
             logger.warning("Prompt repair change() returned an invalid prompt for %s", path)
+            current_text = _maybe_rollback_strict(
+                path, original_text, current_text, config=config, rounds_used=rounds_used
+            )
             result = RepairResult(
                 success=config.mode != "strict",
                 issues_before=issues_before,
@@ -472,6 +587,9 @@ def run_prompt_repair_loop(
                 projected_growth,
                 config.max_token_growth,
             )
+            current_text = _maybe_rollback_strict(
+                path, original_text, current_text, config=config, rounds_used=rounds_used
+            )
             result = RepairResult(
                 success=config.mode != "strict",
                 issues_before=issues_before,
@@ -493,30 +611,38 @@ def run_prompt_repair_loop(
             )
             return result
 
-        path.write_text(validated, encoding="utf-8")
+        _atomic_write_text(path, validated)
         current_text = validated
         rounds_used += 1
         applied_operations.append("CHANGE")
-        issues_after = _lint_issues(path)
         if initial_report is not None:
             current_report = _recheck_source_set(
                 path,
                 initial_report=initial_report,
                 project_root=project_root,
+                strict=strict,
             )
-            findings_after = _report_findings(current_report)
+            findings_after = _actionable_findings(_report_findings(current_report))
+            issues_after = []
         else:
+            issues_after = _lint_issues(path)
             findings_after = _lint_findings(issues_after)
         if not findings_after:
             break
 
-    # Rollback to original if no round improved the file, to avoid leaving a
-    # half-repaired prompt on disk when the LLM failed every attempt.
-    if rounds_used == 0 and path.read_text(encoding="utf-8") != original_text:
-        path.write_text(original_text, encoding="utf-8")
+    # Rollback when no repair ran (rounds_used==0) or when strict mode failed
+    # after partial writes — restore the original so callers get full-success-or-
+    # nothing semantics rather than a half-repaired intermediate state.
+    needs_rollback = rounds_used == 0 or (config.mode == "strict" and bool(findings_after))
+    if needs_rollback and current_text != original_text:
+        try:
+            _atomic_write_text(path, original_text)
+            current_text = original_text
+        except OSError as exc:
+            logger.warning("Failed to restore original prompt %s: %s", path, exc)
 
     try:
-        tokens_after = count_tokens(path.read_text(encoding="utf-8"))
+        tokens_after = count_tokens(current_text)
     except Exception:  # pylint: disable=broad-exception-caught
         tokens_after = -1
 

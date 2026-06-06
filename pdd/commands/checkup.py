@@ -721,6 +721,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                     project_root=_root,
                     strict=strict,
                 )
+                # Mirror agentic_checkup.py: skip prompts that already pass so
+                # we never invoke the LLM for info-only or non-actionable findings.
+                if _report.status == "pass":
+                    continue
                 _repair_context = {
                     "source_set_report": _json.dumps(_report.as_dict(), indent=2),
                     "recommended_actions": "\n".join(_report.recommended_actions()),
@@ -728,6 +732,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 _rr = run_prompt_repair_loop(
                     _pp, _repair_cfg, context=_repair_context, cwd=_root,
                     verbose=ctx.obj.get("verbose", False), quiet=quiet,
+                    strict=strict,
                 )
                 if not quiet:
                     _summary = format_token_delta_summary(_rr)
