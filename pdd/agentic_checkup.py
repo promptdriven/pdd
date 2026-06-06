@@ -778,6 +778,7 @@ def run_agentic_checkup(
                 if pr_content is not None
                 else _fetch_pr_context(pr_owner, pr_repo, pr_number)
             ),
+            has_issue=has_issue,
         )
         loop_config = ReviewLoopConfig(
             reviewers=parse_reviewers(reviewers),

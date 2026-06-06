@@ -619,6 +619,7 @@ class TestFinalGateLibrary:
 
     def test_final_gate_allows_no_issue(self, tmp_path: Path) -> None:
         def loop(*_a, **_kw):
+            assert _kw["context"].has_issue is False
             _write_final_state(
                 tmp_path, issue_number=1, pr_number=1, payload=_clean_final_state()
             )

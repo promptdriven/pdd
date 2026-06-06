@@ -325,6 +325,25 @@ class TestPrMetadataFetch:
             ".pdd/checkup-context/pr-changed-files-api.txt"
         )
 
+    def test_no_issue_report_posts_only_to_pr(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        context = _ctx(tmp_path)
+        context.issue_url = ""
+        context.issue_number = context.pr_number
+        context.has_issue = False
+        calls: List[List[str]] = []
+
+        monkeypatch.setattr(
+            mod,
+            "_run_gh_command",
+            lambda args: calls.append(args) or (True, ""),
+        )
+
+        mod._post_review_loop_report(context, "report", use_github_state=True)
+
+        assert calls == [["pr", "comment", context.pr_url, "--body", "report"]]
+
 
 class TestCheckupReviewLoopRuntime:
     def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:

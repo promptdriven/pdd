@@ -705,6 +705,7 @@ class ReviewLoopContext:
     pr_number: int
     project_root: Path
     pr_content: str = ""
+    has_issue: bool = True
 
 
 @dataclass
@@ -6919,16 +6920,17 @@ def _post_review_loop_report(
 ) -> None:
     if not use_github_state:
         return
-    _run_gh_command(
-        [
-            "api",
-            f"repos/{context.repo_owner}/{context.repo_name}/issues/{context.issue_number}/comments",
-            "-X",
-            "POST",
-            "-f",
-            f"body={report}",
-        ]
-    )
+    if context.has_issue:
+        _run_gh_command(
+            [
+                "api",
+                f"repos/{context.repo_owner}/{context.repo_name}/issues/{context.issue_number}/comments",
+                "-X",
+                "POST",
+                "-f",
+                f"body={report}",
+            ]
+        )
     _run_gh_command(
         [
             "pr",
