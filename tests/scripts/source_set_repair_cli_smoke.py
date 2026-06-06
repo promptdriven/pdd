@@ -9,6 +9,7 @@ deterministic and does not require LLM credentials.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -16,12 +17,15 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT_STR = str(REPO_ROOT)
+# Always prefer this checkout over any installed ``pdd`` on sys.path.
+while _REPO_ROOT_STR in sys.path:
+    sys.path.remove(_REPO_ROOT_STR)
+sys.path.insert(0, _REPO_ROOT_STR)
+
 from click.testing import CliRunner
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-# Ensure the PR checkout is imported, not whatever pdd is on sys.path already.
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "prompt_lint" / "clean.prompt"
 
 
@@ -36,9 +40,12 @@ def _run_cli_checkup(prompt: Path, *, repair: bool) -> dict:
     ]
     if repair:
         cmd.extend(["--prompt-repair", "best-effort"])
+    env = os.environ.copy()
+    env["PYTHONPATH"] = _REPO_ROOT_STR
     proc = subprocess.run(
         cmd,
         cwd=REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
         check=False,

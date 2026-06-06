@@ -437,3 +437,28 @@ def test_checkup_issue_url_still_uses_agentic_path() -> None:
         )
     assert result.exit_code == 0
     run_checkup.assert_called_once()
+
+
+def test_source_set_repair_cli_smoke_script_runs_without_pythonpath() -> None:
+    """Regression: smoke script must not require callers to set PYTHONPATH."""
+    import os
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[1]
+    script = repo_root / "tests" / "scripts" / "source_set_repair_cli_smoke.py"
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    proc = subprocess.run(
+        [sys.executable, str(script)],
+        cwd=repo_root,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "PASS" in proc.stdout
+    assert "AttributeError" not in proc.stderr
