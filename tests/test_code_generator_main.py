@@ -3160,7 +3160,12 @@ class TestVerifyArchitectureConformance:
             )
 
     def test_fails_on_camelcase_in_python(self, tmp_path):
-        """Conformance check detects camelCase in Python code."""
+        """Conformance check detects UNDECLARED camelCase in Python code.
+
+        Declared interface symbols are exempt (issue #1446), so ``processData``
+        here is deliberately NOT declared: it is an accidental extra export the
+        model emitted, and the snake_case guard must still reject it.
+        """
         arch = [
             {
                 "filename": "utils_Python.prompt",
@@ -3169,7 +3174,7 @@ class TestVerifyArchitectureConformance:
                     "type": "module",
                     "module": {
                         "functions": [
-                            {"name": "processData", "signature": "def processData(data)"},
+                            {"name": "process_data", "signature": "def process_data(data)"},
                         ]
                     },
                 },
@@ -3177,7 +3182,12 @@ class TestVerifyArchitectureConformance:
         ]
         (tmp_path / "architecture.json").write_text(json.dumps(arch))
 
-        generated_code = "def processData(data):\n    return data\n"
+        # process_data is declared and present; processData is an undeclared
+        # accidental camelCase export that must still trip the guard.
+        generated_code = (
+            "def process_data(data):\n    return data\n\n"
+            "def processData(data):\n    return data\n"
+        )
 
         with pytest.raises(click.UsageError, match="camelCase"):
             _verify_architecture_conformance(
@@ -3187,6 +3197,84 @@ class TestVerifyArchitectureConformance:
                 language="python",
                 verbose=False,
             )
+
+    def test_declared_camelcase_python_export_passes(self, tmp_path):
+        """Declared camelCase Python exports (e.g. Firebase Cloud Functions) are
+        intentional public-API names and must NOT trip the snake_case guard.
+
+        Regression for issue #1446: ``generateCode`` and friends are declared in
+        the module's ``architecture.json`` interface, so the camelCase guard must
+        treat them as deliberate public API, not accidental drift.
+        """
+        arch = [
+            {
+                "filename": "main_Python.prompt",
+                "filepath": "src/main.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "generateCode", "signature": "def generateCode(req)"},
+                            {"name": "verifyCode", "signature": "def verifyCode(req)"},
+                            {"name": "process_data", "signature": "def process_data(data)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = (
+            "def generateCode(req):\n    return req\n\n"
+            "def verifyCode(req):\n    return req\n\n"
+            "def process_data(data):\n    return data\n"
+        )
+
+        # Must NOT raise: every camelCase export is a declared interface symbol.
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="main_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
+
+    def test_ordinary_snake_case_python_passes(self, tmp_path):
+        """Ordinary snake_case Python modules pass the conformance check (issue #1446).
+
+        The declared-symbol exemption must not change the happy path for normal
+        snake_case modules — they have no camelCase exports to flag.
+        """
+        arch = [
+            {
+                "filename": "utils_Python.prompt",
+                "filepath": "src/utils.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "process_data", "signature": "def process_data(data)"},
+                            {"name": "fetch_user", "signature": "def fetch_user(uid)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        generated_code = (
+            "def process_data(data):\n    return data\n\n"
+            "def fetch_user(uid):\n    return uid\n"
+        )
+
+        # Must NOT raise: pure snake_case module.
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="utils_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+        )
 
     def test_skips_when_no_architecture_file(self, tmp_path):
         """Conformance check silently skips when architecture.json doesn't exist."""
@@ -4647,17 +4735,19 @@ class TestVerifyArchitectureConformanceDeepRecursion:
             )
 
     def test_dotted_method_camelcase_fails(self, tmp_path):
-        """camelCase in the method segment of a dotted symbol must still fail the snake_case guard.
+        """Undeclared camelCase in the method segment of a dotted symbol must still fail.
 
         Before the segment-aware check, ``MyClass.processData`` slipped past
         because the regex only matched on the start of the full string and
-        ``MyClass`` starts with an uppercase letter.
+        ``MyClass`` starts with an uppercase letter. The method is intentionally
+        left undeclared (only ``MyClass`` is declared) so the camelCase guard —
+        which now exempts declared symbols (issue #1446) — still inspects it.
         """
         arch_path = self._write_arch(
             tmp_path,
             "myclass_python.prompt",
             "src/myclass.py",
-            ["MyClass", "MyClass.processData"],
+            ["MyClass"],
         )
         code = (
             "class MyClass:\n"
@@ -5146,7 +5236,12 @@ class TestArchitectureConformanceErrorTypedException:
         assert "Do not modify architecture.json. Do not remove existing valid exports." in directive
 
     def test_camelcase_violation_raises_typed_exception(self, tmp_path):
-        """camelCase guard must raise ArchitectureConformanceError too (spec)."""
+        """Undeclared camelCase guard must raise ArchitectureConformanceError too (spec).
+
+        ``processData`` is left undeclared (only the snake_case ``process_data``
+        is declared) so the guard — which exempts declared symbols per issue
+        #1446 — still flags the accidental camelCase export.
+        """
         from pdd.code_generator_main import ArchitectureConformanceError
         arch = [
             {
@@ -5156,7 +5251,7 @@ class TestArchitectureConformanceErrorTypedException:
                     "type": "module",
                     "module": {
                         "functions": [
-                            {"name": "processData", "signature": "def processData(...)"},
+                            {"name": "process_data", "signature": "def process_data(...)"},
                         ]
                     },
                 },
@@ -5166,7 +5261,10 @@ class TestArchitectureConformanceErrorTypedException:
 
         with pytest.raises(ArchitectureConformanceError) as excinfo:
             _verify_architecture_conformance(
-                generated_code="def processData(data):\n    return data\n",
+                generated_code=(
+                    "def process_data(data):\n    return data\n\n"
+                    "def processData(data):\n    return data\n"
+                ),
                 prompt_name="utils_Python.prompt",
                 arch_path=str(tmp_path / "architecture.json"),
                 language="python",

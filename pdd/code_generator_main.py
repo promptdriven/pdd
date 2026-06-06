@@ -3008,8 +3008,15 @@ def _verify_architecture_json_conformance(
     # guard inspects the method segment, not only the class-name prefix.
     if detected_lang in ("python", "py") or prompt_name.endswith("_Python.prompt"):
         camel_pattern = re.compile(r"^[a-z]+[A-Z]")
+        # Declared interface symbols are intentional public-API names (e.g.
+        # Firebase Cloud Function exports like ``generateCode``); exempt them so
+        # the guard flags only accidental/undeclared camelCase, not deliberate
+        # declared exports (issue #1446).
+        declared_set = set(declared_symbols)
         camel_exports: List[str] = []
         for s in actual_symbols:
+            if s in declared_set:
+                continue
             for part in s.split("."):
                 if not part.startswith("_") and camel_pattern.match(part):
                     camel_exports.append(s)
