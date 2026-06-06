@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import subprocess
 import time
@@ -236,7 +237,9 @@ def _apply_patch(text: str, proposal: Dict[str, Any]) -> str:
     if patch_type == "CLARIFY_VAGUE_TERM":
         term = str(proposal["term"])
         replacement = str(proposal["replacement"])
-        return re.sub(re.escape(term), replacement, text, count=1)
+        # Use a lambda so the replacement is treated as a literal string,
+        # not a regex replacement pattern (avoids re.error on \1, \g<name>, etc.)
+        return re.sub(re.escape(term), lambda _: replacement, text, count=1)
     if patch_type == "ADD_CONTRACT_SKELETON":
         if re.search(r"<contract_rules\s*>", text, re.IGNORECASE):
             return text
@@ -256,6 +259,7 @@ def _invoke_repair_llm(
     cwd: Path,
     verbose: bool,
     quiet: bool,
+    max_seconds: float = 120.0,
 ) -> Tuple[bool, str, float, str]:
     template = load_prompt_template("prompt_repair_LLM")
     if not template:
@@ -273,7 +277,7 @@ def _invoke_repair_llm(
         verbose=verbose,
         quiet=quiet,
         label="prompt_repair_LLM",
-        timeout=120.0,
+        timeout=max_seconds,
     )
 
 
@@ -402,6 +406,7 @@ def run_prompt_repair_loop(
             issues_after = []
             break
 
+        remaining = max(1.0, config.max_seconds - (time.monotonic() - started))
         llm_ok, llm_output, _, _ = _invoke_repair_llm(
             prompt_content=current_text,
             lint_issues=current_issues,
@@ -409,6 +414,7 @@ def run_prompt_repair_loop(
             cwd=work_cwd,
             verbose=verbose,
             quiet=quiet,
+            max_seconds=remaining,
         )
         if not llm_ok:
             logger.warning("Prompt repair LLM call failed for %s", path)
@@ -455,10 +461,10 @@ def run_prompt_repair_loop(
             return result
 
         accepted: List[Dict[str, Any]] = []
+        # Skip the budget guard entirely when token counting is unavailable.
+        budget = math.inf if tokens_before < 0 else config.max_token_growth
         for proposal in valid:
             candidate = _apply_patch(current_text, proposal)
-            growth = _projected_token_growth(current_text, candidate)
-            budget = config.max_token_growth if tokens_before < 0 else config.max_token_growth
             current_growth = _projected_token_growth(original_text, candidate)
             if current_growth > budget:
                 logger.debug("Dropping patch %s: projected growth %s > %s", proposal.get("type"), current_growth, budget)
@@ -521,12 +527,15 @@ def run_prompt_repair_loop(
             path,
         )
 
+    # rounds_used==0 with issues still present means no repair ran (e.g. max_rounds=0).
+    no_repair_ran = rounds_used == 0 and bool(issues_after)
+
     if config.mode == "strict":
         success = len(issues_after) == 0
     else:
-        success = True
+        success = not no_repair_ran or not issues_after
 
-    message = "repaired" if success and not issues_after else "issues remain"
+    message = "repaired" if success and not issues_after else ("repair skipped" if no_repair_ran else "issues remain")
     result = RepairResult(
         success=success,
         issues_before=issues_before,
@@ -536,6 +545,7 @@ def run_prompt_repair_loop(
         tokens_after=tokens_after,
         token_delta=token_delta,
         preamble_estimate=preamble_estimate,
+        repair_skipped=no_repair_ran,
         message=message,
     )
     result.audit_path = _write_audit_note(

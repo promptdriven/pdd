@@ -567,8 +567,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "snapshot":
-        snapshot_args = list(ctx.args)
-        if not snapshot_args or show_help:
+        snapshot_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
+        if not ctx.args or show_help:
             click.echo(
                 checkup_snapshot.get_help(
                     click.Context(checkup_snapshot, info_name="pdd checkup snapshot")
@@ -586,14 +586,14 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "lint":
-        lint_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
-        if strict:
-            lint_args.insert(0, "--strict")
-        if not lint_args or show_help:
+        if not ctx.args or show_help:
             click.echo(
                 prompt_lint.get_help(click.Context(prompt_lint, info_name="pdd checkup lint"))
             )
             return None
+        lint_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
+        if strict:
+            lint_args.insert(0, "--strict")
         exit_code = prompt_lint.main(
             args=lint_args,
             prog_name="pdd checkup lint",
@@ -638,12 +638,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "drift":
-        drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
-        if not drift_args or show_help:
+        if not ctx.args or show_help:
             click.echo(
                 drift_cmd.get_help(click.Context(drift_cmd, info_name="pdd checkup drift"))
             )
             return None
+        drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
         exit_code = drift_cmd.main(
             args=drift_args,
             prog_name="pdd checkup drift",
@@ -726,7 +726,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                     "recommended_actions": "\n".join(_report.recommended_actions()),
                 }
                 _rr = run_prompt_repair_loop(
-                    _pp, _repair_cfg, context=_repair_context, cwd=_root, quiet=quiet,
+                    _pp, _repair_cfg, context=_repair_context, cwd=_root,
+                    verbose=ctx.obj.get("verbose", False), quiet=quiet,
                 )
                 if not quiet:
                     _summary = format_token_delta_summary(_rr)
