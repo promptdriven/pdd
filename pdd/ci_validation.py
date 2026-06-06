@@ -183,6 +183,54 @@ def _normalize_checks(raw_checks: Any) -> List[Dict[str, str]]:
     return checks
 
 
+def _check_run_bucket(status: str, conclusion: str) -> str:
+    """Map REST check-run status/conclusion fields to gh-style buckets."""
+    normalized_status = status.strip().lower()
+    normalized_conclusion = conclusion.strip().lower()
+
+    if normalized_status != "completed":
+        return "pending"
+    if normalized_conclusion == "success":
+        return "pass"
+    if normalized_conclusion in {"skipped", "neutral"}:
+        return "skipped"
+    if normalized_conclusion in {
+        "failure",
+        "cancelled",
+        "timed_out",
+        "action_required",
+        "startup_failure",
+    }:
+        return "fail"
+    return ""
+
+
+def _normalize_check_runs(raw_payload: Any) -> List[Dict[str, str]]:
+    """Normalize REST check-runs payloads into the shared check structure."""
+    if not isinstance(raw_payload, dict):
+        return []
+    raw_runs = raw_payload.get("check_runs")
+    if not isinstance(raw_runs, list):
+        return []
+
+    checks: List[Dict[str, str]] = []
+    for item in raw_runs:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "")).strip()
+        conclusion = str(item.get("conclusion", "") or "").strip()
+        link = str(item.get("html_url") or item.get("details_url") or "").strip()
+        checks.append(
+            {
+                "name": str(item.get("name", "")).strip(),
+                "state": (conclusion or status).upper(),
+                "bucket": _check_run_bucket(status, conclusion),
+                "link": link,
+            }
+        )
+    return checks
+
+
 def _render_check_summary(checks: List[Dict[str, str]]) -> str:
     """Render required checks into a compact markdown list."""
     if not checks:
@@ -321,6 +369,69 @@ def _poll_required_checks(
     return "timeout", latest_checks
 
 
+def _poll_check_runs_for_head(
+    repo_owner: str,
+    repo_name: str,
+    cwd: Path,
+    *,
+    head_sha: str,
+    quiet: bool,
+) -> Tuple[str, List[Dict[str, str]]]:
+    """Poll REST check runs for the exact PR head SHA.
+
+    Final gate uses this instead of ``gh pr checks`` because the latter reads
+    GitHub's GraphQL ``statusCheckRollup`` field. Installation tokens can have
+    ``checks:read`` while lacking commit-status permissions, and the GraphQL
+    rollup fails even when real check runs are readable through the REST Checks
+    API.
+    """
+    saw_checks = False
+    latest_checks: List[Dict[str, str]] = []
+    start = time.monotonic()
+
+    while time.monotonic() - start < MAX_POLL_SECONDS:
+        result = _run_gh(
+            repo_owner,
+            repo_name,
+            cwd,
+            ["api", f"repos/{repo_owner}/{repo_name}/commits/{head_sha}/check-runs?per_page=100"],
+        )
+
+        latest_checks = []
+        if result.stdout.strip():
+            try:
+                latest_checks = _normalize_check_runs(json.loads(result.stdout or "{}"))
+            except json.JSONDecodeError:
+                if not quiet:
+                    console.print("[yellow]CI polling warning: failed to parse check-runs JSON output.[/yellow]")
+
+        saw_checks = saw_checks or bool(latest_checks)
+        if latest_checks:
+            status = _classify_check_result(result.returncode, latest_checks)
+            if status in {"passed", "failed"}:
+                return status, latest_checks
+
+        if result.returncode != 0:
+            stderr_lower = (result.stderr or "").lower()
+            if "resource not accessible by integration" in stderr_lower:
+                if not quiet:
+                    console.print(
+                        "[yellow]CI polling: cannot read GitHub check runs "
+                        "(GitHub App may lack checks:read permission on this repo).[/yellow]"
+                    )
+                return "no_checks", []
+            if not quiet:
+                stderr = result.stderr.strip()
+                if stderr:
+                    console.print(f"[yellow]CI polling warning: {stderr}[/yellow]")
+
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+    if not saw_checks:
+        return "no_checks", []
+    return "timeout", latest_checks
+
+
 def run_github_checks_gate(
     cwd: Path,
     repo_owner: str,
@@ -352,15 +463,24 @@ def run_github_checks_gate(
             f"head {head_sha[:8]}...[/bold]"
         )
 
-    status, checks = _poll_required_checks(
-        repo_owner,
-        repo_name,
-        pr_number,
-        cwd,
-        expected_head_sha=head_sha,
-        quiet=quiet,
-        required_only=required_only,
-    )
+    if required_only:
+        status, checks = _poll_required_checks(
+            repo_owner,
+            repo_name,
+            pr_number,
+            cwd,
+            expected_head_sha=head_sha,
+            quiet=quiet,
+            required_only=True,
+        )
+    else:
+        status, checks = _poll_check_runs_for_head(
+            repo_owner,
+            repo_name,
+            cwd,
+            head_sha=head_sha,
+            quiet=quiet,
+        )
     summary = _render_check_summary(checks)
     skipped = [
         check
