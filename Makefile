@@ -122,7 +122,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-video check-release-remote check-release-branch check-release-clean
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-video check-release-remote check-release-branch check-release-clean check-release-video-config
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -735,6 +735,12 @@ check-release-clean:
 		exit 1; \
 	fi
 
+check-release-video-config:
+	@python scripts/release_video.py \
+		--preflight \
+		--pds-cli "$(PDS_CLI)" \
+		--project-id "$(RELEASE_VIDEO_PROJECT_ID)"
+
 release-video:
 	@if [ "$(RELEASE_VIDEO)" = "0" ]; then \
 		echo "Skipping release video because RELEASE_VIDEO=0"; \
@@ -754,7 +760,7 @@ release-video:
 		--privacy "$(RELEASE_VIDEO_PRIVACY)" \
 		$$DRY_RUN_FLAG
 
-release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean
+release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-video-config
 	@echo "Preparing release"
 	@set -e; \
 	echo "Fetching tags from origin"; \

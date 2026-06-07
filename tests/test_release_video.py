@@ -173,6 +173,89 @@ def test_release_video_can_select_existing_pds_project(tmp_path: Path):
     assert "--project-name" not in pds_call
 
 
+def test_release_video_preflight_warns_for_project_scoped_profile(tmp_path: Path):
+    config_home = tmp_path / "config"
+    pds_config_dir = config_home / "pds"
+    pds_config_dir.mkdir(parents=True)
+    (pds_config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "currentProfile": "v18finish",
+                "profiles": {
+                    "v18finish": {
+                        "apiUrl": "https://video.promptdriven.ai",
+                        "projectId": "pdd-release-v0-0-260",
+                        "token": "local-secret-token",
+                    }
+                },
+            }
+        ),
+        encoding="utf8",
+    )
+    env = {**os.environ, "XDG_CONFIG_HOME": str(config_home)}
+    env.pop("PDS_TOKEN", None)
+    env.pop("PDS_PROFILE", None)
+    env.pop("RELEASE_VIDEO_PROJECT_ID", None)
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--preflight"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "release-video preflight warning" in result.stderr
+    assert "v18finish" in result.stderr
+    assert "pdd-release-v0-0-260" in result.stderr
+    assert "PDS agent token is not allowed for this project" in result.stderr
+    assert "local-secret-token" not in result.stdout + result.stderr
+
+
+def test_release_video_preflight_allows_env_token_without_printing_it(tmp_path: Path):
+    config_home = tmp_path / "config"
+    pds_config_dir = config_home / "pds"
+    pds_config_dir.mkdir(parents=True)
+    (pds_config_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "currentProfile": "v18finish",
+                "profiles": {
+                    "v18finish": {
+                        "projectId": "pdd-release-v0-0-260",
+                        "token": "local-secret-token",
+                    }
+                },
+            }
+        ),
+        encoding="utf8",
+    )
+    env = {
+        **os.environ,
+        "XDG_CONFIG_HOME": str(config_home),
+        "PDS_TOKEN": "env-secret-token",
+    }
+    env.pop("PDS_PROFILE", None)
+    env.pop("RELEASE_VIDEO_PROJECT_ID", None)
+
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT), "--preflight"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "PDS_TOKEN is set" in result.stdout
+    assert "release-video preflight warning" not in result.stderr
+    assert "env-secret-token" not in result.stdout + result.stderr
+    assert "local-secret-token" not in result.stdout + result.stderr
+
+
 def test_release_video_publish_requires_youtube_url(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"

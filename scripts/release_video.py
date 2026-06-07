@@ -25,6 +25,9 @@ class ReleaseVideoError(RuntimeError):
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.preflight:
+        return preflight_release_video(args)
+
     repo = Path(args.repo).resolve()
 
     try:
@@ -127,7 +130,79 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--privacy", default=os.environ.get("RELEASE_VIDEO_PRIVACY", "unlisted"))
     parser.add_argument("--idempotency-key", help="PDS idempotency key.")
     parser.add_argument("--dry-run", action="store_true", help="Plan without creating video or uploading.")
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Check local release-video configuration without creating artifacts.",
+    )
     return parser.parse_args(argv)
+
+
+def preflight_release_video(args: argparse.Namespace) -> int:
+    """Warn about local PDS profile shapes that are likely to fail a release."""
+    if os.environ.get("RELEASE_VIDEO", "").strip() == "0":
+        print("release-video preflight: skipped because RELEASE_VIDEO=0.")
+        return 0
+
+    project_id = str(args.project_id or "").strip()
+    if project_id:
+        print(f"release-video preflight: using explicit PDS project {project_id}.")
+        return 0
+
+    if os.environ.get("PDS_TOKEN", "").strip():
+        print("release-video preflight: PDS_TOKEN is set; token scopes cannot be verified locally.")
+        return 0
+
+    config_path = pds_config_path()
+    config = read_pds_config(config_path)
+    if not config:
+        print(
+            "release-video preflight: no local PDS profile found; set PDS_TOKEN "
+            "for CI-like release credentials."
+        )
+        return 0
+
+    profile_name = str(
+        os.environ.get("PDS_PROFILE", "").strip()
+        or config.get("currentProfile", "")
+        or "default"
+    )
+    profiles = config.get("profiles")
+    profile = profiles.get(profile_name, {}) if isinstance(profiles, dict) else {}
+    if not isinstance(profile, dict):
+        profile = {}
+    profile_project_id = str(profile.get("projectId") or "").strip()
+
+    if profile_project_id:
+        print(
+            "release-video preflight warning: active local PDS profile "
+            f"{profile_name!r} is pinned to project {profile_project_id!r}. "
+            "Normal releases create a new per-release project. The profile token "
+            "may fail with \"PDS agent token is not allowed for this project\". "
+            "Use a release-scoped PDS_TOKEN or PDS_PROFILE, set "
+            "RELEASE_VIDEO_PROJECT_ID for an authorized fixed project, or use "
+            "RELEASE_VIDEO=0 for recovery.",
+            file=sys.stderr,
+        )
+        return 0
+
+    print(f"release-video preflight: active local PDS profile {profile_name!r} has no fixed project id.")
+    return 0
+
+
+def pds_config_path() -> Path:
+    config_home = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    if config_home:
+        return Path(config_home) / "pds" / "config.json"
+    return Path.home() / ".config" / "pds" / "config.json"
+
+
+def read_pds_config(path: Path) -> dict[str, Any]:
+    try:
+        parsed = json.loads(path.read_text(encoding="utf8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def run(
