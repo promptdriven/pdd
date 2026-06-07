@@ -1,0 +1,85 @@
+<include>context/python_preamble.prompt</include>
+<pdd-reason>Non-interactive prompt source-set repair orchestrator using the internal change() contract.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_prompt_repair_loop", "signature": "(path: Path, config: PromptRepairConfig, *, context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None) -> RepairResult", "returns": "RepairResult"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>change_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_prompt_main_python.prompt</pdd-dependency>
+<pdd-dependency>prompt_lint_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/prompt_repair.py`.
+
+% Role & Scope
+Implement a bounded, non-interactive check -> repair -> re-check orchestrator for prompt files.
+The caller supplies the complete `pdd.prompt_source_set_report.v1` and optional issue, PRD,
+story, or test context. The orchestrator converts those findings into focused change
+instructions, applies them through `pdd.change.change()`, and rebuilds the full source-set
+report after every round. It edits only the target prompt file.
+
+% Requirements
+1. Provide `PromptRepairConfig` with `mode`, `max_rounds`, `max_token_growth`, and
+   `max_seconds`, plus `RepairResult` with lint issue compatibility fields, source-set
+   `findings_before`/`findings_after`, token metrics, round count, skip state, message,
+   and audit path.
+2. Accept the structured report from `context["source_set_report"]` as either a JSON
+   string or dictionary. Validate that its schema is `pdd.prompt_source_set_report.v1`.
+3. Treat prompt-fixable source-set findings as first-class repair triggers even when
+   `scan_prompt()` returns zero lint issues. Prompt-fixable checks are lint, contract,
+   and coverage (for example unchecked requirements or missing contract rules).
+   External-only findings (gate `missing_evidence`, drift readiness notes, snapshot
+   policy failures that require evidence capture) must not block or drive repair when
+   no prompt-fixable findings remain.
+4. When no structured report is supplied, retain compatibility by representing current
+   lint issues as source-set findings. Skip only when the active prompt-fixable finding
+   set is empty.
+5. Build a bounded repair brief containing all current findings and caller-provided
+   supporting context. Require minimal prompt-only edits that preserve the public
+   interface and unrelated requirements.
+6. Apply each round exclusively through `pdd.change.change()`:
+   - pass the complete current prompt as `input_prompt`;
+   - pass the structured report and supporting context as `input_code`;
+   - pass the synthesized repair brief as `change_prompt`;
+   - rely on `change()` to enforce and extract the
+     `<<<MODIFIED_PROMPT>>>` / `<<<END_MODIFIED_PROMPT>>>` delimiter contract.
+   Do not implement a separate JSON patch format or schema-specific patch writer.
+7. Validate the returned complete prompt before writing: reject empty or unchanged
+   output and any leaked change delimiters. Reject a candidate whose token growth from
+   the original prompt exceeds `max_token_growth`.
+8. After writing an accepted result, rebuild the complete source-set report with
+   `build_prompt_source_set_report()`. Use its findings, not lint alone, to stop early
+   or drive the next repair round.
+9. Honor the wall-clock and round bounds. `strict` succeeds only when no source-set
+   findings remain. `best-effort` always succeeds unless a hard error occurs (LLM
+   failure, unreadable file): remaining findings after completed rounds are non-fatal,
+   and a zero-round configuration (`max_rounds=0`) is treated as a skip
+   (`repair_skipped=True, success=True`) rather than a hard failure.
+10. Write an audit note under `.pdd/evidence/prompt_repair/` recording token metrics,
+    source-set finding counts, lint issue counts, rounds, and `pdd.change.change` as the
+    apply method. Audit failures must not raise.
+11. In `off` mode, do not modify the prompt. Change failures, invalid output, and
+    timeouts must be returned as structured failures rather than raised.
+
+% Dependencies
+<pdd.change>
+    <include select="def:change,const:MODIFIED_PROMPT_START,const:MODIFIED_PROMPT_END" mode="interface">pdd/change.py</include>
+</pdd.change>
+<pdd.checkup_prompt_main>
+    <include select="def:build_prompt_source_set_report,class:PromptSourceSetReport" mode="interface">pdd/checkup_prompt_main.py</include>
+</pdd.checkup_prompt_main>
+<pdd.prompt_lint>
+    <include select="def:scan_prompt,class:LintIssue" mode="interface">pdd/prompt_lint.py</include>
+</pdd.prompt_lint>
+<pdd.token_counter>
+    <include mode="interface">pdd/server/token_counter.py</include>
+</pdd.token_counter>
+
+% Deliverables
+- Code: `pdd/prompt_repair.py`

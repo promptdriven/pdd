@@ -1449,7 +1449,7 @@ class TestCheckupReviewLoopRuntime:
         assert final_state["active_reviewer"] == "codex"
         assert "findings" in final_state
 
-    def test_none_full_suite_source_is_visible_in_final_report(
+    def test_github_checks_full_suite_source_is_visible_in_final_report(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
         from pdd.checkup_review_loop import run_checkup_review_loop
@@ -1462,7 +1462,7 @@ class TestCheckupReviewLoopRuntime:
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
         context = _ctx(tmp_path)
-        context.full_suite_source = "none"
+        context.full_suite_source = "github-checks"
         context.test_scope = "targeted"
 
         success, report, _cost, _model = run_checkup_review_loop(
@@ -1474,10 +1474,10 @@ class TestCheckupReviewLoopRuntime:
         )
 
         assert success is True
-        assert "full GitHub CI was not used as a gate" in report
-        assert '"full_suite_source": "none"' in report
+        assert "Verification scope: targeted with GitHub checks gate." in report
+        assert '"full_suite_source": "github-checks"' in report
         assert '"test_scope": "targeted"' in report
-        assert '"github_ci_gate_used": false' in report
+        assert '"github_ci_gate_used": true' in report
 
     def test_reviewer_diagnostics_are_surfaced_in_report(
         self, monkeypatch: Any, tmp_path: Path

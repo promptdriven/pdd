@@ -99,17 +99,9 @@ def _restore_captured_streams(ctx: click.Context) -> None:
             sys.stderr = stderr_capture.original_stream
 
 
-def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
-    """Return whether this invocation needs prompt-lint machine output."""
-    pairs = set(zip(arguments, arguments[1:]))
-    return "--json" in arguments and (
-        ("checkup", "lint") in pairs
-        or ("checkup", "contract") in pairs
-        or ("checkup", "contracts") in pairs
-        or ("checkup", "coverage") in pairs
-        or ("checkup", "gate") in pairs
-        or ("contracts", "check") in pairs
-    )
+# JSON-invocation detection is shared with the early pre-parse in pdd/cli.py via a
+# stdlib-only leaf module so the two call sites cannot drift apart.
+from ..json_invocation import is_machine_json_invocation as _is_machine_json_invocation
 
 
 class PDDCLI(click.Group):
@@ -404,7 +396,7 @@ def cli(
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
     # Prompt-lint JSON output is intended for downstream machine consumers.
-    json_mode = _is_prompt_lint_json_invocation(sys.argv)
+    json_mode = _is_machine_json_invocation(sys.argv)
     quiet = quiet or json_mode
     core_dump = core_dump and not json_mode
 

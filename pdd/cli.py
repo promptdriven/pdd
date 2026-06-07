@@ -13,18 +13,9 @@ from __future__ import annotations
 import os as _os
 import sys
 
-
-def _is_structured_json_invocation(arguments: list[str]) -> bool:
-    """Return whether this process is running a JSON-reporting checkup command."""
-    pairs = set(zip(arguments, arguments[1:]))
-    return "--json" in arguments and (
-        ("checkup", "lint") in pairs
-        or ("checkup", "contract") in pairs
-        or ("checkup", "contracts") in pairs
-        or ("checkup", "coverage") in pairs
-        or ("checkup", "gate") in pairs
-        or ("contracts", "check") in pairs
-    )
+# Leaf module (stdlib-only) so this pre-parse stays cheap and shares one
+# definition with pdd/core/cli.py instead of drifting out of sync.
+from .json_invocation import is_machine_json_invocation as _is_structured_json_invocation
 
 
 if '--quiet' in sys.argv or _is_structured_json_invocation(sys.argv):

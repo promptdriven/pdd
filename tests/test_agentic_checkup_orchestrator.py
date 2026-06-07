@@ -3360,7 +3360,9 @@ class TestTargetedPrStep7Exit:
             '"issue_aligned": true, '
             '"issues": [{"severity": "critical", "fixed": false, '
             '"description": "tsc fails because src is missing", '
-            '"module": "frontend", "file": "frontend/"}], '
+            '"module": "frontend", "file": "frontend/", '
+            '"scope": "out-of-scope", '
+            '"out_of_scope_reason": "pre-existing project-wide build failure outside this docs PR"}], '
             '"changed_files": ["docs/checkup.md"]}\n'
             "```"
         )
@@ -6699,6 +6701,19 @@ class TestStep7PassedMeritReview:
         '"changed_files": ["docs/checkup.md"]}\n'
         '```'
     )
+    TARGETED_OUT_OF_DIFF_EXPLICITLY_NONBLOCKING_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "pre-existing tsc baseline failure", '
+        '"module": "frontend", "file": "frontend/", '
+        '"scope": "out-of-scope", '
+        '"out_of_scope_reason": "pre-existing baseline failure outside this PR diff"}], '
+        '"changed_files": ["docs/checkup.md"]}\n'
+        '```'
+    )
     TARGETED_CHANGED_FILE_CRITICAL_VERDICT = (
         '```json\n'
         '{"success": true, '
@@ -6744,11 +6759,23 @@ class TestStep7PassedMeritReview:
         passed, _ = _step7_passed(self.MERIT_VERDICT, pr_mode=True)
         assert not passed  # issue_aligned still required by default
 
-    def test_targeted_pr_ignores_out_of_diff_repo_wide_critical(self):
+    def test_targeted_pr_blocks_out_of_diff_critical_without_structured_reason(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
         passed, reason = _step7_passed(
             self.TARGETED_OUT_OF_DIFF_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
+
+    def test_targeted_pr_allows_explicit_nonblocking_out_of_scope_critical(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_DIFF_EXPLICITLY_NONBLOCKING_VERDICT,
             pr_mode=True,
             has_issue=True,
             pr_test_scope="targeted",

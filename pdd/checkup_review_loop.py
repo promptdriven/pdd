@@ -7230,14 +7230,7 @@ def _render_final_report(
         "",
         state.stop_reason or "Review loop completed.",
     ]
-    if context.full_suite_source == "none":
-        lines.extend(
-            [
-                "",
-                "Verification scope: targeted; full GitHub CI was not used as a gate.",
-            ]
-        )
-    elif context.full_suite_source == "github-checks":
+    if context.full_suite_source == "github-checks":
         lines.extend(["", "Verification scope: targeted with GitHub checks gate."])
     elif context.test_scope == "full":
         lines.extend(["", "Verification scope: local full suite plus Layer 2 review-loop."])

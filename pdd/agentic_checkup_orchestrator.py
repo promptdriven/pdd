@@ -870,11 +870,18 @@ def _normalise_step7_path(value: Any) -> str:
     return path.strip("/")
 
 
-def _paths_overlap(left: str, right: str) -> bool:
-    """Return True when two normalized repo paths are equal or nested."""
-    if not left or not right:
-        return False
-    return left == right or left.startswith(f"{right}/") or right.startswith(f"{left}/")
+def _step7_nonblocking_reason(issue: Dict[str, Any]) -> str:
+    """Return Step 7's structured reason for treating a critical as non-blocking."""
+    for key in (
+        "non_blocking_reason",
+        "out_of_scope_reason",
+        "scope_reason",
+        "reason",
+    ):
+        value = issue.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
 
 
 def _step7_unfixed_critical_blocks_targeted_pr(
@@ -884,12 +891,14 @@ def _step7_unfixed_critical_blocks_targeted_pr(
     payload_message: str,
 ) -> bool:
     """Decide whether an unfixed critical Step 7 finding blocks targeted PR mode."""
+    del changed_files, payload_message
+    reason = _step7_nonblocking_reason(issue)
     blocking = issue.get("blocking")
-    if blocking is False:
+    if blocking is False and reason:
         return False
 
     in_scope = issue.get("in_scope")
-    if in_scope is False:
+    if in_scope is False and reason:
         return False
 
     scope = str(
@@ -898,36 +907,22 @@ def _step7_unfixed_critical_blocks_targeted_pr(
         or issue.get("pr_scope")
         or ""
     ).strip().lower().replace("_", "-")
-    if scope in {"out-of-scope", "project", "project-wide", "repo", "repository", "global", "baseline"}:
+    explicit_nonblocking_scopes = {
+        "out-of-scope",
+        "outside-pr",
+        "outside-pr-scope",
+        "non-blocking",
+        "baseline",
+        "project",
+        "project-wide",
+        "repo",
+        "repository",
+        "global",
+    }
+    if scope in explicit_nonblocking_scopes and reason:
         return False
     if scope in {"pr", "pr-diff", "changed-file", "changed-files", "in-scope", "blocking"}:
         return True
-
-    issue_paths = [
-        _normalise_step7_path(issue.get("file")),
-        _normalise_step7_path(issue.get("module")),
-    ]
-    if changed_files:
-        description = str(issue.get("description") or "").lower()
-        for changed in changed_files:
-            if any(_paths_overlap(issue_path, changed) for issue_path in issue_paths):
-                return True
-            if changed.lower() in description:
-                return True
-        return False
-
-    out_of_scope_phrases = (
-        "out of scope",
-        "outside scope",
-        "outside pr",
-        "outside the pr",
-        "outside pr's targeted",
-        "outside the pr's targeted",
-        "project-wide",
-        "repo-wide",
-    )
-    if any(phrase in payload_message for phrase in out_of_scope_phrases):
-        return False
 
     return True
 

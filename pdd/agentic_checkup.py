@@ -9,10 +9,11 @@ fixes them — one step per LLM call for reliability.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
@@ -38,8 +39,15 @@ from .checkup_review_loop import (
 )
 from .ci_validation import run_github_checks_gate
 from .agentic_sync import _find_project_root, _load_architecture_json
+from .prompt_repair import (
+    PromptRepairConfig,
+    discover_prompt_paths,
+    format_token_delta_summary,
+    run_prompt_repair_loop,
+)
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -398,11 +406,6 @@ def _format_layer1_failure_report(
 ) -> str:
     """Render a parseable final-gate failure report for Layer 1 failures."""
     reason = (layer1_message or "Layer 1 checkup failed.").strip()
-    scope_note = (
-        " full GitHub CI was not used as a gate."
-        if full_suite_source == "none"
-        else ""
-    )
     payload_reason = reason
     if len(payload_reason) > 4000:
         payload_reason = payload_reason[:4000].rstrip() + "...[truncated]"
@@ -450,7 +453,6 @@ def _format_layer1_failure_report(
             "",
             (
                 "Layer 1 PR checkup failed before Layer 2 review loop could run."
-                f"{scope_note}"
             ),
             "",
             "### Machine Verdict",
@@ -481,7 +483,7 @@ def _post_final_gate_report(
     cwd: Path,
     use_github_state: bool,
 ) -> str:
-    """Best-effort post of a final-gate report to PR and optional issue."""
+    """Best-effort post of a final-gate report to PR and issue threads."""
     if not use_github_state or not body.strip():
         return ""
 
@@ -601,6 +603,10 @@ def run_agentic_checkup(
     gate_allow: Tuple[str, ...] = (),
     start_step_override: Optional[Union[int, float]] = None,
     cwd: Optional[Path] = None,
+    prompt_repair: str = "off",
+    max_prompt_repair_rounds: int = 1,
+    max_prompt_token_growth: int = 1000,
+    max_prompt_repair_seconds: float = 120.0,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -625,17 +631,15 @@ def run_agentic_checkup(
             the historical contract: Layer 1 must run the full local suite.
             ``github-checks`` makes Layer 1 run targeted local checks and then
             gates on GitHub checks for the current PR head before Layer 2.
-            ``none`` makes Layer 1 targeted and runs Layer 2 without using full
-            GitHub CI as a gate.
         final_gate: When true in PR mode, run the canonical two-layer final
             gate (issue #1406): Layer 1 is the PR-scoped checkup orchestrator
             (no new PR), Layer 2 is the primary-reviewer/fixer review loop on
             the resulting PR head. Unlike ``review_loop`` — whose success only
             means "trustworthy report produced" — the returned ``success`` is
             a real ship verdict derived from the review-loop's current-run
-            ``final-state.json``. A Layer 1 failure or GitHub-checks gate
-            failure short-circuits before Layer 2; either layer's failure fails
-            the gate.
+            ``final-state.json``. Requires both ``pr_url`` and ``issue_url``.
+            A Layer 1 failure or GitHub-checks gate failure short-circuits
+            before Layer 2; either layer's failure fails the gate.
         review_only: When true with ``review_loop``, run only the primary
             reviewer first pass and do not invoke the fixer or push changes.
         reviewer_fallback: Optional secondary reviewer role to try once when
@@ -749,14 +753,92 @@ def run_agentic_checkup(
         console.print("[bold]Running agentic checkup...[/bold]")
 
     full_suite_source = (full_suite_source or "local").strip().lower()
-    if full_suite_source not in {"local", "github-checks", "none"}:
+    if full_suite_source not in {"local", "github-checks"}:
         return (
             False,
-            "--full-suite-source must be 'local', 'github-checks', or 'none', "
+            "--full-suite-source must be 'local' or 'github-checks', "
             f"got {full_suite_source!r}.",
             0.0,
             "",
         )
+
+    # check → repair → recheck cycle for changed prompt files (Issue #1422).
+    # Uses the full pdd.prompt_source_set_report.v1 structured report as the
+    # repair oracle (not just lint), then re-verifies before the orchestrator runs.
+    if prompt_repair != "off":
+        from .checkup_prompt_main import build_prompt_source_set_report  # pylint: disable=import-outside-toplevel
+
+        repair_config = PromptRepairConfig(
+            mode=prompt_repair,
+            max_rounds=max_prompt_repair_rounds,
+            max_token_growth=max_prompt_token_growth,
+            max_seconds=max_prompt_repair_seconds,
+        )
+        # Base context from issue/PR content (oracle enrichment)
+        issue_context: Dict[str, str] = {}
+        if raw_full_content.strip():
+            issue_context["issue"] = raw_full_content
+        if pr_url and pr_owner and pr_repo and pr_number is not None:
+            issue_context["pr"] = _fetch_pr_context(pr_owner, pr_repo, pr_number)
+
+        strict_failures: List[str] = []
+        work_cwd = cwd if cwd is not None else Path.cwd()
+        # Forward strictness so warnings are treated as errors consistently in
+        # all three phases (initial check, repair loop re-checks, post-repair
+        # check).  Mirrors the commands/checkup.py path which passes strict=strict.
+        is_strict = prompt_repair == "strict"
+        for prompt_path in discover_prompt_paths(work_cwd):
+            # Step 1: run the full structured checkup to decide if repair is needed
+            src_report = build_prompt_source_set_report(
+                prompt_path,
+                target=str(prompt_path),
+                project_root=project_root,
+                strict=is_strict,
+            )
+            if src_report.status == "pass":
+                continue  # no repair needed for this prompt
+            # Step 2: repair using the structured report + issue context as oracle
+            repair_context = dict(issue_context)
+            repair_context["source_set_report"] = json.dumps(src_report.as_dict(), indent=2)
+            repair_context["recommended_actions"] = "\n".join(src_report.recommended_actions())
+            repair_result = run_prompt_repair_loop(
+                prompt_path,
+                repair_config,
+                context=repair_context,
+                cwd=project_root,
+                verbose=verbose,
+                quiet=quiet,
+                strict=is_strict,
+            )
+            summary = format_token_delta_summary(repair_result)
+            if summary:
+                logger.info("%s: %s", prompt_path, summary.replace("\n", "; "))
+                if not quiet:
+                    console.print(f"[cyan]{summary}[/cyan]")
+            # Step 3: re-check with the structured report after repair
+            post_report = build_prompt_source_set_report(
+                prompt_path,
+                target=str(prompt_path),
+                project_root=project_root,
+                strict=is_strict,
+            )
+            if post_report.status != "pass" and prompt_repair == "strict":
+                strict_failures.append(str(prompt_path))
+            elif post_report.status != "pass":
+                logger.warning(
+                    "Prompt repair left issues in %s: %s",
+                    prompt_path,
+                    ", ".join(f.code for f in post_report.findings),
+                )
+
+        if strict_failures:
+            paths = ", ".join(strict_failures)
+            return (
+                False,
+                f"Prompt repair strict mode: unresolved issues in {paths}",
+                0.0,
+                "",
+            )
 
     # Layer 2 (review-loop) runner, shared by ``--review-loop`` (Layer 2 only)
     # and the canonical ``--final-gate`` (Layer 1 then Layer 2). Defined as a
@@ -828,10 +910,11 @@ def run_agentic_checkup(
         and pr_number is not None
     )
 
-    if final_gate and not pr_context_ready:
+    if final_gate and (not pr_context_ready or not has_issue):
         # The final gate is the two-layer PR-readiness path; it is PR-scoped,
-        # so it never runs in plain issue mode.
-        return False, "--final-gate requires --pr.", 0.0, ""
+        # issue-resolution gate, so it never runs in plain issue mode or
+        # PR-only merit-review mode.
+        return False, "--final-gate requires --pr and --issue.", 0.0, ""
 
     if final_gate:
         # The CLI rejects these combinations, but ``run_agentic_checkup`` is the
@@ -857,10 +940,6 @@ def run_agentic_checkup(
                 (
                     "test_scope!=targeted (--test-scope full)",
                     full_suite_source == "github-checks" and test_scope != "targeted",
-                ),
-                (
-                    "test_scope!=targeted (--test-scope full)",
-                    full_suite_source == "none" and test_scope != "targeted",
                 ),
             )
             if set_
@@ -1046,14 +1125,9 @@ def run_agentic_checkup(
                 orch_model,
             )
         if not quiet:
-            scope_clause = (
-                " Full GitHub CI was not used as a gate."
-                if full_suite_source == "none"
-                else ""
-            )
             console.print(
                 "[bold]Final gate Layer 1 (PR checkup) passed; running "
-                f"Layer 2 (review-loop)...{scope_clause}[/bold]"
+                "Layer 2 (review-loop)...[/bold]"
             )
         loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
             pr_content=final_gate_pr_content
@@ -1064,15 +1138,9 @@ def run_agentic_checkup(
         )
         total_cost = orch_cost + loop_cost
         checks_clause = "GitHub checks gate passed; " if github_checks_message else ""
-        no_ci_clause = (
-            "full GitHub CI was not used as a gate; "
-            if full_suite_source == "none"
-            else ""
-        )
         message = (
             "Final gate: Layer 1 (PR checkup) passed; "
             f"{checks_clause}"
-            f"{no_ci_clause}"
             f"Layer 2 (review-loop): {loop_message}"
         )
         if not ship and loop_success:
