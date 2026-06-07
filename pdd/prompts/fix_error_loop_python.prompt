@@ -76,7 +76,7 @@ def cloud_fix_errors(
     strength: float,
     temperature: float,
     verbose: bool = False,
-    time: float = DEFAULT_TIME,
+    time: float | None = DEFAULT_TIME,
     code_file_ext: str = ".py",
     protect_tests: bool = False,
     failure_classification: str | None = None,
@@ -90,6 +90,8 @@ def cloud_fix_errors(
     Args:
         protect_tests: When True, prevents the LLM from modifying test files.
         failure_classification: Optional classification string to send to cloud.
+        time: Reasoning-time value for the cloud request. If None, send DEFAULT_TIME
+            so loop-mode callers match non-loop cloud payload behavior.
 
     Returns: (update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name)
 

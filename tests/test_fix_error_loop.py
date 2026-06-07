@@ -1368,6 +1368,37 @@ def test_cloud_fix_errors_uses_fix_code_camel_case_payload(mock_cloud_config, mo
     assert "protect_tests" not in payload
     assert "code_file_ext" not in payload
 
+def test_cloud_fix_errors_defaults_none_time(mock_cloud_config, mock_requests):
+    """Loop cloud payload should not send null time when ctx.obj has time=None."""
+    mock_cloud_config.get_jwt_token.return_value = "fake_token"
+    mock_cloud_config.get_endpoint_url.return_value = "http://api/fix"
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "updateUnitTest": False,
+        "updateCode": True,
+        "fixedUnitTest": "test",
+        "fixedCode": "code",
+        "analysis": "fixed",
+        "totalCost": 0.25,
+        "modelName": "cloud-model",
+    }
+    mock_requests.post.return_value = mock_response
+
+    cloud_fix_errors(
+        "test",
+        "code",
+        "prompt",
+        "error",
+        "err_file",
+        0.6,
+        0.2,
+        time=None,
+    )
+
+    payload = mock_requests.post.call_args.kwargs["json"]
+    assert payload["time"] == pdd.DEFAULT_TIME
+
 def test_cloud_fix_errors_no_token(mock_cloud_config):
     """Test error when no JWT token is available."""
     mock_cloud_config.get_jwt_token.return_value = None
