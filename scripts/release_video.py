@@ -17,6 +17,27 @@ from typing import Any
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
+DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+DEFAULT_CLAUDE_TOOLS = ",".join(
+    [
+        "Read",
+        "Grep",
+        "Glob",
+        "Bash(git log *)",
+        "Bash(git show *)",
+        "Bash(git diff *)",
+        "Bash(git status *)",
+        "Bash(git tag *)",
+        "Bash(git describe *)",
+        "Bash(git rev-list *)",
+        "Bash(git remote *)",
+        "Bash(gh release view *)",
+        "Bash(gh pr view *)",
+        "Bash(gh issue view *)",
+    ]
+)
 
 
 class ReleaseVideoError(RuntimeError):
@@ -66,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
             context=context,
             claude_cli=args.claude_cli,
             claude_model=args.claude_model,
+            claude_tools=args.claude_tools,
+            prompt_template=Path(args.prompt_template),
             timeout=args.claude_timeout,
             cwd=repo,
         )
@@ -115,8 +138,21 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Directory for generated release-video artifacts.",
     )
     parser.add_argument("--claude-cli", default=os.environ.get("CLAUDE_CLI", "claude"))
-    parser.add_argument("--claude-model", default=os.environ.get("CLAUDE_MODEL", "sonnet"))
-    parser.add_argument("--claude-timeout", type=float, default=300.0)
+    parser.add_argument("--claude-model", default=os.environ.get("CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL))
+    parser.add_argument(
+        "--claude-tools",
+        default=os.environ.get("RELEASE_VIDEO_CLAUDE_TOOLS", DEFAULT_CLAUDE_TOOLS),
+        help=(
+            "Claude Code tools allowed while researching the release. "
+            "Set RELEASE_VIDEO_CLAUDE_TOOLS='' to use Claude Code defaults."
+        ),
+    )
+    parser.add_argument("--claude-timeout", type=float, default=float(os.environ.get("CLAUDE_TIMEOUT", "900")))
+    parser.add_argument(
+        "--prompt-template",
+        default=os.environ.get("RELEASE_VIDEO_PROMPT_TEMPLATE", str(DEFAULT_RELEASE_VIDEO_PROMPT)),
+        help="Prompt template used to generate the release-video script.",
+    )
     parser.add_argument("--pds-cli", default=os.environ.get("PDS_CLI", "pds"))
     parser.add_argument(
         "--project-id",
@@ -419,6 +455,8 @@ def generate_script_with_claude(
     context: str,
     claude_cli: str,
     claude_model: str,
+    claude_tools: str,
+    prompt_template: Path,
     timeout: float,
     cwd: Path,
 ) -> str:
@@ -429,14 +467,14 @@ def generate_script_with_claude(
             "-p",
             "--model",
             claude_model,
-            "--tools",
-            "",
             "--no-session-persistence",
             "--output-format",
             "text",
         ]
     )
-    prompt = build_claude_prompt(context)
+    if claude_tools.strip():
+        command.extend(["--allowedTools", claude_tools.strip()])
+    prompt = render_release_video_prompt(context, prompt_template, cwd)
     completed = run(command, cwd=cwd, input_text=prompt, timeout=timeout)
     script = normalize_release_video_script(strip_markdown_fence(completed.stdout.strip()))
     if len(script) < 200:
@@ -444,32 +482,33 @@ def generate_script_with_claude(
     return script.rstrip() + "\n"
 
 
-def build_claude_prompt(context: str) -> str:
-    return f"""Write the narration script for a short YouTube release video about this PDD CLI release.
+def render_release_video_prompt(context: str, prompt_template: Path, cwd: Path) -> str:
+    path = resolve_prompt_template_path(prompt_template, cwd)
+    try:
+        template = path.read_text(encoding="utf8")
+    except OSError as exc:
+        raise ReleaseVideoError(f"Could not read release-video prompt template {path}: {exc}") from exc
+    if "{release_context}" not in template:
+        raise ReleaseVideoError(
+            f"Release-video prompt template {path} must contain {{release_context}}."
+        )
+    return template.replace("{release_context}", context)
 
-Audience: developers who use or may adopt Prompt-Driven Development.
-Length: 60-90 seconds.
-Style: concise, concrete, technical, and demo-friendly.
 
-Requirements:
-- Base every claim on the release context below; do not invent features.
-- Lead with the most user-visible change.
-- Mention the release tag.
-- Use plain Markdown.
-- Structure the script with 3-5 timestamped level-2 Markdown section headings,
-  exactly like "## Release hook (0:00 - 0:12)"; the automated video pipeline
-  parses those "## " headings.
-- Use the PDS script format: every spoken narration block starts with
-  "NARRATOR:" on its own line, and every non-spoken visual cue starts with
-  "VISUAL:" on its own line.
-- Include a title, a short hook, narration beats, and visual direction cues.
-- Keep it suitable for an automated video pipeline: no tables, no footnotes, no citations, no code fences.
-- Output only the script.
-
-RELEASE CONTEXT:
-
-{context}
-"""
+def resolve_prompt_template_path(prompt_template: Path, cwd: Path) -> Path:
+    if prompt_template.is_absolute():
+        if prompt_template.exists():
+            return prompt_template
+        raise ReleaseVideoError(f"Release-video prompt template not found: {prompt_template}")
+    candidates = [
+        cwd / prompt_template,
+        REPO_ROOT / prompt_template,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    tried = "\n".join(str(candidate) for candidate in candidates)
+    raise ReleaseVideoError(f"Release-video prompt template not found. Tried:\n{tried}")
 
 
 def create_release_video(
