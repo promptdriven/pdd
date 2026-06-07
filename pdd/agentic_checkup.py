@@ -9,10 +9,11 @@ fixes them — one step per LLM call for reliability.
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
@@ -35,8 +36,15 @@ from .checkup_review_loop import (
     run_checkup_review_loop,
 )
 from .agentic_sync import _find_project_root, _load_architecture_json
+from .prompt_repair import (
+    PromptRepairConfig,
+    discover_prompt_paths,
+    format_token_delta_summary,
+    run_prompt_repair_loop,
+)
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -406,6 +414,10 @@ def run_agentic_checkup(
     gate_allow: Tuple[str, ...] = (),
     start_step_override: Optional[Union[int, float]] = None,
     cwd: Optional[Path] = None,
+    prompt_repair: str = "off",
+    max_prompt_repair_rounds: int = 1,
+    max_prompt_token_growth: int = 1000,
+    max_prompt_repair_seconds: float = 120.0,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -545,6 +557,84 @@ def run_agentic_checkup(
 
     if not quiet:
         console.print("[bold]Running agentic checkup...[/bold]")
+
+    # check → repair → recheck cycle for changed prompt files (Issue #1422).
+    # Uses the full pdd.prompt_source_set_report.v1 structured report as the
+    # repair oracle (not just lint), then re-verifies before the orchestrator runs.
+    if prompt_repair != "off":
+        from .checkup_prompt_main import build_prompt_source_set_report  # pylint: disable=import-outside-toplevel
+
+        repair_config = PromptRepairConfig(
+            mode=prompt_repair,
+            max_rounds=max_prompt_repair_rounds,
+            max_token_growth=max_prompt_token_growth,
+            max_seconds=max_prompt_repair_seconds,
+        )
+        # Base context from issue/PR content (oracle enrichment)
+        issue_context: Dict[str, str] = {}
+        if raw_full_content.strip():
+            issue_context["issue"] = raw_full_content
+        if pr_url and pr_owner and pr_repo and pr_number is not None:
+            issue_context["pr"] = _fetch_pr_context(pr_owner, pr_repo, pr_number)
+
+        strict_failures: List[str] = []
+        work_cwd = cwd if cwd is not None else Path.cwd()
+        # Forward strictness so warnings are treated as errors consistently in
+        # all three phases (initial check, repair loop re-checks, post-repair
+        # check).  Mirrors the commands/checkup.py path which passes strict=strict.
+        is_strict = prompt_repair == "strict"
+        for prompt_path in discover_prompt_paths(work_cwd):
+            # Step 1: run the full structured checkup to decide if repair is needed
+            src_report = build_prompt_source_set_report(
+                prompt_path,
+                target=str(prompt_path),
+                project_root=project_root,
+                strict=is_strict,
+            )
+            if src_report.status == "pass":
+                continue  # no repair needed for this prompt
+            # Step 2: repair using the structured report + issue context as oracle
+            repair_context = dict(issue_context)
+            repair_context["source_set_report"] = json.dumps(src_report.as_dict(), indent=2)
+            repair_context["recommended_actions"] = "\n".join(src_report.recommended_actions())
+            repair_result = run_prompt_repair_loop(
+                prompt_path,
+                repair_config,
+                context=repair_context,
+                cwd=project_root,
+                verbose=verbose,
+                quiet=quiet,
+                strict=is_strict,
+            )
+            summary = format_token_delta_summary(repair_result)
+            if summary:
+                logger.info("%s: %s", prompt_path, summary.replace("\n", "; "))
+                if not quiet:
+                    console.print(f"[cyan]{summary}[/cyan]")
+            # Step 3: re-check with the structured report after repair
+            post_report = build_prompt_source_set_report(
+                prompt_path,
+                target=str(prompt_path),
+                project_root=project_root,
+                strict=is_strict,
+            )
+            if post_report.status != "pass" and prompt_repair == "strict":
+                strict_failures.append(str(prompt_path))
+            elif post_report.status != "pass":
+                logger.warning(
+                    "Prompt repair left issues in %s: %s",
+                    prompt_path,
+                    ", ".join(f.code for f in post_report.findings),
+                )
+
+        if strict_failures:
+            paths = ", ".join(strict_failures)
+            return (
+                False,
+                f"Prompt repair strict mode: unresolved issues in {paths}",
+                0.0,
+                "",
+            )
 
     # Layer 2 (review-loop) runner, shared by ``--review-loop`` (Layer 2 only)
     # and the canonical ``--final-gate`` (Layer 1 then Layer 2). Defined as a

@@ -58,6 +58,9 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
 For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
+
+For non-interactive bounded prompt repair after a failed prompt source-set checkup, see [docs/prompt_repair.md](docs/prompt_repair.md).
+
 ## Installation
 
 ### Prerequisites for macOS
@@ -2925,6 +2928,10 @@ Options:
 - `doc-contract` repo config: non-PDD projects can declare documentation contracts in `.pdd/doc_contract.json` or `.pdd/doc-contract.json` with `version: 1` and `rules` containing `source_globs`, `added_regex`, and `docs`/`doc_paths`. Each captured added surface must be documented in the configured docs/sections; optional `doc_regex` can tie named captures together, such as requiring an operation and its new skip condition to appear in the same documented contract. In PR mode the base branch’s config is authoritative, so a PR cannot bypass the gate by weakening its own config.
 - `--gate-timeout FLOAT`: Per-gate timeout in seconds (default: 60). Applies to every discovered gate; the runner kills the subprocess and surfaces the gate as a `runner-error` blocker finding when the timeout fires.
 - `--gate-allow GATE`: Repeatable allowlist token forwarded to `discover_gates` as `extra_allow`. Reserved for future versions to opt extra gate names into the discovery set; the current default discovery is allowlist-only and the argument is accepted but does not widen it. Useful primarily as a forward-compat plumbing hook for CI configurations.
+- `--prompt-repair MODE`: Non-interactive prompt repair mode when automatic prompt checkup fails. Accepted values: `off` (default, no repair), `best-effort` (repair and continue even if issues remain after repair), `strict` (block on unresolved issues after repair). Overrides the `prompt_repair` setting in `[tool.pdd.checkup]` in `pyproject.toml`.
+- `--max-prompt-repair-rounds INT`: Maximum repair-and-recheck iterations per prompt file (default: 1).
+- `--max-prompt-token-growth INT`: Maximum token increase allowed during a single repair pass (default: 1000).
+- `--max-prompt-repair-seconds FLOAT`: Wall-clock timeout for the entire prompt repair loop in seconds (default: 120.0).
 
 **Deterministic-gate coverage limits (issue #1092)**: The default gate set is intentionally conservative because PR contents are untrusted on fork PRs. As a result the following workflows do NOT block a clean verdict and you should still rely on CI / human review for them:
 - **JS/TS PRs that change any `.js` / `.cjs` / `.mjs` file (anywhere in the worktree)**: prettier and eslint script gates are skipped because their configs can `require()` arbitrary local JavaScript (including subdirectory plugin modules) and the require chain is undecidable without running the very code we are trying to gate. A PR-sized JS formatting/lint regression on such a PR will only be caught by CI.
