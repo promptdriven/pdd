@@ -242,7 +242,7 @@ def cloud_fix_errors(
     strength: float,
     temperature: float,
     verbose: bool = False,
-    time: float = DEFAULT_TIME,
+    time: float | None = DEFAULT_TIME,
     code_file_ext: str = ".py",
     protect_tests: bool = False,
     failure_classification: str | None = None,
@@ -263,6 +263,7 @@ def cloud_fix_errors(
         raise RuntimeError("Cloud authentication failed: no JWT token available")
     if failure_classification:
         error = f"[PDD failure classification] {failure_classification}\n{error}"
+    request_time = DEFAULT_TIME if time is None else time
     payload = {
         "unitTest": unit_test,
         "code": code,
@@ -271,7 +272,7 @@ def cloud_fix_errors(
         "language": get_language(code_file_ext) or "python",
         "strength": strength,
         "temperature": temperature,
-        "time": time,
+        "time": request_time,
         "verbose": verbose,
         "protectTests": protect_tests,
         "codeFileExt": code_file_ext,
