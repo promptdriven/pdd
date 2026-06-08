@@ -150,10 +150,7 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     assert "release video automation" in claude_prompt
     claude_argv = json.loads((repo / "claude_argv.json").read_text(encoding="utf8"))
     assert claude_argv[claude_argv.index("--model") + 1] == "claude-opus-4-8"
-    allowed_tools = claude_argv[claude_argv.index("--allowedTools") + 1]
-    assert "Read" in allowed_tools
-    assert "Bash(git show *)" in allowed_tools
-    assert "Bash(gh release view *)" in allowed_tools
+    assert "--allowedTools" not in claude_argv
     pds_call = json.loads(capture.read_text(encoding="utf8"))["argv"]
     assert pds_call[:2] == ["release-video", "create"]
     assert pds_call[pds_call.index("--target") + 1] == "publish"
@@ -198,6 +195,42 @@ def test_release_video_can_select_existing_pds_project(tmp_path: Path):
     assert pds_call[:2] == ["--project", "release-project"]
     assert pds_call[2:4] == ["release-video", "create"]
     assert "--project-name" not in pds_call
+
+
+def test_release_video_can_pass_custom_claude_tool_allowlist(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    env = release_video_env(
+        {
+            "PDS_STUB_CAPTURE": str(capture),
+            "RELEASE_VIDEO_CLAUDE_TOOLS": "Read,Grep,Bash(git show *)",
+        }
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--claude-cli",
+            str(claude_stub(tmp_path)),
+            "--pds-cli",
+            str(pds_stub(tmp_path, {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/tools"}})),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+
+    claude_argv = json.loads((repo / "claude_argv.json").read_text(encoding="utf8"))
+    assert claude_argv[claude_argv.index("--allowedTools") + 1] == "Read,Grep,Bash(git show *)"
 
 
 def test_release_video_fails_for_missing_prompt_template(tmp_path: Path):
