@@ -4763,6 +4763,35 @@ class TestVerifyArchitectureConformanceDeepRecursion:
                 verbose=False,
             )
 
+    def test_declared_dotted_method_camelcase_passes(self, tmp_path):
+        """A DECLARED camelCase method on a dotted symbol is exempt (issue #1446).
+
+        Mirror of ``test_dotted_method_camelcase_fails``: when the exact dotted
+        name ``Service.generateReport`` is declared in ``architecture.json`` it is
+        intentional public API, so the segment-aware camelCase guard must exempt
+        it via the exact-name match rather than flagging the ``generateReport``
+        segment.
+        """
+        arch_path = self._write_arch(
+            tmp_path,
+            "service_python.prompt",
+            "src/service.py",
+            ["Service", "Service.generateReport"],
+        )
+        code = (
+            "class Service:\n"
+            "    def generateReport(self):\n"
+            "        pass\n"
+        )
+        # Must NOT raise: the dotted method is a declared interface symbol.
+        _verify_architecture_conformance(
+            generated_code=code,
+            prompt_name="service_python.prompt",
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+        )
+
     def test_top_level_functions_still_recognised(self, tmp_path):
         """Regression: plain top-level functions continue to work as before."""
         arch_path = self._write_arch(
