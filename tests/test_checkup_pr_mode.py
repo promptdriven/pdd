@@ -2565,6 +2565,109 @@ class TestStep7GateInPrFixMode:
     return failure so callers don't mark the run green.
     """
 
+    def test_resume_at_max_iterations_uses_cached_step7_output(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import (
+            MAX_FIX_VERIFY_ITERATIONS,
+            run_agentic_checkup_orchestrator,
+        )
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        cached_step7 = _step7_output(
+            success=False,
+            issue_aligned=True,
+            message="full suite not run",
+            include_sentinel=False,
+        )
+        state = {
+            "issue_number": 99,
+            "issue_url": "https://github.com/o/r/issues/99",
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": "deadbeef",
+            "last_completed_step": 4,
+            "step_outputs": {
+                "1": "discover",
+                "2": "deps",
+                "3": "build",
+                "4": "interfaces",
+                "7": cached_step7,
+            },
+            "total_cost": 1.25,
+            "model_used": "fake-model",
+            "changed_files": [],
+            "worktree_path": str(wt),
+            "fix_verify_iteration": MAX_FIX_VERIFY_ITERATIONS,
+            "previous_fixes": "",
+        }
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(state, 123),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step"
+        ) as run_step, patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+            create=True,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._refresh_pr_context_from_worktree",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._refresh_pr_base_ref",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._format_pr_changed_files_for_prompt",
+            return_value="",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.ensure_issue_steer_cursor_seeded",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment",
+            return_value=True,
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=True,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is False
+        assert "success=false" in msg
+        assert "empty step 7 output" not in msg
+        run_step.assert_not_called()
+
     def test_pr_mode_returns_failure_when_step7_issue_aligned_false(
         self, tmp_path: Path
     ) -> None:

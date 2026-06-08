@@ -3190,7 +3190,7 @@ def _run_agentic_checkup_orchestrator_inner(
             start_step = 3
             resuming_mid_iteration = True  # Already incremented
 
-        step7_output = ""
+        step7_output = step_outputs.get("7", "")
 
         # Codex round-3 Finding 2: track whether the fixer (Steps 6.1/6.2/6.3)
         # ever actually ran. Defaults to False so that a clean-run PR (Steps
@@ -3500,14 +3500,18 @@ def _run_agentic_checkup_orchestrator_inner(
             is_first_loop_pass = False
             _save_state()
 
-        if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and "All Issues Fixed" not in step7_output:
+        final_step7_output = step7_output or step_outputs.get("7", "")
+        if (
+            fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS
+            and "All Issues Fixed" not in final_step7_output
+        ):
             max_msg = (
                 f"Checkup did not verify all issues fixed after "
                 f"{MAX_FIX_VERIFY_ITERATIONS} fix-verify iterations."
             )
             max_reason = max_msg
             max_gate_passed, max_gate_reason = _step7_passed(
-                step7_output, pr_mode=pr_mode, has_issue=has_issue
+                final_step7_output, pr_mode=pr_mode, has_issue=has_issue
             )
             if not max_gate_passed:
                 max_reason = f"{max_msg} {max_gate_reason}"
@@ -3526,9 +3530,7 @@ def _run_agentic_checkup_orchestrator_inner(
             # the orchestrator owns the canonical report. Post it here so
             # the PR thread records the max-iteration verdict instead of
             # going silent.
-            post_suffix = _post_pr_mode_final_report(
-                step_outputs.get("7", step7_output)
-            )
+            post_suffix = _post_pr_mode_final_report(final_step7_output)
             return (
                 False,
                 f"{max_reason}{post_suffix}",
