@@ -1,0 +1,91 @@
+<pdd-reason>Post-generation completeness gate that verifies handlers are registered, routes are reachable, config entries are declared, and generated modules have corresponding tests.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "validate_wiring", "signature": "(contract: GenerationSourceContract, project_root: Path) -> List[WiringCheckResult]", "returns": "List[WiringCheckResult]"},
+      {"name": "check_handler_registration", "signature": "(generated_files: List[Path], router_file: Path) -> WiringCheckResult", "returns": "WiringCheckResult"},
+      {"name": "check_route_reachability", "signature": "(generated_files: List[Path], project_root: Path) -> WiringCheckResult", "returns": "WiringCheckResult"},
+      {"name": "check_config_declarations", "signature": "(generated_files: List[Path], config_paths: List[Path]) -> WiringCheckResult", "returns": "WiringCheckResult"},
+      {"name": "check_module_test_coverage", "signature": "(generated_files: List[Path], tests_dir: Path) -> WiringCheckResult", "returns": "WiringCheckResult"},
+      {"name": "check_script_executable", "signature": "(generated_files: List[Path]) -> WiringCheckResult", "returns": "WiringCheckResult"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>generation_source_contract_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+
+% Write `pdd/wiring_validator.py`, the post-generation wiring and completeness gate module.
+
+<include>context/python_preamble.prompt</include>
+
+Shared Context (canonical data model — use ONLY these fields and types)
+
+<context_data_dictionary>
+<include>prompts/_context/data_dictionary.yaml</include>
+</context_data_dictionary>
+
+CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
+% Role & Scope
+This module implements PRD Requirement 4: validate wiring and completeness. It extends the `architecture_sync` conformance gate pattern with five deterministic checks performed via AST analysis and file-system inspection. Designed as a gate callable from `agentic_architecture_orchestrator` after generation steps. Raises `ArchitectureConformanceError` (the existing exception class from `architecture_sync`) when any P0 check fails.
+
+% Requirements
+1. Implement `check_handler_registration(generated_files: List[Path], router_file: Path) -> WiringCheckResult`:
+   - Parse `router_file` with `ast.parse`; walk for `app.include_router(...)`, `app.add_url_rule(...)`, `router.add_api_route(...)` calls or Click `cli.add_command(...)`.
+   - For each `.py` in `generated_files`, parse and extract decorated function names (`@app.route`, `@router.get`, `@click.command`, etc.).
+   - Return `WiringCheckResult(check_kind="handler_registration", status="pass", diagnostic="All handlers registered")` if all generated handler names appear in router, else `status="fail"` with missing names listed in `diagnostic`.
+2. Implement `check_route_reachability(generated_files: List[Path], project_root: Path) -> WiringCheckResult`:
+   - Parse generated `.py` files for route path strings (string literals in route decorator arguments).
+   - Glob `project_root` for router/app registration files; verify the same path strings appear.
+   - Return `WiringCheckResult(check_kind="route_reachability", status="pass"|"warn"|"fail", diagnostic=...)`.
+3. Implement `check_config_declarations(generated_files: List[Path], config_paths: List[Path]) -> WiringCheckResult`:
+   - Parse generated files for `os.environ[...]` and `os.getenv(...)` with string literal keys.
+   - Parse `config_paths` (`.env.example`, `README.md` env tables, `pyproject.toml`) for declared keys using `re` patterns.
+   - Return `status="fail"` with undeclared keys listed if any required key is missing.
+4. Implement `check_module_test_coverage(generated_files: List[Path], tests_dir: Path) -> WiringCheckResult`:
+   - For each `module_name.py` in `generated_files`, check for existence of `tests/test_module_name.py` or `tests/test_module_name_*.py` via `glob`.
+   - Return `status="pass"` if all have corresponding test files, `status="warn"` if some are missing, with missing module names in `diagnostic`.
+5. Implement `check_script_executable(generated_files: List[Path]) -> WiringCheckResult`:
+   - For each file in `generated_files` that contains `if __name__ == "__main__"`: check `stat().st_mode & 0o111` (executable bit).
+   - Return `status="fail"` if executable bit is absent, `diagnostic` naming the unexecutable scripts.
+6. Implement `validate_wiring(contract: GenerationSourceContract, project_root: Path) -> List[WiringCheckResult]`:
+   - Derive `generated_files` from `contract.interface_facts` — use unique `source_path` values as `Path` objects.
+   - Auto-discover `router_file`: glob for `app.py`, `main.py`, `router.py`, `cli.py` under `project_root`. Use first match; skip handler check if none found.
+   - Auto-discover `config_paths`: glob for `.env.example`, `README.md`, `pyproject.toml`.
+   - Auto-discover `tests_dir`: use `project_root / "tests"` if it exists.
+   - Run all five checks, collect results.
+   - If any result has `status="fail"`, raise `ArchitectureConformanceError(f"Wiring validation failed: {[r.diagnostic for r in results if r.status=='fail']}")`.
+   - Return all `WiringCheckResult` items regardless.
+7. Import `ArchitectureConformanceError` from `pdd.architecture_sync`. If import fails (module not yet generated), define a local fallback `class ArchitectureConformanceError(Exception): pass`.
+8. Use `logging.getLogger(__name__)`; no `print`. Stdlib only: `ast`, `re`, `pathlib`, `stat`, `logging`, `typing`.
+
+% Dependency API Reference
+
+### generation_source_contract
+- `GenerationSourceContract` — `contract.interface_facts: List[InterfaceFact]`
+- `WiringCheckResult` — fields: `check_kind`, `status`, `diagnostic`
+- `WiringCheckKind` — enum values: `handler_registration`, `route_reachability`, `config_declaration`, `module_test_coverage`, `script_executable`
+- `WiringStatus` — enum values: `pass` (member `PASS_`), `warn`, `fail`
+
+**Import as:** `from pdd.generation_source_contract import (GenerationSourceContract, WiringCheckResult, WiringCheckKind, WiringStatus)`
+
+### architecture_sync (existing module)
+- `ArchitectureConformanceError` — raised when P0 wiring check fails
+
+**Import as:** `from pdd.architecture_sync import ArchitectureConformanceError`
+
+% Testing Strategy
+- External services: filesystem reads (AST parsing, glob, stat)
+- Test: `check_module_test_coverage([Path('pdd/foo.py')], tests_dir)` when `tests/test_foo.py` exists → `status='pass'`
+- Test: `check_module_test_coverage([Path('pdd/bar.py')], tests_dir)` when no test file → `status='warn'`
+- Test: `validate_wiring` with a failing check → raises `ArchitectureConformanceError`
+
+% Deliverables
+- Single file: `pdd/wiring_validator.py`
+- All six public functions with docstrings and type hints
+- Graceful handling when optional project files (router, config) are absent

@@ -1,0 +1,85 @@
+<pdd-reason>Machine-readable generation evidence audit that maps source requirements to generated files, tests, contracts, and validation gate results for CI review and omission detection.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "emit_audit", "signature": "(contract: GenerationSourceContract, generated_files: List[Path], wiring_results: List[WiringCheckResult], quality_findings: List[TestQualityFinding]) -> GenerationAuditRecord", "returns": "GenerationAuditRecord"},
+      {"name": "load_audit", "signature": "(run_id: str, base_dir: Path = Path('.pdd/evidence/generation-audit')) -> GenerationAuditRecord", "returns": "GenerationAuditRecord"},
+      {"name": "check_audit", "signature": "(audit: GenerationAuditRecord, *, strict: bool = False) -> List[str]", "returns": "List[str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>generation_source_contract_python.prompt</pdd-dependency>
+<pdd-dependency>generation_readiness_python.prompt</pdd-dependency>
+<pdd-dependency>interface_grounder_python.prompt</pdd-dependency>
+<pdd-dependency>wiring_validator_python.prompt</pdd-dependency>
+<pdd-dependency>test_quality_gate_python.prompt</pdd-dependency>
+<pdd-dependency>evidence_manifest_python.prompt</pdd-dependency>
+
+% Write `pdd/generation_audit.py`, the generation evidence audit module that maps requirements to generated artifacts and gate results.
+
+<include>context/python_preamble.prompt</include>
+
+Shared Context (canonical data model — use ONLY these fields and types)
+
+<context_data_dictionary>
+<include>prompts/_context/data_dictionary.yaml</include>
+</context_data_dictionary>
+
+CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
+% Role & Scope
+This module implements PRD Requirement 6: emit generation evidence. It extends the `evidence_manifest.py` pattern (SHA-256, `.pdd/evidence/` storage, `ManifestView`) with `GenerationAuditRecord` — a top-level evidence manifest containing one `RequirementAuditEntry` per `FeatureRequirement`. Persists to `.pdd/evidence/generation-audit/{run_id}.json`. Exposes `load_audit` and a CLI-usable `check_audit` that exits non-zero when required items are skipped without waiver.
+
+% Requirements
+1. Implement `emit_audit(contract, generated_files, wiring_results, quality_findings) -> GenerationAuditRecord`:
+   - Build one `RequirementAuditEntry` per `FeatureRequirement` in `contract.features`.
+   - For each entry, compute:
+     - `generated_files`: list of `f"{p}::{hashlib.sha256(p.read_bytes()).hexdigest()}"` strings for all `generated_files` paths that exist. Skip non-existent paths with a logged warning.
+     - `generated_tests`: glob `tests/` for `test_{module_stem}*.py` matching files in `generated_files`.
+     - `contracts_validated`: list of `InterfaceFact.fact_id` values from `contract.interface_facts` where `source_path` overlaps with `generated_files` stems.
+     - `gate_results`: all `WiringCheckResult` and `TestQualityFinding` items (combined).
+     - `audit_status`: `"covered"` if `generated_files` non-empty and no `status="fail"` wiring result; `"partial"` if tests are missing or only warnings; `"skipped"` if no generated files; `"waived"` if requirement has `is_vague=True` and no generated files.
+   - Construct `GenerationAuditRecord(run_id=contract.run_id, schema_version=1, requirement_entries=[...])`.
+   - Serialize with `record.model_dump(mode='json')`, write JSON to `.pdd/evidence/generation-audit/{run_id}.json` (create parent dirs). Return the record.
+2. Implement `load_audit(run_id, base_dir=Path('.pdd/evidence/generation-audit')) -> GenerationAuditRecord`:
+   - Read `{base_dir}/{run_id}.json`; parse with `GenerationAuditRecord.model_validate_json(text)`.
+   - Validate `schema_version == 1`; raise `ValueError(f"Unsupported schema_version: {record.schema_version}")` if different (forward-incompatible schema bump). Raises `FileNotFoundError` if missing, propagates `ValidationError`.
+3. Implement `check_audit(audit: GenerationAuditRecord, *, strict: bool = False) -> List[str]`:
+   - Collect omission messages for entries with `audit_status="skipped"` and `priority="p0"` (no waiver): `f"P0 requirement '{entry.description[:60]}' has no generated files (skipped)"`.
+   - Collect warning messages for entries with `audit_status="partial"`.
+   - In `strict=True` mode: if any P0 entry is `skipped`, call `sys.exit(1)` after collecting messages.
+   - Return list of messages; empty list means all requirements covered.
+4. `emit_audit` must not crash when `generated_files` contains non-existent paths — log warning, skip.
+5. Use `hashlib.sha256` for file fingerprinting. Use `logging.getLogger(__name__)`; no `print`.
+6. Imports: `hashlib`, `json`, `pathlib`, `logging`, `typing`, `sys`. Pydantic v2 from `generation_source_contract`.
+
+% Dependency API Reference
+
+### generation_source_contract
+- `GenerationSourceContract` — `contract.run_id`, `contract.features`, `contract.interface_facts`
+- `GenerationAuditRecord` — fields: `run_id`, `schema_version`, `requirement_entries`
+- `RequirementAuditEntry` — fields: `requirement_id`, `description`, `priority`, `generated_files`, `generated_tests`, `contracts_validated`, `gate_results`, `audit_status`
+- `WiringCheckResult` — fields: `check_kind`, `status`, `diagnostic`
+- `TestQualityFinding` — fields: `kind`, `file_path`, `line_number`, `suggested_fix`
+- `AuditEntryStatus` — enum values: `covered`, `partial`, `skipped`, `waived`
+
+**Import as:** `from pdd.generation_source_contract import (GenerationSourceContract, GenerationAuditRecord, RequirementAuditEntry, WiringCheckResult, TestQualityFinding, AuditEntryStatus, RequirementPriority)`
+
+% Testing Strategy
+- External services: filesystem reads/writes
+- Test: `emit_audit(contract, [], [], [])` when `contract.features` is empty → `GenerationAuditRecord(requirement_entries=[])`
+- Test: `emit_audit` with a P0 feature and no generated files → `audit_status="skipped"`
+- Test: `load_audit` with non-existent run_id → raises `FileNotFoundError`
+- Test: `check_audit` with P0 skipped entry → returns non-empty message list
+- Test: `check_audit` with `strict=True` and P0 skipped → calls `sys.exit(1)` (mock sys.exit in tests)
+
+% Deliverables
+- Single file: `pdd/generation_audit.py`
+- All three public functions: `emit_audit`, `load_audit`, `check_audit`
+- Full docstrings and type hints
+- SHA-256 fingerprinting for generated file provenance

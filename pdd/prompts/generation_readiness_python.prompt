@@ -1,0 +1,66 @@
+<pdd-reason>Pre-generation PRD analysis pass that extracts requirements, classifies examples, and blocks or requests clarification for underspecified P0/P1 behaviors.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "analyze_readiness", "signature": "(prd_text: str, contract: GenerationSourceContract) -> GenerationSourceContract", "returns": "GenerationSourceContract"},
+      {"name": "extract_requirements", "signature": "(prd_text: str) -> List[FeatureRequirement]", "returns": "List[FeatureRequirement]"},
+      {"name": "classify_examples", "signature": "(prd_text: str, features: List[FeatureRequirement]) -> List[ExampleClassification]", "returns": "List[ExampleClassification]"},
+      {"name": "detect_vague_phrases", "signature": "(prd_text: str) -> List[ReadinessFinding]", "returns": "List[ReadinessFinding]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>generation_source_contract_python.prompt</pdd-dependency>
+
+% Write `pdd/generation_readiness.py`, the pre-generation PRD analysis and readiness gate module.
+
+<include>context/python_preamble.prompt</include>
+
+Shared Context (canonical data model — use ONLY these fields and types)
+
+<context_data_dictionary>
+<include>prompts/_context/data_dictionary.yaml</include>
+</context_data_dictionary>
+
+CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
+% Role & Scope
+This module implements the generation-readiness gate described in PRD Requirements 1 and 2. It parses issue/PRD text using regex heuristics to extract `FeatureRequirement` records (api, route, schema, ui, cli, job, test, script surfaces), detects vague prose that cannot be mechanically verified, classifies examples as illustrative vs. exhaustive, and populates the `GenerationSourceContract`. Downstream orchestrators (`agentic_architecture_orchestrator`, `agentic_checkup_orchestrator`) call `analyze_readiness` before starting generation.
+
+% Requirements
+1. Implement `extract_requirements(prd_text: str) -> List[FeatureRequirement]`: use compiled `re` patterns to detect requirement surfaces. Map surface keywords to `RequirementKind`: "endpoint"/"route" → `api`; "schema"/"model" → `schema`; "UI"/"component"/"page" → `ui`; "CLI"/"command" → `cli`; "job"/"cron"/"scheduler" → `job`; "test"/"spec" → `test`; "script" → `script`; fallback → `route`. Assign priority `p0` for "must"/"required"/"blocking"/"shall", `p1` for "should"/"nice-to-have"/"optional". Assign UUID v4 `requirement_id`. Set `is_vague=True` when no file/API/test/acceptance detail follows (heuristic: no path, class, method, or assertion pattern in the same sentence).
+2. Implement `classify_examples(prd_text: str, features: List[FeatureRequirement]) -> List[ExampleClassification]`: scan each sentence for "for example", "e.g.", "such as", "like" → `illustrative`; "only", "exactly", "complete list", "exhaustive" → `exhaustive`; otherwise `unknown`. Populate `required_variants` with tokens following "e.g." or "such as". Set `feature_id` to the nearest preceding requirement's `requirement_id` (or the first requirement if none matches).
+3. Implement `detect_vague_phrases(prd_text: str) -> List[ReadinessFinding]`: compile patterns for vague phrases: "works correctly", "handles errors", "is fast", "is secure", "is simple", "is easy", "appropriate", "as needed", "etc\.", "and so on". Return `ReadinessFinding(severity="warning", ...)` per match. Assign UUID v4 `finding_id`.
+4. Implement `analyze_readiness(prd_text: str, contract: GenerationSourceContract) -> GenerationSourceContract`: raise `ValueError("prd_text must not be empty")` if blank. Call `extract_requirements`, `classify_examples`, `detect_vague_phrases` in sequence. Extend (not replace) `contract.features`, `contract.example_classifications`, `contract.readiness_findings`. For each P0 `FeatureRequirement` where `acceptance_criteria` is empty, append a `ReadinessFinding(severity="blocker", message=f"P0 requirement '{req.description[:60]}' lacks acceptance criteria")`.
+5. All regex patterns must be compiled at module level (not inside function bodies).
+6. Use `logging.getLogger(__name__)`; never `print`.
+7. No LLM calls; purely regex-heuristic. Stdlib only: `re`, `uuid`, `logging`, `typing`.
+
+% Dependency API Reference
+
+### generation_source_contract
+- `create_source_contract(run_id, prd_text) -> GenerationSourceContract`
+- `GenerationSourceContract` — fields: `features`, `example_classifications`, `readiness_findings`
+- `FeatureRequirement` — fields: `requirement_id`, `description`, `priority`, `kind`, `is_vague`, `acceptance_criteria`, `coverage_pointer`
+- `ExampleClassification` — fields: `feature_id`, `kind`, `required_variants`, `coverage_matrix`
+- `ReadinessFinding` — fields: `finding_id`, `severity`, `message`, `requirement_id`
+- `RequirementPriority`, `RequirementKind`, `ExampleKind`, `FindingSeverity`
+
+**Import as:** `from pdd.generation_source_contract import (GenerationSourceContract, FeatureRequirement, ExampleClassification, ReadinessFinding, RequirementPriority, RequirementKind, ExampleKind, FindingSeverity)`
+
+% Testing Strategy
+- External services: none (stdlib only, no I/O)
+- Mock boundaries: none required; module is purely functional
+- Test: `extract_requirements("The API must expose a /health endpoint")` → `[FeatureRequirement(kind='api', priority='p0')]`
+- Test: `detect_vague_phrases("The system handles errors gracefully")` → `[ReadinessFinding(severity='warning')]`
+- Test: `analyze_readiness("")` → raises `ValueError`
+- Test: `analyze_readiness("Must implement login", contract)` where login req has empty `acceptance_criteria` → `ReadinessFinding(severity='blocker')` in contract
+
+% Deliverables
+- Single file: `pdd/generation_readiness.py`
+- All four public functions with docstrings and type hints
+- Module-level compiled regex patterns for requirement extraction and vague phrase detection
