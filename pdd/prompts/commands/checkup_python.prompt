@@ -49,6 +49,7 @@
   - `--help` / `-h` eager flag when needed for alias-aware help dispatch
   - `--pr <pr-url>` (PR-verification mode — verify an existing PR instead of opening one; `--issue` is OPTIONAL (with no issue the PR is reviewed on its own merits); mutually exclusive with `target`)
   - `--issue <issue-url>` (OPTIONAL PR-mode companion to `--pr` — when given, the source issue the PR is meant to resolve and the PR is verified for issue alignment; cannot be passed without `--pr`)
+  - `--test-scope` (`full|targeted`, default `full`; PR-mode verification scope. `targeted` is a fast PR-scoped path and is rejected for caller-supplied `--final-gate`; final gate owns its internal Layer-1 scope from `--full-suite-source`)
   - `--review-loop` (PR mode only — run the primary-reviewer/fixer review loop; still requires both `--pr` and `--issue`)
   - `--full-suite-source` (choice `local`|`github-checks`, default `local`; final-gate only. `local` requires `--test-scope full`; `github-checks` requires `--test-scope targeted` and gates on GitHub checks for the current PR head before Layer 2)
   - `--final-gate` (`final_gate`, flag — the canonical final PR gate, issue #1406; requires both `--pr` and `--issue`; runs the PR-scoped checkup as Layer 1 then the review-loop as Layer 2 and returns a real ship verdict; this is what "ready for maintainer review" means once a PR exists; cannot be combined with `--review-loop`, `--no-fix`, `--review-only`, `--start-step`, or `--no-gates`; `--test-scope targeted` is allowed only with `--full-suite-source github-checks`)
