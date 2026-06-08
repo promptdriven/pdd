@@ -615,6 +615,11 @@ def _is_intermediate_file(filepath: str) -> bool:
 
 # TypeScript/JavaScript test file extensions
 _TS_TEST_EXTENSIONS = (".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx")
+_PYTEST_NODEID_FILE_RE = _re.compile(
+    r"(?<![A-Za-z0-9_./-])"
+    r"((?:[A-Za-z0-9_.-]+/)*test_[A-Za-z0-9_.-]+\.py)"
+    r"(?:::[A-Za-z0-9_./\-[\]:]+)+"
+)
 
 
 def _is_test_file(filename: str) -> bool:
@@ -654,6 +659,36 @@ def _extract_marker_files(text: str) -> List[str]:
     return paths
 
 
+def _extract_pytest_nodeid_files(text: str) -> List[str]:
+    """Extract test file paths from pytest node ids in trusted step output.
+
+    Examples:
+    - tests/test_async_helpers.py::test_fetch_data_returns_json_on_201
+    - test_module.py::TestCase::test_behavior[param]
+
+    This intentionally requires a ``::`` node-id suffix so narrative mentions
+    like "edit tests/test_async_helpers.py" do not trigger broad discovery.
+    """
+    paths: List[str] = []
+    for match in _PYTEST_NODEID_FILE_RE.finditer(text):
+        path = match.group(1)
+        if _is_test_file(path):
+            paths.append(path)
+    return paths
+
+
+def _verification_discovery_text(
+    issue_content: str,
+    step_outputs: Dict[str, str],
+) -> str:
+    """Combine issue context with prior step outputs for test discovery."""
+    parts = [issue_content]
+    for value in step_outputs.values():
+        if isinstance(value, str) and value:
+            parts.append(value)
+    return "\n\n".join(parts)
+
+
 def _extract_test_files(
     issue_content: str,
     changed_files: List[str],
@@ -689,6 +724,13 @@ def _extract_test_files(
 
     # Parse markers from issue content (plain text lines)
     for p in _extract_marker_files(issue_content):
+        _add(p)
+
+    # Parse pytest node IDs from issue comments / prior step outputs. Step 1
+    # commonly reports exact tests as `tests/foo.py::test_name`; without this,
+    # Step 2 can fall through to a whole-repo fallback scan even though targeted
+    # test evidence is already present.
+    for p in _extract_pytest_nodeid_files(issue_content):
         _add(p)
 
     # Parse markers from PDD_WORKFLOW_STATE JSON comments (pdd-issue fresh-clone
@@ -2527,7 +2569,10 @@ def run_agentic_e2e_fix_orchestrator(
         )
         if step2_cached_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
             test_files = _extract_test_files(
-                issue_content, changed_files, cwd, initial_file_hashes
+                _verification_discovery_text(issue_content, step_outputs),
+                changed_files,
+                cwd,
+                initial_file_hashes,
             )
             verified = False
             verify_output = "no test files found for independent verification"
@@ -2579,7 +2624,10 @@ def run_agentic_e2e_fix_orchestrator(
     # reflects reality.
     if _resume_deferred_action == "SUCCESS_FALL_THROUGH":
         test_files = _extract_test_files(
-            issue_content, changed_files, cwd, initial_file_hashes
+            _verification_discovery_text(issue_content, step_outputs),
+            changed_files,
+            cwd,
+            initial_file_hashes,
         )
         if test_files:
             verified, verify_output = _verify_tests_independently(test_files, cwd)
@@ -2691,7 +2739,12 @@ def run_agentic_e2e_fix_orchestrator(
                     if step_num == 2:
                         step1_token = _classify_step_output(step_outputs.get("1", ""), step_num=1)
                         if step1_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
-                            test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+                            test_files = _extract_test_files(
+                                _verification_discovery_text(issue_content, step_outputs),
+                                changed_files,
+                                cwd,
+                                initial_file_hashes,
+                            )
                             if test_files:
                                 verified, verify_output = _verify_tests_independently(test_files, cwd)
                                 if _fallback_scan_was_capped and verified:
@@ -2776,7 +2829,12 @@ def run_agentic_e2e_fix_orchestrator(
                         # Early exit: Step 1 ALL_TESTS_PASS + Step 2 skipped (first time)
                         step1_token = _classify_step_output(step_outputs.get("1", ""), step_num=1)
                         if step1_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
-                            test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+                            test_files = _extract_test_files(
+                                _verification_discovery_text(issue_content, step_outputs),
+                                changed_files,
+                                cwd,
+                                initial_file_hashes,
+                            )
                             if test_files:
                                 verified, verify_output = _verify_tests_independently(test_files, cwd)
                                 if _fallback_scan_was_capped and verified:
@@ -3044,7 +3102,12 @@ def run_agentic_e2e_fix_orchestrator(
                 _step2_token = _classify_step_output(step_output, step_num=2) if step_num == 2 else None
                 if step_num == 2 and _step2_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
                     # Independent verification: don't trust LLM output alone
-                    test_files = _extract_test_files(issue_content, changed_files, cwd, initial_file_hashes)
+                    test_files = _extract_test_files(
+                        _verification_discovery_text(issue_content, step_outputs),
+                        changed_files,
+                        cwd,
+                        initial_file_hashes,
+                    )
                     if test_files:
                         verified, verify_output = _verify_tests_independently(test_files, cwd)
                         if _fallback_scan_was_capped and verified:

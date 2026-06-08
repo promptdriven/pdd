@@ -2513,6 +2513,29 @@ class TestIndependentTestVerification:
         # Non-test files should NOT be included
         assert "src/webhook.py" not in result
 
+    def test_extract_test_files_from_pytest_nodeids(self, tmp_path):
+        """Pytest node IDs in step output should drive targeted verification.
+
+        The staging #3663 replay listed exact pytest node IDs in Step 1, but
+        discovery missed them and fell back to a broad repository scan.
+        """
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_async_helpers.py").touch()
+        for index in range(5):
+            (tmp_path / "tests" / f"test_unrelated_{index}.py").touch()
+
+        issue_content = (
+            "Unit Tests Identified:\n"
+            "- tests/test_async_helpers.py::test_fetch_data_returns_json_on_201\n"
+            "- tests/test_async_helpers.py::test_fetch_data_returns_empty_dict_on_204\n"
+            "tests/test_async_helpers.py::test_fetch_data_returns_json_on_200 PASSED\n"
+        )
+
+        with patch("pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked", return_value=set()):
+            result = _extract_test_files(issue_content, [], tmp_path)
+
+        assert result == ["tests/test_async_helpers.py"]
+
     def test_extract_test_files_from_changed_files(self, tmp_path):
         """Test files from changed_files list should be included."""
         (tmp_path / "tests").mkdir()
@@ -3822,6 +3845,46 @@ class TestIssue673SkippedStepEarlyExit:
         assert mock_run.call_count == 1, (
             f"Expected only 1 LLM call (Step 1) but got {mock_run.call_count}. "
             f"Workflow should exit early, not fall through to Step 3+."
+        )
+
+    def test_step1_pytest_nodeids_are_verified_when_step2_skips(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Step 1's exact pytest node IDs must prevent whole-repo fallback scan."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        tests_dir = e2e_fix_default_args["cwd"] / "tests"
+        tests_dir.mkdir()
+        (tests_dir / "test_async_helpers.py").write_text("def test_placeholder(): pass\n")
+
+        mock_run.return_value = (
+            True,
+            (
+                "**Status:** ALL_TESTS_PASS\n"
+                "- tests/test_async_helpers.py::test_fetch_data_returns_json_on_201\n"
+                "- tests/test_async_helpers.py::test_fetch_data_returns_empty_dict_on_204\n"
+                "5 passed"
+            ),
+            0.1,
+            "gpt-4",
+        )
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_modified_and_untracked",
+            return_value=set(),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "tests/test_async_helpers.py: 5 passed"),
+        ) as mock_verify:
+            success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, msg
+        mock_verify.assert_called_once_with(
+            ["tests/test_async_helpers.py"], e2e_fix_default_args["cwd"]
         )
 
     def test_early_exit_when_step1_passes_and_step2_skipped_cycle2(
