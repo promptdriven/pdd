@@ -4714,8 +4714,17 @@ class TestDocContractCheck:
         res = run_doc_contract_check(tmp_path, base_ref="HEAD~1")
         assert res == 0
 
-    def test_prompt_change_requires_user_story_coverage(self, tmp_path: Path) -> None:
-        """Issue #560 bridge: changed prompts need story-test coverage."""
+    def test_prompt_change_without_story_coverage_passes(self, tmp_path: Path) -> None:
+        """Issue #1447: a changed non-LLM ``.prompt`` file must NOT fail the
+        doc-contract gate merely because no ``user_stories/story__*.md`` covers
+        it.
+
+        The prompt-story coverage requirement (the #560 bridge) predated the
+        prompt-checkup/story product path and was removed from the deterministic
+        gate. Other doc-contract checks still apply; only the story-coverage
+        obligation is gone. Future prompt-checkup work (#1425) owns story
+        enforcement behind product-ready warn|strict|off controls.
+        """
         from pdd.checkup_gates import run_doc_contract_check
 
         _git_init(tmp_path)
@@ -4741,108 +4750,7 @@ class TestDocContractCheck:
             check=True,
         )
 
-        assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 1
-
-        stories = tmp_path / "user_stories"
-        stories.mkdir()
-        (stories / "story__billing_cancel.md").write_text(
-            "<!-- pdd-story-prompts: billing_python.prompt -->\n\n"
-            "# User Story: Billing cancellation\n\n"
-            "## Story\n\nAs a subscriber, I can cancel my plan.\n",
-            encoding="utf-8",
-        )
-        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "add story", "-q"],
-            cwd=tmp_path,
-            check=True,
-        )
-
-        assert run_doc_contract_check(tmp_path, base_ref="HEAD~2") == 0
-
-    def test_prompt_story_coverage_ignores_fixture_prompts(self, tmp_path: Path) -> None:
-        """Fixture prompts are not user-facing prompt surfaces."""
-        from pdd.checkup_gates import run_doc_contract_check
-
-        fixture_repo = tmp_path / "fixture_repo"
-        fixture_repo.mkdir()
-        _git_init(fixture_repo)
-        fixtures_dir = fixture_repo / "tests" / "fixtures"
-        fixtures_dir.mkdir(parents=True, exist_ok=True)
-        fixture_prompt = fixtures_dir / "sample_python.prompt"
-        fixture_prompt.write_text("Fixture prompt.\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=fixture_repo, check=True)
-        subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "base fixture", "-q"],
-            cwd=fixture_repo,
-            check=True,
-        )
-
-        fixture_prompt.write_text("Fixture prompt.\nChanged fixture behavior.\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=fixture_repo, check=True)
-        subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "change fixture", "-q"],
-            cwd=fixture_repo,
-            check=True,
-        )
-
-        assert run_doc_contract_check(fixture_repo, base_ref="HEAD~1") == 0
-
-        real_repo = tmp_path / "real_repo"
-        real_repo.mkdir()
-        _git_init(real_repo)
-        prompts_dir = real_repo / "prompts"
-        prompts_dir.mkdir(parents=True, exist_ok=True)
-        real_prompt = prompts_dir / "sample_python.prompt"
-        real_prompt.write_text("Real prompt.\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=real_repo, check=True)
-        subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "base prompt", "-q"],
-            cwd=real_repo,
-            check=True,
-        )
-
-        real_prompt.write_text("Real prompt.\nChanged user-facing behavior.\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=real_repo, check=True)
-        subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "change prompt", "-q"],
-            cwd=real_repo,
-            check=True,
-        )
-
-        assert run_doc_contract_check(real_repo, base_ref="HEAD~1") == 1
-
-    def test_prompt_story_coverage_accepts_full_prompt_path(self, tmp_path: Path) -> None:
-        """Story links can use full paths as generated/docs may recommend."""
-        from pdd.checkup_gates import run_doc_contract_check
-
-        _git_init(tmp_path)
-        prompts_dir = tmp_path / "pdd" / "prompts"
-        prompts_dir.mkdir(parents=True, exist_ok=True)
-        prompt = prompts_dir / "checkup_gates_python.prompt"
-        prompt.write_text("Gate prompt.\n", encoding="utf-8")
-        story_dir = tmp_path / "user_stories"
-        story_dir.mkdir()
-        (story_dir / "story__gates.md").write_text(
-            "<!-- pdd-story-prompts: pdd/prompts/checkup_gates_python.prompt -->\n\n"
-            "As an operator, gate behavior is documented.\n",
-            encoding="utf-8",
-        )
-        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "base", "-q"],
-            cwd=tmp_path,
-            check=True,
-        )
-
-        prompt.write_text("Gate prompt.\nSupport repo-declared docs.\n", encoding="utf-8")
-        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-        subprocess.run(
-            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit", "-m", "prompt change", "-q"],
-            cwd=tmp_path,
-            check=True,
-        )
-
+        # No ``user_stories/`` coverage exists; the prompt-only change must pass.
         assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 0
 
     def test_repo_declared_doc_contract_supports_non_pdd_repo_surfaces(self, tmp_path: Path) -> None:

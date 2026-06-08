@@ -5666,20 +5666,35 @@ def post_step_comment(
         )
 
     try:
-        result = subprocess.run(
+        attempts = [
             [
                 "gh", "issue", "comment", str(issue_number),
                 "--repo", f"{repo_owner}/{repo_name}",
                 "--body", final_body,
             ],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
+            [
+                "gh", "api",
+                f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
+                "--method", "POST",
+                "-f", f"body={final_body}",
+            ],
+        ]
+        errors = []
+        for cmd in attempts:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return True
+            errors.append((result.stderr or result.stdout or "").strip())
+        detail = " | ".join(err for err in errors if err)
+        console.print(
+            f"[yellow]Warning: Failed to post comment for step {step_num}: {detail}[/yellow]"
         )
-        if result.returncode != 0:
-            console.print(f"[yellow]Warning: Failed to post comment for step {step_num}: {result.stderr}[/yellow]")
-            return False
-        return True
+        return False
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to post comment for step {step_num}: {e}[/yellow]")
         return False
@@ -5705,24 +5720,45 @@ def post_pr_comment(
     Returns:
         True if comment was posted successfully, False otherwise
     """
+    if os.environ.get("PDD_NO_GITHUB_STATE") == "1":
+        return True
     if not _find_cli_binary("gh"):
         return False
 
+    sanitized_body = _sanitize_comment_body(body)
+    attempts = [
+        [
+            "gh", "pr", "comment", str(pr_number),
+            "--repo", f"{repo_owner}/{repo_name}",
+            "--body", sanitized_body,
+        ],
+        [
+            "gh", "issue", "comment", str(pr_number),
+            "--repo", f"{repo_owner}/{repo_name}",
+            "--body", sanitized_body,
+        ],
+        [
+            "gh", "api",
+            f"repos/{repo_owner}/{repo_name}/issues/{pr_number}/comments",
+            "--method", "POST",
+            "-f", f"body={sanitized_body}",
+        ],
+    ]
+    errors = []
     try:
-        result = subprocess.run(
-            [
-                "gh", "pr", "comment", str(pr_number),
-                "--repo", f"{repo_owner}/{repo_name}",
-                "--body", body,
-            ],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            console.print(f"[yellow]Warning: Failed to post PR comment: {result.stderr}[/yellow]")
-            return False
-        return True
+        for cmd in attempts:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return True
+            errors.append((result.stderr or result.stdout or "").strip())
+        detail = " | ".join(err for err in errors if err)
+        console.print(f"[yellow]Warning: Failed to post PR comment: {detail}[/yellow]")
+        return False
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to post PR comment: {e}[/yellow]")
         return False

@@ -325,6 +325,25 @@ class TestPrMetadataFetch:
             ".pdd/checkup-context/pr-changed-files-api.txt"
         )
 
+    def test_no_issue_report_posts_only_to_pr(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        context = _ctx(tmp_path)
+        context.issue_url = ""
+        context.issue_number = context.pr_number
+        context.has_issue = False
+        calls: List[List[str]] = []
+
+        monkeypatch.setattr(
+            mod,
+            "_run_gh_command",
+            lambda args: calls.append(args) or (True, ""),
+        )
+
+        mod._post_review_loop_report(context, "report", use_github_state=True)
+
+        assert calls == [["pr", "comment", context.pr_url, "--body", "report"]]
+
 
 class TestCheckupReviewLoopRuntime:
     def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
@@ -384,6 +403,9 @@ class TestCheckupReviewLoopRuntime:
         assert round(cost, 2) == 0.1
         assert model == "codex"
         assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
+        assert '"schema": "pdd.checkup.final_gate.v1"' in report
+        assert '"stage": "review-loop"' in report
+        assert '"fresh-final": "clean"' in report
         assert ("codex", "checkup-review-loop-review-codex-round1") in calls
         assert not any("review-claude" in label for _, label in calls)
         assert not any("fresh-final" in label for _, label in calls)
@@ -784,7 +806,6 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 "base_ref": "main",
                 "head_sha": "a" * 40,
             },
@@ -1427,6 +1448,36 @@ class TestCheckupReviewLoopRuntime:
         assert final_state["reviewer_status"]["claude"] == "fixer"
         assert final_state["active_reviewer"] == "codex"
         assert "findings" in final_state
+
+    def test_github_checks_full_suite_source_is_visible_in_final_report(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        context = _ctx(tmp_path)
+        context.full_suite_source = "github-checks"
+        context.test_scope = "targeted"
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=context,
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "Verification scope: targeted with GitHub checks gate." in report
+        assert '"full_suite_source": "github-checks"' in report
+        assert '"test_scope": "targeted"' in report
+        assert '"github_ci_gate_used": true' in report
 
     def test_reviewer_diagnostics_are_surfaced_in_report(
         self, monkeypatch: Any, tmp_path: Path
@@ -3195,7 +3246,6 @@ class TestCheckupReviewLoopRuntime:
         different role into the reviewer slot, the fixer-fallback must not
         name that promoted role either."""
         from pdd.checkup_review_loop import (
-            FixResult,
             ReviewFinding,
             ReviewLoopState,
             _maybe_run_fallback_fixer,
@@ -10214,7 +10264,6 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 # Iter-23 Finding 1: gates fail closed when metadata
                 # has no base_ref (gh-API failure semantics). Supply
                 # a base_ref so the default _patch_io still
@@ -11321,7 +11370,6 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             },
@@ -11379,7 +11427,6 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             },
@@ -11443,7 +11490,6 @@ class TestReviewLoopDeterministicGates:
             return {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
-                "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             }

@@ -202,10 +202,11 @@ jobs:
       #                                artifact:read, distribution:package,
       #                                distribution:publish). A project-locked
       #                                token (e.g. an e2e profile) will NOT work.
-      #   vars.PDS_CLI_PACKAGE         install spec for the private
-      #                                @promptdriven/pds CLI — an npm spec once
-      #                                published, or an https/tarball URL.
-      #   vars.PDS_API_URL             PDS backend (default the CLI's built-in).
+      #   vars.PDS_CLI_PACKAGE         install spec for the @promptdriven/pds
+      #                                CLI, for example @promptdriven/pds@latest
+      #                                or a pinned version.
+      #   vars.PDS_API_URL             PDS backend. Defaults to production when
+      #                                the repo variable is unset.
       #   vars.RELEASE_VIDEO_PROJECT_ID  optional stable PDS project to reuse
       #                                across releases (else a per-release
       #                                "PDD <tag> release" project is created).
@@ -215,7 +216,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDS_API_URL: ${{ vars.PDS_API_URL }}
+          PDS_API_URL: ${{ vars.PDS_API_URL || 'https://video.promptdriven.ai' }}
           PDS_CLI_PACKAGE: ${{ vars.PDS_CLI_PACKAGE }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           RELEASE_VIDEO_PROJECT_ID: ${{ vars.RELEASE_VIDEO_PROJECT_ID }}

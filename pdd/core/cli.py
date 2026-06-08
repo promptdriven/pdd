@@ -99,17 +99,9 @@ def _restore_captured_streams(ctx: click.Context) -> None:
             sys.stderr = stderr_capture.original_stream
 
 
-def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
-    """Return whether this invocation needs prompt-lint machine output."""
-    pairs = set(zip(arguments, arguments[1:]))
-    return "--json" in arguments and (
-        ("checkup", "lint") in pairs
-        or ("checkup", "contract") in pairs
-        or ("checkup", "contracts") in pairs
-        or ("checkup", "coverage") in pairs
-        or ("checkup", "gate") in pairs
-        or ("contracts", "check") in pairs
-    )
+# JSON-invocation detection is shared with the early pre-parse in pdd/cli.py via a
+# stdlib-only leaf module so the two call sites cannot drift apart.
+from ..json_invocation import is_machine_json_invocation as _is_machine_json_invocation
 
 
 class PDDCLI(click.Group):
@@ -412,15 +404,13 @@ def cli(
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
-    # Prompt-lint JSON output is intended for downstream machine consumers.
-    json_mode = _is_prompt_lint_json_invocation(sys.argv)
-    # ``pdd context --json`` emits a JSON audit payload that dashboards parse, so
-    # stdout must carry the payload alone — no update check, onboarding hint,
-    # execution summary, or core-dump notice. Detect it from the captured
-    # invocation tokens (reliable under the Click test runner, unlike sys.argv).
+    # Machine-JSON output is intended for downstream consumers, so stdout must
+    # stay payload-only. ``sys.argv`` covers the real CLI, but under Click's test
+    # runner it is the pytest argv — so also check the invocation tokens captured
+    # in ``PDDCLI.invoke`` (subcommand + its args). Both feed the same shared
+    # detector that ``pdd/cli.py``'s early pre-parse uses, so they cannot drift.
     cli_tokens = ctx.meta.get("pdd_cli_tokens", []) if hasattr(ctx, "meta") else []
-    if not json_mode and ctx.invoked_subcommand == "context" and "--json" in cli_tokens:
-        json_mode = True
+    json_mode = _is_machine_json_invocation(sys.argv) or _is_machine_json_invocation(cli_tokens)
     quiet = quiet or json_mode
     core_dump = core_dump and not json_mode
 

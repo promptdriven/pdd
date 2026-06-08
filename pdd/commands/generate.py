@@ -19,6 +19,7 @@ from ..evidence_manifest import (
     resolve_test_output_paths,
     write_evidence_manifest,
 )
+from ..prompt_gate import maybe_run_workflow_prompt_gate
 from ..user_story_tests import cache_story_prompt_links, generate_user_story
 
 # Initialize console
@@ -32,6 +33,50 @@ _DEFAULT_CODE_GENERATOR_MAIN = None
 _GITHUB_ISSUE_RE = re.compile(
     r"^(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+)/issues/(\d+)(?:[/?#].*)?$"
 )
+
+
+def _maybe_run_prompt_gate(
+    *,
+    output_files: Tuple[str, ...] | List[str],
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
+    project_root: Optional[str],
+    quiet: bool,
+    dry_run: bool = False,
+) -> tuple[bool, int]:
+    """Run the prompt gate; return ``(should_continue, exit_code)``."""
+    if dry_run:
+        return True, 0
+    root = Path(project_root or Path.cwd()).resolve()
+    return maybe_run_workflow_prompt_gate(
+        output_files,
+        cli_prompt_checkup=prompt_checkup,
+        no_prompt_checkup=no_prompt_checkup,
+        project_root=root,
+        quiet=quiet,
+    )
+
+
+def _enforce_prompt_gate_or_exit(
+    *,
+    output_files: Tuple[str, ...] | List[str],
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
+    project_root: Optional[str],
+    quiet: bool,
+    dry_run: bool = False,
+) -> None:
+    """Raise ``click.Exit`` when strict prompt checkup blocks downstream work."""
+    should_continue, exit_code = _maybe_run_prompt_gate(
+        output_files=output_files,
+        prompt_checkup=prompt_checkup,
+        no_prompt_checkup=no_prompt_checkup,
+        project_root=project_root,
+        quiet=quiet,
+        dry_run=dry_run,
+    )
+    if not should_continue:
+        raise click.exceptions.Exit(exit_code)
 
 class GenerateCommand(click.Command):
     """
@@ -124,6 +169,18 @@ class GenerateCommand(click.Command):
         "prompt (few-shot context reduction)."
     ),
 )
+@click.option(
+    "--prompt-checkup",
+    type=click.Choice(["warn", "strict"]),
+    default=None,
+    help="Automatic prompt checkup after creating or modifying .prompt files.",
+)
+@click.option(
+    "--no-prompt-checkup",
+    is_flag=True,
+    default=False,
+    help="Disable automatic prompt checkup for this run.",
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -147,6 +204,8 @@ def generate(
     evidence: bool,
     snapshot_context: bool,
     compress: bool,
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -282,6 +341,15 @@ def generate(
                     temperature=obj.get("temperature", 0.0),
                     **grounding_kwargs_from_ctx(ctx.obj),
                 )
+            if success:
+                _enforce_prompt_gate_or_exit(
+                    output_files=output_files,
+                    prompt_checkup=prompt_checkup,
+                    no_prompt_checkup=no_prompt_checkup,
+                    project_root=project_root,
+                    quiet=quiet,
+                    dry_run=dry_run,
+                )
             return (message, cost, model) if success else None
 
         if dry_run:
@@ -320,6 +388,14 @@ def generate(
                     temperature=(ctx.obj or {}).get("temperature", 0.0),
                     basename="agentic-generate",
                     **grounding_kwargs_from_ctx(ctx.obj),
+                )
+            if success:
+                _enforce_prompt_gate_or_exit(
+                    output_files=output_files,
+                    prompt_checkup=prompt_checkup,
+                    no_prompt_checkup=no_prompt_checkup,
+                    project_root=project_root,
+                    quiet=quiet,
                 )
             return (message, cost, model) if success else None
 
@@ -391,7 +467,7 @@ def generate(
             )
         return generated_code, cost, model
 
-    except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+    except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False

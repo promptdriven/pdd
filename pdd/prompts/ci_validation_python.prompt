@@ -6,6 +6,7 @@
   "module": {
     "functions": [
       {"name": "run_ci_validation_loop", "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)", "returns": "Tuple[bool, str, float]", "sideEffects": ["expected_head_sha_override forces the poll to wait for a specific PR head SHA instead of _get_head_sha(cwd); used by the post-checkup CI re-validation gate where cwd's local HEAD is stale relative to the PR remote because the checkup pushed from its own worktree"]},
+      {"name": "run_github_checks_gate", "signature": "(cwd, repo_owner, repo_name, pr_number, quiet, expected_head_sha=None, required_only=False)", "returns": "Tuple[bool, str, str]"},
       {"name": "post_ci_failure_comment", "signature": "(repo_owner, repo_name, pr_number, failures, attempts, cwd)", "returns": "bool"},
       {"name": "detect_ci_system", "signature": "(cwd)", "returns": "str"}
     ]
@@ -48,7 +49,8 @@ Module providing CI polling, log retrieval, and fix-iteration loop infrastructur
     - If stderr contains "resource not accessible by integration" → log a yellow warning that the GitHub App may lack `checks:read` permission, then return `("no_checks", [])` immediately, even with partial check JSON in stdout.
     - If `latest_checks` is empty → mark `saw_ambiguous_error=True`, log the stderr (yellow), and continue polling.
     - If `latest_checks` is non-empty and none of the stderr patterns above matched but stderr is non-empty → log the stderr with an explicit prefix making it clear the result will be classified as failed from the exit code (e.g. `"CI polling warning (classifying as failed from exit code 1): {stderr}"`), then fall through to `_classify_check_result` so a real check failure isn't lost. Without this log, the LLM fix loop can be triggered silently when a transport error masquerades as a real failure.
-14. Include `<include>context/agentic_common_example.py</include>` for `run_agentic_task` signature and `post_pr_comment` usage, and `<include>context/ci_validation_example.py</include>` for the implementation pattern.
+14. Final gate: `run_github_checks_gate(...)` is verify-only and fail-closed. When `required_only=True`, keep using `gh pr checks --required` through the required-check poller. When `required_only=False` (the canonical `--full-suite-source github-checks` final-gate path), do not use `gh pr checks` because it reads GitHub's GraphQL `statusCheckRollup` field and can fail when an installation token has `checks:read` but not commit-status permissions. Instead poll REST check runs for the exact current PR head SHA with `gh api repos/{owner}/{repo}/commits/{head_sha}/check-runs?per_page=100`; do not append `--repo`, because `gh api` does not support that flag. Normalize check runs into the same `{name,state,bucket,link}` structure: non-`completed` statuses are `pending`; `success` is `pass`; `skipped`/`neutral` are skipped buckets; `failure`, `cancelled`, `timed_out`, `action_required`, and `startup_failure` are fail buckets; unknown completed conclusions are unknown and must fail final gate. Missing, unreadable, pending/timeout, skipped, failed, stale/wrong-head, or unknown checks all fail final gate.
+15. Include `<include>context/agentic_common_example.py</include>` for `run_agentic_task` signature and `post_pr_comment` usage, and `<include>context/ci_validation_example.py</include>` for the implementation pattern.
 
 % Deliverables
 - Code: `pdd/ci_validation.py`
