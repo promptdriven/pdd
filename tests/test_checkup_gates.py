@@ -5264,3 +5264,14 @@ class TestExtractPddrcDefaultsKeys:
     def test_syntax_error_returns_empty(self):
         from pdd.checkup_gates import extract_pddrc_defaults_keys
         assert extract_pddrc_defaults_keys("def (broken syntax") == set()
+
+    def test_whitespace_padded_keys_are_stripped(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_PDDRC_DEFAULTS_KEYS = {" key_a ", "key_b"}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_nested_assignment_not_extracted(self):
+        # tree.body only visits top-level nodes; a nested assignment should not be found
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = 'def f():\n    _PDDRC_DEFAULTS_KEYS = {"nested_key"}\n'
+        assert extract_pddrc_defaults_keys(content) == set()

@@ -3291,9 +3291,9 @@ def extract_pddrc_defaults_keys(content: str) -> Set[str]:
     """Extract _PDDRC_DEFAULTS_KEYS from construct_paths.py source using AST parsing."""
     try:
         tree = ast.parse(content)
-    except SyntaxError:
+    except Exception:
         return set()
-    for node in ast.walk(tree):
+    for node in tree.body:
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
@@ -3302,8 +3302,8 @@ def extract_pddrc_defaults_keys(content: str) -> Set[str]:
         ):
             try:
                 value = ast.literal_eval(node.value)
-                if isinstance(value, (set, frozenset)):
-                    return {k for k in value if isinstance(k, str)}
+                if isinstance(value, set):
+                    return {k.strip() for k in value if isinstance(k, str)}
             except (ValueError, TypeError):
                 pass
     return set()
