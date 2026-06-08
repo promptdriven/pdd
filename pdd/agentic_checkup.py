@@ -1956,6 +1956,7 @@ def run_agentic_checkup(
                         final_gate and full_suite_source == "github-checks"
                     ),
                     start_step_override=start_step_override,
+                    suppress_progress_comments=final_gate,
                 )
             )
     except Exception as exc:
