@@ -23,11 +23,14 @@ MAX_LOG_CHARS = 20000
 PASS_BUCKETS = {"pass", "skipping"}
 FAIL_BUCKETS = {"fail", "cancel"}
 PENDING_BUCKETS = {"pending"}
+SKIP_BUCKETS = {"skip", "skipped", "skipping"}
+FINAL_GATE_PASS_BUCKETS = {"pass"}
 
 # Substring gh CLI prints to stderr when no required checks are configured.
 # Centralised so tests can reference the same constant instead of duplicating
 # a magic string.
 GH_NO_REQUIRED_CHECKS_PHRASE = "no required checks"
+GH_NO_CHECKS_PHRASES = (GH_NO_REQUIRED_CHECKS_PHRASE, "no checks")
 
 
 def detect_ci_system(cwd: Path) -> str:
@@ -75,6 +78,15 @@ def _run_command_bytes(cmd: List[str], cwd: Path) -> subprocess.CompletedProcess
 def _run_gh(repo_owner: str, repo_name: str, cwd: Path, args: List[str]) -> subprocess.CompletedProcess[str]:
     """Run a gh command scoped to the current repository."""
     return _run_command(["gh", *args, "--repo", f"{repo_owner}/{repo_name}"], cwd)
+
+
+def _run_gh_api(cwd: Path, args: List[str]) -> subprocess.CompletedProcess[str]:
+    """Run a gh api command.
+
+    ``gh api`` endpoints already include the repository path and do not support
+    the global ``--repo`` flag.
+    """
+    return _run_command(["gh", "api", *args], cwd)
 
 
 def _run_gh_bytes(
@@ -180,6 +192,54 @@ def _normalize_checks(raw_checks: Any) -> List[Dict[str, str]]:
     return checks
 
 
+def _check_run_bucket(status: str, conclusion: str) -> str:
+    """Map REST check-run status/conclusion fields to gh-style buckets."""
+    normalized_status = status.strip().lower()
+    normalized_conclusion = conclusion.strip().lower()
+
+    if normalized_status != "completed":
+        return "pending"
+    if normalized_conclusion == "success":
+        return "pass"
+    if normalized_conclusion in {"skipped", "neutral"}:
+        return "skipped"
+    if normalized_conclusion in {
+        "failure",
+        "cancelled",
+        "timed_out",
+        "action_required",
+        "startup_failure",
+    }:
+        return "fail"
+    return ""
+
+
+def _normalize_check_runs(raw_payload: Any) -> List[Dict[str, str]]:
+    """Normalize REST check-runs payloads into the shared check structure."""
+    if not isinstance(raw_payload, dict):
+        return []
+    raw_runs = raw_payload.get("check_runs")
+    if not isinstance(raw_runs, list):
+        return []
+
+    checks: List[Dict[str, str]] = []
+    for item in raw_runs:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "")).strip()
+        conclusion = str(item.get("conclusion", "") or "").strip()
+        link = str(item.get("html_url") or item.get("details_url") or "").strip()
+        checks.append(
+            {
+                "name": str(item.get("name", "")).strip(),
+                "state": (conclusion or status).upper(),
+                "bucket": _check_run_bucket(status, conclusion),
+                "link": link,
+            }
+        )
+    return checks
+
+
 def _render_check_summary(checks: List[Dict[str, str]]) -> str:
     """Render required checks into a compact markdown list."""
     if not checks:
@@ -223,8 +283,9 @@ def _poll_required_checks(
     *,
     expected_head_sha: str,
     quiet: bool,
+    required_only: bool = True,
 ) -> Tuple[str, List[Dict[str, str]]]:
-    """Poll required checks until they pass, fail, or time out."""
+    """Poll PR checks until they pass, fail, or time out."""
     saw_checks = False
     saw_ambiguous_error = False
     matched_expected_head = not bool(expected_head_sha)
@@ -243,19 +304,11 @@ def _poll_required_checks(
                 time.sleep(POLL_INTERVAL_SECONDS)
                 continue
 
-        result = _run_gh(
-            repo_owner,
-            repo_name,
-            cwd,
-            [
-                "pr",
-                "checks",
-                str(pr_number),
-                "--required",
-                "--json",
-                "name,state,bucket,link",
-            ],
-        )
+        check_args = ["pr", "checks", str(pr_number)]
+        if required_only:
+            check_args.append("--required")
+        check_args.extend(["--json", "name,state,bucket,link"])
+        result = _run_gh(repo_owner, repo_name, cwd, check_args)
 
         latest_checks = []
         if result.stdout.strip():
@@ -272,7 +325,7 @@ def _poll_required_checks(
         # accompany permission/config errors (issue #1114).
         if result.returncode == 1:
             stderr_lower = (result.stderr or "").lower()
-            if GH_NO_REQUIRED_CHECKS_PHRASE in stderr_lower:
+            if any(phrase in stderr_lower for phrase in GH_NO_CHECKS_PHRASES):
                 return "no_checks", []
             # GitHub App installation token may lack checks:read on fork repos.
             # "resource not accessible by integration" means we can't read check
@@ -323,6 +376,175 @@ def _poll_required_checks(
     if not saw_checks and matched_expected_head and not saw_ambiguous_error:
         return "no_checks", []
     return "timeout", latest_checks
+
+
+def _poll_check_runs_for_head(
+    repo_owner: str,
+    repo_name: str,
+    cwd: Path,
+    *,
+    head_sha: str,
+    quiet: bool,
+) -> Tuple[str, List[Dict[str, str]]]:
+    """Poll REST check runs for the exact PR head SHA.
+
+    Final gate uses this instead of ``gh pr checks`` because the latter reads
+    GitHub's GraphQL ``statusCheckRollup`` field. Installation tokens can have
+    ``checks:read`` while lacking commit-status permissions, and the GraphQL
+    rollup fails even when real check runs are readable through the REST Checks
+    API.
+    """
+    saw_checks = False
+    latest_checks: List[Dict[str, str]] = []
+    start = time.monotonic()
+
+    while time.monotonic() - start < MAX_POLL_SECONDS:
+        result = _run_gh_api(
+            cwd,
+            [f"repos/{repo_owner}/{repo_name}/commits/{head_sha}/check-runs?per_page=100"],
+        )
+
+        latest_checks = []
+        if result.stdout.strip():
+            try:
+                latest_checks = _normalize_check_runs(json.loads(result.stdout or "{}"))
+            except json.JSONDecodeError:
+                if not quiet:
+                    console.print("[yellow]CI polling warning: failed to parse check-runs JSON output.[/yellow]")
+
+        saw_checks = saw_checks or bool(latest_checks)
+        if latest_checks:
+            status = _classify_check_result(result.returncode, latest_checks)
+            if status in {"passed", "failed"}:
+                return status, latest_checks
+
+        if result.returncode != 0:
+            stderr_lower = (result.stderr or "").lower()
+            if "resource not accessible by integration" in stderr_lower:
+                if not quiet:
+                    console.print(
+                        "[yellow]CI polling: cannot read GitHub check runs "
+                        "(GitHub App may lack checks:read permission on this repo).[/yellow]"
+                    )
+                return "no_checks", []
+            if not quiet:
+                stderr = result.stderr.strip()
+                if stderr:
+                    console.print(f"[yellow]CI polling warning: {stderr}[/yellow]")
+
+        time.sleep(POLL_INTERVAL_SECONDS)
+
+    if not saw_checks:
+        return "no_checks", []
+    return "timeout", latest_checks
+
+
+def run_github_checks_gate(
+    cwd: Path,
+    repo_owner: str,
+    repo_name: str,
+    pr_number: int,
+    *,
+    quiet: bool,
+    expected_head_sha: Optional[str] = None,
+    required_only: bool = False,
+) -> Tuple[bool, str, str]:
+    """Strict final-gate check over GitHub PR checks.
+
+    Unlike ``run_ci_validation_loop``, this is verify-only and fail-closed:
+    missing, unreadable, skipped, pending, failed, stale, or wrong-head checks
+    all fail because this path uses GitHub checks as the full-suite source of
+    truth.
+    """
+    head_sha = (expected_head_sha or "").strip() or _get_pr_head_sha(
+        repo_owner, repo_name, pr_number, cwd
+    )
+    source_name = "required GitHub checks" if required_only else "GitHub checks"
+
+    if not head_sha:
+        return False, f"{source_name} gate could not read the current PR head SHA.", ""
+
+    if not quiet:
+        console.print(
+            f"[bold]Final gate: waiting for {source_name} on PR #{pr_number} "
+            f"head {head_sha[:8]}...[/bold]"
+        )
+
+    if required_only:
+        status, checks = _poll_required_checks(
+            repo_owner,
+            repo_name,
+            pr_number,
+            cwd,
+            expected_head_sha=head_sha,
+            quiet=quiet,
+            required_only=True,
+        )
+    else:
+        status, checks = _poll_check_runs_for_head(
+            repo_owner,
+            repo_name,
+            cwd,
+            head_sha=head_sha,
+            quiet=quiet,
+        )
+    summary = _render_check_summary(checks)
+    skipped = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() in SKIP_BUCKETS
+        or check.get("state", "").lower() in SKIP_BUCKETS
+    ]
+    unknown = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() not in (
+            FINAL_GATE_PASS_BUCKETS | FAIL_BUCKETS | PENDING_BUCKETS | SKIP_BUCKETS
+        )
+    ]
+
+    if status == "passed" and checks and not skipped and not unknown:
+        return True, f"{source_name} passed on PR head {head_sha[:8]}.\n{summary}", head_sha
+    if status == "passed" and not checks:
+        return False, f"{source_name} were missing for PR head {head_sha[:8]}.", head_sha
+    if skipped:
+        return (
+            False,
+            f"{source_name} included skipped checks on PR head {head_sha[:8]}:\n{summary}",
+            head_sha,
+        )
+    if unknown:
+        return (
+            False,
+            f"{source_name} included unknown check states on PR head {head_sha[:8]}:\n{summary}",
+            head_sha,
+        )
+    if status == "failed":
+        return False, f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}", head_sha
+    if status == "no_checks":
+        return (
+            False,
+            (
+                f"{source_name} were missing or unreadable for PR head "
+                f"{head_sha[:8]}; final gate requires GitHub checks as "
+                "full-suite truth."
+            ),
+            head_sha,
+        )
+    if status == "timeout":
+        return (
+            False,
+            (
+                f"{source_name} were pending, stale, or not reported for PR "
+                f"head {head_sha[:8]} before the polling timeout:\n{summary}"
+            ),
+            head_sha,
+        )
+    return (
+        False,
+        f"{source_name} returned unexpected status {status!r} on PR head {head_sha[:8]}:\n{summary}",
+        head_sha,
+    )
 
 
 def _load_failed_runs(
@@ -565,7 +787,7 @@ def post_ci_failure_comment(
         "What was attempted:",
         f"- Polled required CI checks for PR #{pr_number}",
         f"- Ran automated CI fix iterations: {attempts}",
-        f"- Retrieved failure logs or check URLs for each failing check",
+        "- Retrieved failure logs or check URLs for each failing check",
         "",
         "Remaining required check failures:",
     ]
