@@ -1,0 +1,79 @@
+<pdd-reason>Deterministic Python AST-based real interface inspector that grounds generation in actual models, exports, signatures, and endpoint schemas before code is generated.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ground_interfaces", "signature": "(contract: GenerationSourceContract, source_paths: List[Path]) -> GenerationSourceContract", "returns": "GenerationSourceContract"},
+      {"name": "extract_python_facts", "signature": "(source_path: Path) -> List[InterfaceFact]", "returns": "List[InterfaceFact]"},
+      {"name": "validate_generated_against_facts", "signature": "(generated_code: str, expected_facts: List[InterfaceFact]) -> List[str]", "returns": "List[str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>generation_source_contract_python.prompt</pdd-dependency>
+
+% Write `pdd/interface_grounder.py`, the AST-based interface grounding module for generation quality.
+
+<include>context/python_preamble.prompt</include>
+
+Shared Context (canonical data model — use ONLY these fields and types)
+
+<context_data_dictionary>
+<include>prompts/_context/data_dictionary.yaml</include>
+</context_data_dictionary>
+
+CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
+% Role & Scope
+This module implements PRD Requirement 3: grounding generation in real interfaces. It uses Python stdlib `ast` module (same pattern as `content_selector.py` and `architecture_sync.py`) to extract `InterfaceFact` records from existing source files, populating `contract.interface_facts`. It handles the new-project case (no source files → `grounded_from_contract=True`). Deterministic AST parsing is preferred; `needs_llm_review=True` is flagged only for non-Python surfaces.
+
+% Requirements
+1. Implement `extract_python_facts(source_path: Path) -> List[InterfaceFact]`:
+   - Read source with `source_path.read_text('utf-8')`.
+   - Call `ast.parse(source_text)` — raise `SyntaxError` on failure.
+   - Walk AST nodes:
+     - `ast.FunctionDef` / `ast.AsyncFunctionDef` → `kind="function"`, reconstruct signature string from `node.args` (include type annotations from `ast.unparse` when available), `symbol_name = qualname` including enclosing class if any.
+     - `ast.ClassDef` with `ast.AnnAssign` direct children → `kind="class_field"` per annotated field; `symbol_name = "ClassName.field_name"`.
+     - Top-level `__all__` assignment (`ast.Assign` with target name `__all__`, value `ast.List`) → `kind="export"` per element.
+     - Decorator calls matching `@app.route`, `@router.{method}`, `@blueprint.route` → `kind="endpoint"`, `symbol_name` = the decorated function name.
+     - `@click.command`, `@click.group` → `kind="config_key"`, `symbol_name` = CLI command name.
+     - `os.environ[...]`, `os.getenv(...)` with string literal keys → `kind="config_key"`, `symbol_name` = the key string literal.
+   - Compute `source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()`.
+   - Set `needs_llm_review=False` for all Python facts. Assign UUID v4 `fact_id`.
+   - `source_path` field in `InterfaceFact` stores `str(source_path)`.
+2. Implement `ground_interfaces(contract: GenerationSourceContract, source_paths: List[Path]) -> GenerationSourceContract`:
+   - For each path in `source_paths`: if `.py` extension → call `extract_python_facts`; handle `SyntaxError` by logging warning and adding placeholder `InterfaceFact(kind="function", needs_llm_review=True, symbol_name=str(p), source_path=str(p), source_sha256="", signature=None)`. Non-Python paths → add `InterfaceFact(kind="function", needs_llm_review=True, ...)` placeholder.
+   - If `source_paths` is empty, set `contract.grounded_from_contract = True`.
+   - Mutate `contract.interface_facts` by extending it; return contract.
+3. Implement `validate_generated_against_facts(generated_code: str, expected_facts: List[InterfaceFact]) -> List[str]`:
+   - Parse `generated_code` with `ast.parse`; on `SyntaxError` return `["SyntaxError in generated code: {e}"]`.
+   - Extract function names and class names from the generated AST.
+   - For each `InterfaceFact` in `expected_facts` with `kind="function"`: check that `symbol_name` (or its basename) appears in the generated AST. If missing, append `f"Missing function: {fact.symbol_name}"`.
+   - For `kind="export"`: check that name is in `__all__` or top-level assignments.
+   - Return violation messages; empty list = valid.
+4. Use `logging.getLogger(__name__)`; never `print`.
+5. All stdlib: `ast`, `hashlib`, `uuid`, `logging`, `pathlib`, `typing`. No external deps.
+
+% Dependency API Reference
+
+### generation_source_contract
+- `GenerationSourceContract` — `contract.interface_facts: List[InterfaceFact]`, `contract.grounded_from_contract: bool`
+- `InterfaceFact` — fields: `fact_id`, `symbol_name`, `kind`, `signature`, `source_path`, `source_sha256`, `needs_llm_review`
+- `InterfaceFactKind` — enum values: `function`, `class_field`, `export`, `endpoint`, `config_key`, `component_prop`
+
+**Import as:** `from pdd.generation_source_contract import (GenerationSourceContract, InterfaceFact, InterfaceFactKind)`
+
+% Testing Strategy
+- External services: filesystem reads
+- Test: `extract_python_facts` on a temp file with `def foo(x: int) -> str: ...` → `InterfaceFact(kind='function', symbol_name='foo')`
+- Test: `ground_interfaces(contract, [])` → `contract.grounded_from_contract == True`
+- Test: `ground_interfaces` with a non-Python `.js` path → adds `InterfaceFact(needs_llm_review=True)`
+- Test: `validate_generated_against_facts` with expected function missing → returns violation message
+
+% Deliverables
+- Single file: `pdd/interface_grounder.py`
+- All three public functions with docstrings and type hints
+- AST visitor or `ast.walk` walker for Python fact extraction

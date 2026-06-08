@@ -175,6 +175,36 @@ contexts:
       budget: 10.0
       max_attempts: 3
 
+  # PDD data files context (CSV/data assets; must come before pdd_cli)
+  # Use basename patterns for data modules so prompts_dir does not conflict with pdd_cli
+  pdd_data:
+    paths: ["pdd/data/**", "**/pdd/data/**", "*language_format*", "*llm_model*"]
+    defaults:
+      generate_output_path: "pdd/data/"
+      test_output_path: "tests/data/"
+      example_output_path: "context/data/"
+      default_language: "python"
+      target_coverage: 80.0
+      strength: 0.818
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
+  # PDD agentic prompt templates context (must come before pdd_cli)
+  # Use basename patterns for prompts modules so prompts_dir does not conflict with pdd_cli
+  pdd_prompts:
+    paths: ["pdd/prompts/**", "**/pdd/prompts/**", "*arrange_graph_layout*"]
+    defaults:
+      generate_output_path: "pdd/prompts/"
+      test_output_path: "tests/pdd/prompts/"
+      example_output_path: "context/pdd/prompts/"
+      default_language: "python"
+      target_coverage: 80.0
+      strength: 0.818
+      temperature: 0.0
+      budget: 10.0
+      max_attempts: 3
+
   # Main PDD CLI codebase context
   pdd_cli:
     paths: ["pdd/**", "*.py", "prompts/**", "tests/**"]
