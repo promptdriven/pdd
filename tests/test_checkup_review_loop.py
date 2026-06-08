@@ -4686,6 +4686,50 @@ Local tests passed.
         assert result.status == "clean"
         assert result.findings == []
 
+    def test_markdown_review_scope_checklist_is_filtered_to_clean(self) -> None:
+        """Bare reviewer-checklist headings are not actionable findings."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """1. Issue-contract and user-workflow behavior
+2. State/resume/idempotency and side-effect ordering
+3. Security, redaction, auth, logging, and fallback paths
+4. Prompt/example/architecture/generated-metadata source-of-truth drift
+5. Caller/test/CLI compatibility
+6. Adversarial probes
+"""
+
+        result = _parse_review_output(output, "claude", 1)
+
+        assert result.status == "clean"
+        assert result.findings == []
+
+    def test_json_review_scope_checklist_is_filtered_to_clean(self) -> None:
+        """JSON repair must not preserve prompt checklist headings as findings."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        payload = json.dumps(
+            {
+                "status": "findings",
+                "issue_aligned": True,
+                "summary": "review checklist echoed",
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "area": "",
+                        "location": "",
+                        "evidence": "Adversarial probes",
+                        "finding": "Adversarial probes",
+                        "required_fix": "Address the reviewer finding.",
+                    }
+                ],
+            }
+        )
+
+        result = _parse_review_output(payload, "claude", 1)
+
+        assert result.status == "clean"
+        assert result.findings == []
+
     def test_external_status_filter_keeps_file_backed_workflow_finding(self) -> None:
         """Workflow findings with repository-file evidence are still actionable."""
         from pdd.checkup_review_loop import _parse_review_output

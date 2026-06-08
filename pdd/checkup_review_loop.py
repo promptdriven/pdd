@@ -128,6 +128,14 @@ EXTERNAL_STATUS_AREAS: Tuple[str, ...] = (
     "status",
     "workflow",
 )
+REVIEW_SCOPE_CHECKLIST_FINDINGS: Tuple[str, ...] = (
+    "issue-contract and user-workflow behavior",
+    "state/resume/idempotency and side-effect ordering",
+    "security, redaction, auth, logging, and fallback paths",
+    "prompt/example/architecture/generated-metadata source-of-truth drift",
+    "caller/test/cli compatibility",
+    "adversarial probes",
+)
 REVIEW_TRAILING_SECTION_NAMES = r"(?:Checks|Checks Run|Verification|Regression Checks)"
 REVIEW_TRAILING_SECTION_LOOKAHEAD = (
     r"\n\s*(?:\*\*)?" + REVIEW_TRAILING_SECTION_NAMES + r"(?:\*\*)?\s*:?[^\n]*(?=\n|\Z)"
@@ -3895,7 +3903,12 @@ def _filter_actionable_review_findings(
     findings: Sequence[ReviewFinding],
 ) -> List[ReviewFinding]:
     """Drop findings that only reflect external PR readiness status."""
-    return [finding for finding in findings if not _is_external_status_finding(finding)]
+    return [
+        finding
+        for finding in findings
+        if not _is_external_status_finding(finding)
+        and not _is_review_scope_checklist_finding(finding)
+    ]
 
 
 def _is_external_status_finding(finding: ReviewFinding) -> bool:
@@ -3918,6 +3931,32 @@ def _is_external_status_finding(finding: ReviewFinding) -> bool:
     if area and area not in EXTERNAL_STATUS_AREAS:
         return False
     return True
+
+
+def _is_review_scope_checklist_finding(finding: ReviewFinding) -> bool:
+    """Drop bare prompt checklist headings misparsed as findings."""
+    text = " ".join(
+        [
+            finding.area,
+            finding.location,
+            finding.evidence,
+            finding.finding,
+            finding.required_fix,
+        ]
+    )
+    if _looks_like_file_location(finding.location) or _contains_file_reference(text):
+        return False
+
+    finding_text = _compact_text(finding.finding)
+    if finding_text not in REVIEW_SCOPE_CHECKLIST_FINDINGS:
+        return False
+
+    evidence_text = _compact_text(finding.evidence)
+    if evidence_text and evidence_text != finding_text:
+        return False
+
+    required_fix = _compact_text(finding.required_fix)
+    return required_fix in {"", "address the reviewer finding."}
 
 
 def _looks_like_file_location(location: str) -> bool:
