@@ -251,6 +251,62 @@ def test_estimate_cost_unknown_model_returns_none(mock_pricing_csv):
     assert estimate is None
 
 
+def test_estimate_cost_rejects_provider_prefixed_near_matches(tmp_path):
+    """Bare model names must not inherit prices from provider-scoped near matches."""
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join(
+            [
+                "model,input,output",
+                "azure/gpt-4.1-mini,0.4,1.6",
+                "github_copilot/gpt-4o,0.0,0.0",
+                "openai/gpt-4o,2.5,10.0",
+                "gpt-4.1-mini,0.4,1.6",
+            ]
+        )
+    )
+
+    token_counter._load_model_pricing.cache_clear()
+
+    assert estimate_completion_cost(1000, 1000, "gpt-4", pricing_csv) is None
+    assert estimate_completion_cost(1000, 1000, "gpt-4o", pricing_csv) is None
+
+
+def test_estimate_cost_preserves_exact_provider_and_unqualified_matches(tmp_path):
+    """Conservative matching still allows exact provider-qualified/unqualified rows."""
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join(
+            [
+                "model,input,output",
+                "openai/gpt-4o,2.5,10.0",
+                "gpt-4.1-mini,0.4,1.6",
+                "local-free,0,0",
+            ]
+        )
+    )
+
+    token_counter._load_model_pricing.cache_clear()
+
+    provider_estimate = estimate_completion_cost(
+        1_000_000, 1_000_000, "openai/gpt-4o", pricing_csv
+    )
+    assert provider_estimate is not None
+    assert provider_estimate.matched_model == "openai/gpt-4o"
+    assert provider_estimate.total_cost == pytest.approx(12.5)
+
+    unqualified_estimate = estimate_completion_cost(
+        1_000_000, 1_000_000, "gpt-4.1-mini", pricing_csv
+    )
+    assert unqualified_estimate is not None
+    assert unqualified_estimate.matched_model == "gpt-4.1-mini"
+    assert unqualified_estimate.total_cost == pytest.approx(2.0)
+
+    zero_estimate = estimate_completion_cost(1000, 1000, "local-free", pricing_csv)
+    assert zero_estimate is not None
+    assert zero_estimate.total_cost == pytest.approx(0.0)
+
+
 def test_estimate_completion_cost_uses_input_and_output_rates(mock_pricing_csv):
     """Completion estimates include separate deterministic input/output rates."""
     token_counter._load_model_pricing.cache_clear()

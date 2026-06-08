@@ -363,15 +363,49 @@ def _find_model_pricing(
     model: str,
     pricing: Dict[str, ModelPricing],
 ) -> Optional[tuple[str, ModelPricing]]:
-    """Find valid pricing for model using exact, then conservative partial match."""
+    """Find valid pricing for model without borrowing family/provider prices."""
     if model in pricing:
         return model, pricing[model]
 
     model_lower = model.lower()
     for csv_model, rates in pricing.items():
-        csv_model_lower = csv_model.lower()
-        if model_lower in csv_model_lower or csv_model_lower in model_lower:
+        if csv_model.lower() == model_lower:
             return csv_model, rates
+
+    requested_provider, _, requested_name = model_lower.rpartition("/")
+    requested_is_qualified = bool(requested_provider)
+
+    for csv_model, rates in pricing.items():
+        csv_model_lower = csv_model.lower()
+
+        csv_provider, _, csv_name = csv_model_lower.rpartition("/")
+        csv_is_qualified = bool(csv_provider)
+
+        if (
+            requested_is_qualified
+            and not csv_is_qualified
+            and requested_name == csv_name
+        ):
+            return csv_model, rates
+
+        if (
+            not requested_is_qualified
+            and not csv_is_qualified
+            and requested_name.startswith(f"{csv_name}-")
+        ):
+            suffix = requested_name[len(csv_name) + 1 :]
+            if suffix.isdigit():
+                return csv_model, rates
+
+        if (
+            requested_is_qualified
+            and csv_is_qualified
+            and requested_provider == csv_provider
+            and requested_name.startswith(f"{csv_name}-")
+        ):
+            suffix = requested_name[len(csv_name) + 1 :]
+            if suffix.isdigit():
+                return csv_model, rates
 
     return None
 
