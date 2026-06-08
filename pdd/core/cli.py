@@ -135,6 +135,15 @@ class PDDCLI(click.Group):
     def invoke(self, ctx):
         exception_to_handle = None
         user_abort = False  # Flag for user cancellation (fix for issue #186)
+        # Capture the real invocation tokens (subcommand + its args) before Click
+        # consumes them while resolving the subcommand. The group callback needs
+        # these to decide whether to enter machine-output (quiet) mode, and
+        # ``sys.argv`` is unreliable for that under Click's test runner. ``meta``
+        # is shared with the same context the callback receives.
+        try:
+            ctx.meta["pdd_cli_tokens"] = list(ctx.protected_args) + list(ctx.args)
+        except Exception:
+            ctx.meta["pdd_cli_tokens"] = list(getattr(ctx, "args", []) or [])
         try:
             result = super().invoke(ctx)
         except click.Abort:
@@ -405,6 +414,13 @@ def cli(
     """
     # Prompt-lint JSON output is intended for downstream machine consumers.
     json_mode = _is_prompt_lint_json_invocation(sys.argv)
+    # ``pdd context --json`` emits a JSON audit payload that dashboards parse, so
+    # stdout must carry the payload alone — no update check, onboarding hint,
+    # execution summary, or core-dump notice. Detect it from the captured
+    # invocation tokens (reliable under the Click test runner, unlike sys.argv).
+    cli_tokens = ctx.meta.get("pdd_cli_tokens", []) if hasattr(ctx, "meta") else []
+    if not json_mode and ctx.invoked_subcommand == "context" and "--json" in cli_tokens:
+        json_mode = True
     quiet = quiet or json_mode
     core_dump = core_dump and not json_mode
 
