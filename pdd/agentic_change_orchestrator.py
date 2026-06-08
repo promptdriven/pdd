@@ -52,6 +52,7 @@ from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
 from pdd.pre_checkup_gate import run_pre_checkup_gate
+from pdd.user_story_tests import generate_user_story
 
 # Initialize console for rich output
 console = Console()
@@ -2479,6 +2480,30 @@ def run_agentic_change_orchestrator(
                 console.print(f"  {tf}")
     else:
         context["impacted_tests"] = "No impacted test files identified"
+
+    # Step 12.6: Generate user stories for changed non-LLM .prompt files (PR #1489).
+    # For each changed prompt file that is not a runtime LLM template and still
+    # exists on disk, call generate_user_story so the story is linked via
+    # pdd-story-prompts metadata.  Failure is non-blocking — Step 13 still runs.
+    for _story_f in changed_files:
+        if not _story_f.endswith(".prompt"):
+            continue
+        # Skip runtime LLM templates (*_LLM.prompt) — inlined to avoid circular
+        # import with pdd.agentic_sync which imports pdd.agentic_change.
+        _story_tail = Path(_story_f).name
+        if _story_tail.endswith(".prompt"):
+            _story_tail = _story_tail[: -len(".prompt")]
+        if _story_tail.endswith("_LLM"):
+            continue
+        if not Path(_story_f).exists():
+            continue
+        try:
+            generate_user_story(prompt_files=[_story_f], issue=issue_url)
+        except Exception as _story_exc:  # pylint: disable=broad-except
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: story generation failed for {_story_f}: {_story_exc}[/yellow]"
+                )
 
     if last_completed_step < 13:
         # Aggregate MANUAL_REVIEW lines from Step 9 and the review-loop
