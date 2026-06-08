@@ -52,6 +52,7 @@ from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
 from pdd.pre_checkup_gate import run_pre_checkup_gate
+from pdd.user_story_tests import generate_user_story
 
 # Initialize console for rich output
 console = Console()
@@ -806,6 +807,119 @@ def _prompt_paths_from_changed_file_entries(
             path = Path(normalized)
             prompt_paths.add(path if path.is_absolute() else worktree_path / path)
     return prompt_paths
+
+
+def _story_prompt_files_for_change(
+    changed_files: Sequence[str],
+    worktree_path: Path,
+) -> List[Path]:
+    """Return existing non-runtime prompt files changed by this workflow."""
+    prompt_paths: List[Path] = []
+    seen: Set[str] = set()
+    for prompt_path in _prompt_paths_from_changed_file_entries(changed_files, worktree_path):
+        if prompt_path.name.lower().endswith("_llm.prompt"):
+            continue
+        if not prompt_path.exists() or not prompt_path.is_file():
+            continue
+        key = str(prompt_path.resolve()).lower()
+        if key in seen:
+            continue
+        prompt_paths.append(prompt_path)
+        seen.add(key)
+    return sorted(prompt_paths, key=lambda p: str(p).lower())
+
+
+def _common_prompt_root(prompt_files: Sequence[Path], worktree_path: Path) -> Optional[Path]:
+    """Return a shared prompts directory for metadata, when one is clear."""
+    roots: Set[Path] = set()
+    for prompt_file in prompt_files:
+        resolved = prompt_file.resolve()
+        parts = resolved.parts
+        prompt_indexes = [i for i, part in enumerate(parts) if part == "prompts"]
+        if not prompt_indexes:
+            continue
+        index = prompt_indexes[-1]
+        roots.add(Path(*parts[: index + 1]))
+    if len(roots) == 1:
+        return next(iter(roots))
+    default_root = worktree_path / "prompts"
+    if default_root.exists():
+        return default_root
+    return None
+
+
+def _format_rel(path: Path, root: Path) -> str:
+    """Format a path relative to root when possible."""
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _generate_user_story_artifacts_for_change(
+    *,
+    issue_url: str,
+    changed_files: Sequence[str],
+    worktree_path: Path,
+    strength: float,
+    temperature: float,
+    time_budget: float,
+    verbose: bool,
+    quiet: bool,
+) -> Tuple[List[str], str, float, str]:
+    """Generate issue-derived story artifacts before Step 13 creates the PR.
+
+    Returns ``(story_files_to_stage, pr_summary, cost, model)``. The summary is
+    rendered into the PR body so reviewers can see which story coverage was
+    created or why generation was skipped.
+    """
+    prompt_files = _story_prompt_files_for_change(changed_files, worktree_path)
+    if not prompt_files:
+        return [], "None", 0.0, ""
+
+    stories_dir = worktree_path / "user_stories"
+    prompts_dir = _common_prompt_root(prompt_files, worktree_path)
+    success, message, cost, model, story_file, linked_prompts = generate_user_story(
+        prompt_files=[str(p) for p in prompt_files],
+        issue=issue_url,
+        stories_dir=str(stories_dir),
+        prompts_dir=str(prompts_dir) if prompts_dir else None,
+        strength=strength,
+        temperature=temperature,
+        time=time_budget,
+        verbose=verbose,
+    )
+
+    linked = linked_prompts or [_format_rel(p, prompts_dir or worktree_path) for p in prompt_files]
+    if not success:
+        if not quiet:
+            console.print(f"[yellow]User story generation skipped: {message}[/yellow]")
+        return (
+            [],
+            (
+                "### User Stories\n"
+                f"- Story generation was attempted for `{', '.join(linked)}` "
+                f"but skipped: {message}"
+            ),
+            cost,
+            model,
+        )
+
+    story_path = Path(story_file)
+    story_rel = _format_rel(story_path, worktree_path)
+    if not quiet:
+        console.print(f"[green]Generated user story:[/green] {story_rel}")
+        console.print(f"[green]Linked prompts:[/green] {', '.join(linked)}")
+    return (
+        [story_rel],
+        (
+            "### User Stories\n"
+            f"- `{story_rel}` — issue-derived story linked to: "
+            f"{', '.join(f'`{p}`' for p in linked)}"
+        ),
+        cost,
+        model,
+    )
 
 
 def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
@@ -2452,6 +2566,38 @@ def run_agentic_change_orchestrator(
             )
         except Exception:  # pylint: disable=broad-except
             pass
+
+    story_files_to_stage, user_story_summary, story_cost, story_model = (
+        _generate_user_story_artifacts_for_change(
+            issue_url=issue_url,
+            changed_files=changed_files,
+            worktree_path=gate_worktree,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=verbose,
+            quiet=quiet,
+        )
+    )
+    total_cost += story_cost
+    if story_model:
+        model_used = model_used or story_model
+    for story_file in story_files_to_stage:
+        if story_file not in changed_files:
+            changed_files.append(story_file)
+    if story_files_to_stage:
+        existing_to_stage = [
+            f.strip()
+            for f in str(context.get("files_to_stage", "") or "").split(",")
+            if f.strip()
+        ]
+        merged_to_stage = existing_to_stage[:]
+        for story_file in story_files_to_stage:
+            if story_file not in merged_to_stage:
+                merged_to_stage.append(story_file)
+        context["files_to_stage"] = ", ".join(merged_to_stage)
+    context["user_story_summary"] = user_story_summary
+    state["total_cost"] = total_cost
 
     # Identify test files for affected modules (#377 Bug B)
     impacted_tests: List[str] = []

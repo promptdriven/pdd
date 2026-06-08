@@ -34,7 +34,7 @@ from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 pytestmark = pytest.mark.timeout(450)
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths, _generate_user_story_artifacts_for_change
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -54,6 +54,82 @@ def mock_pre_checkup_gate_default():
 def temp_cwd(tmp_path):
     """Returns a temporary directory path to use as cwd."""
     return tmp_path
+
+
+def test_generate_user_story_artifacts_for_change_mentions_story_in_pr_summary(tmp_path):
+    """Generated stories must be staged and described for the Step 13 PR body."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content must not author the story", encoding="utf-8")
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        assert kwargs["issue"] == "https://github.com/x/y/issues/1454"
+        assert kwargs["prompt_files"] == [str(prompt_file)]
+        assert kwargs["stories_dir"] == str(tmp_path / "user_stories")
+        assert kwargs["prompts_dir"] == str(prompts_dir)
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n"
+            "## Story\nAs a user...\n",
+            encoding="utf-8",
+        )
+        return (
+            True,
+            f"Generated story file: {story_file}",
+            0.25,
+            "story-model",
+            str(story_file),
+            ["upload_python.prompt"],
+        )
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ):
+        story_files, summary, cost, model = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert story_files == ["user_stories/story__upload.md"]
+    assert "### User Stories" in summary
+    assert "`user_stories/story__upload.md`" in summary
+    assert "`upload_python.prompt`" in summary
+    assert cost == 0.25
+    assert model == "story-model"
+
+
+def test_generate_user_story_artifacts_skips_runtime_llm_prompts(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "runtime_LLM.prompt").write_text("runtime", encoding="utf-8")
+
+    with patch("pdd.agentic_change_orchestrator.generate_user_story") as mock_generate:
+        story_files, summary, cost, model = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/runtime_LLM.prompt", "src/code.py"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert story_files == []
+    assert summary == "None"
+    assert cost == 0.0
+    assert model == ""
+    mock_generate.assert_not_called()
+
 
 @pytest.fixture
 def mock_dependencies(temp_cwd):
