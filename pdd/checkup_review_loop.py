@@ -3908,6 +3908,7 @@ def _filter_actionable_review_findings(
         for finding in findings
         if not _is_external_status_finding(finding)
         and not _is_review_scope_checklist_finding(finding)
+        and not _is_non_actionable_baseline_finding(finding)
     ]
 
 
@@ -3957,6 +3958,68 @@ def _is_review_scope_checklist_finding(finding: ReviewFinding) -> bool:
 
     required_fix = _compact_text(finding.required_fix)
     return required_fix in {"", "address the reviewer finding."}
+
+
+NON_ACTIONABLE_BASELINE_MARKERS = (
+    "same behavior as before",
+    "same behaviour as before",
+    "not introduced by this pr",
+    "not introduced by the pr",
+    "not introduced by this pull request",
+    "not introduced by the pull request",
+    "pre-existing",
+    "preexisting",
+    "baseline observation",
+)
+
+NON_ACTIONABLE_TRANSITIVE_MARKERS = (
+    "resolves transitively",
+    "resolved transitively",
+    "available transitively",
+    "provided transitively",
+    "transitively via",
+)
+
+GENERIC_REVIEW_REQUIRED_FIXES = {
+    "",
+    "address the reviewer finding.",
+    "none.",
+    "no fix required.",
+    "no code change required.",
+}
+
+
+def _is_non_actionable_baseline_finding(finding: ReviewFinding) -> bool:
+    """Drop reviewer observations that explicitly say they are not PR regressions."""
+    text = " ".join(
+        [
+            finding.area,
+            finding.location,
+            finding.evidence,
+            finding.finding,
+            finding.required_fix,
+        ]
+    ).lower()
+    has_baseline_marker = any(
+        marker in text for marker in NON_ACTIONABLE_BASELINE_MARKERS
+    )
+    has_transitive_marker = any(
+        marker in text for marker in NON_ACTIONABLE_TRANSITIVE_MARKERS
+    )
+    if not has_baseline_marker and not has_transitive_marker:
+        return False
+
+    required_fix = _compact_text(finding.required_fix)
+    if required_fix not in GENERIC_REVIEW_REQUIRED_FIXES:
+        return False
+
+    if _looks_like_file_location(finding.location):
+        return False
+
+    if _contains_file_reference(text) and not has_transitive_marker:
+        return False
+
+    return True
 
 
 def _looks_like_file_location(location: str) -> bool:

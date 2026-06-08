@@ -1642,6 +1642,95 @@ class TestPushWithRetryTokenFile:
         mock_push.assert_called_once_with(tmp_path, "myowner", "myrepo")
 
 
+class TestRefreshFixPrMetadata:
+    def test_refresh_fix_pr_metadata_replaces_bug_phase_body_and_marks_ready(
+        self,
+        tmp_path,
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _refresh_fix_pr_metadata
+
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            return type(
+                "Result",
+                (),
+                {"returncode": 0, "stdout": "", "stderr": ""},
+            )()
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=3673,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=mock_run,
+        ):
+            success, message = _refresh_fix_pr_metadata(
+                cwd=tmp_path,
+                issue_number=3672,
+                issue_url="https://github.com/promptdriven/test_repo/issues/3672",
+                issue_title="fetch_data should handle all successful 2xx responses",
+                repo_owner="promptdriven",
+                repo_name="test_repo",
+                changed_files=["app/async_helpers.py"],
+                ci_message="pytest -vv tests/test_async_helpers.py: 5 passed",
+            )
+
+        assert success is True
+        assert "Updated PR #3673 metadata" in message
+
+        edit_call = calls[0]
+        assert edit_call[:4] == ["gh", "pr", "edit", "3673"]
+        body = edit_call[edit_call.index("--body") + 1]
+        assert "Fixes #3672" in body
+        assert "`app/async_helpers.py`" in body
+        assert "pytest -vv tests/test_async_helpers.py: 5 passed" in body
+        assert "Adds failing tests" not in body
+        assert "Next Steps" not in body
+        assert "Implement the fix" not in body
+
+        assert calls[1] == [
+            "gh",
+            "pr",
+            "ready",
+            "3673",
+            "--repo",
+            "promptdriven/test_repo",
+        ]
+
+    def test_refresh_fix_pr_metadata_fails_when_edit_fails(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _refresh_fix_pr_metadata
+
+        def mock_run(cmd, **kwargs):
+            returncode = 1 if cmd[:4] == ["gh", "pr", "edit", "42"] else 0
+            return type(
+                "Result",
+                (),
+                {"returncode": returncode, "stdout": "", "stderr": "edit failed"},
+            )()
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=42,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=mock_run,
+        ):
+            success, message = _refresh_fix_pr_metadata(
+                cwd=tmp_path,
+                issue_number=1,
+                issue_url="https://github.com/o/r/issues/1",
+                issue_title="Bug",
+                repo_owner="o",
+                repo_name="r",
+                changed_files=["app.py"],
+            )
+
+        assert success is False
+        assert "Failed to update PR #42 metadata" in message
+
+
 class TestPushWithRetryNonFastForward:
     """Tests for _push_with_retry handling non-fast-forward push errors.
 

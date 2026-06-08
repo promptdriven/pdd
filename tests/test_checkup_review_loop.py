@@ -4730,6 +4730,82 @@ Local tests passed.
         assert result.status == "clean"
         assert result.findings == []
 
+    def test_json_baseline_and_transitive_observations_are_filtered_to_clean(
+        self,
+    ) -> None:
+        """Non-regression baseline observations should not block final gate."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        payload = json.dumps(
+            {
+                "status": "findings",
+                "issue_aligned": True,
+                "summary": "non-blocking observations",
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "area": "dependency",
+                        "location": "",
+                        "evidence": "`aiohttp` resolves transitively via `litellm`.",
+                        "finding": (
+                            "`aiohttp` is not listed directly in "
+                            "`requirements.txt`/`pyproject.toml` but resolves "
+                            "transitively via `litellm`."
+                        ),
+                        "required_fix": "Address the reviewer finding.",
+                    },
+                    {
+                        "severity": "medium",
+                        "area": "behavior",
+                        "location": "",
+                        "evidence": "Malformed 2xx JSON handling is unchanged.",
+                        "finding": (
+                            "`json.JSONDecodeError` from malformed 2xx response "
+                            "bodies is not caught; this is the same behavior as "
+                            "before the fix."
+                        ),
+                        "required_fix": "Address the reviewer finding.",
+                    },
+                ],
+            }
+        )
+
+        result = _parse_review_output(payload, "claude", 1)
+
+        assert result.status == "clean"
+        assert result.findings == []
+
+    def test_stale_pr_metadata_finding_is_not_filtered(self) -> None:
+        """Stale generated PR body text is actionable merge-readiness metadata."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        payload = json.dumps(
+            {
+                "status": "findings",
+                "issue_aligned": True,
+                "summary": "stale PR body",
+                "findings": [
+                    {
+                        "severity": "medium",
+                        "area": "PR metadata",
+                        "location": "",
+                        "evidence": (
+                            "The PR body still says 'Adds failing tests' and "
+                            "'Next Steps: Implement the fix'."
+                        ),
+                        "finding": "Stale PR description still describes bug-phase work.",
+                        "required_fix": "Replace the PR body with the final fix summary.",
+                    }
+                ],
+            }
+        )
+
+        result = _parse_review_output(payload, "claude", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        assert "Stale PR description" in result.findings[0].finding
+
     def test_external_status_filter_keeps_file_backed_workflow_finding(self) -> None:
         """Workflow findings with repository-file evidence are still actionable."""
         from pdd.checkup_review_loop import _parse_review_output
