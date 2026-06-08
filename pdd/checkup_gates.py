@@ -3781,7 +3781,6 @@ def run_doc_contract_check(
     # .pddrc keys
     pddrc_keys_now = set()
     pddrc_keys_then = set()
-    pddrc_base_available = False
     construct_paths_path = worktree / "pdd/construct_paths.py"
     if construct_paths_path.is_file():
         try:
@@ -3808,15 +3807,10 @@ def run_doc_contract_check(
             )
             if res_show.returncode == 0:
                 pddrc_keys_then = extract_pddrc_defaults_keys(res_show.stdout)
-                pddrc_base_available = True
         except Exception:
             pass
 
-    # Only compute the delta when the base-ref file was successfully read.
-    # If it was absent (e.g. construct_paths.py is new in this PR) we cannot
-    # distinguish "all keys are new" from "file didn't exist yet", so we skip
-    # the check rather than spuriously flagging every key as undocumented.
-    added_pddrc_keys = pddrc_keys_now - pddrc_keys_then if pddrc_base_available else set()
+    added_pddrc_keys = pddrc_keys_now - pddrc_keys_then
 
     # Click options, Skip behaviors, and Env vars
     for file_path, lines in added_lines_by_file.items():
