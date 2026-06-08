@@ -4997,6 +4997,33 @@ def test_post_step_comment_skips_github_when_disabled(tmp_path):
         mock_run.assert_not_called()
 
 
+def test_post_step_comment_falls_back_to_api_comment(tmp_path):
+    """If the high-level gh command fails, direct REST comment posting is tried."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stdout="", stderr="issue comment failed"),
+            MagicMock(returncode=0, stdout="", stderr=""),
+        ]
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=3,
+            total_steps=13,
+            description="Research",
+            output="All good",
+            cwd=tmp_path,
+        )
+
+        assert result is True
+        assert mock_run.call_count == 2
+        fallback_cmd = mock_run.call_args_list[1].args[0]
+        assert fallback_cmd[:2] == ["gh", "api"]
+        assert "repos/owner/repo/issues/289/comments" in fallback_cmd
+
+
 def test_post_step_comment_no_gh_cli(tmp_path):
     """Test that post_step_comment returns False without crashing when gh is not installed."""
     with patch("shutil.which", return_value=None):
@@ -5037,6 +5064,68 @@ def test_post_pr_comment_posts_to_github(tmp_path):
         assert "42" in cmd
         assert "--repo" in cmd
         assert "owner/repo" in cmd
+
+
+def test_post_pr_comment_skips_github_when_disabled(tmp_path):
+    """PDD_NO_GITHUB_STATE suppresses visible PR comments too."""
+    with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}), \
+         patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        result = post_pr_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            body="CI validation exhausted retries.",
+            cwd=tmp_path,
+        )
+
+        assert result is True
+        mock_run.assert_not_called()
+
+
+def test_post_pr_comment_falls_back_to_issue_comment(tmp_path):
+    """PR comments are issue-thread comments; fallback should use that path."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=1, stdout="", stderr="pr comment failed"),
+            MagicMock(returncode=0, stdout="", stderr=""),
+        ]
+
+        result = post_pr_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            body="CI validation exhausted retries.",
+            cwd=tmp_path,
+        )
+
+        assert result is True
+        assert mock_run.call_count == 2
+        fallback_cmd = mock_run.call_args_list[1].args[0]
+        assert fallback_cmd[:3] == ["gh", "issue", "comment"]
+        assert "42" in fallback_cmd
+
+
+def test_post_pr_comment_sanitizes_and_truncates_body(tmp_path):
+    """PR comments should not fail solely because the report is too large."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_pr_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            body="x" * 30_000,
+            cwd=tmp_path,
+        )
+
+        assert result is True
+        cmd = mock_run.call_args.args[0]
+        body_arg = cmd[cmd.index("--body") + 1]
+        assert len(body_arg) == 25_000
+        assert body_arg.endswith("…[truncated]")
 
 
 def test_post_pr_comment_no_gh_cli(tmp_path):

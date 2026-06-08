@@ -5,8 +5,8 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from unittest.mock import MagicMock, call, patch
+from typing import Dict, List, Optional
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -16,6 +16,7 @@ from pdd.agentic_checkup_orchestrator import (
     STEP_ORDER,
     TOTAL_STEPS,
     _copy_uncommitted_changes,
+    _discard_clean_run_side_effects,
     _format_pr_changed_files_for_prompt,
     _format_step_abort_message,
     _get_state_dir,
@@ -26,6 +27,7 @@ from pdd.agentic_checkup_orchestrator import (
     _parse_expansion_items,
     _parse_failure_signal_block,
     _pr_base_tracking_ref,
+    _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
 )
 
@@ -1038,6 +1040,57 @@ class TestChangedFilesTracking:
         assert f"Base: {base_ref}" in result
         assert "- M: app.py" in result
         assert "- A: tests/test_app.py" in result
+
+    def test_targeted_step5_docs_only_uses_diff_check_fast_path(self, tmp_path):
+        """Docs-only targeted PRs should not ask the agent to run full suites."""
+        self._init_git_repo(tmp_path)
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "branch", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "staging2_checkup.md").write_text("marker\n", encoding="utf-8")
+        subprocess.run(["git", "add", "staging2_checkup.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "docs"], cwd=tmp_path, check=True)
+        base_ref = _pr_base_tracking_ref(77)
+        subprocess.run(["git", "update-ref", base_ref, "base"], cwd=tmp_path, check=True)
+        changed_files = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "base", "base_local_ref": base_ref},
+        )
+
+        result = _targeted_non_code_step5_result(
+            {
+                "pr_mode": "true",
+                "pr_test_scope": "targeted",
+                "pr_changed_files": changed_files,
+            },
+            tmp_path,
+            iteration=1,
+        )
+
+        assert result is not None
+        success, output, cost, model = result
+        assert success is True
+        assert cost == 0.0
+        assert model == "deterministic-step5"
+        assert "git diff --check" in output
+        assert "status: pass" in output
+        assert "0 executable tests" in output
+
+    def test_targeted_step5_code_change_uses_agent_path(self, tmp_path):
+        """Code-like paths still need normal targeted test selection."""
+        result = _targeted_non_code_step5_result(
+            {
+                "pr_mode": "true",
+                "pr_test_scope": "targeted",
+                "pr_changed_files": "Base: refs/pdd/base\n- A: src/app.py",
+            },
+            tmp_path,
+            iteration=1,
+        )
+
+        assert result is None
 
     def test_format_pr_changed_files_includes_all_pr_commits(self, tmp_path):
         """Merge-base diff should not collapse multi-commit PRs to HEAD~1."""
@@ -3292,6 +3345,86 @@ def _pr_patches_1212(
     )
 
 
+class TestTargetedPrStep7Exit:
+    """Targeted PR mode can exit on the structured Step 7 verdict."""
+
+    def test_structured_targeted_pass_exits_without_legacy_marker(self, tmp_path):
+        labels: List[str] = []
+        targeted_step7_pass = (
+            "## Step 7/8: Verification & Final Report\n"
+            "Targeted verification passed; full suite not run here.\n"
+            "```json\n"
+            '{"success": true, '
+            '"message": "Verification scope: targeted — full suite not run. '
+            'Project-wide build issues remain but are outside PR scope.", '
+            '"issue_aligned": true, '
+            '"issues": [{"severity": "critical", "fixed": false, '
+            '"description": "tsc fails because src is missing", '
+            '"module": "frontend", "file": "frontend/", '
+            '"scope": "out-of-scope", '
+            '"out_of_scope_reason": "pre-existing project-wide build failure outside this docs PR"}], '
+            '"changed_files": ["docs/checkup.md"]}\n'
+            "```"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            labels.append(kwargs.get("label", ""))
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, targeted_step7_pass, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        assert "step7_iter1" in labels
+        assert "step3_iter2" not in labels
+
+    def test_structured_targeted_pass_on_final_iteration_does_not_fail_max(
+        self, tmp_path
+    ):
+        labels: List[str] = []
+        targeted_step7_pass = (
+            "## Step 7/8: Verification & Final Report\n"
+            "Targeted verification passed; full suite not run here.\n"
+            "```json\n"
+            '{"success": true, '
+            '"message": "Verification scope: targeted — full suite not run.", '
+            '"issue_aligned": true, '
+            '"issues": [], '
+            '"changed_files": ["docs/checkup.md"]}\n'
+            "```"
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            label = kwargs.get("label", "")
+            labels.append(label)
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7 and label == "step7_iter3":
+                return (True, targeted_step7_pass, 0.1, "model")
+            if step_num == 7:
+                return (True, "Issues remain", 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(tmp_path, step_side_effect=step_side_effect)
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        assert "did not verify all issues fixed" not in msg.lower()
+        assert "step7_iter3" in labels
+
+
 class TestIssue1212Bug1Step5FailureSignalPropagation:
     """Bug 1: Step 5 failure output must flow to Step 6's context and user-visible logs."""
 
@@ -3412,9 +3545,9 @@ class TestIssue1212Bug2FixerScopeGuard:
         in_scope_files = ["pdd/main.py", "tests/test_main.py"]
 
         def step_side_effect(step_num, name, context, **kwargs):
-            # Round-3 Finding 2: the side-effect guard now refuses to push
-            # when the fixer never ran. Make Step 5 fail so Step 6.x runs
-            # and the worktree changes are attributable to the fixer.
+            # Make Step 5 fail so Step 6.x runs and the worktree changes
+            # are attributable to the fixer instead of clean-run side
+            # effects.
             if step_num == 5:
                 return (False, "FAILED: tests/test_main.py::test_x", 0.1, "model")
             if step_num == 7:
@@ -4373,9 +4506,12 @@ class TestIssue1215Round3ScopeGuardJustification:
 class TestIssue1215Round3CleanRunSideEffect:
     """Round-3 Finding 2: clean Steps 3/4/5 must not push side-effect edits."""
 
-    def test_clean_run_with_side_effect_dirty_file_refuses_push(self, tmp_path):
-        """Steps 3/4/5 clean → fixer skipped → any in-scope dirty file must NOT push."""
+    def test_clean_run_with_side_effect_dirty_file_discards_without_push(self, tmp_path):
+        """Steps 3/4/5 clean → fixer skipped → side-effect dirt is restored."""
         steps_invoked: List[float] = []
+        wt = tmp_path / "wt"
+        (wt / "pdd").mkdir(parents=True, exist_ok=True)
+        (wt / "pdd" / "main.py").write_text("side effect\n", encoding="utf-8")
 
         def step_side_effect(step_num, name, context, **kwargs):
             steps_invoked.append(step_num)
@@ -4388,9 +4524,6 @@ class TestIssue1215Round3CleanRunSideEffect:
                 return (True, ALL_ISSUES_FIXED, 0.1, "model")
             return (True, f"out-{step_num}", 0.0, "model")
 
-        # The dirty file is even *in scope* (matches PR's changed-file
-        # set) — Round-3 Finding 2's contract is that side effects must
-        # not push regardless of scope when no fixer ran.
         patches = _pr_patches_1212(
             tmp_path,
             step_side_effect=step_side_effect,
@@ -4398,7 +4531,14 @@ class TestIssue1215Round3CleanRunSideEffect:
             pr_metadata=dict(_PR_META_REAL_API),
         )
         with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
-             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
+             patch(
+                 "pdd.agentic_checkup_orchestrator._trusted_gate_git",
+                 return_value=("git", os.environ.copy()),
+             ), patch(
+                 "pdd.agentic_checkup_orchestrator._git_changed_files",
+                 side_effect=[["pdd/main.py"], []],
+             ):
             success, msg, _, _ = run_agentic_checkup_orchestrator(
                 **{**_PR_ARGS_1212, "cwd": tmp_path}
             )
@@ -4408,8 +4548,175 @@ class TestIssue1215Round3CleanRunSideEffect:
             f"Fixer 6.1 must be skipped on clean Steps 3-5: invoked={steps_invoked}"
         )
         push_mock.assert_not_called()
-        assert success is False
-        assert "side-effect" in (msg or "").lower()
+        assert success is True, msg
+        assert not (wt / "pdd" / "main.py").exists()
+
+    def test_clean_run_restores_tracked_normal_file_side_effect(self, tmp_path):
+        """Tracked ordinary files are restored, not treated as Layer 1 failures."""
+        wt = tmp_path / "repo"
+        (wt / "app").mkdir(parents=True)
+        target = wt / "app" / "calculator.py"
+        target.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+        subprocess.run(["git", "init"], cwd=wt, check=True, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=wt, check=True, capture_output=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Test User",
+                "commit",
+                "-m",
+                "initial",
+            ],
+            cwd=wt,
+            check=True,
+            capture_output=True,
+        )
+        target.write_text(
+            "def add(a, b):\n    return a + b + 0\n",
+            encoding="utf-8",
+        )
+
+        remaining, discarded = _discard_clean_run_side_effects(
+            wt,
+            ["app/calculator.py"],
+        )
+
+        assert remaining == []
+        assert discarded == ["app/calculator.py"]
+        assert target.read_text(encoding="utf-8") == "def add(a, b):\n    return a + b\n"
+
+    def test_clean_run_discards_lockfile_tooling_noise(self, tmp_path):
+        """Lockfile-only non-fixer dirt is restored, not treated as Layer 1 failure."""
+        wt = tmp_path / "wt"
+        (wt / "frontend").mkdir(parents=True)
+        (wt / "frontend" / "package-lock.json").write_text(
+            '{"lockfileVersion":3}\n',
+            encoding="utf-8",
+        )
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value=dict(_PR_META_REAL_API),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=step_side_effect,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            side_effect=[["frontend/package-lock.json"], []],
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._trusted_gate_git",
+            return_value=("git", os.environ.copy()),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed 1 file"),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+            return_value=None,
+        ), patch("pdd.agentic_checkup_orchestrator.console"):
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        push_mock.assert_not_called()
+        assert not (wt / "frontend" / "package-lock.json").exists()
+
+    def test_clean_run_discards_prompt_generated_tooling_noise(self, tmp_path):
+        """Generated-code non-fixer dirt is restored before prompt-source guard."""
+        wt = tmp_path / "wt"
+        (wt / "app").mkdir(parents=True)
+        (wt / "app" / "async_helpers.py").write_text("dirty\n", encoding="utf-8")
+        (wt / "requirements.txt").write_text("dirty\n", encoding="utf-8")
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 5:
+                return (True, STEP5_CLEAN_OUTPUT, 0.1, "model")
+            if step_num == 7:
+                return (True, ALL_ISSUES_FIXED, 0.1, "model")
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                **dict(_PR_META_REAL_API),
+                "api_changed_files": "- A: staging2_marker.md",
+                "api_changed_files_full": "- A: staging2_marker.md",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=step_side_effect,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            side_effect=[
+                ["app/async_helpers.py", "requirements.txt"],
+                [],
+            ],
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._load_prompt_source_map",
+            return_value={
+                "app/async_helpers.py": "pdd/prompts/async_helpers_Python.prompt",
+                "requirements.txt": "pdd/prompts/backend_requirements_Text.prompt",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._trusted_gate_git",
+            return_value=("git", os.environ.copy()),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed 1 file"),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+            return_value=None,
+        ) as registry_guard_mock, patch(
+            "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+            side_effect=lambda _wt, changed: (
+                "generated-code-only fix refused" if changed else None
+            ),
+        ) as prompt_guard_mock, patch("pdd.agentic_checkup_orchestrator.console"):
+            success, msg, _, _ = run_agentic_checkup_orchestrator(
+                **{**_PR_ARGS_1212, "cwd": tmp_path}
+            )
+
+        assert success is True, msg
+        push_mock.assert_not_called()
+        registry_guard_mock.assert_called_once_with(wt, [])
+        prompt_guard_mock.assert_called_once_with(wt, [])
+        assert not (wt / "app" / "async_helpers.py").exists()
+        assert not (wt / "requirements.txt").exists()
 
 
 class TestIssue1215Round3FailureSignalContentValidation:
@@ -5305,13 +5612,13 @@ class TestIssue1215Round6FixerInvokedResume:
         push_mock.assert_called_once()
         assert success is True
 
-    def test_manual_start_step_7_without_persisted_fixer_output_refuses(
+    def test_manual_start_step_7_without_persisted_fixer_output_discards(
         self, tmp_path
     ):
         """Round-7 Finding 2: a manual --start-step 7 with NO persisted
-        Step 6 output must still trip the clean-run side-effect guard for
-        a dirty in-scope file — the operator did not run the fixer, so
-        the dirty file cannot be attributed to it.
+        Step 6 output must still treat a dirty in-scope file as a clean-run
+        side effect — the operator did not run the fixer, so the dirty file
+        cannot be attributed to it or pushed.
 
         Round-8 Finding 1 follow-through: the live Step 5 mock emits a
         well-formed ``status: pass`` failure_signal so the fail-closed
@@ -5319,7 +5626,8 @@ class TestIssue1215Round6FixerInvokedResume:
         treated as logically failed and the fixer would run, masking the
         scenario we're testing)."""
         wt = tmp_path / "wt"
-        wt.mkdir(exist_ok=True)
+        (wt / "pdd").mkdir(parents=True, exist_ok=True)
+        (wt / "pdd" / "main.py").write_text("side effect\n", encoding="utf-8")
 
         # State carries valid identity fields but NO 6_1/6_2/6_3 outputs —
         # so fixer_invoked must stay False even though start_step > 6.
@@ -5402,14 +5710,21 @@ class TestIssue1215Round6FixerInvokedResume:
             patch("pdd.agentic_checkup_orchestrator.console"),
         )
         with patches[0], patches[1], patches[2], patches[3], patches[4] as push_mock, \
-             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10]:
+             patches[5], patches[6], patches[7], patches[8], patches[9], patches[10], \
+             patch(
+                 "pdd.agentic_checkup_orchestrator._trusted_gate_git",
+                 return_value=("git", os.environ.copy()),
+             ), patch(
+                 "pdd.agentic_checkup_orchestrator._git_changed_files",
+                 side_effect=[["pdd/main.py"], []],
+             ):
             success, msg, _, _ = run_agentic_checkup_orchestrator(
                 **{**_PR_ARGS_1212, "cwd": tmp_path, "use_github_state": True}
             )
 
         push_mock.assert_not_called()
-        assert success is False
-        assert "side-effect" in (msg or "").lower() or "clean-run" in (msg or "").lower()
+        assert success is True, msg
+        assert not (wt / "pdd" / "main.py").exists()
 
 
 class TestIssue1215Round8Step5MissingFailureSignal:
@@ -6374,6 +6689,42 @@ class TestStep7PassedMeritReview:
         '"description": "null deref", "module": "x.py"}]}\n'
         '```'
     )
+    TARGETED_OUT_OF_DIFF_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run. '
+        'Project-wide build issues remain but are outside PR scope.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "tsc fails because src is missing", '
+        '"module": "frontend", "file": "frontend/"}], '
+        '"changed_files": ["docs/checkup.md"]}\n'
+        '```'
+    )
+    TARGETED_OUT_OF_DIFF_EXPLICITLY_NONBLOCKING_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "pre-existing tsc baseline failure", '
+        '"module": "frontend", "file": "frontend/", '
+        '"scope": "out-of-scope", '
+        '"out_of_scope_reason": "pre-existing baseline failure outside this PR diff"}], '
+        '"changed_files": ["docs/checkup.md"]}\n'
+        '```'
+    )
+    TARGETED_CHANGED_FILE_CRITICAL_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "package is invalid", '
+        '"module": "frontend", "file": "frontend/package.json"}], '
+        '"changed_files": ["frontend/package.json"]}\n'
+        '```'
+    )
 
     def test_issue_aligned_required_when_issue_present(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
@@ -6407,6 +6758,53 @@ class TestStep7PassedMeritReview:
 
         passed, _ = _step7_passed(self.MERIT_VERDICT, pr_mode=True)
         assert not passed  # issue_aligned still required by default
+
+    def test_targeted_pr_blocks_out_of_diff_critical_without_structured_reason(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_DIFF_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
+
+    def test_targeted_pr_allows_explicit_nonblocking_out_of_scope_critical(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_DIFF_EXPLICITLY_NONBLOCKING_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed, reason
+
+    def test_targeted_pr_still_blocks_changed_file_critical(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_CHANGED_FILE_CRITICAL_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert not passed
+        assert "package is invalid" in reason
+
+    def test_full_pr_scope_still_blocks_out_of_diff_critical(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_DIFF_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="full",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
 
 
 class TestNoIssuePrModePosting:
