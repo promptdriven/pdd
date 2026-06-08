@@ -1,0 +1,98 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PromptPolicy",
+  "description": "Lean prompt mode pruning policy artifact (schema_version 1.0).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "compression_method",
+    "policy_version",
+    "removed_sections",
+    "preserved_contract_fields",
+    "source_inputs"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version identifier."
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["current", "lean"],
+      "description": "Pruning mode selected for this run."
+    },
+    "compression_method": {
+      "type": "string",
+      "const": "deterministic_section_pruning",
+      "description": "Method used to reduce prompt tokens."
+    },
+    "policy_version": {
+      "type": "string",
+      "description": "Version of the pruning policy rule table applied.",
+      "pattern": "^[0-9]+\\.[0-9]+$"
+    },
+    "removed_sections": {
+      "type": "array",
+      "description": "Sections removed in lean mode. Empty array when mode is 'current'.",
+      "items": {
+        "type": "object",
+        "required": ["section_id", "reason", "token_delta"],
+        "additionalProperties": false,
+        "properties": {
+          "section_id": {
+            "type": "string",
+            "description": "Stable identifier for the pruned section."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "workflow_narrative",
+              "explanatory_boilerplate",
+              "shared_preamble_boilerplate",
+              "repeated_framing",
+              "non_contract_prose"
+            ],
+            "description": "Reason category for removal."
+          },
+          "token_delta": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Tokens saved by removing this section."
+          }
+        }
+      }
+    },
+    "preserved_contract_fields": {
+      "type": "array",
+      "description": "Required contract field groups confirmed present in the output.",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 0
+    },
+    "source_inputs": {
+      "type": "array",
+      "description": "Input files with their SHA-256 hashes.",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256"],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Path to the source prompt file."
+          },
+          "sha256": {
+            "type": "string",
+            "description": "Hex-encoded SHA-256 hash of the file content.",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      },
+      "minItems": 1
+    }
+  }
+}

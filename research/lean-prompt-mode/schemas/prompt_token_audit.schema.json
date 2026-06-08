@@ -1,0 +1,103 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PromptTokenAudit",
+  "description": "Lean prompt mode token audit artifact (schema_version 1.0).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "tokenizer",
+    "approximation",
+    "model",
+    "tasks",
+    "aggregate"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1.0",
+      "description": "Schema version identifier."
+    },
+    "tokenizer": {
+      "type": "string",
+      "description": "Tokenizer used, e.g. 'anthropic/count_tokens', 'litellm/cl100k_base', 'tiktoken/cl100k_base'."
+    },
+    "approximation": {
+      "type": "boolean",
+      "description": "True when an approximate tokenizer (litellm/tiktoken) was used; false when Anthropic SDK count_tokens was used."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model name used to select the tokenizer."
+    },
+    "tasks": {
+      "type": "array",
+      "description": "Per-task token counts.",
+      "items": {
+        "type": "object",
+        "required": ["task_id", "current_tokens", "lean_tokens", "ratio"],
+        "additionalProperties": false,
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Identifier for the prompt task (typically the prompt file stem)."
+          },
+          "current_tokens": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Token count for the current (unmodified) prompt."
+          },
+          "lean_tokens": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Token count for the lean (pruned) prompt."
+          },
+          "ratio": {
+            "type": "number",
+            "minimum": 0,
+            "description": "lean_tokens / current_tokens. Values >= 1.0 trigger an anomaly flag."
+          }
+        }
+      },
+      "minItems": 1
+    },
+    "aggregate": {
+      "type": "object",
+      "required": [
+        "total_current_tokens",
+        "total_lean_tokens",
+        "aggregate_ratio",
+        "structural_floor_tokens",
+        "structural_floor_ratio"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "total_current_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sum of current_tokens across all tasks."
+        },
+        "total_lean_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sum of lean_tokens across all tasks."
+        },
+        "aggregate_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "description": "total_lean_tokens / total_current_tokens."
+        },
+        "structural_floor_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum tokens achievable while preserving all required contract field groups."
+        },
+        "structural_floor_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "description": "structural_floor_tokens / total_current_tokens."
+        }
+      }
+    }
+  }
+}
