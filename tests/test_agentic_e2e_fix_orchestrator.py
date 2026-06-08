@@ -1653,10 +1653,13 @@ class TestRefreshFixPrMetadata:
 
         def mock_run(cmd, **kwargs):
             calls.append(cmd)
+            stdout = ""
+            if cmd[:4] == ["gh", "pr", "view", "3673"]:
+                stdout = json.dumps({"files": [{"path": "app/async_helpers.py"}]})
             return type(
                 "Result",
                 (),
-                {"returncode": 0, "stdout": "", "stderr": ""},
+                {"returncode": 0, "stdout": stdout, "stderr": ""},
             )()
 
         with patch(
@@ -1680,7 +1683,7 @@ class TestRefreshFixPrMetadata:
         assert success is True
         assert "Updated PR #3673 metadata" in message
 
-        edit_call = calls[0]
+        edit_call = next(cmd for cmd in calls if cmd[:4] == ["gh", "pr", "edit", "3673"])
         assert edit_call[:4] == ["gh", "pr", "edit", "3673"]
         body = edit_call[edit_call.index("--body") + 1]
         assert "Fixes #3672" in body
@@ -1690,14 +1693,57 @@ class TestRefreshFixPrMetadata:
         assert "Next Steps" not in body
         assert "Implement the fix" not in body
 
-        assert calls[1] == [
+        assert [
             "gh",
             "pr",
             "ready",
             "3673",
             "--repo",
             "promptdriven/test_repo",
-        ]
+        ] in calls
+
+    def test_refresh_fix_pr_metadata_uses_live_pr_files_over_reported_files(
+        self,
+        tmp_path,
+    ):
+        from pdd.agentic_e2e_fix_orchestrator import _refresh_fix_pr_metadata
+
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            stdout = ""
+            if cmd[:4] == ["gh", "pr", "view", "3673"]:
+                stdout = json.dumps({"files": [{"path": "app/async_helpers.py"}]})
+            return type(
+                "Result",
+                (),
+                {"returncode": 0, "stdout": stdout, "stderr": ""},
+            )()
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=3673,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.subprocess.run",
+            side_effect=mock_run,
+        ):
+            success, _message = _refresh_fix_pr_metadata(
+                cwd=tmp_path,
+                issue_number=3672,
+                issue_url="https://github.com/promptdriven/test_repo/issues/3672",
+                issue_title="fetch_data should handle all successful 2xx responses",
+                repo_owner="promptdriven",
+                repo_name="test_repo",
+                changed_files=["tests/test_which.py"],
+                ci_message="pytest passed",
+            )
+
+        assert success is True
+        edit_call = next(cmd for cmd in calls if cmd[:4] == ["gh", "pr", "edit", "3673"])
+        body = edit_call[edit_call.index("--body") + 1]
+        assert "`app/async_helpers.py`" in body
+        assert "`tests/test_which.py`" not in body
 
     def test_refresh_fix_pr_metadata_fails_when_edit_fails(self, tmp_path):
         from pdd.agentic_e2e_fix_orchestrator import _refresh_fix_pr_metadata

@@ -1629,6 +1629,49 @@ Issue: {issue_url}
 """
 
 
+def _fetch_pr_changed_files(
+    *,
+    cwd: Path,
+    repo_owner: str,
+    repo_name: str,
+    pr_number: int,
+) -> List[str]:
+    """Fetch the live GitHub PR file list for final PR metadata."""
+    repo = f"{repo_owner}/{repo_name}"
+    result = subprocess.run(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr_number),
+            "--repo",
+            repo,
+            "--json",
+            "files",
+        ],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return []
+    files = payload.get("files")
+    if not isinstance(files, list):
+        return []
+    paths: List[str] = []
+    for item in files:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or item.get("filename") or "").strip()
+        if path:
+            paths.append(path)
+    return sorted(set(paths))
+
+
 def _refresh_fix_pr_metadata(
     *,
     cwd: Path,
@@ -1645,13 +1688,20 @@ def _refresh_fix_pr_metadata(
     if pr_number is None:
         return True, "No open PR found; skipping PR metadata refresh"
 
+    live_pr_files = _fetch_pr_changed_files(
+        cwd=cwd,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        pr_number=pr_number,
+    )
+
     title_summary = _one_line(issue_title, max_chars=120) or f"Issue #{issue_number}"
     title = f"fix: {title_summary} (#{issue_number})"
     body = _render_fix_pr_body(
         issue_number=issue_number,
         issue_url=issue_url,
         issue_title=issue_title,
-        changed_files=changed_files,
+        changed_files=live_pr_files or changed_files,
         ci_message=ci_message,
     )
     repo = f"{repo_owner}/{repo_name}"
