@@ -58,6 +58,7 @@ help:
 	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make release-video           - Generate and upload a YouTube video for the current release tag"
+	@echo "  make release-local           - Run release with local Infisical PDS release token"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
 	@echo "  make release                 - On main: tag HEAD with next vN.N.N and push (BUMP=patch|minor|major; default patch)"
 	@echo "                                  Actions publishes to PyPI via OIDC after gltanaka approval"
@@ -91,6 +92,10 @@ RELEASE_VIDEO_DRY_RUN ?= 0
 RELEASE_VIDEO_PROJECT_ID ?=
 CLAUDE_CLI ?= claude
 PDS_CLI ?= pds
+PDS_API_URL ?= https://video.promptdriven.ai
+INFISICAL ?= infisical
+INFISICAL_ENV ?= prod
+INFISICAL_PATH ?= /
 
 # Python files
 PY_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_python.prompt")
@@ -103,6 +108,11 @@ SKIP_MAKEFILE_REGEN ?= 0
 
 # CI should test the checked-in Makefile, not regenerate it interactively.
 ifeq ($(CI),true)
+SKIP_MAKEFILE_REGEN := 1
+endif
+
+RELEASE_MAKE_GOALS := release release-video release-local release-infisical check-release-video-config check-release-video-config-local check-release-video-config-infisical
+ifneq ($(filter $(RELEASE_MAKE_GOALS),$(MAKECMDGOALS)),)
 SKIP_MAKEFILE_REGEN := 1
 endif
 
@@ -122,7 +132,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-video check-release-remote check-release-branch check-release-clean check-release-video-config
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-infisical release-video check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-infisical
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -736,10 +746,28 @@ check-release-clean:
 	fi
 
 check-release-video-config:
-	@python scripts/release_video.py \
+	@RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
+	if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
+	if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
+	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
+	python scripts/release_video.py \
 		--preflight \
 		--pds-cli "$(PDS_CLI)" \
 		--project-id "$(RELEASE_VIDEO_PROJECT_ID)"
+
+check-release-video-config-local: check-release-video-config-infisical
+
+check-release-video-config-infisical:
+	@command -v "$(INFISICAL)" >/dev/null 2>&1 || { echo "Error: $(INFISICAL) CLI is required."; exit 1; }
+	@"$(INFISICAL)" run --env "$(INFISICAL_ENV)" --path "$(INFISICAL_PATH)" --silent -- \
+		$(MAKE) --no-print-directory check-release-video-config
+
+release-local: release-infisical
+
+release-infisical:
+	@command -v "$(INFISICAL)" >/dev/null 2>&1 || { echo "Error: $(INFISICAL) CLI is required."; exit 1; }
+	@"$(INFISICAL)" run --env "$(INFISICAL_ENV)" --path "$(INFISICAL_PATH)" --silent -- \
+		$(MAKE) --no-print-directory release
 
 release-video:
 	@if [ "$(RELEASE_VIDEO)" = "0" ]; then \
@@ -748,6 +776,10 @@ release-video:
 	fi; \
 	DRY_RUN_FLAG=""; \
 	if [ "$(RELEASE_VIDEO_DRY_RUN)" = "1" ]; then DRY_RUN_FLAG="--dry-run"; fi; \
+	RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
+	if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
+	if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
+	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
 	RELEASE_TAG="$(RELEASE_TAG)" RELEASE_GIT_SHA="$(RELEASE_GIT_SHA)" \
 	python scripts/release_video.py \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
