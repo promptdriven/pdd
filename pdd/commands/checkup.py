@@ -10,8 +10,15 @@ import click
 
 from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
-from ..checkup_prompt_main import run_checkup_prompt
+from ..checkup_prompt_main import build_prompt_source_set_report, run_checkup_prompt
 from ..checkup_target import is_prompt_shaped_target
+from ..prompt_repair import (
+    PromptRepairConfig,
+    discover_prompt_paths,
+    format_token_delta_summary,
+    load_prompt_repair_defaults,
+    run_prompt_repair_loop,
+)
 from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
@@ -134,6 +141,19 @@ def _forward_subcommand_json(
     ),
 )
 @click.option(
+    "--full-suite-source",
+    "full_suite_source",
+    type=click.Choice(["local", "github-checks"]),
+    default="local",
+    show_default=True,
+    help=(
+        "Final-gate full-suite source. 'local' requires --test-scope full and "
+        "uses Layer 1 local full-suite evidence. 'github-checks' requires "
+        "--test-scope targeted and gates on GitHub checks for the current PR "
+        "head before Layer 2."
+    ),
+)
+@click.option(
     "--review-loop",
     is_flag=True,
     default=False,
@@ -152,7 +172,7 @@ def _forward_subcommand_json(
         "shippable). This is what \"ready for maintainer review\" means once a "
         "PR exists. Cannot be combined with --review-loop, --no-fix, "
         "--review-only, --start-step, --no-gates, or --test-scope targeted "
-        "(the verdict requires the deterministic gates and the full suite)."
+        "unless --full-suite-source github-checks is also set."
     ),
 )
 @click.option(
@@ -338,6 +358,33 @@ def _forward_subcommand_json(
     ),
 )
 @click.option(
+    "--prompt-repair",
+    type=click.Choice(["off", "best-effort", "strict"]),
+    default=None,
+    help=(
+        "With prompt targets: run repair after a failed checkup, then re-check. "
+        "Overrides pyproject.toml [tool.pdd.checkup].prompt_repair (default: off)."
+    ),
+)
+@click.option(
+    "--max-prompt-repair-rounds",
+    type=int,
+    default=None,
+    help="Maximum repair-and-recheck iterations per prompt file (default: 1).",
+)
+@click.option(
+    "--max-prompt-token-growth",
+    type=int,
+    default=None,
+    help="Maximum token increase allowed during repair (default: 1000).",
+)
+@click.option(
+    "--max-prompt-repair-seconds",
+    type=float,
+    default=None,
+    help="Wall-clock timeout for the prompt repair loop in seconds (default: 120).",
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -377,6 +424,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     pr_url: Optional[str],
     issue_url_opt: Optional[str],
     test_scope: str,
+    full_suite_source: str,
     review_loop: bool,
     final_gate: bool,
     review_only: bool,
@@ -397,6 +445,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     no_gates: bool,
     gate_timeout: float,
     gate_allow: Tuple[str, ...],
+    prompt_repair: Optional[str],
+    max_prompt_repair_rounds: Optional[int],
+    max_prompt_token_growth: Optional[int],
+    max_prompt_repair_seconds: Optional[float],
 ) -> Optional[Tuple[str, float, str]]:
     """
     pdd checkup = verifier namespace
@@ -529,8 +581,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "snapshot":
-        snapshot_args = list(ctx.args)
-        if not snapshot_args or show_help:
+        snapshot_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
+        if not ctx.args or show_help:
             click.echo(
                 checkup_snapshot.get_help(
                     click.Context(checkup_snapshot, info_name="pdd checkup snapshot")
@@ -548,14 +600,14 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "lint":
-        lint_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
-        if strict:
-            lint_args.insert(0, "--strict")
-        if not lint_args or show_help:
+        if not ctx.args or show_help:
             click.echo(
                 prompt_lint.get_help(click.Context(prompt_lint, info_name="pdd checkup lint"))
             )
             return None
+        lint_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
+        if strict:
+            lint_args.insert(0, "--strict")
         exit_code = prompt_lint.main(
             args=lint_args,
             prog_name="pdd checkup lint",
@@ -600,12 +652,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         return None
 
     if target == "drift":
-        drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
-        if not drift_args or show_help:
+        if not ctx.args or show_help:
             click.echo(
                 drift_cmd.get_help(click.Context(drift_cmd, info_name="pdd checkup drift"))
             )
             return None
+        drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
         exit_code = drift_cmd.main(
             args=drift_args,
             prog_name="pdd checkup drift",
@@ -635,7 +687,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         target,
         project_root=project_root,
     ):
+        import json as _json  # pylint: disable=import-outside-toplevel
+
         quiet = ctx.obj.get("quiet", False)
+        _repair_defaults = load_prompt_repair_defaults(Path.cwd())
+        _effective_repair = prompt_repair if prompt_repair is not None else _repair_defaults.mode
+
         passed, message, cost, model, exit_code = run_checkup_prompt(
             target,
             explain=explain,
@@ -644,6 +701,67 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             strict=strict,
             project_root=project_root,
         )
+
+        # check → repair → recheck cycle (Issue #1422)
+        # Repair runs only after a failed structured checkup and never with --json.
+        if not passed and _effective_repair not in (None, "off") and not as_json:
+            _root = project_root if project_root is not None else Path.cwd()
+            _repair_cfg = PromptRepairConfig(
+                mode=_effective_repair,
+                max_rounds=(
+                    max_prompt_repair_rounds if max_prompt_repair_rounds is not None
+                    else _repair_defaults.max_rounds
+                ),
+                max_token_growth=(
+                    max_prompt_token_growth if max_prompt_token_growth is not None
+                    else _repair_defaults.max_token_growth
+                ),
+                max_seconds=(
+                    max_prompt_repair_seconds if max_prompt_repair_seconds is not None
+                    else _repair_defaults.max_seconds
+                ),
+            )
+            _target_path = Path(target)
+            if _target_path.is_file() and _target_path.suffix == ".prompt":
+                _prompt_paths = [_target_path]
+            else:
+                _prompt_paths = discover_prompt_paths(_root)
+            for _pp in _prompt_paths:
+                # Feed the full structured report (coverage/contract/gate findings,
+                # recommended_action) as repair context, not just lint.
+                _report = build_prompt_source_set_report(
+                    _pp,
+                    target=target,
+                    project_root=_root,
+                    strict=strict,
+                )
+                # Mirror agentic_checkup.py: skip prompts that already pass so
+                # we never invoke the LLM for info-only or non-actionable findings.
+                if _report.status == "pass":
+                    continue
+                _repair_context = {
+                    "source_set_report": _json.dumps(_report.as_dict(), indent=2),
+                    "recommended_actions": "\n".join(_report.recommended_actions()),
+                }
+                _rr = run_prompt_repair_loop(
+                    _pp, _repair_cfg, context=_repair_context, cwd=_root,
+                    verbose=ctx.obj.get("verbose", False), quiet=quiet,
+                    strict=strict,
+                )
+                if not quiet:
+                    _summary = format_token_delta_summary(_rr)
+                    if _summary:
+                        click.echo(_summary)
+            # Re-check after repair
+            passed, message, cost, model, exit_code = run_checkup_prompt(
+                target,
+                explain=explain,
+                as_json=as_json,
+                quiet=quiet or as_json,
+                strict=strict,
+                project_root=project_root,
+            )
+
         if not quiet and not as_json:
             echo_model_line(model)
         if exit_code:
@@ -678,11 +796,17 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             param_hint="'--review-loop'",
         )
     # ``--final-gate`` is the canonical two-layer PR-readiness gate (#1406). It
-    # requires both ``--pr`` and ``--issue`` and owns the review-loop as Layer 2,
-    # so it cannot be combined with flags that would contradict or duplicate the
-    # two-layer contract.
+    # requires ``--pr`` and owns the review-loop as Layer 2, so it cannot be
+    # combined with flags that would contradict or duplicate the two-layer
+    # contract. ``--issue`` remains optional in PR mode; without it, the
+    # issue-alignment gate is skipped.
     if final_gate:
-        if not pr_mode or issue_url_opt is None:
+        if not pr_mode:
+            raise click.BadParameter(
+                "--final-gate requires --pr and --issue.",
+                param_hint="'--final-gate'",
+            )
+        if issue_url_opt is None:
             raise click.BadParameter(
                 "--final-gate requires --pr and --issue.",
                 param_hint="'--final-gate'",
@@ -717,10 +841,18 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 "an LLM-only review could pass over a failing gate.",
                 param_hint="'--final-gate'",
             )
-        if test_scope != "full":
+        if full_suite_source == "github-checks" and test_scope != "targeted":
+            raise click.BadParameter(
+                "--full-suite-source github-checks requires --test-scope targeted; "
+                "GitHub checks provide the full-suite truth.",
+                param_hint="'--full-suite-source'",
+            )
+        if full_suite_source == "local" and test_scope != "full":
             raise click.BadParameter(
                 "--final-gate requires full test scope; --test-scope targeted "
-                "would return a ship verdict without running the full suite.",
+                "would return a ship verdict without running the full suite. "
+                "Use --full-suite-source github-checks to pair targeted Layer 1 "
+                "tests with GitHub checks.",
                 param_hint="'--final-gate'",
             )
     if review_loop and start_step is not None:
@@ -803,6 +935,25 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     quiet = ctx.obj.get("quiet", False)
     verbose = ctx.obj.get("verbose", False)
+    repair_defaults = load_prompt_repair_defaults(Path.cwd())
+    effective_prompt_repair = (
+        prompt_repair if prompt_repair is not None else repair_defaults.mode
+    )
+    effective_max_repair_rounds = (
+        max_prompt_repair_rounds
+        if max_prompt_repair_rounds is not None
+        else repair_defaults.max_rounds
+    )
+    effective_max_token_growth = (
+        max_prompt_token_growth
+        if max_prompt_token_growth is not None
+        else repair_defaults.max_token_growth
+    )
+    effective_max_repair_seconds = (
+        max_prompt_repair_seconds
+        if max_prompt_repair_seconds is not None
+        else repair_defaults.max_seconds
+    )
     start_step_override = None
     if start_step is not None:
         start_step_override = float(start_step)
@@ -820,6 +971,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
             pr_url=pr_url,
             test_scope=test_scope,
+            full_suite_source=full_suite_source,
             start_step_override=start_step_override,
             review_loop=review_loop,
             final_gate=final_gate,
@@ -841,6 +993,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             enable_gates=not no_gates,
             gate_timeout=gate_timeout,
             gate_allow=tuple(gate_allow),
+            prompt_repair=effective_prompt_repair,
+            max_prompt_repair_rounds=effective_max_repair_rounds,
+            max_prompt_token_growth=effective_max_token_growth,
+            max_prompt_repair_seconds=effective_max_repair_seconds,
         )
 
         if not quiet:

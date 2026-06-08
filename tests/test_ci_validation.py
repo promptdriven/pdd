@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import subprocess
 import zipfile
 from pathlib import Path
@@ -11,9 +12,11 @@ import pytest
 from pdd.ci_validation import (
     _classify_check_result,
     _collect_failure_logs,
+    _poll_check_runs_for_head,
     _poll_required_checks,
     detect_ci_system,
     post_ci_failure_comment,
+    run_github_checks_gate,
     run_ci_validation_loop,
 )
 
@@ -168,6 +171,216 @@ def test_run_ci_validation_loop_returns_no_checks_when_ci_absent(tmp_path: Path)
     assert success is True
     assert message == "No CI checks detected"
     assert cost == 0.0
+
+
+def test_github_checks_gate_passes_all_checks_on_current_head(tmp_path: Path) -> None:
+    """Final gate strict mode should pass only when real checks pass."""
+    passing_checks = [
+        {"name": "lint", "state": "SUCCESS", "bucket": "pass", "link": "https://example.test/lint"}
+    ]
+    captured: dict[str, object] = {}
+
+    def fake_poll(*_args, **kwargs):  # noqa: ANN001
+        captured.update(kwargs)
+        return "passed", passing_checks
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", side_effect=fake_poll), \
+         patch("pdd.ci_validation._poll_required_checks") as mock_required_poll:
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is True
+    assert head_sha == "sha123"
+    assert "passed on PR head sha123" in message
+    assert captured["head_sha"] == "sha123"
+    mock_required_poll.assert_not_called()
+
+
+def test_github_checks_gate_fails_when_checks_missing(tmp_path: Path) -> None:
+    """No checks is success for the legacy CI-fix loop, but failure for final gate."""
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("no_checks", [])):
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert head_sha == "sha123"
+    assert "missing or unreadable" in message
+
+
+def test_github_checks_gate_fails_when_any_check_skipped(tmp_path: Path) -> None:
+    """Skipped GitHub checks are not full-suite evidence."""
+    skipped_checks = [
+        {"name": "full suite", "state": "SKIPPING", "bucket": "skipping", "link": ""}
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("passed", skipped_checks)):
+        success, message, _head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "skipped checks" in message
+
+
+def test_github_checks_gate_fails_unknown_check_bucket(tmp_path: Path) -> None:
+    """Unknown check states are not trustworthy full-suite evidence."""
+    unknown_checks = [
+        {"name": "full suite", "state": "SUCCESS", "bucket": "", "link": ""}
+    ]
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("passed", unknown_checks)):
+        success, message, _head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "unknown check states" in message
+
+
+def test_github_checks_gate_required_only_uses_required_pr_checks(tmp_path: Path) -> None:
+    """The required-only legacy path still uses `gh pr checks --required`."""
+    passing_checks = [
+        {"name": "required lint", "state": "SUCCESS", "bucket": "pass", "link": ""}
+    ]
+    captured: dict[str, object] = {}
+
+    def fake_poll(*_args, **kwargs):  # noqa: ANN001
+        captured.update(kwargs)
+        return "passed", passing_checks
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", side_effect=fake_poll), \
+         patch("pdd.ci_validation._poll_check_runs_for_head") as mock_check_runs_poll:
+        success, message, head_sha = run_github_checks_gate(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            quiet=True,
+            required_only=True,
+        )
+
+    assert success is True
+    assert head_sha == "sha123"
+    assert "required GitHub checks passed" in message
+    assert captured["expected_head_sha"] == "sha123"
+    assert captured["required_only"] is True
+    mock_check_runs_poll.assert_not_called()
+
+
+def test_poll_check_runs_for_head_passes_completed_success(tmp_path: Path) -> None:
+    """Final gate can read real check runs without GraphQL statusCheckRollup."""
+    payload = {
+        "check_runs": [
+            {
+                "name": "full-suite",
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://example.test/check",
+            }
+        ]
+    }
+    result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result) as mock_run, \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "passed"
+    assert checks == [
+        {
+            "name": "full-suite",
+            "state": "SUCCESS",
+            "bucket": "pass",
+            "link": "https://example.test/check",
+        }
+    ]
+    assert mock_run.call_args.args[1] == ["repos/owner/repo/commits/sha123/check-runs?per_page=100"]
+
+
+def test_poll_check_runs_for_head_fails_completed_failure(tmp_path: Path) -> None:
+    """Failed check-run conclusions are hard final-gate failures."""
+    payload = {
+        "check_runs": [
+            {
+                "name": "full-suite",
+                "status": "completed",
+                "conclusion": "failure",
+                "html_url": "https://example.test/check",
+            }
+        ]
+    }
+    result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "failed"
+    assert checks[0]["bucket"] == "fail"
+
+
+def test_poll_check_runs_for_head_pending_times_out(tmp_path: Path) -> None:
+    """Pending check runs fail closed after the polling timeout."""
+    payload = {
+        "check_runs": [
+            {
+                "name": "full-suite",
+                "status": "in_progress",
+                "conclusion": None,
+                "html_url": "https://example.test/check",
+            }
+        ]
+    }
+    result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        status, checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "timeout"
+    assert checks[0]["bucket"] == "pending"
 
 
 def test_run_ci_validation_loop_retries_and_commits_fix(tmp_path: Path) -> None:

@@ -1,0 +1,59 @@
+<pdd-reason>LLM template: writes a PDS-compatible release-video narration script from GitHub release context and repo research.</pdd-reason>
+
+You are an expert technical product marketer, developer educator, and video scriptwriter.
+Write the narration script for a short YouTube release video about this PDD CLI release.
+
+Audience:
+- Developers who use Prompt-Driven Development today.
+- Developers evaluating whether PDD will save them time, reduce release risk, or improve prompt/code quality.
+- Technical leads who care about concrete workflow value, not generic feature announcements.
+
+Target length:
+- 60-90 seconds.
+
+Style:
+- Clear, concrete, technical, and demo-friendly.
+- Explain what changed, why it matters, and the practical business value.
+- Avoid hype, filler, and vague benefit language.
+- Do not invent claims. Every claim must be grounded in the release context or additional research.
+
+Research requirement:
+- Before writing the final script, use available Claude Code tools to research the release enough to understand the product story.
+- Start from the release context below, then inspect relevant release notes, commits, PRs, issues, changelog entries, docs, tests, and changed files when tools are available.
+- Prefer authoritative local or GitHub sources: the checked-out repo, `git log`, `git show`, `git diff`, `gh release view`, `gh pr view`, and linked issue/PR text.
+- Identify the primary user problem solved by the release, the workflow before and after the change, and the concrete business value.
+- Do not inspect secrets, tokens, credentials, private user config, `.env*` files, or unrelated local files.
+- If tool access is unavailable, use the provided release context only and say nothing about unavailable research in the final script.
+
+Business-value requirements:
+- Lead with the highest-value user outcome, not the implementation detail.
+- For each major feature or fix, connect it to a user/business result, such as faster repair loops, fewer blocked releases, lower review burden, safer automation, clearer failure recovery, or reduced manual work.
+- Explain the "before" pain and the "after" improvement when that helps the story.
+- Mention the release tag naturally.
+- Include at least one concrete example workflow or command when the release context supports it.
+- Keep the message useful for people deciding whether to upgrade.
+
+Visual requirements:
+- Use the PDS script format exactly:
+  - Every spoken narration block starts with `NARRATOR:` on its own line.
+  - Every non-spoken visual cue starts with `VISUAL:` on its own line.
+- Visual cues must be detailed enough for an automated video generator to create relevant scenes.
+- For every `VISUAL:` cue, include specific screen/UI/content direction, not generic phrases.
+- Prefer visuals that reveal the product and workflow: terminal commands, before/after output, GitHub release page, changelog snippets, failing/passing checks, audit files, config snippets, PR/issue references, diagrams of the workflow, and short code/doc excerpts.
+- When showing text on screen, specify the exact or representative text to display.
+- Include motion/composition direction when useful: split-screen before/after, highlighted lines, zoom into terminal output, progress ticks, callout labels, timeline arrows, or overlay badges.
+- Do not use purely atmospheric visuals. Avoid vague cues like "show developers coding" unless tied to a concrete PDD workflow on screen.
+
+Structure requirements:
+- Use plain Markdown.
+- Start with a concise title.
+- Structure the script with 3-5 timestamped level-2 Markdown section headings,
+  exactly like `## Release hook (0:00 - 0:12)`.
+- The automated video pipeline parses headings that start with `## `.
+- Include a short hook, narration beats, and visual direction cues.
+- Keep it suitable for an automated video pipeline: no tables, no footnotes, no citations, no code fences.
+- Output only the script. Do not include research notes, analysis, citations, or preamble.
+
+RELEASE CONTEXT:
+
+{release_context}

@@ -17,6 +17,9 @@ from typing import Any
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+")
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
+DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
 
 
 class ReleaseVideoError(RuntimeError):
@@ -25,6 +28,9 @@ class ReleaseVideoError(RuntimeError):
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.preflight:
+        return preflight_release_video(args)
+
     repo = Path(args.repo).resolve()
 
     try:
@@ -63,6 +69,8 @@ def main(argv: list[str] | None = None) -> int:
             context=context,
             claude_cli=args.claude_cli,
             claude_model=args.claude_model,
+            claude_tools=args.claude_tools,
+            prompt_template=Path(args.prompt_template),
             timeout=args.claude_timeout,
             cwd=repo,
         )
@@ -112,8 +120,21 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Directory for generated release-video artifacts.",
     )
     parser.add_argument("--claude-cli", default=os.environ.get("CLAUDE_CLI", "claude"))
-    parser.add_argument("--claude-model", default=os.environ.get("CLAUDE_MODEL", "sonnet"))
-    parser.add_argument("--claude-timeout", type=float, default=300.0)
+    parser.add_argument("--claude-model", default=os.environ.get("CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL))
+    parser.add_argument(
+        "--claude-tools",
+        default=os.environ.get("RELEASE_VIDEO_CLAUDE_TOOLS", ""),
+        help=(
+            "Optional Claude Code tool allowlist for locked-down environments. "
+            "Defaults to Claude Code's normal tool permissions."
+        ),
+    )
+    parser.add_argument("--claude-timeout", type=float, default=float(os.environ.get("CLAUDE_TIMEOUT", "900")))
+    parser.add_argument(
+        "--prompt-template",
+        default=os.environ.get("RELEASE_VIDEO_PROMPT_TEMPLATE", str(DEFAULT_RELEASE_VIDEO_PROMPT)),
+        help="Prompt template used to generate the release-video script.",
+    )
     parser.add_argument("--pds-cli", default=os.environ.get("PDS_CLI", "pds"))
     parser.add_argument(
         "--project-id",
@@ -127,7 +148,79 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--privacy", default=os.environ.get("RELEASE_VIDEO_PRIVACY", "unlisted"))
     parser.add_argument("--idempotency-key", help="PDS idempotency key.")
     parser.add_argument("--dry-run", action="store_true", help="Plan without creating video or uploading.")
+    parser.add_argument(
+        "--preflight",
+        action="store_true",
+        help="Check local release-video configuration without creating artifacts.",
+    )
     return parser.parse_args(argv)
+
+
+def preflight_release_video(args: argparse.Namespace) -> int:
+    """Warn about local PDS profile shapes that are likely to fail a release."""
+    if os.environ.get("RELEASE_VIDEO", "").strip() == "0":
+        print("release-video preflight: skipped because RELEASE_VIDEO=0.")
+        return 0
+
+    project_id = str(args.project_id or "").strip()
+    if project_id:
+        print(f"release-video preflight: using explicit PDS project {project_id}.")
+        return 0
+
+    if os.environ.get("PDS_TOKEN", "").strip():
+        print("release-video preflight: PDS_TOKEN is set; token scopes cannot be verified locally.")
+        return 0
+
+    config_path = pds_config_path()
+    config = read_pds_config(config_path)
+    if not config:
+        print(
+            "release-video preflight: no local PDS profile found; set PDS_TOKEN "
+            "for CI-like release credentials."
+        )
+        return 0
+
+    profile_name = str(
+        os.environ.get("PDS_PROFILE", "").strip()
+        or config.get("currentProfile", "")
+        or "default"
+    )
+    profiles = config.get("profiles")
+    profile = profiles.get(profile_name, {}) if isinstance(profiles, dict) else {}
+    if not isinstance(profile, dict):
+        profile = {}
+    profile_project_id = str(profile.get("projectId") or "").strip()
+
+    if profile_project_id:
+        print(
+            "release-video preflight warning: active local PDS profile "
+            f"{profile_name!r} is pinned to project {profile_project_id!r}. "
+            "Normal releases create a new per-release project. The profile token "
+            "may fail with \"PDS agent token is not allowed for this project\". "
+            "Use a release-scoped PDS_TOKEN or PDS_PROFILE, set "
+            "RELEASE_VIDEO_PROJECT_ID for an authorized fixed project, or use "
+            "RELEASE_VIDEO=0 for recovery.",
+            file=sys.stderr,
+        )
+        return 0
+
+    print(f"release-video preflight: active local PDS profile {profile_name!r} has no fixed project id.")
+    return 0
+
+
+def pds_config_path() -> Path:
+    config_home = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    if config_home:
+        return Path(config_home) / "pds" / "config.json"
+    return Path.home() / ".config" / "pds" / "config.json"
+
+
+def read_pds_config(path: Path) -> dict[str, Any]:
+    try:
+        parsed = json.loads(path.read_text(encoding="utf8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def run(
@@ -344,6 +437,8 @@ def generate_script_with_claude(
     context: str,
     claude_cli: str,
     claude_model: str,
+    claude_tools: str,
+    prompt_template: Path,
     timeout: float,
     cwd: Path,
 ) -> str:
@@ -354,14 +449,14 @@ def generate_script_with_claude(
             "-p",
             "--model",
             claude_model,
-            "--tools",
-            "",
             "--no-session-persistence",
             "--output-format",
             "text",
         ]
     )
-    prompt = build_claude_prompt(context)
+    if claude_tools.strip():
+        command.extend(["--allowedTools", claude_tools.strip()])
+    prompt = render_release_video_prompt(context, prompt_template, cwd)
     completed = run(command, cwd=cwd, input_text=prompt, timeout=timeout)
     script = normalize_release_video_script(strip_markdown_fence(completed.stdout.strip()))
     if len(script) < 200:
@@ -369,32 +464,33 @@ def generate_script_with_claude(
     return script.rstrip() + "\n"
 
 
-def build_claude_prompt(context: str) -> str:
-    return f"""Write the narration script for a short YouTube release video about this PDD CLI release.
+def render_release_video_prompt(context: str, prompt_template: Path, cwd: Path) -> str:
+    path = resolve_prompt_template_path(prompt_template, cwd)
+    try:
+        template = path.read_text(encoding="utf8")
+    except OSError as exc:
+        raise ReleaseVideoError(f"Could not read release-video prompt template {path}: {exc}") from exc
+    if "{release_context}" not in template:
+        raise ReleaseVideoError(
+            f"Release-video prompt template {path} must contain {{release_context}}."
+        )
+    return template.replace("{release_context}", context)
 
-Audience: developers who use or may adopt Prompt-Driven Development.
-Length: 60-90 seconds.
-Style: concise, concrete, technical, and demo-friendly.
 
-Requirements:
-- Base every claim on the release context below; do not invent features.
-- Lead with the most user-visible change.
-- Mention the release tag.
-- Use plain Markdown.
-- Structure the script with 3-5 timestamped level-2 Markdown section headings,
-  exactly like "## Release hook (0:00 - 0:12)"; the automated video pipeline
-  parses those "## " headings.
-- Use the PDS script format: every spoken narration block starts with
-  "NARRATOR:" on its own line, and every non-spoken visual cue starts with
-  "VISUAL:" on its own line.
-- Include a title, a short hook, narration beats, and visual direction cues.
-- Keep it suitable for an automated video pipeline: no tables, no footnotes, no citations, no code fences.
-- Output only the script.
-
-RELEASE CONTEXT:
-
-{context}
-"""
+def resolve_prompt_template_path(prompt_template: Path, cwd: Path) -> Path:
+    if prompt_template.is_absolute():
+        if prompt_template.exists():
+            return prompt_template
+        raise ReleaseVideoError(f"Release-video prompt template not found: {prompt_template}")
+    candidates = [
+        cwd / prompt_template,
+        REPO_ROOT / prompt_template,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    tried = "\n".join(str(candidate) for candidate in candidates)
+    raise ReleaseVideoError(f"Release-video prompt template not found. Tried:\n{tried}")
 
 
 def create_release_video(
