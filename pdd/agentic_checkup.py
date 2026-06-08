@@ -717,6 +717,7 @@ def run_agentic_checkup(
             pr_number=pr_number,
             test_scope=test_scope,
             start_step_override=start_step_override,
+            suppress_progress_comments=final_gate,
         )
     except Exception as exc:
         msg = f"Orchestrator failed: {exc}"

@@ -1957,6 +1957,7 @@ def _run_agentic_checkup_orchestrator_inner(
     pr_number: Optional[int] = None,
     test_scope: str = "full",
     start_step_override: Optional[Union[int, float]] = None,
+    suppress_progress_comments: bool = False,
     # External review (issue #1116). Both default to "off"; set only by
     # the outer wrapper on restart iterations.
     _force_skip_state_load: bool = False,
@@ -2560,8 +2561,10 @@ def _run_agentic_checkup_orchestrator_inner(
             # comments there — the orchestrator still posts the single
             # canonical final report to the PR. With a source issue, progress
             # lands on the issue thread (unchanged).
-            suppress_step_comment = (pr_mode and step_num == 7) or (
-                pr_mode and not has_issue
+            suppress_step_comment = (
+                suppress_progress_comments
+                or (pr_mode and step_num == 7)
+                or (pr_mode and not has_issue)
             )
             if description and not suppress_step_comment:
                 _maybe_post_step_comment(step_num, description, persistable_output, iteration)
@@ -4439,6 +4442,7 @@ def run_agentic_checkup_orchestrator(
     pr_number: Optional[int] = None,
     test_scope: str = "full",
     start_step_override: Optional[Union[int, float]] = None,
+    suppress_progress_comments: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """Public entry point for the agentic checkup orchestrator.
 
@@ -4479,6 +4483,7 @@ def run_agentic_checkup_orchestrator(
             pr_number=pr_number,
             test_scope=test_scope,
             start_step_override=start_step_override,
+            suppress_progress_comments=suppress_progress_comments,
         )
 
     # PR-mode rerun loop. ``refresh_count`` is initialized from disk so a
@@ -4529,6 +4534,7 @@ def run_agentic_checkup_orchestrator(
                 _carried_step_comments=(
                     preserved_step_comments if is_restart_iteration else None
                 ),
+                suppress_progress_comments=suppress_progress_comments,
             )
         except _PRHeadAdvancedRestart as restart:
             cumulative_cost += restart.cost_so_far

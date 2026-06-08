@@ -6494,6 +6494,50 @@ class TestNoIssuePrModePosting:
         assert ppc.call_count == 1
         assert final_issue, "with a source issue, the issue-thread final report must still post"
 
+    def test_suppress_progress_comments_keeps_only_final_report(self, tmp_path):
+        from unittest.mock import patch as _patch
+
+        def step_side_effect(step_num, name, context, **kwargs):
+            if step_num == 7:
+                return (
+                    True,
+                    "<step_report>ok</step_report>\n" + ALL_ISSUES_FIXED,
+                    0.1,
+                    "model",
+                )
+            return (True, f"out-{step_num}", 0.0, "model")
+
+        patches = _pr_patches_1212(
+            tmp_path,
+            step_side_effect=step_side_effect,
+            git_changed_files=["pdd/main.py"],
+            commit_push_return=(True, "Pushed 1 file"),
+        )
+        per_step: List = []
+        final_issue: List = []
+        with patches[0], patches[1], patches[2], patches[3], patches[4], \
+             patches[5], patches[6], patches[7], patches[8], patches[9], \
+             patches[10], \
+             _patch(
+                 "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+                 side_effect=lambda *a, **k: per_step.append(k.get("step_num")) or True,
+             ), \
+             _patch(
+                 "pdd.agentic_checkup_orchestrator.post_step_comment",
+                 side_effect=lambda *a, **k: final_issue.append(1) or True,
+             ):
+            run_agentic_checkup_orchestrator(
+                **{
+                    **_PR_ARGS_1212,
+                    "cwd": tmp_path,
+                    "use_github_state": True,
+                    "suppress_progress_comments": True,
+                }
+            )
+
+        assert per_step == []
+        assert final_issue, "suppression must not disable the canonical final report"
+
 
 class TestSetupWorktreeStaleBranch:
     """Regression for: checkup fails when a stale ``checkup/issue-*`` branch

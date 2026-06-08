@@ -2270,6 +2270,18 @@ class TestPrModeSourceArtifacts:
         assert "do NOT post GitHub comments from Step 7" in prompt
         assert "orchestrator posts the final PR/issue report after" in prompt
 
+    def test_step7_prompt_keeps_baseline_findings_out_of_pr_findings(self) -> None:
+        prompt = (
+            Path(__file__).resolve().parent.parent
+            / "pdd"
+            / "prompts"
+            / "agentic_checkup_step7_verify_LLM.prompt"
+        ).read_text(encoding="utf-8")
+
+        assert "only PR-scoped blockers" in prompt
+        assert "pre-existing project-wide/baseline issues" in prompt
+        assert "never include them in the final JSON `issues` array" in prompt
+
     def test_architecture_records_agentic_checkup_cwd_parameter(self) -> None:
         arch_path = Path(__file__).resolve().parent.parent / "architecture.json"
         architecture = json.loads(arch_path.read_text(encoding="utf-8"))

@@ -204,6 +204,7 @@ class TestFinalGateLibrary:
 
         assert order == ["layer1", "layer2"]
         orch_mock.assert_called_once()
+        assert orch_mock.call_args.kwargs["suppress_progress_comments"] is True
         loop_mock.assert_called_once()
         assert success is True
         # Cost is composed across both layers.
