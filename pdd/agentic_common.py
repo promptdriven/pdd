@@ -4537,6 +4537,35 @@ def _load_gh_paginated_comments(stdout: str) -> List[Dict]:
         comments.extend(_flatten_comment_pages(payload))
     return comments
 
+
+def _github_token_from_env() -> str:
+    """Return the best GitHub token for trusted ``gh`` subprocesses."""
+    token_file_path = os.environ.get("PDD_GH_TOKEN_FILE")
+    if token_file_path:
+        token_path = Path(token_file_path)
+        try:
+            token = token_path.read_text(encoding="utf-8").strip()
+        except OSError:
+            token = ""
+        if token:
+            return token
+    return (
+        os.environ.get("GH_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("PDD_GITHUB_TOKEN")
+        or ""
+    ).strip()
+
+
+def _gh_subprocess_env() -> Dict[str, str]:
+    """Build an env that makes ``gh`` use the refreshed cloud token file."""
+    env = os.environ.copy()
+    token = _github_token_from_env()
+    if token:
+        env["GH_TOKEN"] = token
+        env["GITHUB_TOKEN"] = token
+    return env
+
 def _find_state_comment(
     repo_owner: str,
     repo_name: str,
@@ -4559,7 +4588,9 @@ def _find_state_comment(
             "--paginate",
             "--slurp",
         ]
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env()
+        )
         if result.returncode != 0:
             return None
 
@@ -4612,7 +4643,9 @@ def _find_all_state_comments(
             "--paginate",
             "--slurp",
         ]
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        result = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env()
+        )
         if result.returncode != 0:
             return []
         comments = _load_gh_paginated_comments(result.stdout)
@@ -4637,7 +4670,9 @@ def _github_delete_comment(repo_owner: str, repo_name: str, comment_id: int, cwd
             f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
             "-X", "DELETE",
         ]
-        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        res = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env()
+        )
         return res.returncode == 0
     except Exception:
         return False
@@ -4669,7 +4704,9 @@ def _github_edit_comment(
             "-X", "PATCH",
             "-f", f"body={body}",
         ]
-        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        res = subprocess.run(
+            cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env()
+        )
         return res.returncode == 0
     except Exception:
         return False
@@ -4712,7 +4749,9 @@ def github_save_state(
                 "-X", "PATCH",
                 "-f", f"body={body}"
             ]
-            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+            res = subprocess.run(
+                cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env()
+            )
             if res.returncode == 0:
                 return comment_id
         else:
@@ -4732,7 +4771,9 @@ def github_save_state(
                     "-X", "PATCH",
                     "-f", f"body={body}",
                 ]
-                res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+                res = subprocess.run(
+                    cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env()
+                )
                 if res.returncode != 0:
                     return None
                 failed_ids = [
@@ -4756,7 +4797,9 @@ def github_save_state(
                 "-X", "POST",
                 "-f", f"body={body}"
             ]
-            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+            res = subprocess.run(
+                cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env()
+            )
             if res.returncode == 0:
                 data = json.loads(res.stdout)
                 return data.get("id")
@@ -4956,6 +4999,7 @@ def _fetch_issue_comments_via_gh(
             cwd=cwd,
             capture_output=True,
             text=True,
+            env=_gh_subprocess_env(),
             start_new_session=True,
         )
     except Exception as exc:
@@ -5051,6 +5095,7 @@ def fetch_issue_updated_at(
             cwd=cwd,
             capture_output=True,
             text=True,
+            env=_gh_subprocess_env(),
             start_new_session=True,
         )
         if res.returncode == 0 and res.stdout.strip():
@@ -5546,6 +5591,7 @@ def post_step_comment_once(
             cwd=cwd,
             capture_output=True,
             text=True,
+            env=_gh_subprocess_env(),
         )
         if result.returncode != 0:
             console.print(
@@ -5675,6 +5721,7 @@ def post_step_comment(
             cwd=cwd,
             capture_output=True,
             text=True,
+            env=_gh_subprocess_env(),
         )
         if result.returncode != 0:
             console.print(f"[yellow]Warning: Failed to post comment for step {step_num}: {result.stderr}[/yellow]")
@@ -5718,6 +5765,7 @@ def post_pr_comment(
             cwd=cwd,
             capture_output=True,
             text=True,
+            env=_gh_subprocess_env(),
         )
         if result.returncode != 0:
             console.print(f"[yellow]Warning: Failed to post PR comment: {result.stderr}[/yellow]")
@@ -5780,6 +5828,7 @@ def post_final_comment(
             cwd=cwd,
             capture_output=True,
             text=True,
+            env=_gh_subprocess_env(),
         )
         if result.returncode != 0:
             console.print(f"[yellow]Warning: Failed to post final comment: {result.stderr}[/yellow]")
