@@ -5,6 +5,7 @@ import pytest
 from pdd.checkup_interactive_session import (
     ApprovedPatch,
     FakeInteractiveSession,
+    InteractiveRepairSession,
     RepairOption,
 )
 
@@ -101,3 +102,190 @@ def test_seed_can_import_mapping_style_findings() -> None:
     session.seed({"findings": [{"id": "finding-1", "options": [option]}]})
 
     assert session.present_finding("finding-1") == [option]
+
+
+# ---------------------------------------------------------------------------
+# ApprovedPatch dataclass coercions
+# ---------------------------------------------------------------------------
+
+
+def test_approved_patch_coerces_string_target_to_path() -> None:
+    patch = ApprovedPatch(
+        kind="vocab_definition",
+        target="prompts/refund_python.prompt",  # type: ignore[arg-type]
+        anchor={"finding_id": "f1", "line": 1},
+        replacement="definition text",
+    )
+    assert isinstance(patch.target, Path)
+    assert patch.target == Path("prompts/refund_python.prompt")
+
+
+def test_approved_patch_anchor_is_copy_independent_of_input() -> None:
+    original_anchor = {"finding_id": "f1", "line": 10}
+    patch = ApprovedPatch(
+        kind="vocab_definition",
+        target=Path("prompts/foo.prompt"),
+        anchor=original_anchor,
+        replacement="y",
+    )
+    original_anchor["line"] = 99
+    assert patch.anchor["line"] == 10, "Mutating the input dict must not affect the stored anchor"
+
+
+# ---------------------------------------------------------------------------
+# FakeInteractiveSession.seed() behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_seed_non_mapping_report_stores_report_without_raising() -> None:
+    session = FakeInteractiveSession()
+    session.seed("plain string report")
+    assert session.report == "plain string report"
+
+    session2 = FakeInteractiveSession()
+    session2.seed(None)
+    assert session2.report is None
+
+    session3 = FakeInteractiveSession()
+    session3.seed([1, 2, 3])
+    assert session3.report == [1, 2, 3]
+
+
+def test_seed_imports_findings_using_finding_id_key() -> None:
+    option = _option()
+    session = FakeInteractiveSession()
+    session.seed({"findings": [{"finding_id": "finding-x", "options": [option]}]})
+    assert session.present_finding("finding-x") == [option]
+
+
+def test_seed_does_not_overwrite_preexisting_options() -> None:
+    original_option = _option("original")
+    session = FakeInteractiveSession({"finding-1": [original_option]})
+
+    seed_option = _option("seed")
+    session.seed({"findings": [{"id": "finding-1", "options": [seed_option]}]})
+
+    # setdefault must preserve the original — seed must not overwrite
+    assert session.present_finding("finding-1") == [original_option]
+
+
+# ---------------------------------------------------------------------------
+# FakeInteractiveSession.present_finding() behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_present_finding_returns_independent_list_each_call() -> None:
+    option = _option()
+    session = FakeInteractiveSession({"finding-1": [option]})
+
+    result1 = session.present_finding("finding-1")
+    result1.append(_option("extra"))  # mutate the returned list
+
+    result2 = session.present_finding("finding-1")
+    assert len(result2) == 1, "Mutating one call's returned list must not affect the next call"
+
+
+def test_present_finding_returns_empty_list_for_unknown_finding() -> None:
+    session = FakeInteractiveSession()
+    assert session.present_finding("no-such-finding") == []
+
+
+# ---------------------------------------------------------------------------
+# FakeInteractiveSession.ask() queue exhaustion
+# ---------------------------------------------------------------------------
+
+
+def test_ask_returns_empty_string_when_answers_queue_is_empty() -> None:
+    session = FakeInteractiveSession(answers=[])
+    assert session.ask("Any question?") == ""
+    # Transcript should record the empty answer
+    assert session.qa_transcript_summary == [{"question": "Any question?", "answer": ""}]
+
+
+# ---------------------------------------------------------------------------
+# Multi-finding sessions and approved_patches() edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_approved_patches_returns_empty_list_when_no_choices_recorded() -> None:
+    session = FakeInteractiveSession()
+    assert session.approved_patches() == []
+
+
+def test_multi_finding_session_produces_ordered_approved_patches() -> None:
+    opt1 = _option("A", "vocab_definition")
+    opt2 = _option("B", "contract_rule")
+    session = FakeInteractiveSession(
+        {"finding-1": [opt1], "finding-2": [opt2]}
+    )
+
+    session.present_finding("finding-1")
+    session.record_choice("finding-1", opt1)
+    session.present_finding("finding-2")
+    session.record_choice("finding-2", opt2)
+
+    patches = session.approved_patches()
+    assert len(patches) == 2
+    assert patches[0].kind == opt1.patch.kind
+    assert patches[1].kind == opt2.patch.kind
+
+
+def test_record_choice_after_representing_finding_accepts_newly_presented_option() -> None:
+    opt_a = _option("A")
+    opt_b = _option("B")
+
+    session = FakeInteractiveSession({"finding-1": [opt_a]})
+    session.present_finding("finding-1")
+    session.record_choice("finding-1", opt_a)
+
+    # Replace available options and re-present
+    session.options_by_finding["finding-1"] = [opt_b]
+    session.present_finding("finding-1")
+
+    # opt_a is no longer in the current presented set
+    with pytest.raises(ValueError, match="not presented"):
+        session.record_choice("finding-1", opt_a)
+
+    # opt_b is now in the current presented set
+    session.record_choice("finding-1", opt_b)
+    assert len(session.recorded_choices) == 2
+
+
+def test_approved_patches_excludes_no_patch_kind() -> None:
+    no_patch_option = _option("skip", "no_patch")
+    session = FakeInteractiveSession({"finding-1": [no_patch_option]})
+    session.present_finding("finding-1")
+    session.record_choice("finding-1", no_patch_option)
+    assert session.approved_patches() == []
+
+
+def test_approved_patches_deep_copy_is_independent_of_recorded_choice() -> None:
+    option = _option()
+    session = FakeInteractiveSession({"finding-1": [option]})
+    session.present_finding("finding-1")
+    session.record_choice("finding-1", option)
+
+    patches = session.approved_patches()
+    patches[0].anchor["line"] = 999  # mutate the copy
+
+    # The recorded option's patch must be unaffected
+    _, recorded_option = session.recorded_choices[0]
+    assert recorded_option.patch.anchor["line"] == 42, (
+        "approved_patches() must return deep copies that do not alias recorded option data"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Protocol conformance
+# ---------------------------------------------------------------------------
+
+
+def test_fake_session_satisfies_interactive_repair_session_protocol() -> None:
+    """FakeInteractiveSession must structurally implement all InteractiveRepairSession methods."""
+    # The type annotation is checked statically; runtime callable checks are belt-and-suspenders.
+    session: InteractiveRepairSession = FakeInteractiveSession()
+    assert callable(session.seed)
+    assert callable(session.present_finding)
+    assert callable(session.ask)
+    assert callable(session.record_choice)
+    assert callable(session.approved_patches)
