@@ -144,6 +144,62 @@ PDD reports active compression modes in the execution summary, lists successfull
 
 ---
 
+## Lean Prompt Mode
+
+PDD includes a research harness (`research/lean-prompt-mode/`) for measuring and reducing prompt token overhead at the **prompt structure** level, distinct from dependency-level `--context-compression`.
+
+### What It Prunes
+
+Lean mode deterministically removes non-essential sections — workflow narrative, repeated framing, and explanatory boilerplate — while preserving five required field groups:
+
+| Required group | Examples |
+|---|---|
+| Source-truth content | `<contract_rules>`, `<vocabulary>`, `<responsibility>` |
+| Output files | `<output_files>`, allowed-path declarations |
+| Verifier command | `<verifier>`, test runner specification |
+| Output delimiters | Machine-parseable begin/end tags and schema |
+| Safety constraints | `MUST NOT` capability rules, `<capabilities>` block |
+
+### Audit Artifacts
+
+Every lean run emits two JSON artifacts:
+
+**`prompt_policy.json`** records the pruning decisions:
+- `mode`, `compression_method` (`"deterministic_section_pruning"`)
+- `removed_sections`: list of `{section_id, reason, token_delta}`
+- `preserved_contract_fields`
+- `source_inputs`: `[{path, sha256}]`
+- `schema_version: "1.0"`
+
+**`prompt_token_audit.json`** records the token impact:
+- `tokenizer` and `approximation` flag (pdd.server.token_counter / litellm → tiktoken cl100k_base → char approx fallback)
+- `tasks`: per-task `{task_id, current_tokens, lean_tokens, ratio}`
+- `aggregate`: `{total_current_tokens, total_lean_tokens, aggregate_ratio, structural_floor_tokens, structural_floor_ratio}`
+- `schema_version: "1.0"`
+
+### Structural Floor
+
+If lean mode cannot reach a target ratio without removing required contract fields, the audit reports `structural_floor_tokens` and `structural_floor_ratio` instead of silently dropping content. This reveals how much of the token cost is intrinsic to the contract itself and cannot be reduced without weakening source-truth semantics.
+
+### Relationship to Context Compression
+
+Lean prompt mode and `--context-compression` are orthogonal:
+
+| Mechanism | Operates on | Controls |
+|---|---|---|
+| Lean prompt mode | Prompt structure | Workflow framing, narrative sections |
+| `--context-compression` | `<include>` graph | Dependency file content |
+
+Both can be combined: compress dependency includes with `--context-compression examples` while reducing prompt boilerplate with lean mode.
+
+### Default Behavior
+
+The default mode is `current`. All existing `pdd generate`, `pdd sync`, and `pdd fix` paths are unchanged when lean mode is not selected. Lean mode is a research harness parameter only — it does not modify production generation behavior.
+
+See `research/lean-prompt-mode/README.md` for full design, fixture format, and CI integration.
+
+---
+
 ## Grounding Overrides: Pin & Exclude (PDD Cloud)
 
 For users with PDD Cloud access, you can override automatic grounding using XML tags:
