@@ -125,6 +125,7 @@ def _run_final_gate(
     issue_url=ISSUE_URL,
     test_scope: str = "full",
     full_suite_source: str = "local",
+    **kwargs,
 ):
     """Drive run_agentic_checkup(final_gate=True) with both layers mocked."""
     with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
@@ -153,6 +154,7 @@ def _run_final_gate(
             final_gate=True,
             test_scope=test_scope,
             full_suite_source=full_suite_source,
+            **kwargs,
         )
     return result, orch_mock, loop_mock
 
@@ -278,6 +280,7 @@ class TestFinalGateLibrary:
         assert success is True
         # Cost is composed across both layers.
         assert cost == 3.0
+        assert orch_mock.call_args.kwargs["test_scope"] == "full"
 
     def test_layer1_success_hosted_artifact_records_pass(
         self, tmp_path: Path, monkeypatch

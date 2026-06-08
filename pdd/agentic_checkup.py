@@ -1012,7 +1012,6 @@ def _truncate_issue_context(text: str, limit: int) -> str:
 # re-run; a false ship is not).
 _SHIP_REVIEWER_STATES = ("clean",)
 
-
 def _markdown_table_cell(value: str) -> str:
     """Return a one-line markdown table cell."""
     return (value or "").replace("|", "\\|").replace("\n", " ").strip()
@@ -1926,6 +1925,10 @@ def run_agentic_checkup(
     if final_gate:
         final_gate_pr_content = _fetch_pr_context(pr_owner, pr_repo, pr_number)
 
+    layer1_test_scope = test_scope
+    if final_gate and full_suite_source == "github-checks":
+        layer1_test_scope = "targeted"
+
     # 5. Invoke orchestrator (Layer 1 of the final gate; the only layer for a
     #    plain checkup run).
     try:
@@ -1951,7 +1954,7 @@ def run_agentic_checkup(
                     pr_owner=pr_owner,
                     pr_repo=pr_repo,
                     pr_number=pr_number,
-                    test_scope=test_scope,
+                    test_scope=layer1_test_scope,
                     defer_step5_to_github_checks=(
                         final_gate and full_suite_source == "github-checks"
                     ),

@@ -66,6 +66,7 @@
   - `--help` / `-h` eager flag when needed for alias-aware help dispatch
   - `--pr <pr-url>` (PR-verification mode — verify an existing PR instead of opening one; `--issue` is OPTIONAL (with no issue the PR is reviewed on its own merits); mutually exclusive with `target`)
   - `--issue <issue-url>` (OPTIONAL PR-mode companion to `--pr` — when given, the source issue the PR is meant to resolve and the PR is verified for issue alignment; cannot be passed without `--pr`)
+  - `--test-scope` (`full|targeted`, default `full`; PR-mode verification scope. `targeted` is a fast PR-scoped path and is rejected for caller-supplied `--final-gate`; final gate owns its internal Layer-1 scope from `--full-suite-source`)
   - `--review-loop` (PR mode only — run the primary-reviewer/fixer review loop; still requires both `--pr` and `--issue`)
   - `--agentic-review-loop` (standalone adversarial PR checkup mode; implies `--review-loop` and `--json`; requires `--pr`; `--issue` is optional; permits `--no-fix` for report-only mode; cannot be combined with `--final-gate`)
   - `--adversarial-prompt TEXT` (adversarial instruction forwarded to all reviewers in `--agentic-review-loop` mode; defaults to a canonical-checkup-anchored lens so the fallback/mirror pass does not invent new merge criteria: `"Using the same criteria as canonical pdd checkup, find concrete reasons this PR should not merge. Do not introduce new merge criteria. Report only verifiable blockers or material risks."`)
