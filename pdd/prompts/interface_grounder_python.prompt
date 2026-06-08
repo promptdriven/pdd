@@ -13,7 +13,7 @@
 }
 </pdd-interface>
 
-<pdd-dependency>pdd/generation_source_contract_Python.prompt</pdd-dependency>
+<pdd-dependency>generation_source_contract_python.prompt</pdd-dependency>
 
 % Write `pdd/interface_grounder.py`, the AST-based interface grounding module for generation quality.
 

@@ -13,12 +13,12 @@
 }
 </pdd-interface>
 
-<pdd-dependency>pdd/generation_source_contract_Python.prompt</pdd-dependency>
-<pdd-dependency>pdd/generation_readiness_Python.prompt</pdd-dependency>
-<pdd-dependency>pdd/interface_grounder_Python.prompt</pdd-dependency>
-<pdd-dependency>pdd/wiring_validator_Python.prompt</pdd-dependency>
-<pdd-dependency>pdd/test_quality_gate_Python.prompt</pdd-dependency>
-<pdd-dependency>pdd/evidence_manifest_Python.prompt</pdd-dependency>
+<pdd-dependency>generation_source_contract_python.prompt</pdd-dependency>
+<pdd-dependency>generation_readiness_python.prompt</pdd-dependency>
+<pdd-dependency>interface_grounder_python.prompt</pdd-dependency>
+<pdd-dependency>wiring_validator_python.prompt</pdd-dependency>
+<pdd-dependency>test_quality_gate_python.prompt</pdd-dependency>
+<pdd-dependency>evidence_manifest_python.prompt</pdd-dependency>
 
 % Write `pdd/generation_audit.py`, the generation evidence audit module that maps requirements to generated artifacts and gate results.
 

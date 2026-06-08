@@ -16,8 +16,8 @@
 }
 </pdd-interface>
 
-<pdd-dependency>pdd/generation_source_contract_Python.prompt</pdd-dependency>
-<pdd-dependency>pdd/architecture_sync_Python.prompt</pdd-dependency>
+<pdd-dependency>generation_source_contract_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 
 % Write `pdd/wiring_validator.py`, the post-generation wiring and completeness gate module.
 

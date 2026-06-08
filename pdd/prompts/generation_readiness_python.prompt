@@ -14,7 +14,7 @@
 }
 </pdd-interface>
 
-<pdd-dependency>pdd/generation_source_contract_Python.prompt</pdd-dependency>
+<pdd-dependency>generation_source_contract_python.prompt</pdd-dependency>
 
 % Write `pdd/generation_readiness.py`, the pre-generation PRD analysis and readiness gate module.
 
