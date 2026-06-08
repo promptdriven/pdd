@@ -681,8 +681,31 @@ class SyncLock:
 
 
 def get_extension(language: str) -> str:
-    """Get file extension for a programming language."""
-    extensions = {
+    """Get file extension for a programming language.
+
+    Uses the canonical language_format.csv mapping bundled with the package.
+    Falls back to a hard-coded subset for common languages if the CSV is
+    unavailable, then falls back to the raw lower-cased language name.
+    """
+    lang_lower = language.lower()
+
+    # Canonical lookup: read the first matching row from the package-local CSV.
+    # This works without PDD_PATH being set in the environment.
+    try:
+        import csv as _csv_module
+        _csv_path = Path(__file__).parent / "data" / "language_format.csv"
+        with open(_csv_path, newline='', encoding='utf-8') as _csv_f:
+            for row in _csv_module.DictReader(_csv_f):
+                if row.get('language', '').lower() == lang_lower:
+                    ext = row.get('extension', '')
+                    if isinstance(ext, str):
+                        return ext.lstrip('.')
+                    break
+    except Exception:
+        pass
+
+    # Hard-coded fallback for the most common languages.
+    _extensions = {
         'python': 'py',
         'javascript': 'js',
         'typescript': 'ts',
@@ -711,7 +734,7 @@ def get_extension(language: str) -> str:
         'lua': 'lua',
         'perl': 'pl',
     }
-    return extensions.get(language.lower(), language.lower())
+    return _extensions.get(lang_lower, lang_lower)
 
 
 def _resolve_prompts_root(prompts_dir: str) -> Path:

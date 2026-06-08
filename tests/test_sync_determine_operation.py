@@ -5169,3 +5169,109 @@ def test_missing_example_is_bypassed_for_isolated_repair_or_replay(tmp_path: Pat
 
     assert decision.operation == "generate"
     assert decision.details["isolated_replay_or_repair"] is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #551 (reopened): YAML and Markdown example/test paths use raw language
+# name instead of canonical file extension.
+#
+# Root cause: local get_extension() in sync_determine_operation fell back to
+# language.lower() for languages not in its hard-coded map, returning "yaml"
+# instead of "yml" and "markdown" instead of "md".
+#
+# Fix: local get_extension() now reads the first matching row from the
+# package-local language_format.csv, which maps YAML -> .yml and Markdown -> .md.
+# ---------------------------------------------------------------------------
+
+class TestIssue551CanonicalExtensionInGetPddFilePaths:
+    """Regression tests for issue #551 (reopened): YAML and Markdown example/test
+    paths must use canonical file extensions, not raw language names.
+    """
+
+    def _write_arch_json(self, tmp_path: Path, prompt_filename: str, filepath: str) -> None:
+        (tmp_path / "architecture.json").write_text(json.dumps({
+            "modules": [{"filename": prompt_filename, "filepath": filepath}]
+        }))
+
+    def _setup_dirs(self, tmp_path: Path) -> None:
+        for d in ("prompts", "examples", "tests", ".pdd/meta", ".pdd/locks"):
+            (tmp_path / d).mkdir(parents=True, exist_ok=True)
+
+    @pytest.mark.parametrize("language,code_filename,expected_example_suffix,expected_test_suffix", [
+        ("YAML",     "ci.yml",          ".yml",  ".yml"),
+        ("Markdown", "manifest.md",     ".md",   ".md"),
+        ("Text",     "dockerfile.txt",  ".txt",  ".txt"),
+    ])
+    def test_architecture_paths_use_canonical_extensions(
+        self,
+        tmp_path,
+        monkeypatch,
+        language,
+        code_filename,
+        expected_example_suffix,
+        expected_test_suffix,
+    ):
+        """get_pdd_file_paths must derive example/test extensions from the canonical
+        language mapping, not the raw language string.
+
+        Before the fix:
+          YAML     -> ci_example.yaml / test_ci.yaml   (wrong, should be .yml)
+          Markdown -> manifest_example.markdown         (wrong, should be .md)
+          Text     -> dockerfile_example.text           (wrong, should be .txt)
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+
+        basename = Path(code_filename).stem
+        prompt_filename = f"{basename}_{language}.prompt"
+        (tmp_path / "prompts" / prompt_filename).write_text(f"% {language} module\n")
+        self._write_arch_json(tmp_path, prompt_filename, code_filename)
+
+        paths = get_pdd_file_paths(basename, language, "prompts")
+
+        assert paths["example"].suffix == expected_example_suffix, (
+            f"Issue #551: example path for {language} must end with {expected_example_suffix!r}, "
+            f"got {paths['example'].suffix!r} (full path: {paths['example']})"
+        )
+        assert paths["test"].suffix == expected_test_suffix, (
+            f"Issue #551: test path for {language} must end with {expected_test_suffix!r}, "
+            f"got {paths['test'].suffix!r} (full path: {paths['test']})"
+        )
+
+    def test_yaml_example_path_is_yml_not_yaml(self, tmp_path, monkeypatch):
+        """Explicit regression for the reported YAML case: ci.yml must produce
+        ci_example.yml (not ci_example.yaml) and test_ci.yml (not test_ci.yaml).
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        (tmp_path / "prompts" / "ci_YAML.prompt").write_text("% CI pipeline\n")
+        self._write_arch_json(tmp_path, "ci_YAML.prompt", "ci.yml")
+
+        paths = get_pdd_file_paths("ci", "YAML", "prompts")
+
+        assert paths["example"].name == "ci_example.yml", (
+            f"Issue #551: YAML example must be ci_example.yml, got {paths['example'].name!r}"
+        )
+        assert paths["test"].name == "test_ci.yml", (
+            f"Issue #551: YAML test must be test_ci.yml, got {paths['test'].name!r}"
+        )
+
+    def test_markdown_example_path_is_md_not_markdown(self, tmp_path, monkeypatch):
+        """Explicit regression for the reported Markdown case: manifest.md must
+        produce manifest_example.md (not manifest_example.markdown).
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        (tmp_path / "prompts" / "manifest_Markdown.prompt").write_text("% Manifest docs\n")
+        self._write_arch_json(tmp_path, "manifest_Markdown.prompt", "manifest.md")
+
+        paths = get_pdd_file_paths("manifest", "Markdown", "prompts")
+
+        assert paths["example"].name == "manifest_example.md", (
+            f"Issue #551: Markdown example must be manifest_example.md, "
+            f"got {paths['example'].name!r}"
+        )
+        assert paths["test"].name == "test_manifest.md", (
+            f"Issue #551: Markdown test must be test_manifest.md, "
+            f"got {paths['test'].name!r}"
+        )
