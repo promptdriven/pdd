@@ -172,7 +172,7 @@ Every lean run emits two JSON artifacts:
 - `schema_version: "1.0"`
 
 **`prompt_token_audit.json`** records the token impact:
-- `tokenizer` and `approximation` flag (Anthropic SDK → litellm → tiktoken fallback)
+- `tokenizer` and `approximation` flag (pdd.server.token_counter / litellm → tiktoken cl100k_base → char approx fallback)
 - `tasks`: per-task `{task_id, current_tokens, lean_tokens, ratio}`
 - `aggregate`: `{total_current_tokens, total_lean_tokens, aggregate_ratio, structural_floor_tokens, structural_floor_ratio}`
 - `schema_version: "1.0"`

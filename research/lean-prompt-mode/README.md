@@ -43,11 +43,11 @@ The parser handles both styles and assigns each section a stable `section_id` us
 
 Token counting uses a three-tier fallback hierarchy (recorded in `prompt_token_audit.json`):
 
-1. **Anthropic SDK `count_tokens`** (optional; used when `ANTHROPIC_API_KEY` is set and the model is a Claude model) — highest accuracy, avoids rate limits in CI by being opt-in.
-2. **`litellm.token_counter`** — model-aware counting via `pdd/server/token_counter.py`.
-3. **tiktoken `cl100k_base`** — final fallback for unknown models or litellm failures.
+1. **`pdd.server.token_counter`** — litellm-based counting (used when `pdd/server/token_counter.py` is importable from the repo root).
+2. **tiktoken `cl100k_base`** — used when the PDD package is unavailable but tiktoken is installed.
+3. **Char approximation** — `1 token ≈ 4 chars`; used when neither of the above is available.
 
-The `approximation` flag in the audit artifact is `false` only when tier 1 is used.
+The `approximation` flag in the audit artifact is always `true` in v1 of this harness regardless of which tier is used.
 
 ### Structural Floor
 

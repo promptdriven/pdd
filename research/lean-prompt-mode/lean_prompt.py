@@ -164,24 +164,7 @@ def _parse_sections(prompt_text: str) -> list[Section]:
 
     Sections are returned in order of appearance.
     """
-    sections: list[Section] = []
-    remaining = prompt_text
-
-    # We process the text linearly, extracting XML blocks first as anchors,
-    # then splitting remaining prose by %-heading boundaries.
-
-    # Regex to match a top-level XML block (non-nested for simplicity)
-    xml_block_re = re.compile(
-        r'(<(?P<tag>[a-zA-Z][a-zA-Z0-9_-]*)(?:\s[^>]*)?>.*?</(?P=tag)>)',
-        re.DOTALL,
-    )
-
-    # Split on XML blocks, keeping the blocks
-    parts = xml_block_re.split(remaining)
-    # xml_block_re.split produces: [text, full_match, tag_name, text, ...]
-    # We need to re-join properly using finditer instead.
-    sections = _parse_sections_impl(prompt_text)
-    return sections
+    return _parse_sections_impl(prompt_text)
 
 
 def _parse_sections_impl(prompt_text: str) -> list[Section]:

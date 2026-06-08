@@ -20,7 +20,7 @@
       "token_delta": 28
     },
     {
-      "section_id": "include_python_preamble",
+      "section_id": "include_preamble",
       "reason": "shared_preamble_boilerplate",
       "token_delta": 5
     }

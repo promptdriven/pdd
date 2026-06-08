@@ -20,11 +20,11 @@
     },
     "tokenizer": {
       "type": "string",
-      "description": "Tokenizer used, e.g. 'anthropic/count_tokens', 'litellm/cl100k_base', 'tiktoken/cl100k_base'."
+      "description": "Tokenizer used, e.g. 'litellm/cl100k_base', 'tiktoken/cl100k_base', 'char_approx/4'."
     },
     "approximation": {
       "type": "boolean",
-      "description": "True when an approximate tokenizer (litellm/tiktoken) was used; false when Anthropic SDK count_tokens was used."
+      "description": "Always true in v1 of this harness. Records whether an approximate tokenizer (litellm/cl100k_base, tiktoken/cl100k_base, or char_approx/4) was used instead of an exact model-native counter."
     },
     "model": {
       "type": "string",
