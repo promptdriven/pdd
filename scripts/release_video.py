@@ -20,24 +20,6 @@ YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
-DEFAULT_CLAUDE_TOOLS = ",".join(
-    [
-        "Read",
-        "Grep",
-        "Glob",
-        "Bash(git log *)",
-        "Bash(git show *)",
-        "Bash(git diff *)",
-        "Bash(git status *)",
-        "Bash(git tag *)",
-        "Bash(git describe *)",
-        "Bash(git rev-list *)",
-        "Bash(git remote *)",
-        "Bash(gh release view *)",
-        "Bash(gh pr view *)",
-        "Bash(gh issue view *)",
-    ]
-)
 
 
 class ReleaseVideoError(RuntimeError):
@@ -141,10 +123,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--claude-model", default=os.environ.get("CLAUDE_MODEL", DEFAULT_CLAUDE_MODEL))
     parser.add_argument(
         "--claude-tools",
-        default=os.environ.get("RELEASE_VIDEO_CLAUDE_TOOLS", DEFAULT_CLAUDE_TOOLS),
+        default=os.environ.get("RELEASE_VIDEO_CLAUDE_TOOLS", ""),
         help=(
-            "Claude Code tools allowed while researching the release. "
-            "Set RELEASE_VIDEO_CLAUDE_TOOLS='' to use Claude Code defaults."
+            "Optional Claude Code tool allowlist for locked-down environments. "
+            "Defaults to Claude Code's normal tool permissions."
         ),
     )
     parser.add_argument("--claude-timeout", type=float, default=float(os.environ.get("CLAUDE_TIMEOUT", "900")))
