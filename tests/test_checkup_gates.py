@@ -5275,3 +5275,19 @@ class TestExtractPddrcDefaultsKeys:
         from pdd.checkup_gates import extract_pddrc_defaults_keys
         content = 'def f():\n    _PDDRC_DEFAULTS_KEYS = {"nested_key"}\n'
         assert extract_pddrc_defaults_keys(content) == set()
+
+    def test_annotated_assignment_is_extracted(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = 'from typing import Set\n_PDDRC_DEFAULTS_KEYS: Set[str] = {"key_a", "key_b"}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_chained_assignment_is_extracted(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_ALIAS = _PDDRC_DEFAULTS_KEYS = {"key_a", "key_b"}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_whitespace_only_keys_excluded(self):
+        # keys that strip to "" must not appear in the result
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_PDDRC_DEFAULTS_KEYS = {"real_key", "   "}\n'
+        assert extract_pddrc_defaults_keys(content) == {"real_key"}

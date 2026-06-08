@@ -3294,18 +3294,27 @@ def extract_pddrc_defaults_keys(content: str) -> Set[str]:
     except Exception:
         return set()
     for node in tree.body:
-        if (
-            isinstance(node, ast.Assign)
-            and len(node.targets) == 1
-            and isinstance(node.targets[0], ast.Name)
-            and node.targets[0].id == "_PDDRC_DEFAULTS_KEYS"
+        # Handle plain assignment (x = {...}) and annotated assignment (x: T = {...})
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "_PDDRC_DEFAULTS_KEYS"
+            for t in node.targets
         ):
-            try:
-                value = ast.literal_eval(node.value)
-                if isinstance(value, set):
-                    return {k.strip() for k in value if isinstance(k, str)}
-            except (ValueError, TypeError):
-                pass
+            value_node = node.value
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "_PDDRC_DEFAULTS_KEYS"
+            and node.value is not None
+        ):
+            value_node = node.value
+        else:
+            continue
+        try:
+            value = ast.literal_eval(value_node)
+            if isinstance(value, set):
+                return {k.strip() for k in value if isinstance(k, str) and k.strip()}
+        except ValueError:
+            pass
     return set()
 
 
@@ -3772,6 +3781,7 @@ def run_doc_contract_check(
     # .pddrc keys
     pddrc_keys_now = set()
     pddrc_keys_then = set()
+    pddrc_base_available = False
     construct_paths_path = worktree / "pdd/construct_paths.py"
     if construct_paths_path.is_file():
         try:
@@ -3798,10 +3808,15 @@ def run_doc_contract_check(
             )
             if res_show.returncode == 0:
                 pddrc_keys_then = extract_pddrc_defaults_keys(res_show.stdout)
+                pddrc_base_available = True
         except Exception:
             pass
 
-    added_pddrc_keys = pddrc_keys_now - pddrc_keys_then
+    # Only compute the delta when the base-ref file was successfully read.
+    # If it was absent (e.g. construct_paths.py is new in this PR) we cannot
+    # distinguish "all keys are new" from "file didn't exist yet", so we skip
+    # the check rather than spuriously flagging every key as undocumented.
+    added_pddrc_keys = pddrc_keys_now - pddrc_keys_then if pddrc_base_available else set()
 
     # Click options, Skip behaviors, and Env vars
     for file_path, lines in added_lines_by_file.items():
