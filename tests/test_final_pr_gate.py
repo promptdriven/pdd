@@ -58,7 +58,14 @@ def _clean_final_state(*, reviewer: str = "codex", head: str = "deadbeef") -> di
     }
 
 
-def _run_final_gate(tmp_path: Path, *, orch_return, loop_side_effect=None, loop_return=None):
+def _run_final_gate(
+    tmp_path: Path,
+    *,
+    orch_return,
+    loop_side_effect=None,
+    loop_return=None,
+    **kwargs,
+):
     """Drive run_agentic_checkup(final_gate=True) with both layers mocked."""
     with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), patch(
         "pdd.agentic_checkup._run_gh_command", side_effect=_fake_gh
@@ -84,6 +91,7 @@ def _run_final_gate(tmp_path: Path, *, orch_return, loop_side_effect=None, loop_
             use_github_state=False,
             pr_url=PR_URL,
             final_gate=True,
+            **kwargs,
         )
     return result, orch_mock, loop_mock
 
@@ -209,6 +217,87 @@ class TestFinalGateLibrary:
         assert success is True
         # Cost is composed across both layers.
         assert cost == 3.0
+        assert orch_mock.call_args.kwargs["test_scope"] == "full"
+
+    def test_no_full_suite_source_uses_targeted_layer1_then_layer2(
+        self, tmp_path: Path
+    ) -> None:
+        def loop(*_a, **_kw):
+            _write_final_state(
+                tmp_path, issue_number=2, pr_number=1, payload=_clean_final_state()
+            )
+            return (True, "review ok", 2.0, "codex")
+
+        (result, orch_mock, loop_mock) = _run_final_gate(
+            tmp_path,
+            orch_return=(True, "targeted checkup ok", 1.0, "model"),
+            loop_side_effect=loop,
+            full_suite_source="none",
+        )
+
+        success, msg, _cost, _model = result
+        assert success is True
+        assert "full-suite source=none" in msg
+        assert orch_mock.call_args.kwargs["test_scope"] == "targeted"
+        loop_mock.assert_called_once()
+
+    def test_github_checks_source_waits_for_required_checks_before_layer2(
+        self, tmp_path: Path
+    ) -> None:
+        def loop(*_a, **_kw):
+            _write_final_state(
+                tmp_path, issue_number=2, pr_number=1, payload=_clean_final_state()
+            )
+            return (True, "review ok", 2.0, "codex")
+
+        with patch(
+            "pdd.agentic_checkup._get_ci_pr_head_sha", return_value="headsha"
+        ) as head_mock, patch(
+            "pdd.agentic_checkup._poll_required_checks",
+            return_value=(
+                "passed",
+                [{"name": "ci", "state": "SUCCESS", "bucket": "pass", "link": ""}],
+            ),
+        ) as checks_mock:
+            (result, orch_mock, loop_mock) = _run_final_gate(
+                tmp_path,
+                orch_return=(True, "targeted checkup ok", 1.0, "model"),
+                loop_side_effect=loop,
+                full_suite_source="github-checks",
+            )
+
+        success, msg, _cost, _model = result
+        assert success is True
+        assert "full-suite source=github-checks" in msg
+        assert orch_mock.call_args.kwargs["test_scope"] == "targeted"
+        head_mock.assert_called_once_with("o", "r", 1, tmp_path)
+        checks_mock.assert_called_once()
+        loop_mock.assert_called_once()
+
+    def test_github_checks_source_failure_skips_layer2(self, tmp_path: Path) -> None:
+        with patch(
+            "pdd.agentic_checkup._get_ci_pr_head_sha", return_value="headsha"
+        ), patch(
+            "pdd.agentic_checkup._poll_required_checks",
+            return_value=(
+                "no_checks",
+                [],
+            ),
+        ):
+            (result, orch_mock, loop_mock) = _run_final_gate(
+                tmp_path,
+                orch_return=(True, "targeted checkup ok", 1.0, "model"),
+                loop_return=(True, "should not run", 2.0, "codex"),
+                full_suite_source="github-checks",
+            )
+
+        success, msg, cost, _model = result
+        assert success is False
+        assert cost == 1.0
+        assert "final-gate-stage: github-checks" in msg
+        assert "final-gate-status: failed" in msg
+        assert orch_mock.call_args.kwargs["test_scope"] == "targeted"
+        loop_mock.assert_not_called()
 
     def test_layer1_failure_skips_layer2(self, tmp_path: Path) -> None:
         (result, orch_mock, loop_mock) = _run_final_gate(
@@ -451,6 +540,7 @@ class TestFinalGateCli:
                     "--pr", PR_URL,
                     "--issue", ISSUE_URL,
                     "--final-gate",
+                    "--full-suite-source", "github-checks",
                     "--reviewer", "codex",
                     "--fixer", "claude",
                     "--max-review-rounds", "3",
@@ -462,6 +552,7 @@ class TestFinalGateCli:
         assert kwargs["final_gate"] is True
         assert kwargs["reviewer"] == "codex"
         assert kwargs["fixer"] == "claude"
+        assert kwargs["full_suite_source"] == "github-checks"
         assert kwargs["max_review_rounds"] == 3
 
     def test_requires_pr(self) -> None:

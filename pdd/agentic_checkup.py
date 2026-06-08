@@ -34,6 +34,11 @@ from .checkup_review_loop import (
     parse_state_list,
     run_checkup_review_loop,
 )
+from .ci_validation import (
+    _get_pr_head_sha as _get_ci_pr_head_sha,
+    _poll_required_checks,
+    _render_check_summary,
+)
 from .agentic_sync import _find_project_root, _load_architecture_json
 
 console = Console()
@@ -313,6 +318,25 @@ def _truncate_issue_context(text: str, limit: int) -> str:
 # "clean" sentinel to stay conservative (a false non-ship is recoverable by a
 # re-run; a false ship is not).
 _SHIP_REVIEWER_STATES = ("clean",)
+_FULL_SUITE_SOURCES = {"local", "github-checks", "none"}
+_FULL_SUITE_SOURCE_ALIASES = {
+    "github": "github-checks",
+    "github-actions": "github-checks",
+    "checks": "github-checks",
+    "off": "none",
+    "disabled": "none",
+    "no-gate": "none",
+}
+
+
+def _normalize_full_suite_source(value: str) -> str:
+    raw = str(value or "local").strip().lower().replace("_", "-")
+    normalized = _FULL_SUITE_SOURCE_ALIASES.get(raw, raw)
+    if normalized not in _FULL_SUITE_SOURCES:
+        raise ValueError(
+            "full_suite_source must be one of: local, github-checks, none"
+        )
+    return normalized
 
 
 def _review_loop_ship_verdict(
@@ -384,6 +408,7 @@ def run_agentic_checkup(
     reasoning_time: Optional[float] = None,
     pr_url: Optional[str] = None,
     test_scope: str = "full",
+    full_suite_source: str = "local",
     review_loop: bool = False,
     final_gate: bool = False,
     review_only: bool = False,
@@ -434,6 +459,10 @@ def run_agentic_checkup(
             ``success`` is a real ship verdict derived from the review-loop's
             current-run ``final-state.json``. A Layer 1 failure short-circuits
             before Layer 2; either layer's failure fails the gate.
+        full_suite_source: Final-gate full-suite evidence source. ``local`` keeps
+            the original behavior and runs full local tests in Layer 1.
+            ``github-checks`` uses targeted Layer 1 plus required GitHub checks.
+            ``none`` uses targeted Layer 1 when no CI/full-suite source exists.
         review_only: When true with ``review_loop``, run only the primary
             reviewer first pass and do not invoke the fixer or push changes.
         reviewer_fallback: Optional secondary reviewer role to try once when
@@ -619,6 +648,11 @@ def run_agentic_checkup(
         # and PR-scoped, so it never runs in plain issue mode.
         return False, "--final-gate requires --pr and --issue.", 0.0, ""
 
+    try:
+        final_gate_full_suite_source = _normalize_full_suite_source(full_suite_source)
+    except ValueError as exc:
+        return False, str(exc), 0.0, ""
+
     if final_gate:
         # The CLI rejects these combinations, but ``run_agentic_checkup`` is the
         # real contract boundary (the e2e/pdd-issue path and pdd_cloud call it
@@ -645,7 +679,8 @@ def run_agentic_checkup(
                 (
                     "--final-gate cannot be combined with: "
                     f"{', '.join(conflicts)}; the gate owns the fix/review steps, "
-                    "requires the deterministic gates and the full test suite, "
+                    "requires the deterministic gates and owns the full-suite "
+                    "evidence source, "
                     "and runs the review-loop as Layer 2."
                 ),
                 0.0,
@@ -692,6 +727,10 @@ def run_agentic_checkup(
     if final_gate:
         final_gate_pr_content = _fetch_pr_context(pr_owner, pr_repo, pr_number)
 
+    layer1_test_scope = test_scope
+    if final_gate and final_gate_full_suite_source in {"github-checks", "none"}:
+        layer1_test_scope = "targeted"
+
     # 5. Invoke orchestrator (Layer 1 of the final gate; the only layer for a
     #    plain checkup run).
     try:
@@ -715,7 +754,7 @@ def run_agentic_checkup(
             pr_owner=pr_owner,
             pr_repo=pr_repo,
             pr_number=pr_number,
-            test_scope=test_scope,
+            test_scope=layer1_test_scope,
             start_step_override=start_step_override,
             suppress_progress_comments=final_gate,
         )
@@ -731,6 +770,47 @@ def run_agentic_checkup(
         return False, orch_message, orch_cost, orch_model
 
     if final_gate:
+        if final_gate_full_suite_source == "github-checks":
+            assert pr_owner is not None and pr_repo is not None and pr_number is not None
+            checked_head_sha = _get_ci_pr_head_sha(
+                pr_owner, pr_repo, pr_number, project_root
+            )
+            if not checked_head_sha:
+                return (
+                    False,
+                    (
+                        "Final gate Layer 1 targeted PR checkup passed, but "
+                        "the GitHub-checks full-suite source could not read the "
+                        "current PR head SHA.\n\n"
+                        "final-gate-stage: github-checks\n"
+                        "final-gate-status: failed"
+                    ),
+                    orch_cost,
+                    orch_model,
+                )
+            check_status, checks = _poll_required_checks(
+                pr_owner,
+                pr_repo,
+                pr_number,
+                project_root,
+                expected_head_sha=checked_head_sha,
+                quiet=quiet,
+            )
+            if check_status != "passed":
+                return (
+                    False,
+                    (
+                        "Final gate Layer 1 targeted PR checkup passed, but "
+                        "required GitHub checks did not pass "
+                        f"(status={check_status}).\n\n"
+                        f"{_render_check_summary(checks)}\n\n"
+                        "final-gate-stage: github-checks\n"
+                        "final-gate-status: failed"
+                    ),
+                    orch_cost,
+                    orch_model,
+                )
+
         # Layer 2: the maintainer-style reviewer/fixer loop on the (possibly
         # Layer-1-pushed) PR head. Clear any stale verdict first so the
         # post-run read reflects THIS run only (a role/setup error returns
@@ -767,8 +847,13 @@ def run_agentic_checkup(
             has_issue=has_issue,
         )
         total_cost = orch_cost + loop_cost
+        source_note = (
+            ""
+            if final_gate_full_suite_source == "local"
+            else f"; full-suite source={final_gate_full_suite_source}"
+        )
         message = (
-            "Final gate: Layer 1 (PR checkup) passed; "
+            f"Final gate: Layer 1 (PR checkup{source_note}) passed; "
             f"Layer 2 (review-loop): {loop_message}"
         )
         if not ship and loop_success:
