@@ -5236,3 +5236,31 @@ class TestDocContractCheck:
             encoding="utf-8",
         )
         assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 0
+
+
+class TestExtractPddrcDefaultsKeys:
+    """Direct unit tests for extract_pddrc_defaults_keys (AST-based parser)."""
+
+    def test_single_line_set_literal(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_PDDRC_DEFAULTS_KEYS = {"a", "b", "c"}\n'
+        assert extract_pddrc_defaults_keys(content) == {"a", "b", "c"}
+
+    def test_multiline_set_literal(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = 'x = 1\n_PDDRC_DEFAULTS_KEYS = {\n    "key_a",\n    "key_b",\n}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_comment_with_closing_brace_inside_literal(self):
+        # This is the case the old regex silently failed on
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_PDDRC_DEFAULTS_KEYS = {\n    "key_a",  # e.g. {default}\n    "key_b",\n}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_missing_assignment_returns_empty(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        assert extract_pddrc_defaults_keys("x = 1\n") == set()
+
+    def test_syntax_error_returns_empty(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        assert extract_pddrc_defaults_keys("def (broken syntax") == set()

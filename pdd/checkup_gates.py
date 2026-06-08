@@ -49,6 +49,7 @@ Trust-boundary invariants:
 
 from __future__ import annotations
 
+import ast
 import datetime as _dt
 import fnmatch
 import json
@@ -3287,13 +3288,25 @@ def gate_results_to_findings(
 
 
 def extract_pddrc_defaults_keys(content: str) -> Set[str]:
-    """Helper to extract .pddrc keys from construct_paths.py content."""
-    match = re.search(r"_PDDRC_DEFAULTS_KEYS\s*=\s*\{([^}]+)\}", content)
-    if not match:
+    """Extract _PDDRC_DEFAULTS_KEYS from construct_paths.py source using AST parsing."""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
         return set()
-    block = match.group(1)
-    keys = re.findall(r'["\']([^"\']+)["\']', block)
-    return {k.strip() for k in keys if k.strip()}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id == "_PDDRC_DEFAULTS_KEYS"
+        ):
+            try:
+                value = ast.literal_eval(node.value)
+                if isinstance(value, (set, frozenset)):
+                    return {k for k in value if isinstance(k, str)}
+            except (ValueError, TypeError):
+                pass
+    return set()
 
 
 def get_markdown_section(text: str, start_marker: str, end_markers: List[str]) -> str:
