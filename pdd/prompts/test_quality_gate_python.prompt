@@ -1,0 +1,81 @@
+<pdd-reason>Test quality gate that validates generated tests assert user-visible outcomes and public contracts rather than implementation details or brittle selectors.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "check_test_quality", "signature": "(test_files: List[Path], contract: GenerationSourceContract) -> List[TestQualityFinding]", "returns": "List[TestQualityFinding]"},
+      {"name": "detect_brittle_selectors", "signature": "(test_source: str, file_path: Path) -> List[TestQualityFinding]", "returns": "List[TestQualityFinding]"},
+      {"name": "detect_private_impl_assertions", "signature": "(test_source: str, file_path: Path) -> List[TestQualityFinding]", "returns": "List[TestQualityFinding]"},
+      {"name": "detect_exact_dynamic_text", "signature": "(test_source: str, file_path: Path) -> List[TestQualityFinding]", "returns": "List[TestQualityFinding]"},
+      {"name": "detect_no_async_polling", "signature": "(test_source: str, file_path: Path) -> List[TestQualityFinding]", "returns": "List[TestQualityFinding]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>pdd/generation_source_contract_Python.prompt</pdd-dependency>
+
+% Write `pdd/test_quality_gate.py`, the AST-based test quality analysis module.
+
+<include>context/python_preamble.prompt</include>
+
+Shared Context (canonical data model — use ONLY these fields and types)
+
+<context_data_dictionary>
+<include>prompts/_context/data_dictionary.yaml</include>
+</context_data_dictionary>
+
+CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
+% Role & Scope
+This module implements PRD Requirement 5: improve generated test quality. It uses Python stdlib `ast` module to walk test ASTs and detect `TestQualityFinding` records. Integrates with `agentic_test_orchestrator` post-generation validation step. All checks are deterministic (no LLM calls).
+
+% Requirements
+1. Implement `detect_brittle_selectors(test_source: str, file_path: Path) -> List[TestQualityFinding]`:
+   - Parse `test_source` with `ast.parse`; walk for string literal values inside `assert` statements, `assertEqual`, `assertIn`, `find`, `query_selector` calls.
+   - Flag strings matching TailwindCSS patterns (`re.compile(r'\b(bg|text|flex|grid|p|m|w|h)-[\w-]+\b')`) or XPath expressions (`re.compile(r'//\w+\[|/descendant::')`).
+   - Return `TestQualityFinding(kind="brittle_selector", file_path=str(file_path), line_number=node.lineno, suggested_fix="Use semantic selectors (get_by_role, get_by_label, get_by_text) or data-testid attributes instead of CSS utility classes")`.
+2. Implement `detect_private_impl_assertions(test_source: str, file_path: Path) -> List[TestQualityFinding]`:
+   - Walk AST for attribute accesses (`ast.Attribute`) inside assert/assertEqual/assertIs calls where the attribute name starts with `_`.
+   - Walk for `mock.patch` / `unittest.mock.patch` targets containing `._` paths.
+   - Return `TestQualityFinding(kind="private_impl_assertion", ..., suggested_fix="Assert on public API return values and observable side effects, not internal attributes")`.
+3. Implement `detect_exact_dynamic_text(test_source: str, file_path: Path) -> List[TestQualityFinding]`:
+   - Walk for string literal arguments in `assertEqual`, `assert_called_with`, `assert_text` calls matching:
+     - UUID pattern: `re.compile(r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b', re.I)`
+     - Timestamp pattern: `re.compile(r'\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}')`
+     - Numeric ID-only strings: `re.compile(r'^\d{4,}$')`
+   - Return `TestQualityFinding(kind="exact_dynamic_text", ..., suggested_fix="Use regex matching, isinstance checks, or mock-controlled values instead of exact dynamic strings")`.
+4. Implement `detect_no_async_polling(test_source: str, file_path: Path) -> List[TestQualityFinding]`:
+   - Walk for `page.locator(...)`, `driver.find_element(...)`, `selenium` calls NOT followed by `wait_for`, `expect`, `WebDriverWait`, `wait_until`, `page.wait_for_selector` in the same test function body.
+   - Return `TestQualityFinding(kind="no_async_polling", ..., suggested_fix="Use page.wait_for_selector / expect(locator).to_be_visible() instead of direct locator access without polling")`.
+5. Implement `check_test_quality(test_files: List[Path], contract: GenerationSourceContract) -> List[TestQualityFinding]`:
+   - For each `Path` in `test_files`: read file, call all four detection functions, aggregate results.
+   - Silently skip files that cannot be read or parsed (log warning, continue).
+   - Return combined list of all findings; empty list means all checks pass.
+6. All `re` patterns must be compiled at module level.
+7. Use `logging.getLogger(__name__)`; never `print`. Stdlib only: `ast`, `re`, `pathlib`, `logging`, `typing`.
+
+% Dependency API Reference
+
+### generation_source_contract
+- `GenerationSourceContract` — `contract` passed for context (e.g., known public symbols)
+- `TestQualityFinding` — fields: `kind`, `file_path`, `line_number`, `suggested_fix`
+- `TestQualityFindingKind` — enum values: `brittle_selector`, `private_impl_assertion`, `exact_dynamic_text`, `no_async_polling`
+
+**Import as:** `from pdd.generation_source_contract import (GenerationSourceContract, TestQualityFinding, TestQualityFindingKind)`
+
+% Testing Strategy
+- External services: filesystem reads (test file reading)
+- Test: `detect_brittle_selectors` on source with `assert "bg-blue-500" in element.class_name` → finding with `kind="brittle_selector"`
+- Test: `detect_private_impl_assertions` on source with `assert obj._internal_state == 42` → finding with `kind="private_impl_assertion"`
+- Test: `detect_exact_dynamic_text` on `assertEqual(result, "2024-01-15T10:30:00")` → finding with `kind="exact_dynamic_text"`
+- Test: `check_test_quality([], contract)` → empty list
+- Test: `check_test_quality` with unreadable file → skips gracefully, no exception
+
+% Deliverables
+- Single file: `pdd/test_quality_gate.py`
+- All five public functions with docstrings and type hints
+- Module-level compiled regex patterns
+- No LLM calls — purely AST and regex based

@@ -1,0 +1,61 @@
+<pdd-reason>Foundational Pydantic v2 schema and file-persistence layer for the generation source contract artifact, consumed by all generation quality modules.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "create_source_contract", "signature": "(run_id: Optional[str] = None, prd_text: Optional[str] = None) -> GenerationSourceContract", "returns": "GenerationSourceContract"},
+      {"name": "load_source_contract", "signature": "(run_id: str, base_dir: Path = Path('.pdd/generation-contracts')) -> GenerationSourceContract", "returns": "GenerationSourceContract"},
+      {"name": "save_source_contract", "signature": "(contract: GenerationSourceContract, base_dir: Path = Path('.pdd/generation-contracts')) -> Path", "returns": "Path"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Write `pdd/generation_source_contract.py`, the central Pydantic v2 schema and JSON persistence layer shared by all generation quality modules.
+
+<include>context/python_preamble.prompt</include>
+
+Shared Context (canonical data model — use ONLY these fields and types)
+
+<context_data_dictionary>
+<include>prompts/_context/data_dictionary.yaml</include>
+</context_data_dictionary>
+
+CONSTRAINTS: Use ONLY the field names, types, and enum values from the data dictionary above. Do NOT invent new fields or rename existing ones.
+
+% Role & Scope
+This module is the foundational shared data contract for all six generation quality modules. It defines Pydantic v2 models for every entity in the data dictionary: `GenerationSourceContract` (UUID-keyed root artifact persisted to `.pdd/generation-contracts/{run_id}.json`), `FeatureRequirement`, `ExampleClassification`, `InterfaceFact`, `WiringCheckResult`, `TestQualityFinding`, `ReadinessFinding`, `GenerationAuditRecord`, and `RequirementAuditEntry`. It also exports `create_source_contract`, `load_source_contract`, and `save_source_contract` for file-based JSON persistence.
+
+% Requirements
+1. Define all 9 enums as `str, Enum` subclasses with lowercase string values from the data dictionary: `RequirementPriority` (`p0`, `p1`), `FindingSeverity` (`blocker`, `warning`), `ExampleKind` (`illustrative`, `exhaustive`, `unknown`), `RequirementKind` (`api`, `route`, `schema`, `ui`, `cli`, `job`, `test`, `script`), `InterfaceFactKind` (`function`, `class_field`, `export`, `endpoint`, `config_key`, `component_prop`), `WiringCheckKind` (`handler_registration`, `route_reachability`, `config_declaration`, `module_test_coverage`, `script_executable`), `WiringStatus` (`pass_` with value `"pass"` to avoid Python keyword, `warn`, `fail`), `TestQualityFindingKind` (`brittle_selector`, `private_impl_assertion`, `exact_dynamic_text`, `no_async_polling`), `AuditEntryStatus` (`covered`, `partial`, `skipped`, `waived`).
+2. Define all 9 Pydantic v2 `BaseModel` subclasses using `model_config = ConfigDict(use_enum_values=True)` for automatic enum serialization. Fields must exactly match the data dictionary (names, types, required/optional, defaults).
+3. Add `model_validator(mode='after')` on `FeatureRequirement` to enforce that `acceptance_criteria` is non-empty when `priority == "p0"`.
+4. `RequirementAuditEntry.gate_results: List[Union[WiringCheckResult, TestQualityFinding]]` — use `Annotated` with `Field(discriminator=...)` or a plain `Union` — whichever round-trips cleanly via `model_dump(mode='json')`.
+5. Call `model_rebuild()` on all models after class definitions to resolve forward references.
+6. Export module-level constant `GENERATION_SOURCE_CONTRACT_SCHEMA_VERSION: int = 1`.
+7. Implement `create_source_contract(run_id=None, prd_text=None) -> GenerationSourceContract`: generates `str(uuid.uuid4())` if `run_id` is `None`.
+8. Implement `load_source_contract(run_id, base_dir=Path('.pdd/generation-contracts')) -> GenerationSourceContract`: resolves `base_dir / f"{run_id}.json"`, reads UTF-8 text, parses with `GenerationSourceContract.model_validate_json(text)`. Raises `FileNotFoundError` if path missing, propagates `ValidationError` on bad JSON.
+9. Implement `save_source_contract(contract, base_dir=Path('.pdd/generation-contracts')) -> Path`: serializes with `json.dumps(contract.model_dump(mode='json'), indent=2)`, writes UTF-8 to `base_dir / f"{contract.run_id}.json"`, calls `mkdir(parents=True, exist_ok=True)` first, returns the `Path`.
+10. Use `from __future__ import annotations` at top. Stdlib-only imports: `json`, `uuid`, `pathlib`, `enum`, `typing`. Pydantic v2 imports: `BaseModel`, `ConfigDict`, `Field`, `field_validator`, `model_validator`.
+
+% Dependencies
+<pydantic_v2>
+  <!-- pydantic v2: BaseModel, ConfigDict, Field, field_validator, model_validator -->
+</pydantic_v2>
+
+% Instructions
+- Define enums at the top of the file, before any model classes, so models can reference them.
+- Use `class WiringStatus(str, Enum): PASS_ = "pass"; WARN = "warn"; FAIL = "fail"` — the member name is `PASS_` but the serialized value is `"pass"`.
+- `GenerationSourceContract` stores `schema_version: int = Field(default=1)` and `grounded_from_contract: bool = Field(default=False)`.
+- `InterfaceFact.signature` is `Optional[str] = None` — `None` for non-callable facts like class fields or config keys.
+- All list fields default to `Field(default_factory=list)`.
+- Keep model definitions in dependency order: enums → leaf models (FeatureRequirement, ExampleClassification, InterfaceFact, WiringCheckResult, TestQualityFinding, ReadinessFinding) → container models (GenerationSourceContract, RequirementAuditEntry, GenerationAuditRecord).
+
+% Deliverables
+- Single file: `pdd/generation_source_contract.py`
+- All 9 enums and 9 Pydantic v2 models
+- Three persistence functions: `create_source_contract`, `load_source_contract`, `save_source_contract`
+- Module constant: `GENERATION_SOURCE_CONTRACT_SCHEMA_VERSION = 1`
+- Full docstrings and type hints throughout
