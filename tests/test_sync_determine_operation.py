@@ -5275,3 +5275,129 @@ class TestIssue551CanonicalExtensionInGetPddFilePaths:
             f"Issue #551: Markdown test must be test_manifest.md, "
             f"got {paths['test'].name!r}"
         )
+
+    # ------------------------------------------------------------------
+    # Comprehensive sibling-language parametrized regression tests
+    # These cover languages from the Step 6 NEEDS_FIX list where the old
+    # local helper returned raw language names instead of canonical exts.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize("language,code_filename,expected_example_suffix,expected_test_suffix", [
+        # C-family / systems
+        ("C++",             "engine.cpp",   ".cpp",    ".cpp"),
+        ("C#",              "service.cs",   ".cs",     ".cs"),
+        ("Haskell",         "parser.hs",    ".hs",     ".hs"),
+        ("F#",              "module.fs",    ".fs",     ".fs"),
+        ("R",               "stats.R",      ".R",      ".R"),
+        ("LaTeX",           "paper.tex",    ".tex",    ".tex"),
+        ("Assembly",        "boot.asm",     ".asm",    ".asm"),
+        ("Fortran",         "solver.f90",   ".f90",    ".f90"),
+        ("COBOL",           "report.cob",   ".cob",    ".cob"),
+        ("Prolog",          "facts.pl",     ".pl",     ".pl"),
+        ("Erlang",          "node.erl",     ".erl",    ".erl"),
+        ("Clojure",         "core.clj",     ".clj",    ".clj"),
+        ("Julia",           "compute.jl",   ".jl",     ".jl"),
+        ("Elixir",          "worker.ex",    ".ex",     ".ex"),
+        ("Pascal",          "program.pas",  ".pas",    ".pas"),
+        ("VBScript",        "script.vbs",   ".vbs",    ".vbs"),
+        ("CoffeeScript",    "app.coffee",   ".coffee", ".coffee"),
+        ("Objective-C",     "view.m",       ".m",      ".m"),
+        ("Scheme",          "eval.scm",     ".scm",    ".scm"),
+        ("OCaml",           "lexer.ml",     ".ml",     ".ml"),
+        ("LLM",             "agent.prompt", ".prompt", ".prompt"),
+        ("reStructuredText","manual.rst",   ".rst",    ".rst"),
+        ("Verilog",         "adder.v",      ".v",      ".v"),
+        ("Systemverilog",   "module.sv",    ".sv",     ".sv"),
+        ("Jinja",           "tmpl.jinja2",  ".jinja2", ".jinja2"),
+        ("Handlebars",      "page.hbs",     ".hbs",    ".hbs"),
+        ("Terraform",       "main.tf",      ".tf",     ".tf"),
+        ("Solidity",        "token.sol",    ".sol",    ".sol"),
+        ("Protobuf",        "schema.proto", ".proto",  ".proto"),
+        ("Starlark",        "rules.bzl",    ".bzl",    ".bzl"),
+    ])
+    def test_sibling_language_architecture_paths_use_canonical_extensions(
+        self,
+        tmp_path,
+        monkeypatch,
+        language,
+        code_filename,
+        expected_example_suffix,
+        expected_test_suffix,
+    ):
+        """Issue #551 scope expansion: all languages from the Step 6 NEEDS_FIX list
+        must produce canonical extensions in get_pdd_file_paths, not raw language names.
+
+        Before the fix, the local get_extension() fell back to language.lower() for any
+        language not in its hard-coded map, producing suffixes like .c++, .haskell,
+        .terraform, .restructuredtext, etc. instead of canonical .cpp, .hs, .tf, .rst.
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+
+        basename = Path(code_filename).stem
+        prompt_filename = f"{basename}_{language}.prompt"
+        (tmp_path / "prompts" / prompt_filename).write_text(f"% {language} module\n")
+        self._write_arch_json(tmp_path, prompt_filename, code_filename)
+
+        paths = get_pdd_file_paths(basename, language, "prompts")
+
+        assert paths["example"].suffix == expected_example_suffix, (
+            f"Issue #551 ({language}): example path must end with {expected_example_suffix!r}, "
+            f"got {paths['example'].suffix!r} (full path: {paths['example']})"
+        )
+        assert paths["test"].suffix == expected_test_suffix, (
+            f"Issue #551 ({language}): test path must end with {expected_test_suffix!r}, "
+            f"got {paths['test'].suffix!r} (full path: {paths['test']})"
+        )
+        assert paths["test_files"] == [paths["test"]], (
+            f"Issue #551 ({language}): test_files must contain the canonical test path, "
+            f"got {paths['test_files']!r}"
+        )
+
+    def test_makefile_uses_no_extension(self, tmp_path, monkeypatch):
+        """Makefile has no extension in language_format.csv — example/test paths must
+        not get a raw .makefile suffix.
+
+        Before the fix: get_extension('Makefile') returned 'makefile', so paths
+        would be *_example.makefile and test_*.makefile.
+        After the fix: the canonical CSV row has empty extension, so get_extension
+        returns '' and paths omit the suffix.
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        (tmp_path / "prompts" / "build_Makefile.prompt").write_text("% Build rules\n")
+        self._write_arch_json(tmp_path, "build_Makefile.prompt", "Makefile")
+
+        paths = get_pdd_file_paths("Makefile", "Makefile", "prompts")
+
+        assert ".makefile" not in paths["example"].name.lower(), (
+            f"Issue #551 (Makefile): example path must not contain .makefile, "
+            f"got {paths['example'].name!r}"
+        )
+        assert ".makefile" not in paths["test"].name.lower(), (
+            f"Issue #551 (Makefile): test path must not contain .makefile, "
+            f"got {paths['test'].name!r}"
+        )
+
+    def test_test_files_list_uses_canonical_extension(self, tmp_path, monkeypatch):
+        """test_files key in get_pdd_file_paths return must also use the canonical extension.
+
+        Before the fix, YAML produced test_files=[Path('tests/test_ci.yaml')] instead of
+        [Path('tests/test_ci.yml')].
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        (tmp_path / "prompts" / "ci_YAML.prompt").write_text("% CI pipeline\n")
+        self._write_arch_json(tmp_path, "ci_YAML.prompt", "ci.yml")
+
+        paths = get_pdd_file_paths("ci", "YAML", "prompts")
+
+        assert len(paths["test_files"]) >= 1, "test_files must be non-empty"
+        for tf in paths["test_files"]:
+            assert Path(tf).suffix == ".yml", (
+                f"Issue #551: test_files entry must end with .yml, got {Path(tf).suffix!r} "
+                f"(entry: {tf!r})"
+            )
+            assert Path(tf).suffix != ".yaml", (
+                f"Issue #551: test_files must not contain .yaml path, got {tf!r}"
+            )
