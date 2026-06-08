@@ -3378,6 +3378,11 @@ PDD automatically detects the appropriate context based on:
 - `max_attempts`: Default maximum attempts for fixing operations
 - `outputs`: Output directories or configurations (default: empty dictionary)
 - `auto_deps_csv_path`: Path to the CSV file the auto-deps step uses to store and read dependency information. When unset, sync falls back to `project_dependencies.csv`. This is the `.pddrc` context-level equivalent of the `PDD_AUTO_DEPS_CSV_PATH` environment variable and the `auto-deps --csv` option (see the auto-deps command and Environment Variables sections); the same `project_dependencies.csv` default applies if none of these is set.
+- `compressed_context`: Enables compressed sync context by default for generation and repair phases. This is the context-level equivalent of `--compressed-context`.
+- `context_compression`: Selects active context-compression modes. Supported values are `off`, `test`, `examples`, `contracts`, and `all`.
+- `compress_examples`: Compresses included example files by default, using interface-oriented context where supported.
+- `compress_test_context`: Compresses test context by default so fix and test flows include focused failing tests and related fixtures.
+- `compression_fallback`: Controls behavior when compression fails. Use `full` to fall back to full context or `error` to fail instead.
 
 **Path Behavior**:
 - Paths ending with `/` are treated as explicit directories and do **not** preserve subdirectory basenames (e.g., `commands/analysis` -> `pdd/analysis.py`).

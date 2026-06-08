@@ -1,0 +1,100 @@
+<pdd-reason>Defines the engine-agnostic interactive prompt-repair session protocol and fake backend.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "ApprovedPatch", "signature": "(kind: str, target: Path, anchor: dict, replacement: str)", "returns": "ApprovedPatch"},
+      {"name": "RepairOption", "signature": "(label: str, preview: str, patch: ApprovedPatch)", "returns": "RepairOption"},
+      {"name": "InteractiveRepairSession", "signature": "(seed(report: PromptSourceSetReport) -> None, present_finding(finding_id: str) -> list[RepairOption], ask(question: str) -> str, record_choice(finding_id: str, option: RepairOption) -> None, approved_patches() -> list[ApprovedPatch])", "returns": "Protocol"},
+      {"name": "FakeInteractiveSession", "signature": "(options_by_finding=None, answers=None)", "returns": "FakeInteractiveSession"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Write `pdd/checkup_interactive_session.py`.
+%
+% This module defines the pure, engine-agnostic session contract for interactive
+% checkup prompt repair. It is a stateful in-memory approval protocol, not a CLI,
+% persistence layer, or patch applicator.
+
+<include>context/python_preamble.prompt</include>
+
+% Public API
+- `ApprovedPatch` dataclass:
+  - `kind: str`
+  - `target: pathlib.Path`
+  - `anchor: dict`
+  - `replacement: str`
+- `RepairOption` dataclass:
+  - `label: str`
+  - `preview: str`
+  - `patch: ApprovedPatch`
+- `InteractiveRepairSession` protocol:
+  - `seed(report: PromptSourceSetReport) -> None`
+  - `present_finding(finding_id: str) -> list[RepairOption]`
+  - `ask(question: str) -> str`
+  - `record_choice(finding_id: str, option: RepairOption) -> None`
+  - `approved_patches() -> list[ApprovedPatch]`
+- `FakeInteractiveSession` concrete in-memory backend for tests.
+
+% Type guidance
+- The repository may not yet provide a concrete `PromptSourceSetReport` type.
+- Use `from __future__ import annotations`.
+- Define `PromptSourceSetReport = Any` locally unless a real importable type is added later.
+- Do not invent report generation behavior in this module.
+
+% Requirements
+- Use only the standard library.
+- `ApprovedPatch` and `RepairOption` must be dataclasses with type annotations.
+- `RepairOption.patch` must be non-optional. Non-approving options such as skip
+  or custom-without-patch must still carry a typed `ApprovedPatch`, using a
+  non-approving patch kind such as `skip` or `custom_no_patch`.
+- `InteractiveRepairSession` must be a structural `typing.Protocol`.
+- `FakeInteractiveSession` must support deterministic seeding with finding IDs,
+  scripted repair options, and scripted answers.
+- `present_finding()` must return a fresh list of options for the requested
+  finding and remember which options were presented.
+- `record_choice()` must reject a choice for a finding when that option was not
+  previously presented for the same finding.
+- `ask()` must consume scripted answers in order and record a QA transcript
+  summary in memory. Missing scripted answers must return an empty string.
+- `approved_patches()` must return a fresh list containing only `ApprovedPatch`
+  objects from recorded approving choices.
+- `approved_patches()` must not return raw model text, free-form answers,
+  untyped values, skipped choices, or custom no-patch choices.
+- The module must not write files, apply patches, prompt on a TTY, call provider
+  APIs, persist artifacts, or implement Pi/TTY backends.
+
+<contract_rules>
+R1 - Typed repair options
+Every `RepairOption` MUST contain a non-optional `ApprovedPatch`.
+
+R2 - Presented option validation
+For every recorded choice, the session MUST reject the choice when the option
+was not previously presented for the same finding.
+
+R3 - Typed approvals only
+For every call to `approved_patches()`, the session MUST return only
+`ApprovedPatch` objects from recorded approving choices and MUST NOT return raw
+LLM text, answers, skipped choices, or custom no-patch choices.
+
+R4 - Write-free session layer
+The session layer MUST NOT write files, apply patches, or persist artifacts.
+</contract_rules>
+
+<capabilities>
+- MAY keep in-memory session state.
+- MAY return typed repair options.
+- MAY return typed approved patches.
+- MUST NOT write session artifacts.
+- MUST NOT modify prompt files.
+- MUST NOT apply patches.
+- MUST NOT call external providers.
+- MUST NOT prompt on TTY or Pi backends in this module.
+</capabilities>
+
+% Deliverables
+- Code: `pdd/checkup_interactive_session.py`
