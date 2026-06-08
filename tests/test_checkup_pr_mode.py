@@ -2284,6 +2284,18 @@ class TestPrModeSourceArtifacts:
         assert "`gpt-4` does not get priced from `openai/gpt-4o`" in prompt
         assert "`azure/gpt-4.1-mini`" in prompt
 
+    def test_step7_prompt_keeps_baseline_findings_out_of_pr_findings(self) -> None:
+        prompt = (
+            Path(__file__).resolve().parent.parent
+            / "pdd"
+            / "prompts"
+            / "agentic_checkup_step7_verify_LLM.prompt"
+        ).read_text(encoding="utf-8")
+
+        assert "only PR-scoped blockers" in prompt
+        assert "pre-existing project-wide/baseline issues" in prompt
+        assert "never include them in the final JSON `issues` array" in prompt
+
     def test_checkup_test_prompts_require_negative_acceptance_coverage(self) -> None:
         prompt_dir = Path(__file__).resolve().parent.parent / "pdd" / "prompts"
         regression_prompt = (
