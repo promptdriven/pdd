@@ -27,6 +27,18 @@ Manifests are written under:
 The versioned run path preserves audit history. The latest path provides a
 stable lookup for downstream automation.
 
+Interactive prompt-repair sessions are checkup evidence artifacts, but they are
+not evidence manifests and are not written by the session protocol layer itself.
+Backend or orchestration code may persist them under:
+
+```text
+.pdd/evidence/checkups/sessions/<run_id>.json
+.pdd/evidence/checkups/sessions/<run_id>.jsonl
+```
+
+See `docs/checkup_interactive_session.md` for the session API contract and
+artifact schema.
+
 Snapshot-enabled runs also write replay artifacts:
 
 ```bash
