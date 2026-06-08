@@ -318,22 +318,17 @@ def test_format_code_with_explicit_output_path(mock_ctx, mock_construct_paths, m
 def test_format_code_preserves_explicit_typescriptreact_filename(
     mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path
 ):
-    """Issue #551: explicit TypeScriptReact --output filenames must not be rewritten.
-
-    The original bug path rewrote explicit outputs through Path.with_suffix(...)
-    using the detected language extension. Using a complete filename whose final
-    suffix differs from .tsx makes that rewrite visible: buggy code writes
-    app_page_example.tsx.tsx instead of the exact requested .tsx.bak filename.
-    """
+    """Issue #551: explicit TypeScriptReact --output filenames are preserved."""
     mock_ctx.obj['local'] = True
     prompt_file = tmp_path / "app_page_TypeScriptReact.prompt"
     code_file = tmp_path / "app_page.tsx"
     explicit_output = tmp_path / "examples" / "app" / "app_page_example.tsx.bak"
     prompt_file.write_text("Prompt")
-    code_file.write_text("export function AppPage() { return <div>Hello</div>; }")
+    code_content = "export function AppPage() { return <div>Hello</div>; }"
+    code_file.write_text(code_content)
     mock_construct_paths.return_value = (
         {},
-        {"prompt_file": "Prompt", "code_file": "export function AppPage() { return <div>Hello</div>; }"},
+        {"prompt_file": "Prompt", "code_file": code_content},
         {"output": str(explicit_output)},
         "typescriptreact",
     )
@@ -347,12 +342,10 @@ def test_format_code_preserves_explicit_typescriptreact_filename(
         format="code",
     )
 
-    assert explicit_output.exists(), f"Expected exact --output path {explicit_output} to exist"
+    assert explicit_output.exists(), f"Expected {explicit_output} to exist"
     assert explicit_output.read_text() == "// Generated TSX"
     rewritten = explicit_output.with_suffix(".tsx")
-    assert not rewritten.exists(), (
-        f"Did not expect language-derived rewrite target {rewritten} when --output was explicit"
-    )
+    assert not rewritten.exists(), f"Unexpected rewritten output: {rewritten}"
 
 def test_format_md_without_explicit_output(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
     """Test that --format md option works with default output path generation."""
