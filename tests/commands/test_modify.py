@@ -179,6 +179,79 @@ def test_change_agentic_success(runner, mock_run_agentic_change):
     assert "Status: Success" in result.output
     assert "Cost: $1.0000" in result.output
 
+
+def test_change_agentic_generates_story_for_changed_prompt(runner, mock_run_agentic_change):
+    """Agentic pdd change should author a linked story from the issue URL."""
+    issue_url = "https://github.com/x/y/issues/1"
+    mock_run_agentic_change.return_value = (
+        True,
+        "Done",
+        1.0,
+        "change-model",
+        ["prompts/upload_python.prompt"],
+    )
+
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        with open("prompts/upload_python.prompt", "w", encoding="utf-8") as fh:
+            fh.write("new prompt")
+
+        with patch("pdd.commands.modify.generate_user_story") as mock_generate:
+            mock_generate.return_value = (
+                True,
+                "Generated story file: user_stories/story__upload.md.",
+                0.25,
+                "story-model",
+                "user_stories/story__upload.md",
+                ["upload_python.prompt"],
+            )
+
+            result = runner.invoke(change, [issue_url])
+
+    assert result.exit_code == 0, result.output
+    mock_generate.assert_called_once()
+    kwargs = mock_generate.call_args.kwargs
+    assert kwargs["prompt_files"] == ["prompts/upload_python.prompt"]
+    assert kwargs["issue"] == issue_url
+    assert "Generated user story:" in result.output
+
+
+def test_change_agentic_skips_story_generation_without_changed_prompt(
+    runner,
+    mock_run_agentic_change,
+):
+    mock_run_agentic_change.return_value = (True, "Done", 1.0, "gpt-4", ["file1.py"])
+
+    with patch("pdd.commands.modify.generate_user_story") as mock_generate:
+        result = runner.invoke(change, ["https://github.com/x/y/issues/1"])
+
+    assert result.exit_code == 0, result.output
+    mock_generate.assert_not_called()
+
+
+def test_change_agentic_skips_llm_prompt_story_generation(
+    runner,
+    mock_run_agentic_change,
+):
+    mock_run_agentic_change.return_value = (
+        True,
+        "Done",
+        1.0,
+        "gpt-4",
+        ["prompts/runtime_LLM.prompt"],
+    )
+
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        with open("prompts/runtime_LLM.prompt", "w", encoding="utf-8") as fh:
+            fh.write("runtime template")
+
+        with patch("pdd.commands.modify.generate_user_story") as mock_generate:
+            result = runner.invoke(change, ["https://github.com/x/y/issues/1"])
+
+    assert result.exit_code == 0, result.output
+    mock_generate.assert_not_called()
+
 def test_change_agentic_invalid_args(runner, mock_run_agentic_change, mock_handle_error):
     """Test agentic mode fails with wrong number of arguments."""
     # 0 arguments - UsageError propagates directly to Click (exit code 2)

@@ -4,7 +4,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple, Any, List
 
 import click
 from rich.console import Console
@@ -19,6 +19,7 @@ from ..track_cost import track_cost
 from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from ..operation_log import log_operation
+from ..user_story_tests import generate_user_story
 from ..evidence_manifest import write_evidence_manifest
 from ..prompt_gate import (
     maybe_run_workflow_prompt_gate,
@@ -36,6 +37,61 @@ _GITHUB_ISSUE_RE = re.compile(
 def _is_github_issue_url(value: str) -> bool:
     """Return True when value is a GitHub issue URL."""
     return bool(_GITHUB_ISSUE_RE.match(value.strip()))
+
+
+def _changed_story_prompt_files(changed_files: List[str]) -> List[str]:
+    """Return existing changed prompt files eligible for story generation."""
+    prompt_files: List[str] = []
+    seen = set()
+    for file_name in changed_files:
+        path = Path(file_name)
+        if path.suffix.lower() != ".prompt":
+            continue
+        if path.name.lower().endswith("_llm.prompt"):
+            continue
+        if not path.exists() or not path.is_file():
+            continue
+        key = str(path.resolve()).lower()
+        if key in seen:
+            continue
+        prompt_files.append(str(path))
+        seen.add(key)
+    return prompt_files
+
+
+def _generate_user_stories_for_agentic_change(
+    *,
+    issue_url: str,
+    changed_files: List[str],
+    quiet: bool,
+    verbose: bool,
+    ctx_obj: dict,
+) -> Tuple[float, str]:
+    """Generate a linked user story for changed prompt files from the issue."""
+    prompt_files = _changed_story_prompt_files(changed_files)
+    if not prompt_files or ctx_obj.get("skip_user_stories", False):
+        return 0.0, ""
+
+    success, message, cost, model, story_file, linked_prompts = generate_user_story(
+        prompt_files=prompt_files,
+        issue=issue_url,
+        stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
+        prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
+        strength=ctx_obj.get("strength", 0.2),
+        temperature=ctx_obj.get("temperature", 0.0),
+        time=ctx_obj.get("time", 0.25),
+        verbose=verbose,
+    )
+
+    if not quiet:
+        if success:
+            console.print(f"[bold green]Generated user story:[/bold green] {story_file}")
+            if linked_prompts:
+                console.print(f"Linked prompts: {', '.join(linked_prompts)}")
+        else:
+            console.print(f"[yellow]User story generation skipped:[/yellow] {message}")
+
+    return cost, model or ""
 
 @click.command()
 @click.argument("args", nargs=-1)
@@ -377,6 +433,16 @@ def change(
             
             if not success:
                 raise click.exceptions.Exit(1)
+
+            story_cost, story_model = _generate_user_stories_for_agentic_change(
+                issue_url=issue_url,
+                changed_files=changed_files,
+                quiet=quiet,
+                verbose=verbose,
+                ctx_obj=ctx.obj,
+            )
+            cost += story_cost
+            model = model or story_model
 
             should_continue, gate_exit = maybe_run_workflow_prompt_gate(
                 changed_files,
