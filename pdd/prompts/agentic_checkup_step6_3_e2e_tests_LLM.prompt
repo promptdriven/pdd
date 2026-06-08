@@ -63,11 +63,19 @@ Write **e2e/integration tests** to verify the system works end-to-end:
 2. **Test full request/response flows** where applicable
    - API endpoints, CLI commands, data pipelines
    - Happy path and key error scenarios
+   - Include at least one realistic negative or adversarial flow when the issue
+     has an acceptance criterion about unknown, rejected, absent, unchanged, or
+     unguessed behavior. Use production-like fixture data that contains
+     look-alike values, aliases, prefixes, suffixes, or defaults likely to mask
+     an over-broad implementation.
 
 3. **Test integration between components that were fixed**
    - If a dependency was added, test the module that depends on it
    - If an interface was changed, test both sides of the interface
    - If imports were fixed, test the full import chain
+   - If one component selects, matches, filters, prices, authorizes, or routes
+     data for another component, test both the accepted exact case and a
+     near-miss case that must remain unselected/unknown
 
 % Output
 
@@ -102,5 +110,9 @@ FILES_MODIFIED: path/to/file3, path/to/file4
 - Focus on cross-module interactions, not individual unit tests (those are covered by regression tests)
 - Place tests alongside existing tests following project conventions
 - Each test should cover a meaningful integration point
+- Do not stop at a smoke test when the source issue's acceptance criteria
+  depend on conservative matching or unknown preservation; add an integration
+  test that would fail if an implementation silently borrowed a default,
+  partial-match, or fallback result from another component
 - Post your findings as a GitHub comment before completing — EXCEPT in a PR-only review (no linked issue, #1292), where you skip posting and the orchestrator owns the single PR report
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
