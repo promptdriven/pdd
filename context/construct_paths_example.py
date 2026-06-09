@@ -1,81 +1,60 @@
-"""
-demo_construct_paths.py
-~~~~~~~~~~~~~~~~~~~~~~~
-Tiny end‑to‑end demo for pdd.construct_paths.construct_paths.
-
-What it shows
--------------
-1. Creates a toy prompt file in the current directory.
-2. Calls `construct_paths` with the arguments normally supplied by the CLI.
-3. Prints the three return values:
-      • input_strings      –  the file contents that were just read
-      • output_file_paths  –  where PDD will write its results
-      • language           –  language detected for the operation
-4. Removes the temporary file afterwards so the directory is left clean.
-
-Run it:
-    python demo_construct_paths.py
-"""
+from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
-
 from pdd.construct_paths import construct_paths
 
-# ---------------------------------------------------------------------------
-# 1. Prepare a minimal prompt file so the function has something to read
-# ---------------------------------------------------------------------------
-prompt_path = Path("Makefile_makefile.prompt").resolve()
-prompt_path.write_text(
-    "Prompt‑Driven Development example\n\n"
-    "Task: Write a function `hello()` that returns the string 'Hello, world!'",
-    encoding="utf-8",
-)
+def main() -> None:
+    # Define the output directory for temporary files
+    output_dir = Path("./output")
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-# ---------------------------------------------------------------------------
-# 2. Build the arguments expected by `construct_paths`
-# ---------------------------------------------------------------------------
-# The CLI layer normally supplies these.  We mimic that here.
-input_file_paths = {
-    "prompt_file": str(prompt_path),  # key name depends on the command
-    # Optional: you could also add an 'error_file': "errors.log", etc.
-}
+    # 1. Create a dummy prompt file to satisfy the input resolution requirement
+    # The filename ends with '_python.prompt' so that the language discovery 
+    # can automatically infer "python" from the suffix.
+    prompt_file = output_dir / "get_user_data_python.prompt"
+    prompt_file.write_text(
+        "Generate a python function that retrieves user profiles.", 
+        encoding="utf-8"
+    )
 
-force = True          # overwrite outputs if they already exist
-quiet = False         # print nice Rich tables to the terminal
-command = "generate"  # the PDD command we are emulating
-command_options = {}  # '--output', '--language', … would land here
+    # 2. Define the input file dictionary mapping keys to their paths
+    input_file_paths = {
+        "prompt_file": str(prompt_file)
+    }
 
-# ---------------------------------------------------------------------------
-# 3. Invoke the helper – exactly what the CLI does internally
-# ---------------------------------------------------------------------------
-resolved_config, input_strings, output_file_paths, language = construct_paths(
-    input_file_paths=input_file_paths,
-    force=force,
-    quiet=quiet,
-    command=command,
-    command_options=command_options,
-)
+    # 3. Define command-specific options
+    # We do not explicitly pass a language here to show how construct_paths
+    # dynamically infers it from the filename suffix we created above.
+    command_options = {
+        "basename": None,
+        "language": None,
+    }
 
-# ---------------------------------------------------------------------------
-# 4. Show the returned structures so you see what to expect
-# ---------------------------------------------------------------------------
-print("\nReturned values --------------------------------------------------")
-print("input_strings:")
-for key, value in input_strings.items():
-    print(f"  {key}:")
-    # Format multiline strings with proper indentation for better readability
-    value_lines = value.split('\n')
-    for line in value_lines:
-        print(f"    {line}")
+    print(f"Created mock prompt file at: {prompt_file.resolve()}")
+    print("Running construct_paths for the 'generate' command...")
 
-print("\noutput_file_paths:")
-for key, value in output_file_paths.items():
-    print(f"  {key}: {value}")
+    # 4. Call construct_paths
+    # - force=True prevents interactive prompts (critical for non-interactive environments)
+    # - quiet=False prints internal rich logs explaining how configurations are applied
+    resolved_config, input_strings, output_file_paths, language = construct_paths(
+        input_file_paths=input_file_paths,
+        force=True,
+        quiet=False,
+        command="generate",
+        command_options=command_options,
+        create_error_file=True
+    )
 
-print(f"\nlanguage: {language}")
+    # 5. Output and examine the resolved values
+    print("\n--- Path Construction Results ---")
+    print(f"Detected Language: {language}")
+    print(f"Resolved Basename: {resolved_config.get('basename', 'Unknown')}")
+    print(f"Code Output Path:  {output_file_paths.get('output')}")
+    print(f"Prompts Directory: {resolved_config.get('prompts_dir')}")
+    print(f"Code Directory:    {resolved_config.get('code_dir')}")
+    print(f"Loaded Prompt Context:\n\"\"\"\n{input_strings.get('prompt_file', '').strip()}\n\"\"\"")
 
-# ---------------------------------------------------------------------------
-# 5. (Optional) Clean‑up – remove the temporary prompt so it doesn't litter
-# ---------------------------------------------------------------------------
-prompt_path.unlink(missing_ok=True)
+if __name__ == "__main__":
+    main()
