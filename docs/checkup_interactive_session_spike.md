@@ -77,6 +77,8 @@ import { Type } from "@sinclair/typebox";
 
 const proposeRepairOptions = defineTool({
   name: "propose_repair_options",
+  // `label` (UI display name) is required by the 0.78.1 ToolDefinition type.
+  label: "Propose Repair Options",
   description: "Return structured repair proposals for a finding",
   parameters: Type.Object({
     finding_id: Type.String(),
@@ -88,7 +90,14 @@ const proposeRepairOptions = defineTool({
       recommended: Type.Optional(Type.Boolean()),
     })),
   }),
-  execute: async (params) => params,
+  // execute(toolCallId, params, signal, onUpdate, ctx): Promise<AgentToolResult>.
+  // The result must be an AgentToolResult ({ content, details }), not the raw params.
+  async execute(toolCallId, params, signal, onUpdate, ctx) {
+    return {
+      content: [{ type: "text", text: JSON.stringify(params.proposals) }],
+      details: { finding_id: params.finding_id, proposals: params.proposals },
+    };
+  },
 });
 
 const session = await createAgentSession({
@@ -96,6 +105,13 @@ const session = await createAgentSession({
   customTools: [proposeRepairOptions],
 });
 ```
+
+This tool shape matches the pinned `@earendil-works/pi-coding-agent@0.78.1`
+contract (required `label`; `execute(toolCallId, params, signal, onUpdate, ctx)`
+returning an `AgentToolResult` of `{ content, details }`). The reproducible run
+of the restricted session is recorded in
+`docs/checkup_interactive_session_pi_sample.jsonl` (see Sample Session
+Artifacts).
 
 ## Python TTY Prototype Shape
 
