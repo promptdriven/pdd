@@ -26,6 +26,22 @@ from .architecture_registry import (
 
 from .architecture_sync_helper import filepath_to_prompt_filename
 
+__all__ = [
+    "normalize_architecture_filenames",
+    "parse_prompt_tags",
+    "register_untracked_prompts",
+    "validate_contract_summary",
+    "update_architecture_from_prompt",
+    "sync_all_prompts_to_architecture",
+    "validate_architecture_modules",
+    "sync_prompts_to_architecture",
+    "validate_dependencies",
+    "validate_interface_structure",
+    "get_architecture_entry_for_prompt",
+    "has_pdd_tags",
+    "generate_tags_from_architecture",
+]
+
 # --- Issue #617: filename mirrors filepath ---
 
 # Extension (with dot, lowercased) -> PascalCase language for architecture.json
