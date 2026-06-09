@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, Sequence
 
@@ -52,19 +52,11 @@ class ApprovedPatch:
     target: Path
     anchor: dict[str, Any]
     replacement: str
+    finding_id: str = field(default="")
 
     def __post_init__(self) -> None:
         self.target = Path(self.target)
         self.anchor = dict(self.anchor)
-
-
-@dataclass
-class RepairOption:
-    """A repair option label/preview pair passed to Pi as context."""
-
-    label: str
-    preview: str
-    patch: ApprovedPatch
 
 
 class InteractiveRepairSession(Protocol):
@@ -115,9 +107,13 @@ class PiInteractiveSession:
                 [node, str(self._bridge), str(ctx_path), str(out_path)],
                 check=True,
             )
+            if not out_path.exists():
+                raise RuntimeError(
+                    f"Pi bridge exited without writing output to {out_path}"
+                )
             result = json.loads(out_path.read_text(encoding="utf-8"))
         self._patches = [
-            ApprovedPatch(**{k: v for k, v in p.items() if k != "finding_id"})
+            ApprovedPatch(**p)
             for p in result.get("approved_patches", [])
             if p.get("kind") not in NON_APPROVING_PATCH_KINDS
         ]

@@ -1,3 +1,4 @@
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -7,25 +8,18 @@ import pytest
 from pdd.checkup_interactive_session import (
     ApprovedPatch,
     FakeInteractiveSession,
-    RepairOption,
+    PiInteractiveSession,
     _pi_available,
 )
 
 
-def _patch(kind: str = "vocab_definition") -> ApprovedPatch:
+def _patch(kind: str = "vocab_definition", finding_id: str = "F-1") -> ApprovedPatch:
     return ApprovedPatch(
         kind=kind,
         target=Path("prompts/refund_python.prompt"),
-        anchor={"finding_id": "finding-1", "line": 42},
+        anchor={"line": 42},
         replacement="- Remaining refundable amount: captured minus refunded.",
-    )
-
-
-def _option(label: str = "A", kind: str = "vocab_definition") -> RepairOption:
-    return RepairOption(
-        label=label,
-        preview="--- prompt\n+++ prompt\n@@\n+definition",
-        patch=_patch(kind),
+        finding_id=finding_id,
     )
 
 
@@ -86,10 +80,85 @@ def test_approved_patch_coerces_anchor_to_dict() -> None:
     assert isinstance(p.anchor, dict)
 
 
+def test_approved_patch_finding_id_defaults_to_empty_string() -> None:
+    p = ApprovedPatch(kind="k", target=Path("f.prompt"), anchor={}, replacement="r")
+    assert p.finding_id == ""
+
+
+def test_approved_patch_preserves_finding_id() -> None:
+    p = ApprovedPatch(kind="k", target=Path("f.prompt"), anchor={}, replacement="r", finding_id="F-42")
+    assert p.finding_id == "F-42"
+
+
+# --- PiInteractiveSession.run() ---
+
+def _bridge_writer(bridge_output: dict):
+    """Return a subprocess.run side_effect that writes bridge_output to the output path."""
+    def _run(cmd, check, **kwargs):
+        Path(cmd[-1]).write_text(json.dumps(bridge_output), encoding="utf-8")
+        return MagicMock(returncode=0)
+    return _run
+
+
+def test_pi_session_run_parses_approved_patches() -> None:
+    bridge_output = {"approved_patches": [
+        {"kind": "vocab_definition", "target": "p.prompt",
+         "anchor": {"line": 1}, "replacement": "x", "finding_id": "F-1"},
+    ]}
+    with patch("shutil.which", return_value="/usr/bin/node"), \
+         patch("subprocess.run", side_effect=_bridge_writer(bridge_output)):
+        session = PiInteractiveSession()
+        session.seed({"findings": []})
+        session.run()
+
+    patches = session.approved_patches()
+    assert len(patches) == 1
+    assert patches[0].kind == "vocab_definition"
+    assert patches[0].finding_id == "F-1"
+
+
+def test_pi_session_run_filters_non_approving_kinds() -> None:
+    bridge_output = {"approved_patches": [
+        {"kind": "skip", "target": "p.prompt", "anchor": {}, "replacement": "", "finding_id": "F-1"},
+        {"kind": "custom_no_patch", "target": "p.prompt", "anchor": {}, "replacement": "", "finding_id": "F-1"},
+        {"kind": "no_patch", "target": "p.prompt", "anchor": {}, "replacement": "", "finding_id": "F-1"},
+        {"kind": "vocab_definition", "target": "p.prompt", "anchor": {}, "replacement": "x", "finding_id": "F-1"},
+    ]}
+    with patch("shutil.which", return_value="/usr/bin/node"), \
+         patch("subprocess.run", side_effect=_bridge_writer(bridge_output)):
+        session = PiInteractiveSession()
+        session.seed({})
+        session.run()
+
+    patches = session.approved_patches()
+    assert len(patches) == 1
+    assert patches[0].kind == "vocab_definition"
+
+
+def test_pi_session_run_raises_on_bridge_error() -> None:
+    with patch("shutil.which", return_value="/usr/bin/node"), \
+         patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "node")):
+        session = PiInteractiveSession()
+        session.seed({})
+        with pytest.raises(subprocess.CalledProcessError):
+            session.run()
+
+
+def test_pi_session_run_raises_when_bridge_writes_no_output() -> None:
+    def _run_no_output(cmd, check, **kwargs):
+        return MagicMock(returncode=0)
+
+    with patch("shutil.which", return_value="/usr/bin/node"), \
+         patch("subprocess.run", side_effect=_run_no_output):
+        session = PiInteractiveSession()
+        session.seed({})
+        with pytest.raises(RuntimeError, match="without writing output"):
+            session.run()
+
+
 # --- _pi_available ---
 
 def _npm_ok() -> MagicMock:
-    """Return a mock subprocess.CompletedProcess indicating npm probe success."""
     m = MagicMock()
     m.returncode = 0
     return m

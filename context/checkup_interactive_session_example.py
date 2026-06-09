@@ -14,8 +14,10 @@ from pdd.checkup_interactive_session import (
 
 
 def main() -> None:
-    # External dependencies must be imported inside the function scope
-    from rich.console import Console
+    try:
+        from rich.console import Console
+    except ImportError:
+        raise SystemExit("Install 'rich' to run this example: pip install rich")
 
     console = Console()
     console.print("[bold blue]Interactive Prompt-Repair Session Example[/bold blue]\n")

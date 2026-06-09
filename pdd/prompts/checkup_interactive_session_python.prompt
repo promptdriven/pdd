@@ -6,8 +6,7 @@
   "module": {
     "functions": [
       {"name": "_pi_available", "signature": "() -> bool", "returns": "bool"},
-      {"name": "ApprovedPatch", "signature": "(kind: str, target: Path, anchor: dict, replacement: str)", "returns": "ApprovedPatch"},
-      {"name": "RepairOption", "signature": "(label: str, preview: str, patch: ApprovedPatch)", "returns": "RepairOption"},
+      {"name": "ApprovedPatch", "signature": "(kind: str, target: Path, anchor: dict, replacement: str, finding_id: str = '')", "returns": "ApprovedPatch"},
       {"name": "InteractiveRepairSession", "signature": "(seed(report: PromptSourceSetReport) -> None, run() -> None, approved_patches() -> list[ApprovedPatch])", "returns": "Protocol"},
       {"name": "PiInteractiveSession", "signature": "(bridge: Path | None = None)", "returns": "PiInteractiveSession"},
       {"name": "FakeInteractiveSession", "signature": "(patches: Sequence[ApprovedPatch] | None = None)", "returns": "FakeInteractiveSession"}
@@ -27,16 +26,15 @@
 
 % Public API
 - `_pi_available() -> bool`:
-  - Returns True when `node` is on PATH and its major version >= 22.
+  - Returns True when `node` is on PATH, its major version >= 22, AND
+    `@earendil-works/pi-coding-agent` is installed (verified via a dynamic
+    import probe: `node --input-type=module --eval "import('...').then(...)"`).
 - `ApprovedPatch` dataclass:
   - `kind: str`
   - `target: pathlib.Path`
   - `anchor: dict`
   - `replacement: str`
-- `RepairOption` dataclass:
-  - `label: str`
-  - `preview: str`
-  - `patch: ApprovedPatch`
+  - `finding_id: str` (default `""`)
 - `InteractiveRepairSession` protocol:
   - `seed(report: PromptSourceSetReport) -> None`
   - `run() -> None`
@@ -55,7 +53,7 @@
 
 % Requirements
 - Use only the standard library (json, shutil, subprocess, tempfile, pathlib, copy, dataclasses, typing).
-- `ApprovedPatch` and `RepairOption` must be dataclasses with type annotations.
+- `ApprovedPatch` must be a dataclass with type annotations; `RepairOption` is NOT part of this module.
 - `InteractiveRepairSession` must be a structural `typing.Protocol` with three methods: `seed`, `run`, `approved_patches`.
 - `PiInteractiveSession.run()` must write the report to a temp context.json, invoke the bridge via subprocess, and parse approved_patches from the output.json.
 - `PiInteractiveSession.run()` must filter out non-approving patch kinds (skip, custom_no_patch, no_patch).
@@ -76,9 +74,10 @@ R3 - Write-free session layer
 The session layer MUST NOT write files, apply patches, or persist artifacts
 outside the temporary directory used by the subprocess bridge.
 
-R4 - Node version guard
-`_pi_available()` MUST return False when `node` is absent from PATH or its major
-version is less than 22.
+R4 - Node and package guard
+`_pi_available()` MUST return False when `node` is absent from PATH, its major
+version is less than 22, OR `@earendil-works/pi-coding-agent` is not installed
+(verified via a dynamic import probe).
 </contract_rules>
 
 <capabilities>

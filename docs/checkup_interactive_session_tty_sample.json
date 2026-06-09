@@ -1,7 +1,7 @@
 {
   "schema": "pdd.checkup_interactive_session_sample.v1",
   "backend": "python_tty",
-  "decision": "hybrid",
+  "decision": "pi_first",
   "created_date": "2026-06-09",
   "seed_report": {
     "schema": "pdd.prompt_source_set_report.v1",

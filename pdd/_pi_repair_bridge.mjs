@@ -35,11 +35,11 @@ const proposeRepairOptions = defineTool({
       })
     ),
   }),
-  execute: async (_toolCallId, { patches }) => {
-    // Do not spread finding_id into patch objects — ApprovedPatch has no such field.
-    approvedPatches.push(...patches);
+  execute: async (_toolCallId, { finding_id, patches }) => {
+    // Spread finding_id into each patch so Python can map patches back to findings.
+    for (const p of patches) approvedPatches.push({ ...p, finding_id });
     return {
-      content: [{ type: "text", text: `Recorded ${patches.length} patch(es).` }],
+      content: [{ type: "text", text: `Recorded ${patches.length} patch(es) for ${finding_id}.` }],
       details: { recorded: patches.length },
     };
   },
