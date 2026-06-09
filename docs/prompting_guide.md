@@ -546,14 +546,67 @@ Use stories for cross-module behavior, product acceptance criteria, critical edg
 
 Story files live in `user_stories/`. Use `pdd detect --stories` to validate them, `pdd change` to run validation after prompt modifications, and `pdd fix user_stories/story__*.md` to apply a story to prompts and re-validate it. Link stories to prompts with `pdd-story-prompts` metadata.
 
+### Two files: human-verified Story + AI-generated contract
+
+A user story is split across **two files** with different owners:
+
+- **The human Story** at `user_stories/story__<name>.md` is the *only* thing a
+  person reads and signs off on — one plain-language sentence ("As a
+  &lt;persona&gt;, I can &lt;capability&gt;, so that &lt;benefit&gt;.") they can
+  verify by using the product. It is the **source of truth**. Keep flags, exit
+  codes, JSON shapes, and internals out of it.
+- **The contract** at `user_stories/contracts/<name>.contract.md` is
+  **generated** from the human Story + the original issue. It holds the
+  machine-checkable sections (`## Covers`, `## Acceptance Criteria`, `## Oracle`,
+  …) plus a `## Candidate Prompts` list of other prompts the story could run
+  against. `pdd detect --stories` / the LLM uses it to confirm the prompts
+  deliver the Story. Humans don't hand-edit it.
+
+**Edit the Story, not the contract.** When you change the human Story, the
+contract is regenerated from the edited Story + the issue to re-align (a
+`story-hash` in the contract header tracks this). Validation feeds the Story and
+its contract **combined** to `detect_change`.
+
+**Keep it readable.** A human can only verify the Story quickly if they can read
+it quickly. Write the Story in plain, everyday language a newcomer who does not
+know PDD/LLM internals would understand. Translate internal jargon to the plain
+idea even when the issue uses it (e.g. "hydrated prompt" → "your fully assembled
+prompt"); keep genuine interface terms (command names, `--json`, exit codes)
+because those are the user's own vocabulary, not jargon.
+
+**Write durable Stories.** Describe the user's *stable goal* and *observable
+outcome*, never a comparison to a specific external product, tool, brand, or UI
+("works like Claude Code's UI", "matches Codex") and never a time-/version-pinned
+fact ("the current best model", "as of 2026") unless the issue itself makes that
+exact version the requirement. Whichever tool is "best" today may be surpassed
+tomorrow; a story pinned to it rots into a false failure. List the brittle things
+the contract deliberately excludes under its `## Non-Oracle` so the durability
+boundary is explicit.
+
 ### Story Template
+
+The human Story file — `user_stories/story__<name>.md` (the only part you write
+and verify by hand):
 
 ```md
 <!-- pdd-story-prompts: prompts/<module>_<language>.prompt -->
 
 # User Story: <name>
 
-<!-- Replace or remove every placeholder before committing this story. -->
+## Story
+
+As a <persona>,
+I want <behavior>,
+so that <value>.
+```
+
+The generated contract — `user_stories/contracts/<name>.contract.md` (produced
+from the Story + issue; shown here for reference, not for hand-authoring):
+
+```md
+<!-- pdd-story-contract derived-from-story="../story__<name>.md" story-hash="<auto>" issue-ref="<url|number|path>" -->
+
+# Contract: <name>
 
 ## Covers
 
@@ -569,12 +622,6 @@ For cross-module stories, namespace rule IDs by prompt:
 
 - prompts/<module_a>_<language>.prompt#R1: <rule name>
 - prompts/<module_b>_<language>.prompt#R3: <rule name>
-
-## Story
-
-As a <persona>,
-I want <behavior>,
-so that <value>.
 
 ## Context / Fixtures
 
@@ -612,17 +659,22 @@ Examples:
 - Internal class structure does not matter.
 - Exact wording of non-user-facing messages does not matter.
 - Deterministic but irrelevant ordering does not matter.
+- Resemblance to any specific third-party tool's UI or behavior does not matter.
+- Which provider/model is currently considered "best" does not matter.
 
-## Forbidden Outcomes
+## Negative Cases
 
-List outcomes this story protects against.
+List forbidden outcomes this story protects against.
 
 For MUST NOT rules, this section is required.
-For ordinary positive stories, this section may be empty or omitted.
+For ordinary positive stories, it may be empty.
 
-*(The canonical on-disk template at `user_stories/story__template.md` and story
-generation from `pdd test <*.prompt>` use **## Negative Cases** for this section —
-same intent, different heading.)*
+## Candidate Prompts
+
+Other prompts in this codebase the story could also be run against:
+
+- `prompts/<module>_<language>.prompt` — <one-line reason> (primary)
+- `prompts/<other>_<language>.prompt` — <one-line reason> (related|possible)
 
 ## Non-Goals
 
@@ -633,6 +685,10 @@ What this story explicitly does not cover.
 Links, edge cases, fixture notes, rationale, follow-up work, or review notes.
 ```
 
+The two worked examples below predate the two-file split; read them as the
+*combined* content (the `## Story` belongs in the human file, the remaining
+sections in the generated contract).
+
 Example:
 
 ```md
@@ -640,19 +696,21 @@ Example:
 
 # User Story: Refund requests are validated before provider calls
 
-## Covers
-
-- R1: Positive amount
-- R2: Remaining balance
-- R3: No provider call before validation
-
 ## Story
 
 As a support operator,
 I want invalid refund requests to be rejected before provider calls,
 so that customers are not over-refunded and provider state stays consistent.
 
-## Context / Fixtures
+## LLM-Confirmed Contract
+
+### Covers
+
+- R1: Positive amount
+- R2: Remaining balance
+- R3: No provider call before validation
+
+### Context / Fixtures
 
 The payment has been captured for $100.
 Successful prior refunds total $80.
@@ -660,7 +718,7 @@ Pending refunds total $0.
 The payment provider refund API is observed with a spy or mock.
 Payment state is observed from the payment record after the request.
 
-## Acceptance Criteria
+### Acceptance Criteria
 
 1. Given the payment above,
    when the operator requests a $30 refund,
@@ -674,31 +732,31 @@ Payment state is observed from the payment record after the request.
    when the operator requests a $30 refund,
    then the payment state is unchanged.
 
-## Oracle
+### Oracle
 
 The error type is `OverRefundError`.
 The payment provider is not called.
 The payment state is unchanged.
 
-## Non-Oracle
+### Non-Oracle
 
 The exact error message text is not important.
 The private helper names are not important.
 The order of internal validation checks is not important, as long as provider calls do not happen before validation.
 
-## Forbidden Outcomes
+### Forbidden Outcomes
 
 - The payment provider must not be called for an over-refund request.
 - The payment state must not change.
 - A successful-refund audit event must not be written.
 
-## Non-Goals
+### Non-Goals
 
 This story does not test operator authorization.
 This story does not test currency conversion.
 This story does not test customer notification.
 
-## Notes
+### Notes
 
 This is a negative story: it verifies forbidden behavior does not occur.
 ```
@@ -716,22 +774,24 @@ Example:
 
 # User Story: Provider secrets are not leaked
 
-## Covers
-
-- R6: Privacy
-
 ## Story
 
 As a security reviewer,
 I want provider secrets removed from returned errors and logs,
 so that generated code does not leak credentials.
 
-## Context / Fixtures
+## LLM-Confirmed Contract
+
+### Covers
+
+- R6: Privacy
+
+### Context / Fixtures
 
 The payment provider client is mocked to return an error that contains an API key.
 Returned errors and log output are captured by test fixtures.
 
-## Acceptance Criteria
+### Acceptance Criteria
 
 1. Given the payment provider returns an error containing an API key,
    when the module returns an error to the caller,
@@ -741,17 +801,17 @@ Returned errors and log output are captured by test fixtures.
    when the module writes logs,
    then the logs do not contain the API key.
 
-## Oracle
+### Oracle
 
 The returned error does not contain the API key.
 Captured logs do not contain the API key.
 
-## Non-Oracle
+### Non-Oracle
 
 The exact sanitized error wording is not important.
 The exact log message wording is not important.
 
-## Forbidden Outcomes
+### Forbidden Outcomes
 
 - Returned errors must not contain the API key.
 - Logs must not contain the API key.

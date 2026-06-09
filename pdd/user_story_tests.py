@@ -2,6 +2,7 @@
 # pylint: disable=too-many-lines
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -31,6 +32,14 @@ _LANGUAGE_EXTENSION_FALLBACKS = {
 }
 STORY_PREFIX = "story__"
 STORY_SUFFIX = ".md"
+# Two-file model: the human-verified Story lives at
+# ``user_stories/story__<slug>.md``; the AI-generated, machine-checkable contract
+# lives at ``user_stories/contracts/<slug>.contract.md``. The contract is derived
+# from the human Story plus the original issue and regenerated when the Story
+# changes. Keeping them in separate files keeps the human's sign-off tiny while
+# the precise, evolving test contract is owned by the tooling.
+CONTRACTS_SUBDIR = "contracts"
+CONTRACT_SUFFIX = ".contract.md"
 STORY_PROMPTS_METADATA_KEY = "pdd-story-prompts"
 STORY_PROMPTS_METADATA_RE = re.compile(
     r"<!--\s*pdd-story-prompts:\s*(?P<prompts>.*?)\s*-->",
@@ -615,19 +624,29 @@ def resolve_issue_source(  # pylint: disable=too-many-return-statements
 
 
 _STORY_META_PROMPT_NAME = "generate_user_story_LLM"
-# An LLM-authored story must contain the full canonical section set (issue
-# #1356) to be accepted. Invalid or unavailable LLM output fails generation
-# instead of writing a deterministic substitute, because deterministic stories
-# can miss prompt behavior and pass mutation tests that should fail.
+_STORY_CONTRACT_PROMPT_NAME = "generate_story_contract_LLM"
+# Two-file audience split (the human verifies the Story; the AI owns the
+# contract). The human story file is tiny — it must carry the ``## Story``
+# sentence and nothing else is required. Invalid or unavailable LLM output fails
+# generation instead of writing a deterministic substitute, because a shallow
+# deterministic story can miss prompt behavior and pass mutation tests that
+# should fail.
 _REQUIRED_STORY_SECTIONS = (
-    "## Covers",
     "## Story",
+)
+# The generated contract file carries the machine-checkable sections plus a
+# ``## Candidate Prompts`` list of other prompts the story could run against.
+# These are top-level ``##`` headings because the contract is now its own file
+# (the audience split is at the file level, not the heading level).
+_REQUIRED_CONTRACT_SECTIONS = (
+    "## Covers",
     "## Context",
     "## Acceptance Criteria",
     "## Oracle",
     "## Non-Oracle",
     "## Negative Cases",
     "## Non-Goals",
+    "## Candidate Prompts",
     "## Notes",
 )
 _PLACEHOLDER_TOKEN_RE = re.compile(
@@ -741,6 +760,362 @@ def _llm_generate_story_markdown(  # pylint: disable=too-many-arguments,too-many
     if not markdown.endswith("\n"):
         markdown += "\n"
     return markdown, cost, model
+
+
+# ---------------------------------------------------------------------------
+# AI contract file (derived from the human Story + issue)
+# ---------------------------------------------------------------------------
+
+_CONTRACT_HEADER_RE = re.compile(
+    r"<!--\s*pdd-story-contract\b(?P<attrs>.*?)-->",
+    flags=re.IGNORECASE | re.DOTALL,
+)
+_CONTRACT_ATTR_RE = re.compile(r"(?P<key>[a-z0-9_-]+)\s*=\s*\"(?P<val>[^\"]*)\"", re.IGNORECASE)
+
+
+def _slug_from_story_path(story_path: Path) -> str:
+    """Return the ``<slug>`` portion of a ``story__<slug>.md`` filename."""
+    name = story_path.name
+    if name.startswith(STORY_PREFIX):
+        name = name[len(STORY_PREFIX):]
+    if name.endswith(STORY_SUFFIX):
+        name = name[: -len(STORY_SUFFIX)]
+    return name
+
+
+def _contract_path_for_story(story_path: Path) -> Path:
+    """Return the sibling contract path for a human story file.
+
+    ``user_stories/story__x.md`` -> ``user_stories/contracts/x.contract.md``.
+    """
+    slug = _slug_from_story_path(story_path)
+    return story_path.parent / CONTRACTS_SUBDIR / f"{slug}{CONTRACT_SUFFIX}"
+
+
+def _normalized_story_for_hash(story_text: str) -> str:
+    """Return story text normalized for hashing.
+
+    Drops the ``pdd-story-prompts`` metadata comment and trailing whitespace so a
+    metadata-only edit (e.g. relinking prompts) does not look like a Story change,
+    while any edit to the human-facing prose does.
+    """
+    without_meta = STORY_PROMPTS_METADATA_RE.sub("", story_text)
+    lines = [line.rstrip() for line in without_meta.strip().splitlines()]
+    return "\n".join(line for line in lines if line.strip())
+
+
+def _story_content_hash(story_text: str) -> str:
+    """Stable short hash of the human-facing story content."""
+    norm = _normalized_story_for_hash(story_text)
+    return hashlib.sha256(norm.encode("utf-8")).hexdigest()[:16]
+
+
+def _parse_contract_header(contract_text: str) -> Dict[str, str]:
+    """Parse the ``<!-- pdd-story-contract key="val" ... -->`` header attrs."""
+    match = _CONTRACT_HEADER_RE.search(contract_text)
+    if not match:
+        return {}
+    return {
+        m.group("key").lower(): m.group("val")
+        for m in _CONTRACT_ATTR_RE.finditer(match.group("attrs"))
+    }
+
+
+def _prompt_inventory_descriptor(prompt_path: Path) -> str:
+    """Return a one-line descriptor for a prompt file (for the inventory)."""
+    try:
+        text = prompt_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    reason = re.search(r"<pdd-reason>\s*(.*?)\s*</pdd-reason>", text, re.DOTALL | re.IGNORECASE)
+    if reason:
+        snippet = " ".join(reason.group(1).split())
+    else:
+        snippet = ""
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith(("%", "<", "#")):
+                snippet = stripped
+                break
+    return snippet[:160]
+
+
+def _scan_prompt_inventory(
+    prompts_dir: Optional[Path],
+    *,
+    extra_paths: Optional[Iterable[Path]] = None,
+    include_llm: bool = False,
+    limit: int = 60,
+) -> List[Tuple[str, str]]:
+    """Collect ``(relpath, descriptor)`` for candidate prompts in the codebase.
+
+    The inventory feeds the contract generator so it can suggest other prompts
+    this story could run against. Runtime ``*_LLM.prompt`` templates are excluded.
+    """
+    found: Dict[str, Path] = {}
+    roots: List[Path] = []
+    if prompts_dir is not None:
+        roots.append(prompts_dir)
+    for root in roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for candidate in root.rglob("*.prompt"):
+            if not candidate.is_file():
+                continue
+            if not include_llm and candidate.name.lower().endswith("_llm.prompt"):
+                continue
+            found[str(candidate.resolve()).lower()] = candidate
+    for candidate in extra_paths or []:
+        if candidate.is_file() and (include_llm or not candidate.name.lower().endswith("_llm.prompt")):
+            found.setdefault(str(candidate.resolve()).lower(), candidate)
+
+    base = prompts_dir.resolve() if prompts_dir else None
+    inventory: List[Tuple[str, str]] = []
+    for prompt_path in sorted(found.values(), key=lambda p: str(p).lower()):
+        if base is not None:
+            try:
+                rel = prompt_path.resolve().relative_to(base).as_posix()
+            except ValueError:
+                rel = prompt_path.name
+        else:
+            rel = prompt_path.name
+        inventory.append((rel, _prompt_inventory_descriptor(prompt_path)))
+    return inventory[:limit]
+
+
+def _llm_generate_story_contract(  # pylint: disable=too-many-arguments,too-many-locals,broad-exception-caught,import-outside-toplevel
+    *,
+    title: str,
+    story_text: str,
+    issue_text: str,
+    inventory: List[Tuple[str, str]],
+    primary_refs: List[str],
+    strength: float,
+    temperature: float,
+    time: float,
+    verbose: bool,
+) -> Tuple[Optional[str], float, str]:
+    """Author the machine-checkable contract from the human Story + issue.
+
+    Returns ``(markdown, cost, model)`` or ``(None, cost, model)`` when the LLM is
+    unavailable or returns a contract missing a required section.
+    """
+    try:
+        from .llm_invoke import llm_invoke
+        from .load_prompt_template import load_prompt_template
+        from .preprocess import preprocess
+    except Exception as exc:  # pragma: no cover - defensive import guard
+        logger.debug("Contract LLM generation unavailable: %s", exc)
+        return None, 0.0, ""
+
+    template = load_prompt_template(_STORY_CONTRACT_PROMPT_NAME)
+    if not template:
+        logger.debug("Meta-prompt %s not found.", _STORY_CONTRACT_PROMPT_NAME)
+        return None, 0.0, ""
+
+    inventory_block = "\n".join(
+        f"- {rel}" + (f" — {desc}" if desc else "") for rel, desc in inventory
+    ) or "- (no other prompts found in the codebase)"
+    primary_block = "\n".join(f"- {ref}" for ref in primary_refs) or "- (none)"
+
+    processed = preprocess(
+        template,
+        recursive=False,
+        double_curly_brackets=True,
+        exclude_keys=[
+            "STORY_TITLE",
+            "STORY_TEXT",
+            "ISSUE_TEXT",
+            "PROMPT_INVENTORY",
+            "PRIMARY_PROMPTS",
+        ],
+    )
+    try:
+        response = llm_invoke(
+            prompt=processed,
+            input_json={
+                "STORY_TITLE": title,
+                "STORY_TEXT": story_text,
+                "ISSUE_TEXT": issue_text,
+                "PROMPT_INVENTORY": inventory_block,
+                "PRIMARY_PROMPTS": primary_block,
+            },
+            strength=strength,
+            temperature=temperature,
+            time=time,
+            verbose=verbose,
+        )
+    except Exception as exc:
+        logger.debug("Contract LLM generation failed: %s", exc)
+        return None, 0.0, ""
+
+    cost = float(response.get("cost", 0.0) or 0.0)
+    model = response.get("model_name", "") or ""
+    raw = response.get("result", "")
+    if not isinstance(raw, str) or not raw.strip():
+        return None, cost, model
+    markdown = _strip_markdown_code_fence(raw)
+    missing = [s for s in _REQUIRED_CONTRACT_SECTIONS if s not in markdown]
+    if missing:
+        logger.debug("LLM contract missing required sections %s.", missing)
+        return None, cost, model
+    if _contains_placeholder_tokens(markdown):
+        logger.debug("LLM contract contains placeholder tokens.")
+        return None, cost, model
+    if not markdown.endswith("\n"):
+        markdown += "\n"
+    return markdown, cost, model
+
+
+def _compose_contract_file(
+    contract_body: str,
+    *,
+    title: str,
+    story_rel: str,
+    story_hash: str,
+    issue_ref: str,
+) -> str:
+    """Wrap the contract body with the derived-from header used for sync."""
+    header = (
+        f'<!-- pdd-story-contract derived-from-story="{story_rel}" '
+        f'story-hash="{story_hash}" issue-ref="{issue_ref}" -->\n'
+    )
+    notice = (
+        "> Generated from the human-verified user story + issue. Do not hand-edit:\n"
+        "> it is regenerated to align whenever the Story changes. Humans verify the\n"
+        f"> Story (`{story_rel}`), not this contract.\n\n"
+    )
+    return f"{header}\n# Contract: {title}\n\n{notice}{contract_body}"
+
+
+def _generate_and_write_contract(  # pylint: disable=too-many-arguments,too-many-locals
+    *,
+    story_path: Path,
+    story_text: str,
+    title: str,
+    issue_text: str,
+    issue_ref: str,
+    prompts_root: Optional[Path],
+    extra_prompt_paths: Iterable[Path],
+    primary_refs: List[str],
+    strength: float,
+    temperature: float,
+    time: float,
+    verbose: bool,
+) -> Tuple[Optional[Path], float, str, Optional[str]]:
+    """Generate the contract for ``story_path`` and write it.
+
+    Returns ``(contract_path, cost, model, error)``. ``contract_path`` is None and
+    ``error`` is set when contract generation could not be completed.
+    """
+    inventory = _scan_prompt_inventory(prompts_root, extra_paths=extra_prompt_paths)
+    body, cost, model = _llm_generate_story_contract(
+        title=title,
+        story_text=story_text,
+        issue_text=issue_text,
+        inventory=inventory,
+        primary_refs=primary_refs,
+        strength=strength,
+        temperature=temperature,
+        time=time,
+        verbose=verbose,
+    )
+    if body is None:
+        return None, cost, model, "contract generation returned no valid contract"
+
+    contract_path = _contract_path_for_story(story_path)
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    # The contract lives one level down (contracts/); reference the story relative
+    # to the contract so the link survives the stories dir being moved.
+    rel_to_contract = os.path.relpath(story_path, contract_path.parent)
+    contract_text = _compose_contract_file(
+        body,
+        title=title,
+        story_rel=rel_to_contract,
+        story_hash=_story_content_hash(story_text),
+        issue_ref=issue_ref,
+    )
+    contract_path.write_text(contract_text, encoding="utf-8")
+    return contract_path, cost, model, None
+
+
+def sync_user_story_contract(  # pylint: disable=too-many-arguments,too-many-locals,too-many-return-statements
+    story_path: str,
+    *,
+    issue: Optional[str] = None,
+    prompts_dir: Optional[str] = None,
+    strength: float = 0.2,
+    temperature: float = 0.0,
+    time: float = 0.25,
+    verbose: bool = False,
+    force: bool = False,
+) -> Tuple[bool, str, float, str, str]:
+    """Regenerate a story's contract when the human Story has changed.
+
+    The human-verified Story is the source of truth: when it is edited, the
+    contract is regenerated from the edited Story plus the original issue (the
+    issue ref is read from the existing contract header, or may be passed via
+    ``issue``). Returns ``(changed, message, cost, model, contract_path)``.
+    """
+    story_p = Path(story_path)
+    if not story_p.exists():
+        return False, f"Story file not found: {story_path}", 0.0, "", ""
+    story_text = _read_story(story_p)
+    contract_p = _contract_path_for_story(story_p)
+
+    current_hash = _story_content_hash(story_text)
+    issue_ref = issue
+    if contract_p.exists():
+        header = _parse_contract_header(contract_p.read_text(encoding="utf-8"))
+        if not force and header.get("story-hash") == current_hash:
+            return False, "Contract already aligned with the Story.", 0.0, "", str(contract_p)
+        issue_ref = issue or header.get("issue-ref")
+
+    if not issue_ref:
+        return (
+            False,
+            (
+                "Cannot regenerate contract: no issue reference recorded in the "
+                "contract header and none provided. Pass issue=<url|number|path>."
+            ),
+            0.0,
+            "",
+            str(contract_p),
+        )
+
+    issue_title, issue_text, resolved_ref = resolve_issue_source(issue_ref)
+    if issue_text is None:
+        return (
+            False,
+            f"Could not resolve issue source '{issue_ref}' to regenerate the contract.",
+            0.0,
+            "",
+            str(contract_p),
+        )
+
+    prompts_root = _resolve_prompts_dir(prompts_dir) if prompts_dir else None
+    heading = _issue_title_from_markdown(story_text)
+    if heading and heading.lower().startswith("user story:"):
+        heading = heading.split(":", 1)[1].strip()
+    title = heading or issue_title or _slug_from_story_path(story_p)
+    primary_refs = _parse_story_prompt_metadata(story_text)
+    contract_path, cost, model, error = _generate_and_write_contract(
+        story_path=story_p,
+        story_text=story_text,
+        title=title,
+        issue_text=issue_text,
+        issue_ref=resolved_ref or issue_ref,
+        prompts_root=prompts_root,
+        extra_prompt_paths=[],
+        primary_refs=primary_refs,
+        strength=strength,
+        temperature=temperature,
+        time=time,
+        verbose=verbose,
+    )
+    if contract_path is None:
+        return False, f"Contract regeneration failed: {error}", cost, model, str(contract_p)
+    return True, f"Regenerated contract: {contract_path}", cost, model, str(contract_path)
 
 
 def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches,too-many-statements,too-many-return-statements,unused-argument
@@ -873,16 +1248,54 @@ def generate_user_story(  # pylint: disable=too-many-arguments,too-many-locals,t
         [path.resolve() for path in resolved_paths],
         prompts_root,
     )
+
+    total_cost = story_cost
+    model_used = story_model
     status_message = (
         f"Generated story file: {output_path}. "
         "Story prompt metadata linked from prompt inputs."
     )
 
+    # Generate the AI contract (machine-checkable oracle + candidate prompts)
+    # from the human Story + issue. This is best-effort: a contract failure must
+    # not block writing the human-verified Story, which is the source of truth and
+    # can have its contract regenerated later via sync_user_story_contract().
+    human_story_text = _read_story(output_path)
+    # Record a re-resolvable issue reference so the contract can be regenerated
+    # later (sync) from any working directory: absolutize a local issue path,
+    # otherwise keep the URL/number form the user supplied.
+    durable_issue_ref = os.path.abspath(issue) if issue and os.path.exists(issue) else issue
+    contract_path, contract_cost, contract_model, contract_error = _generate_and_write_contract(
+        story_path=output_path,
+        story_text=human_story_text,
+        title=title,
+        issue_text=issue_text,
+        issue_ref=durable_issue_ref,
+        prompts_root=prompts_root,
+        extra_prompt_paths=[p.resolve() for p in resolved_paths],
+        primary_refs=linked_refs,
+        strength=strength,
+        temperature=temperature,
+        time=time,
+        verbose=verbose,
+    )
+    total_cost += contract_cost
+    # The human Story is the primary artifact; report its model. Fall back to the
+    # contract model only when the story model is unknown.
+    model_used = model_used or contract_model
+    if contract_path is not None:
+        status_message += f" Generated contract file: {contract_path}."
+    else:
+        status_message += (
+            f" Contract generation was skipped ({contract_error}); "
+            "the Story is written and its contract can be generated later."
+        )
+
     return (
         True,
         status_message,
-        story_cost,
-        story_model,
+        total_cost,
+        model_used,
         str(output_path),
         linked_refs,
     )
@@ -944,6 +1357,19 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
     for story_path in story_files:
         story_content = _read_story(story_path)
         metadata_prompt_refs = _parse_story_prompt_metadata(story_content)
+        # The oracle is the human Story PLUS its generated contract (when present).
+        # The human file carries the prompt-link metadata; the contract carries the
+        # machine-checkable acceptance criteria the LLM detects against.
+        oracle_content = story_content
+        contract_path = _contract_path_for_story(story_path)
+        if contract_path.exists():
+            try:
+                oracle_content = (
+                    f"{story_content}\n\n"
+                    f"{contract_path.read_text(encoding='utf-8')}"
+                )
+            except OSError:
+                oracle_content = story_content
         story_prompt_files = prompt_files
         if metadata_prompt_refs:
             resolved_story_prompts: List[Path] = []
@@ -980,7 +1406,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
 
         changes_list, cost, model = detect_change(
             [str(p) for p in story_prompt_files],
-            story_content,
+            oracle_content,
             strength,
             temperature,
             time,

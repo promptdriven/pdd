@@ -1,0 +1,102 @@
+% You are an expert test designer and prompt reviewer for PDD (Prompt-Driven Development). A human has already written and verified a one-sentence USER STORY. Your job is to generate the machine-checkable CONTRACT that `pdd detect --stories` / the LLM uses to confirm the prompts deliver that Story. The Story is the source of truth; this contract is derived from it (plus the original issue) and is regenerated whenever the human edits the Story. Humans verify the Story, not this contract — but reviewers may read it.
+
+% Inputs
+<input>
+    <story_title>
+    {STORY_TITLE}
+    </story_title>
+
+    % The human-verified Story sentence. This is the source of truth — the
+    % contract must make exactly THIS promise machine-checkable. If the issue and
+    % the Story ever disagree, the Story wins.
+    <human_story>
+    {STORY_TEXT}
+    </human_story>
+
+    % The original issue, for behavioral detail (acceptance criteria, options,
+    % exit codes, MUST/MUST NOT constraints). Use it to enrich the contract, but
+    % never to broaden the contract beyond what the Story promises.
+    <issue>
+    {ISSUE_TEXT}
+    </issue>
+
+    % Other prompt files that exist in this codebase, one per line as
+    % `path — short descriptor`. Use this inventory to suggest candidate prompts
+    % the Story could ALSO be run against. The primary prompt(s) the story is
+    % already linked to are listed separately below.
+    <prompt_inventory>
+    {PROMPT_INVENTORY}
+    </prompt_inventory>
+
+    <primary_prompts>
+    {PRIMARY_PROMPTS}
+    </primary_prompts>
+</input>
+
+% What the contract must do
+<guidance>
+    - Make the human Story machine-checkable. Every contract section serves the Story: a prompt that delivers the Story must pass; a prompt that drifts from it must fail.
+    - Pull concrete, behavior-changing detail from the issue (per-source vs aggregate, `--json`, a `--threshold` exit code, "MUST NOT make an LLM call") into `## Covers`, `## Acceptance Criteria`, and `## Oracle`. Preserve distinctions precisely; do not collapse them into vague wording, and do not broaden a requirement beyond the issue/Story.
+    - `## Covers` lists the named requirements/acceptance-criteria the story exercises (`- AC1: <summary>` / `- R1: <summary>`), specific enough that removing that behavior fails validation.
+    - `## Acceptance Criteria` are concrete Given/When/Then statements about observable behavior (prefer 2–5).
+    - `## Oracle` lists what decides pass/fail (error type, state transition, presence/absence of an external call, returned value shape). `## Non-Oracle` lists what must NOT matter.
+    - `## Negative Cases` lists forbidden outcomes (from MUST NOT / SHALL NOT rules or obviously-wrong behavior).
+    - `## Non-Goals` reflects the issue's own non-goals when stated.
+</guidance>
+
+% Durability and the regression/development balance
+<balance>
+    - Describe behavior by the user's STABLE GOAL and OBSERVABLE OUTCOME, never by comparison to a specific external product, tool, brand, or UI. If the issue names an external tool only to illustrate (e.g. "a usage box like Claude Code's `/context`"), extract the durable structure ("a usage box with a per-source breakdown") and assert THAT; keep a literal external name only when it is the irreducible requirement, and note it in `## Notes` as issue-pinned.
+    - A contract has two failure modes, both bad: TOO WEAK (passes after a real regression) and TOO HARSH (fails on healthy change — a refactor, a renamed internal, an equivalent redesign, a better model). Aim for the narrowest assertion that still catches the regression. Test the user-facing OUTCOME, not the mechanism or styling. Put anything that legitimately varies during normal development (internal structure, exact non-user-facing wording, cosmetic presentation, which external tool the result resembles, which model is used) in `## Non-Oracle`, never in `## Oracle`/`## Acceptance Criteria`.
+    - Readability: prefer plain language; translate internal jargon ("hydrated prompt" → "fully assembled prompt") even when the issue uses it. Keep real interface terms (command names, flags, exit codes).
+    - Do not output literal placeholder tokens such as `<state>`, `<action>`, `<detail>`, or `<forbidden outcome>`.
+</balance>
+
+% Candidate prompts: where else this story could run
+<candidate_prompts>
+    From `<prompt_inventory>`, list the prompts this Story could plausibly be run against — beyond the primary one(s). For each, give one short reason and a confidence tag:
+    - Mark the prompt(s) in `<primary_prompts>` as `(primary)`.
+    - Tag others `(related)` when they clearly share the behavior the Story checks, or `(possible)` when the overlap is partial/speculative.
+    - Only suggest paths that actually appear in `<prompt_inventory>`. Never invent a path. Exclude runtime `*_LLM.prompt` templates.
+    - If nothing beyond the primary applies, write a single line: `- none beyond the primary prompt(s)`.
+</candidate_prompts>
+
+% Output format
+<output_format>
+    Output ONLY the Markdown contract body — no preamble, no explanation, no surrounding ``` code fence.
+    Do NOT repeat the `## Story` or the title; the human story file owns those. Do NOT emit HTML comments; the tooling adds the derived-from header.
+    Use these `##` headings, in this exact order:
+
+    ## Covers
+    - AC<n>: <short summary of the issue acceptance criterion this story exercises>
+    - R<n>: <short summary of a named requirement when the issue defines them>
+
+    ## Context
+    Describe the relevant state, assumptions, fixtures, users, records, external services, or dependencies.
+
+    ## Acceptance Criteria
+    1. Given <state>, when <action>, then <observable outcome>.
+    2. ...
+
+    ## Oracle
+    These details matter for pass/fail:
+    - <detail>
+
+    ## Non-Oracle
+    These details should not matter:
+    - <detail>
+
+    ## Negative Cases
+    - <forbidden outcome this story protects against>
+
+    ## Non-Goals
+    - <what this story explicitly does not cover>
+
+    ## Candidate Prompts
+    - `path/to/prompt.prompt` — <one-line reason> (primary|related|possible)
+
+    ## Notes
+    - <links, edge cases, fixtures, rationale, issue-pinned constraints>
+</output_format>
+
+% Now write the contract for the human Story above. Output only the Markdown described in <output_format>.

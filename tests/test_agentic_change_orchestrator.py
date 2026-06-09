@@ -107,6 +107,62 @@ def test_generate_user_story_artifacts_for_change_mentions_story_in_pr_summary(t
     assert model == "story-model"
 
 
+def test_generate_user_story_artifacts_stages_generated_contract(tmp_path):
+    """Two-file model integration: when generate_user_story also writes the
+    sibling AI contract, the change hook must stage the contract too so it
+    travels with the change PR (not left as an untracked local file)."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content", encoding="utf-8")
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+    contract_file = tmp_path / "user_stories" / "contracts" / "upload.contract.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nAs a user...\n",
+            encoding="utf-8",
+        )
+        contract_file.parent.mkdir(parents=True, exist_ok=True)
+        contract_file.write_text(
+            "<!-- pdd-story-contract derived-from-story=\"../story__upload.md\" -->\n\n"
+            "## Covers\n- AC1: x\n",
+            encoding="utf-8",
+        )
+        return (
+            True,
+            f"Generated story file: {story_file}. Generated contract file: {contract_file}.",
+            0.25,
+            "story-model",
+            str(story_file),
+            ["upload_python.prompt"],
+        )
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ):
+        story_files, summary, cost, model = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    # Both the human story and the generated contract are staged.
+    assert story_files == [
+        "user_stories/story__upload.md",
+        "user_stories/contracts/upload.contract.md",
+    ]
+    assert "`user_stories/contracts/upload.contract.md`" in summary
+    assert "machine-checkable contract" in summary
+
+
 def test_generate_user_story_artifacts_skips_runtime_llm_prompts(tmp_path):
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
