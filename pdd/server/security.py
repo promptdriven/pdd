@@ -67,17 +67,25 @@ class PathValidator:
             SecurityError: If the path is invalid, blocked, or traverses outside root.
         """
         try:
-            # 1. Parse user input and require a relative path.
+            # 1. Parse user input and reduce it to a single root-relative shape.
+            # Absolute paths are accepted only when they fall inside the project
+            # root; we rewrite them to a root-relative path (os.path.relpath) so
+            # an out-of-root absolute path becomes a '..'-prefixed relative path
+            # and is rejected by the traversal guard below, exactly like a
+            # relative escape. This preserves "absolute path inside root is valid"
+            # while keeping a single sanitization path.
             path_obj = Path(path)
+            root_str = str(self.project_root)
             if path_obj.is_absolute():
-                console.print(f"[bold red]Security Alert:[/bold red] Absolute path rejected: {path}")
-                raise SecurityError(
-                    code="PATH_TRAVERSAL",
-                    message="Access denied: Absolute paths are not allowed."
-                )
+                normalized_relative = os.path.relpath(os.path.normpath(str(path_obj)), root_str)
+            else:
+                normalized_relative = os.path.normpath(str(path_obj))
 
-            # 2. Normalize as a relative path and block traversal segments.
-            normalized_relative = os.path.normpath(str(path_obj))
+            # 2. Block traversal segments. After normpath, any path that escapes
+            # the root begins with '..'; rejecting that here breaks the taint
+            # before it reaches a filesystem path expression (CodeQL
+            # py/path-injection), since step 3 only ever joins a guarded relative
+            # path onto the trusted project root.
             if normalized_relative in ("", "."):
                 normalized_relative = "."
             if normalized_relative == ".." or normalized_relative.startswith(".." + os.sep):
