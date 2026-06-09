@@ -5,6 +5,5 @@
 ## Story
 
 As a maintainer preparing a project or pull request for review,
-I want PDD to run the right health check for the target I provide,
+I want PDD to run the right health check or review loop for the target I provide,
 so that I can see whether the work is ready or what needs repair.
-
