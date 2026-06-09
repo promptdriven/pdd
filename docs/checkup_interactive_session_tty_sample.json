@@ -1,0 +1,101 @@
+{
+  "schema": "pdd.checkup_interactive_session_sample.v1",
+  "backend": "python_tty",
+  "decision": "hybrid",
+  "artifact_note": "Python TTY sample for Hybrid: menus, choice validation, and apply gating are always Python-owned; Pi is optional for QA/proposals only and is not exercised in this artifact.",
+  "created_date": "2026-06-09",
+  "seed_report": {
+    "schema": "pdd.prompt_source_set_report.v1",
+    "findings": [
+      {
+        "finding_id": "F-001",
+        "check": "prompt-source-set",
+        "status": "failed",
+        "summary": "Prompt repair needs a human-approved backend decision before #1423 can proceed.",
+        "details": "The session must retain finding IDs, proposals, and user choices across turns."
+      }
+    ]
+  },
+  "turns": [
+    {
+      "turn": 1,
+      "user": "why?",
+      "assistant": "Because #1423 needs an interactive repair session that can answer follow-up questions without losing finding and proposal context. A session backend must persist finding IDs, proposals, and user choices across conversational turns."
+    },
+    {
+      "turn": 2,
+      "user": "what check failed?",
+      "assistant": "Finding F-001 failed the prompt-source-set check because no backend decision had been recorded for session persistence, tool control, UX control, and packaging. The check requires a documented decision before #1423 implementation can proceed."
+    },
+    {
+      "turn": 3,
+      "user": "tradeoff?",
+      "assistant": "Pi provides stronger session and QA primitives — built-in JSONL persistence, tool allowlisting, and custom tool support — but adds a Node >=22.19.0 runtime. Python TTY is simpler to package and test with existing dependencies, but requires more custom session memory and streaming code. The Hybrid decision captures Pi's benefits when the runtime is available while guaranteeing Python TTY covers all CI and headless cases."
+    }
+  ],
+  "proposals": [
+    {
+      "finding_id": "F-001",
+      "proposal_id": "P-001",
+      "label": "Adopt Pi",
+      "rationale": "Use Pi AgentSession for conversation, context retention, and proposal generation. Explicit tool allowlist: [\"read\", \"grep\", \"propose_repair_options\"].",
+      "tradeoff": "Best session engine and QA primitives; highest packaging cost (Node >=22.19.0 required).",
+      "recommended": false
+    },
+    {
+      "finding_id": "F-001",
+      "proposal_id": "P-002",
+      "label": "Custom TTY",
+      "rationale": "Use Python click prompts and llm_invoke with JSON session persistence. No new runtime dependency.",
+      "tradeoff": "Lowest packaging cost; more custom session behavior required for context retention and streaming.",
+      "recommended": false
+    },
+    {
+      "finding_id": "F-001",
+      "proposal_id": "P-003",
+      "label": "Hybrid",
+      "rationale": "Use Pi for QA and proposals when Node >=22.19.0 is available; Python owns menus, apply gating, state policy, and file mutation in all cases. Python TTY is the fallback when Pi is unavailable.",
+      "tradeoff": "Two backend paths to maintain; keeps deterministic control in Python; degrades gracefully in CI/headless.",
+      "recommended": true
+    },
+    {
+      "finding_id": "F-001",
+      "proposal_id": "P-004",
+      "label": "Defer",
+      "rationale": "Delay the decision until #1423 implementation begins; use Python TTY as a placeholder.",
+      "tradeoff": "Avoids the decision now but leaves #1423 blocked and risks a harder migration later.",
+      "recommended": false
+    }
+  ],
+  "rendered_menu": {
+    "prompt": "Select a backend for interactive prompt repair sessions:",
+    "options": [
+      "[1] Adopt Pi — best session engine, requires Node >=22.19.0",
+      "[2] Custom TTY — Python only, more custom session code",
+      "[3] Hybrid — Pi when available, Python TTY fallback (recommended)",
+      "[4] Defer — use Python TTY as placeholder, decide later"
+    ],
+    "selected_number": 3,
+    "selected_proposal_id": "P-003",
+    "apply": false,
+    "apply_owner": "python"
+  },
+  "user_choices": [
+    {
+      "finding_id": "F-001",
+      "selected_proposal_id": "P-003",
+      "apply": false,
+      "recorded_by": "python"
+    }
+  ],
+  "ownership": {
+    "pi": ["contextual_qa", "proposal_generation"],
+    "python": [
+      "numbered_menus",
+      "choice_validation",
+      "apply_gating",
+      "session_persistence",
+      "file_mutation"
+    ]
+  }
+}
