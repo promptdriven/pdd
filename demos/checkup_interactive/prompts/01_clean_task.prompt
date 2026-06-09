@@ -1,0 +1,12 @@
+<pdd-reason>Formats a list of items as a numbered string.</pdd-reason>
+
+% Write `pdd/format_list.py`.
+
+% Requirements
+- Provide `format_list(items: list[str], start: int = 1) -> str`.
+- Returns an empty string when the input list is empty.
+- Each item is prefixed with `{n}. ` where n starts at `start`.
+- Items are joined with newlines; no trailing newline.
+
+% Deliverables
+- Code: `pdd/format_list.py`
