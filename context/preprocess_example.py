@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from rich.console import Console
 from pdd.preprocess import preprocess
@@ -15,9 +16,7 @@ def main() -> None:
 
     # Create a dummy helper file to include in our prompt
     helper_file = output_dir / "helper.py"
-    helper_content = """def greet(name: str) -> str:
-    return f"Hello, {name}!"
-"""
+    helper_content = """def greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n"""
     helper_file.write_text(helper_content, encoding="utf-8")
 
     # Define a prompt with XML-like include tags and single curly braces
@@ -28,8 +27,8 @@ def main() -> None:
 
 Ensure you implement the client using the following JSON schema:
 {{
-    "username": "string",
-    "active": "boolean"
+    \"username\": \"string\",
+    \"active\": \"boolean\"
 }}
 """
 
@@ -50,11 +49,9 @@ Ensure you implement the client using the following JSON schema:
     console.print("[bold green]Preprocessed Prompt Output:[/bold green]")
     console.print(processed_prompt)
 
-    # Clean up the created helper file and directory
-    if helper_file.exists():
-        helper_file.unlink()
+    # Clean up - use rmtree to handle any auxiliary files (e.g. __pycache__)
     if output_dir.exists():
-        output_dir.rmdir()
+        shutil.rmtree(output_dir, ignore_errors=True)
 
 if __name__ == "__main__":
     main()

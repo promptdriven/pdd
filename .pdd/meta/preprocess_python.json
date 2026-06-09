@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.266",
-  "timestamp": "2026-06-09T00:37:11.785469+00:00",
-  "command": "verify",
+  "timestamp": "2026-06-09T01:06:44.357844+00:00",
+  "command": "test",
   "prompt_hash": "ee2a3bada76c66157971c9270925174e6b3393d67d034fe8f83e854fef3cbaeb",
   "code_hash": "e92713c711aad961fdba67f66f84327a71545e00552245b320c0e6ad191c187e",
-  "example_hash": "a0a52213acbd07537b57628812ce2471735512ffe06936b58bae300d5db2d7bf",
-  "test_hash": "0b24940dc9c79288d3a9f34b5c8127efa3dd98ddb69e21f2bf01e53a79f3f7a0",
+  "example_hash": "e7082a4a9ef830048ff32ed774a3e74da1cf4662a22115e6bd5543e1b9cdbf43",
+  "test_hash": "ec9a69c157443c17d8cdece1e5102252f31b470d9107efea66d89cfa977d9d13",
   "test_files": {
-    "test_preprocess.py": "0b24940dc9c79288d3a9f34b5c8127efa3dd98ddb69e21f2bf01e53a79f3f7a0",
+    "test_preprocess.py": "ec9a69c157443c17d8cdece1e5102252f31b470d9107efea66d89cfa977d9d13",
     "test_preprocess_main.py": "0fa3887c7a4e2c3f051ce719117b8f07444da419b35363b9dff4a2b5ae0f17e9",
     "test_preprocess_main_pdd_tags.py": "abddfe41c460aa7dcd4186028134deb4eef0a85419a7f6f59869a274c25f7ee8"
   },
