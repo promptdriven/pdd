@@ -15,7 +15,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from lxml import etree
 
@@ -547,7 +547,7 @@ def register_untracked_prompts(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
     dry_run: bool = False,
-    only_files: Optional[set] = None,
+    only_files: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """
     Discover prompt files that have PDD tags but no architecture.json entry,
@@ -1438,7 +1438,7 @@ def sync_all_prompts_to_architecture(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
     dry_run: bool = False,
-    only_files: Optional[set] = None,
+    only_files: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """
     Sync ALL prompt files to architecture.json.
@@ -1722,7 +1722,7 @@ def sync_prompts_to_architecture(
 
     try:
         if filenames is None:
-            register_only_files: Optional[set] = None
+            register_only_files: Optional[Set[str]] = None
             try:
                 prompts_owner = resolved_prompts_dir.parent.resolve(strict=False)
                 architecture_owner = resolved_architecture_path.parent.resolve(strict=False)
