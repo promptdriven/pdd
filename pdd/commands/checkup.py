@@ -699,8 +699,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             )
             return None
         drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
-        if dry_run and "--dry-run" not in drift_args:
-            drift_args.insert(0, "--dry-run")
         exit_code = drift_cmd.main(
             args=drift_args,
             prog_name="pdd checkup drift",

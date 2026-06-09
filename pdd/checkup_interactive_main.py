@@ -182,6 +182,28 @@ def _append_presented_option(
         session.presented_options[finding_id] = list(presented) + [option]
 
 
+def _register_dynamic_option(
+    session: _SessionType,
+    finding_id: str,
+    option: RepairOption,
+) -> None:
+    """Add a dynamically-created option (skip/custom) to any session that tracks presented_options.
+
+    Both ClickInteractiveSession and FakeInteractiveSession validate that an option
+    was presented before record_choice() accepts it.  This helper registers the
+    option with whichever session type is in use so the subsequent record_choice()
+    call succeeds without requiring an isinstance check.
+    """
+    presented_options = getattr(session, "presented_options", None)
+    if not isinstance(presented_options, dict):
+        return
+    presented = presented_options.get(finding_id)
+    if presented is None:
+        return
+    if option not in presented:
+        presented_options[finding_id] = list(presented) + [option]
+
+
 def _prompt_menu_choice(
     finding: SourceSetFinding,
     options: list[RepairOption],
@@ -248,6 +270,8 @@ def run_interactive_checkup(
     """Orchestrate report → session → optional apply for one prompt target."""
     root = project_root if project_root is not None else Path.cwd()
     prompt_path = Path(target)
+    if not prompt_path.is_absolute():
+        prompt_path = root / prompt_path
     if not prompt_path.is_file():
         raise click.UsageError(
             f"--interactive requires a single .prompt file target, got {target!r}."
@@ -286,24 +310,29 @@ def run_interactive_checkup(
         choices_by_finding[finding.finding_id] = choice
 
         if choice == 4:
-            if isinstance(session, ClickInteractiveSession):
-                skip_option = _skip_option(finding)
-                _append_presented_option(session, finding.finding_id, skip_option)
-                session.record_choice(finding.finding_id, skip_option)
+            skip_option = _skip_option(finding)
+            _register_dynamic_option(session, finding.finding_id, skip_option)
+            session.record_choice(finding.finding_id, skip_option)
             skipped += 1
             continue
 
         if choice == 3:
             definition = session.ask("Enter your definition:")
-            if isinstance(session, ClickInteractiveSession):
-                custom_option = _custom_option(finding, definition)
-                _append_presented_option(session, finding.finding_id, custom_option)
-                session.record_choice(finding.finding_id, custom_option)
+            custom_option = _custom_option(finding, definition)
+            _register_dynamic_option(session, finding.finding_id, custom_option)
+            session.record_choice(finding.finding_id, custom_option)
             continue
 
         index = choice - 1
         if 0 <= index < len(options):
             session.record_choice(finding.finding_id, options[index])
+        else:
+            click.echo(
+                f"  Warning: option {choice} unavailable for [{finding.finding_id}] "
+                f"({len(options)} option(s) presented). Skipping finding.",
+                err=True,
+            )
+            skipped += 1
 
     patches = session.approved_patches()
     postflight_exit = 0

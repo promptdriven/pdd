@@ -9,6 +9,8 @@ import pytest
 
 from pdd.prompt_repair import (
     PromptRepairConfig,
+    _actionable_findings,
+    _lint_findings,
     _repair_brief,
     _source_set_report,
     _validate_changed_prompt,
@@ -115,32 +117,52 @@ def test_non_lint_source_set_findings_trigger_change_and_full_recheck(
     mock_recheck.assert_called_once()
 
 
+def _coverage_report(prompt: Path) -> dict:
+    """Non-VAGUE source-set report with a single coverage finding for repair loop tests."""
+    return {
+        "schema": "pdd.prompt_source_set_report.v1",
+        "status": "warn",
+        "target": str(prompt),
+        "findings": [
+            {
+                "source_check": "coverage",
+                "severity": "warn",
+                "code": "unchecked",
+                "message": "R1 is not covered by any test",
+            }
+        ],
+    }
+
+
+def _pass_report(prompt: Path) -> dict:
+    return {
+        "schema": "pdd.prompt_source_set_report.v1",
+        "status": "pass",
+        "target": str(prompt),
+        "findings": [],
+    }
+
+
 def test_repair_adds_vocabulary_and_reclean(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
-    repaired = prompt.read_text(encoding="utf-8") + (
-        "\n<vocabulary>\nvalid: passes schema and business rules checks\n"
-        "reasonable: completes within 2000 ms on CI hardware\n"
-        "gracefully: returns HTTP 4xx without raising\n"
-        "authorized: caller holds a valid session token\n"
-        "duplicate: same idempotency key seen within 24h\n"
-        "active: account status is enabled\n"
-        "complete: all required fields are non-empty\n</vocabulary>\n"
-    )
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
+    prompt.write_text(original, encoding="utf-8")
+    repaired = original + "\n% R1 coverage documented.\n"
 
-    with patch(
-        "pdd.prompt_repair.change",
-        return_value=(repaired, 0.0, "mock"),
+    with (
+        patch("pdd.prompt_repair.change", return_value=(repaired, 0.0, "mock")),
+        patch("pdd.prompt_repair._recheck_source_set", return_value=_pass_report(prompt)),
     ):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort", max_rounds=1),
+            context={"source_set_report": _coverage_report(prompt)},
             cwd=tmp_path,
             quiet=True,
         )
 
     assert result.rounds_used == 1
-    assert "<vocabulary>" in prompt.read_text(encoding="utf-8")
+    assert "R1 coverage" in prompt.read_text(encoding="utf-8")
     assert result.token_delta >= 0
     assert result.audit_path is not None
     assert result.audit_path.is_file()
@@ -148,17 +170,22 @@ def test_repair_adds_vocabulary_and_reclean(tmp_path: Path) -> None:
 
 def test_max_rounds_respected(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
     calls = {"count": 0}
+    report = _coverage_report(prompt)
 
     def _fake_change(**kwargs):
         calls["count"] += 1
         return kwargs["input_prompt"] + f"\n% repair round {calls['count']}\n", 0.0, "mock"
 
-    with patch("pdd.prompt_repair.change", side_effect=_fake_change):
+    with (
+        patch("pdd.prompt_repair.change", side_effect=_fake_change),
+        patch("pdd.prompt_repair._recheck_source_set", return_value=report),
+    ):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort", max_rounds=2),
+            context={"source_set_report": report},
             cwd=tmp_path,
             quiet=True,
         )
@@ -169,41 +196,43 @@ def test_max_rounds_respected(tmp_path: Path) -> None:
 
 def test_llm_failure_does_not_raise(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    report = _coverage_report(prompt)
 
-    with patch(
-        "pdd.prompt_repair.change",
-        side_effect=RuntimeError("provider error"),
-    ):
+    with patch("pdd.prompt_repair.change", side_effect=RuntimeError("provider error")):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort"),
+            context={"source_set_report": report},
             cwd=tmp_path,
             quiet=True,
         )
 
     assert result.success is False
-    # issues_after must reflect actual remaining issues, not [] (which would cause callers to skip retries)
-    assert len(result.issues_after) > 0
+    # findings_after must reflect remaining findings so callers do not skip retries
+    assert len(result.findings_after) > 0
 
 
 def test_strict_mode_fails_with_remaining_issues(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
+    prompt.write_text(original, encoding="utf-8")
+    report = _coverage_report(prompt)
 
-    with patch(
-        "pdd.prompt_repair.change",
-        side_effect=lambda **kwargs: (kwargs["input_prompt"], 0.0, "mock"),
+    with (
+        patch("pdd.prompt_repair.change", side_effect=lambda **kwargs: (kwargs["input_prompt"], 0.0, "mock")),
+        patch("pdd.prompt_repair._recheck_source_set", return_value=report),
     ):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="strict", max_rounds=1),
+            context={"source_set_report": report},
             cwd=tmp_path,
             quiet=True,
         )
 
     assert result.success is False
-    assert result.issues_after
+    assert result.findings_after
 
 
 def test_best_effort_continues_with_remaining_issues(tmp_path: Path) -> None:
@@ -227,23 +256,23 @@ def test_best_effort_continues_with_remaining_issues(tmp_path: Path) -> None:
 
 def test_token_budget_drops_patches(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text((FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8")
-    huge_prompt = prompt.read_text(encoding="utf-8") + ("x" * 5000)
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
+    prompt.write_text(original, encoding="utf-8")
+    huge_prompt = original + ("x" * 5000)
+    report = _coverage_report(prompt)
 
-    with patch(
-        "pdd.prompt_repair.change",
-        return_value=(huge_prompt, 0.0, "mock"),
-    ):
+    with patch("pdd.prompt_repair.change", return_value=(huge_prompt, 0.0, "mock")):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort", max_token_growth=10),
+            context={"source_set_report": report},
             cwd=tmp_path,
             quiet=True,
         )
 
     assert result.success is True
     assert result.message == "token budget exceeded"
-    assert "<vocabulary>" not in prompt.read_text(encoding="utf-8")
+    assert prompt.read_text(encoding="utf-8") == original
 
 
 def test_format_token_delta_summary() -> None:
@@ -464,14 +493,16 @@ def test_clarification_findings_skipped_by_non_interactive_repair(tmp_path: Path
 
 def test_change_apply_validates_delimiters_before_write(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
-    original = (FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8")
+    original = (FIXTURES / "clean.prompt").read_text(encoding="utf-8")
     prompt.write_text(original, encoding="utf-8")
     leaked = "<<<MODIFIED_PROMPT>>>\n% broken\n<<<END_MODIFIED_PROMPT>>>"
+    report = _coverage_report(prompt)
 
     with patch("pdd.prompt_repair.change", return_value=(leaked, 0.0, "mock")):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort"),
+            context={"source_set_report": report},
             cwd=tmp_path,
             quiet=True,
         )
@@ -567,27 +598,75 @@ def test_best_effort_max_rounds_zero_is_a_skip_not_failure(tmp_path: Path) -> No
 
 
 def test_repair_llm_failure_preserves_existing_issues(tmp_path: Path) -> None:
-    """Regression: when the LLM call fails, RepairResult.issues_after must reflect the
-    actual remaining issues, not an empty list that would cause callers to skip retries.
+    """Regression: when the LLM call fails, RepairResult.findings_after must reflect the
+    actual remaining findings, not an empty list that would cause callers to skip retries.
     (Issue #1422 fix)"""
     prompt = tmp_path / "vague.prompt"
-    prompt.write_text(
-        (Path(__file__).parent / "fixtures" / "prompt_lint" / "vague_undefined.prompt")
-        .read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
+    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    report = _coverage_report(prompt)
 
     with patch("pdd.prompt_repair.change", side_effect=RuntimeError("failed")):
         result = run_prompt_repair_loop(
             prompt,
             PromptRepairConfig(mode="best-effort"),
+            context={"source_set_report": report},
             cwd=tmp_path,
         )
 
     assert result.success is False
-    assert len(result.issues_after) > 0, (
-        "issues_after is empty after LLM failure — callers will skip retries incorrectly"
+    assert len(result.findings_after) > 0, (
+        "findings_after is empty after LLM failure — callers will skip retries incorrectly"
     )
-    assert len(result.issues_after) == len(result.issues_before), (
-        "issues_after should match issues_before when no repair was applied"
+    assert len(result.findings_after) == len(result.findings_before), (
+        "findings_after should match findings_before when no repair was applied"
     )
+
+
+def test_lint_only_vague_findings_not_auto_repaired(tmp_path: Path) -> None:
+    """VAGUE lint findings from the lint-only path must be excluded from auto-repair (#1438).
+
+    When no source_set_report is provided, _lint_findings() builds the finding dicts.
+    Those dicts must include requires_clarification=True for VAGUE codes so
+    _actionable_findings() correctly excludes them from LLM auto-repair.
+    """
+    prompt = tmp_path / "vague.prompt"
+    prompt.write_text(
+        (FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8"), encoding="utf-8"
+    )
+
+    with patch("pdd.prompt_repair.change") as mock_change:
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort"),
+            # No source_set_report — forces lint-only path
+            cwd=tmp_path,
+            quiet=True,
+        )
+
+    mock_change.assert_not_called()
+    assert result.repair_skipped is True
+    assert result.rounds_used == 0
+    assert result.message == "no actionable source-set findings"
+
+
+def test_lint_only_non_vague_findings_still_actionable(tmp_path: Path) -> None:
+    """Non-VAGUE lint findings from the lint-only path must still be auto-repaired.
+
+    The requires_clarification key must be False for non-VAGUE codes so the repair
+    loop is NOT blocked from processing them.
+    """
+    from pdd.prompt_repair import _actionable_findings, _lint_findings
+    from pdd.prompt_lint import LintIssue
+
+    non_vague_issue = LintIssue(
+        level="warn",
+        term="",
+        section="contract_rules",
+        line="% no contract",
+        message="No contract section found",
+        code="MISSING_CONTRACT",
+    )
+    findings = _lint_findings([non_vague_issue])
+    assert findings[0]["requires_clarification"] is False
+    actionable = _actionable_findings(findings)
+    assert len(actionable) == 1, "Non-VAGUE lint finding must remain actionable"

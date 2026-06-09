@@ -260,3 +260,146 @@ def test_fake_session_still_usable_via_factory(tmp_path: Path) -> None:
             )
 
     assert fake.recorded_choices == [("FAKE-001", repair_option)]
+
+
+def test_relative_target_resolved_against_project_root(tmp_path: Path) -> None:
+    """Path existence check must resolve relative targets against project_root (#1519 finding #4).
+
+    pdd checkup prompts/foo.prompt --project-root=/other --interactive must find the
+    file at project_root/prompts/foo.prompt, not relative to cwd.
+    """
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    prompt_file = project_root / "prompts" / "test.prompt"
+    prompt_file.parent.mkdir()
+    prompt_file.write_text("prompt content")
+
+    finding = _make_finding("REL-001")
+    report = _make_report(project_root, [finding])
+
+    # Use a relative path (the file does NOT exist relative to tmp_path itself)
+    relative_target = "prompts/test.prompt"
+
+    with patch(
+        "pdd.checkup_interactive_main.build_prompt_source_set_report",
+        return_value=report,
+    ):
+        with patch("pdd.checkup_interactive_main._prompt_menu_choice", return_value=4):
+            # Must NOT raise UsageError even though cwd != project_root
+            result = run_interactive_checkup(
+                relative_target,
+                project_root=project_root,
+                quiet=True,
+            )
+
+    assert result is not None
+    message, _, _ = result
+    assert "Interactive checkup complete" in message
+
+
+def test_relative_target_missing_gives_clear_error(tmp_path: Path) -> None:
+    """Missing relative target must raise UsageError with the original path in the message."""
+    import click
+
+    with pytest.raises(click.UsageError, match="nonexistent.prompt"):
+        run_interactive_checkup(
+            "nonexistent.prompt",
+            project_root=tmp_path,
+            quiet=True,
+        )
+
+
+def test_fake_session_skip_choice_is_recorded(tmp_path: Path) -> None:
+    """Choice 4 (skip) must be recorded for FakeInteractiveSession, not silently dropped (#1519 finding #5)."""
+    from pdd.checkup_interactive_session import ApprovedPatch
+
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("prompt content")
+    finding = _make_finding("SKIP-FAKE-001")
+    report = _make_report(tmp_path, [finding])
+
+    fake = FakeInteractiveSession({"SKIP-FAKE-001": []})
+
+    with patch(
+        "pdd.checkup_interactive_main.build_prompt_source_set_report",
+        return_value=report,
+    ):
+        with patch("pdd.checkup_interactive_main._prompt_menu_choice", return_value=4):
+            run_interactive_checkup(
+                str(prompt_file),
+                apply=False,
+                project_root=tmp_path,
+                quiet=True,
+                session_factory=lambda: fake,
+            )
+
+    assert len(fake.recorded_choices) == 1
+    fid, opt = fake.recorded_choices[0]
+    assert fid == "SKIP-FAKE-001"
+    assert opt.patch.kind == "skip"
+
+
+def test_fake_session_custom_choice_is_recorded(tmp_path: Path) -> None:
+    """Choice 3 (custom definition) must be recorded for FakeInteractiveSession (#1519 finding #5)."""
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("prompt content")
+    finding = _make_finding("CUSTOM-FAKE-001")
+    report = _make_report(tmp_path, [finding])
+
+    # FakeInteractiveSession.ask() pops from its answer queue
+    fake = FakeInteractiveSession(
+        options_by_finding={"CUSTOM-FAKE-001": []},
+        answers=["my definition"],
+    )
+
+    with patch(
+        "pdd.checkup_interactive_main.build_prompt_source_set_report",
+        return_value=report,
+    ):
+        with patch("pdd.checkup_interactive_main._prompt_menu_choice", return_value=3):
+            run_interactive_checkup(
+                str(prompt_file),
+                apply=False,
+                project_root=tmp_path,
+                quiet=True,
+                session_factory=lambda: fake,
+            )
+
+    assert len(fake.recorded_choices) == 1
+    fid, opt = fake.recorded_choices[0]
+    assert fid == "CUSTOM-FAKE-001"
+    assert opt.patch.kind == "custom_no_patch"
+    assert opt.patch.replacement == "my definition"
+
+
+def test_out_of_bounds_option_choice_emits_warning_and_skips(
+    tmp_path: Path, capsys
+) -> None:
+    """Out-of-bounds option index must emit a warning and skip the finding, not silently discard (#1519 finding #6)."""
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("prompt content")
+    finding = _make_finding("OOB-001")
+    report = _make_report(tmp_path, [finding])
+
+    # FakeInteractiveSession with ZERO options for the finding
+    fake = FakeInteractiveSession({"OOB-001": []})
+
+    with patch(
+        "pdd.checkup_interactive_main.build_prompt_source_set_report",
+        return_value=report,
+    ):
+        # Choice 1 with 0 options → out-of-bounds
+        with patch("pdd.checkup_interactive_main._prompt_menu_choice", return_value=1):
+            result = run_interactive_checkup(
+                str(prompt_file),
+                apply=False,
+                project_root=tmp_path,
+                quiet=True,
+                session_factory=lambda: fake,
+            )
+
+    # No choice must be recorded (finding was skipped with warning)
+    assert fake.recorded_choices == []
+    assert result is not None
+    message, _, _ = result
+    assert "skipped" in message
