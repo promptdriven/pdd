@@ -1,3 +1,14 @@
+<pdd-reason>LLM prompt template for updating architecture metadata after changes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert software engineer using Prompt-Driven Development (PDD). Your task is to update architecture metadata for prompts created/modified in the previous step.
 
 % Context
@@ -48,7 +59,7 @@ You are working on step 10 of 13 in an agentic change workflow. Previous step im
       - Infer from % Requirements section
       - For Python modules: extract function names, signatures, return types
       - For CLI modules: extract command names and descriptions
-      - Use interface type: module | cli | command | frontend
+      - Use interface type: module | cli | command | frontend | entrypoint
       - Format as valid JSON
    d. Generate `<pdd-dependency>` tags:
       - Extract from `<include>` directives in the prompt

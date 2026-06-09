@@ -287,7 +287,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 **`<pdd-interface>`**
 - **Purpose**: JSON describing the module's public API (functions, commands, pages)
 - **Maps to**: `architecture.json["interface"]`
-- **Format**: Valid JSON matching one of four interface types (see below)
+- **Format**: Valid JSON matching one of five interface types (see below)
 - **Example**:
   ```xml
   <pdd-interface>
@@ -315,7 +315,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 
 ### Interface Types
 
-The `<pdd-interface>` tag supports four interface types, matching the architecture.json schema:
+The `<pdd-interface>` tag supports five interface types, matching the architecture.json schema:
 
 **Module Interface** (Python modules with functions):
 ```json
@@ -365,6 +365,17 @@ The `<pdd-interface>` tag supports four interface types, matching the architectu
 }
 ```
 
+**Entrypoint Interface** (framework bootstrap files that export nothing):
+```json
+{
+  "type": "entrypoint"
+}
+```
+
+Use `"entrypoint"` for files that are pure runners — they bootstrap the application or a subsystem but export no symbols. Examples: a React `main.tsx` that calls `ReactDOM.createRoot(...).render(...)`, a Node/Express `server.ts` that calls `app.listen(...)`, or a Python `run.py` with an `if __name__ == "__main__":` guard. Architecture conformance skips the declared-symbol check for this type, since "no exports" is the correct answer for these files.
+
+> **Note:** If your entrypoint does export a named object (e.g., `app` for test instrumentation), use `"type": "module"` instead — the `entrypoint` type is only for files that genuinely export nothing.
+
 ### Sync Workflow
 
 1. **Add/edit tags** in your prompt files using the format above
@@ -395,8 +406,8 @@ Validation is **lenient**:
 
 **Validate interface JSON before committing**
 - Use a JSON validator to check syntax
-- Ensure `type` field matches one of: `module`, `cli`, `command`, `frontend`
-- Include required nested keys (`functions`, `commands`, or `pages`)
+- Ensure `type` field matches one of: `module`, `cli`, `command`, `frontend`, `entrypoint`
+- Include required nested keys (`functions`, `commands`, or `pages`); `entrypoint` requires no nested key
 
 **Run "Sync All" after bulk prompt updates**
 - If you've edited multiple prompts, sync all at once
