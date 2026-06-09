@@ -34,7 +34,7 @@ from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 pytestmark = pytest.mark.timeout(450)
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths, _generate_user_story_artifacts_for_change
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -54,6 +54,175 @@ def mock_pre_checkup_gate_default():
 def temp_cwd(tmp_path):
     """Returns a temporary directory path to use as cwd."""
     return tmp_path
+
+
+def test_generate_user_story_artifacts_for_change_mentions_story_in_pr_summary(tmp_path):
+    """Generated stories must be staged and described for the Step 13 PR body."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content must not author the story", encoding="utf-8")
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        assert kwargs["issue"] == "https://github.com/x/y/issues/1454"
+        assert kwargs["prompt_files"] == [str(prompt_file)]
+        assert kwargs["stories_dir"] == str(tmp_path / "user_stories")
+        assert kwargs["prompts_dir"] == str(prompts_dir)
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n"
+            "## Story\nAs a user...\n",
+            encoding="utf-8",
+        )
+        return (
+            True,
+            f"Generated story file: {story_file}",
+            0.25,
+            "story-model",
+            str(story_file),
+            ["upload_python.prompt"],
+        )
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ):
+        story_files, summary, cost, model = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert story_files == ["user_stories/story__upload.md"]
+    assert "### User Stories" in summary
+    assert "`user_stories/story__upload.md`" in summary
+    assert "`upload_python.prompt`" in summary
+    assert cost == 0.25
+    assert model == "story-model"
+
+
+def test_generate_user_story_artifacts_skips_runtime_llm_prompts(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "runtime_LLM.prompt").write_text("runtime", encoding="utf-8")
+
+    with patch("pdd.agentic_change_orchestrator.generate_user_story") as mock_generate:
+        story_files, summary, cost, model = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/runtime_LLM.prompt", "src/code.py"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert story_files == []
+    assert summary == "None"
+    assert cost == 0.0
+    assert model == ""
+    mock_generate.assert_not_called()
+
+
+def test_generate_user_story_artifacts_is_non_blocking_on_exception(tmp_path):
+    """An unexpected exception in generation must not abort the change workflow.
+
+    Regression for PR #1489 review: story generation runs after the pre-PR gate
+    and before Step 13, so a raised exception (issue resolution, provider code,
+    file I/O) would otherwise abort the run instead of degrading to a warning.
+    """
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content", encoding="utf-8")
+
+    def boom(**kwargs):
+        raise RuntimeError("provider exploded")
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=boom,
+    ):
+        story_files, summary, cost, model = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    # No artifacts staged, but the call returns cleanly (no exception raised).
+    assert story_files == []
+    assert "### User Stories" in summary
+    assert "skipped" in summary
+    assert "provider exploded" in summary
+    assert "`upload_python.prompt`" in summary
+    assert cost == 0.0
+    assert model == ""
+
+
+def test_step13_prompt_renders_user_story_summary(tmp_path):
+    """The Step 13 prompt must substitute {user_story_summary}, not leave the
+    literal placeholder.
+
+    Regression for PR #1489 review change #1: the orchestrator sets
+    context["user_story_summary"], so rendering the Step 13 template with the
+    same preprocess + substitution pipeline the orchestrator uses must inject
+    the value into the PR-body section.
+    """
+    from pdd.agentic_common import substitute_template_variables
+    from pdd.load_prompt_template import load_prompt_template
+    from pdd.preprocess import preprocess
+
+    template = load_prompt_template("agentic_change_step13_create_pr_LLM")
+    assert template is not None, "Step 13 template should load"
+    # The template must contain a real substitution input, not only prose
+    # mentioning the <user_story_summary> tag.
+    assert "{user_story_summary}" in template
+
+    summary_value = (
+        "### User Stories\n"
+        "- `user_stories/story__upload.md` — issue-derived story linked to: "
+        "`upload_python.prompt`"
+    )
+    context = {
+        "issue_url": "https://github.com/x/y/issues/1454",
+        "repo_owner": "x",
+        "repo_name": "y",
+        "issue_number": "1454",
+        "issue_title": "t",
+        "worktree_path": str(tmp_path),
+        "base_branch": "main",
+        "files_to_stage": "prompts/upload_python.prompt",
+        "sync_order_script": "",
+        "sync_order_list": "",
+        "clean_restart": "false",
+        "issue_content": "issue body",
+        "step8_output": "summary",
+        "manual_review_lines": "None",
+        "user_story_summary": summary_value,
+    }
+    exclude = list(context.keys())
+    rendered_template = preprocess(
+        template, recursive=True, double_curly_brackets=True, exclude=exclude
+    )
+    rendered = substitute_template_variables(rendered_template, context)
+
+    assert summary_value in rendered
+    assert "user_stories/story__upload.md" in rendered
+    # The substitution input must be consumed, not left as a literal token.
+    assert "{user_story_summary}" not in rendered
+
 
 @pytest.fixture
 def mock_dependencies(temp_cwd):
