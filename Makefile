@@ -90,6 +90,7 @@ RELEASE_VIDEO_PLATFORM ?= youtube
 RELEASE_VIDEO_PRIVACY ?= unlisted
 RELEASE_VIDEO_DRY_RUN ?= 0
 RELEASE_VIDEO_PROJECT_ID ?=
+RELEASE_VIDEO_SCRIPT_PATH ?=
 CLAUDE_CLI ?= claude
 PDS_CLI ?= pds
 PDS_API_URL ?= https://video.promptdriven.ai
@@ -784,6 +785,7 @@ release-video:
 	python scripts/release_video.py \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
 		--claude-cli "$(CLAUDE_CLI)" \
+		--script-path "$(RELEASE_VIDEO_SCRIPT_PATH)" \
 		--pds-cli "$(PDS_CLI)" \
 		--project-id "$(RELEASE_VIDEO_PROJECT_ID)" \
 		--preset "$(RELEASE_VIDEO_PRESET)" \
