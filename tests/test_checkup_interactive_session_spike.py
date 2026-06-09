@@ -124,27 +124,16 @@ def test_sample_artifact_recommends_hybrid_with_apply_gated(sample_artifact: dic
 
 
 def test_spike_scope_excludes_production_session_module() -> None:
-    """#1434 is evidence-only; production session code belongs in #1435."""
-    module_path = REPO_ROOT / "pdd" / "checkup_interactive_session.py"
-    bridge_path = REPO_ROOT / "pdd" / "scripts" / "_pi_repair_bridge.mjs"
-    # Guard both the canonical prompt source tree (`prompts/`, per .pddrc's
-    # prompts_dir) and the package-copy path (`pdd/prompts/`) so a production
-    # prompt added at either location trips this scope check.
-    prompt_paths = [
-        REPO_ROOT / "prompts" / "checkup_interactive_session_python.prompt",
-        REPO_ROOT / "pdd" / "prompts" / "checkup_interactive_session_python.prompt",
-    ]
+    """#1434 is evidence-only; Pi bridge belongs in a later issue.
 
-    assert not module_path.is_file(), (
-        f"{module_path} is implementation surface; defer to #1435"
-    )
+    checkup_interactive_session.py and its prompt landed in #1435 / PR #1518
+    and are now legitimate implementation surface.
+    """
+    # Pi bridge is the only remaining deferred item.
+    bridge_path = REPO_ROOT / "pdd" / "scripts" / "_pi_repair_bridge.mjs"
     assert not bridge_path.is_file(), (
-        f"{bridge_path} is implementation surface; defer to #1435"
+        f"{bridge_path} is implementation surface; defer to a later issue"
     )
-    for prompt_path in prompt_paths:
-        assert not prompt_path.is_file(), (
-            f"{prompt_path} is implementation surface; defer to #1435"
-        )
 
 
 def test_spike_doc_and_sample_artifact_cross_reference(

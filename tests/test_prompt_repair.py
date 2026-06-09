@@ -428,6 +428,40 @@ def test_gate_only_missing_evidence_skips_repair(tmp_path: Path) -> None:
     assert result.findings_after == result.findings_before
 
 
+def test_clarification_findings_skipped_by_non_interactive_repair(tmp_path: Path) -> None:
+    """requires_clarification=True findings must not be auto-repaired (#1438)."""
+    prompt = tmp_path / "vague.prompt"
+    prompt.write_text((FIXTURES / "clean.prompt").read_text(encoding="utf-8"), encoding="utf-8")
+    source_set_report = {
+        "schema": "pdd.prompt_source_set_report.v1",
+        "status": "warn",
+        "target": str(prompt),
+        "findings": [
+            {
+                "source_check": "lint",
+                "severity": "warn",
+                "code": "VAGUE_TERM",
+                "message": "Ambiguous term needs clarification",
+                "requires_clarification": True,
+            },
+        ],
+    }
+
+    with patch("pdd.prompt_repair.change") as mock_change:
+        result = run_prompt_repair_loop(
+            prompt,
+            PromptRepairConfig(mode="best-effort"),
+            context={"source_set_report": source_set_report},
+            cwd=tmp_path,
+            quiet=True,
+        )
+
+    assert result.repair_skipped is True
+    assert result.rounds_used == 0
+    assert result.message == "no actionable source-set findings"
+    mock_change.assert_not_called()
+
+
 def test_change_apply_validates_delimiters_before_write(tmp_path: Path) -> None:
     prompt = tmp_path / "vague.prompt"
     original = (FIXTURES / "vague_undefined.prompt").read_text(encoding="utf-8")
