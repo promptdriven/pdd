@@ -237,7 +237,7 @@ def test_fake_session_still_usable_via_factory(tmp_path: Path) -> None:
         label="Fix",
         preview="preview",
         patch=ApprovedPatch(
-            kind="repair_candidate",
+            kind="vocab_definition",
             target=prompt_file,
             anchor={"finding_id": "FAKE-001"},
             replacement="fix",

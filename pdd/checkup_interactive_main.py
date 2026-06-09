@@ -14,6 +14,7 @@ from .checkup_interactive_session import (
     NON_APPROVING_PATCH_KINDS,
     RepairOption,
 )
+from .checkup_prompt_apply import apply_approved_patches as run_patch_apply
 from .checkup_prompt_main import (
     PromptSourceSetReport,
     SourceSetFinding,
@@ -21,6 +22,13 @@ from .checkup_prompt_main import (
 )
 
 _EVIDENCE_EXCERPT_LEN = 200
+_PRIMARY_KIND_BY_SOURCE = {
+    "lint": "vocab_definition",
+    "contract": "contract_rule",
+    "coverage": "coverage_line",
+    "gate": "waiver",
+    "snapshot": "contract_rule",
+}
 _SessionType = Union[InteractiveRepairSession, "ClickInteractiveSession"]
 
 
@@ -48,12 +56,18 @@ def build_repair_options_for_finding(finding: SourceSetFinding) -> list[RepairOp
     primary_preview = _truncate_excerpt(finding.evidence or finding.message)
     alternate_label = "Alternative repair"
     alternate_preview = _truncate_excerpt(finding.message)
+    primary_kind = _PRIMARY_KIND_BY_SOURCE.get(finding.source_check, "vocab_definition")
+    alternate_kind = (
+        "story_template"
+        if finding.file.suffix.lower() == ".md"
+        else "append_covers"
+    )
     return [
         RepairOption(
             label=primary_action,
             preview=primary_preview,
             patch=ApprovedPatch(
-                kind="repair_candidate",
+                kind=primary_kind,
                 target=finding.file,
                 anchor={"finding_id": finding.finding_id, "line": finding.line},
                 replacement=primary_action,
@@ -64,10 +78,10 @@ def build_repair_options_for_finding(finding: SourceSetFinding) -> list[RepairOp
             label=alternate_label,
             preview=alternate_preview,
             patch=ApprovedPatch(
-                kind="repair_candidate_alt",
+                kind=alternate_kind,
                 target=finding.file,
                 anchor={"finding_id": finding.finding_id, "line": finding.line},
-                replacement=alternate_label,
+                replacement=alternate_preview,
                 finding_id=finding.finding_id,
             ),
         ),
@@ -194,16 +208,30 @@ def apply_approved_patches(
     *,
     dry_run: bool,
     quiet: bool,
-) -> None:
-    """Apply boundary for Block 3; v1 honors dry-run and leaves writes to Block 3."""
-    if dry_run or not patches:
-        return
-    for patch in patches:
-        if not quiet:
-            click.echo(
-                f"  [apply pending Block 3] {patch.finding_id}: {patch.kind} "
-                f"→ {patch.target}"
-            )
+    project_root: Path,
+    original_target: str,
+    strict: bool,
+    choices_by_finding: dict[str, int],
+) -> int:
+    """Delegate to the deterministic patch applicator and return postflight exit code."""
+    if not patches:
+        return 0
+    result = run_patch_apply(
+        patches,
+        repo_root=project_root,
+        original_target=original_target,
+        dry_run=dry_run,
+        interactive=True,
+        strict=strict,
+        choices_by_finding=choices_by_finding,
+    )
+    if not quiet:
+        if result.log_path is not None:
+            click.echo(f"Apply log: {result.log_path}")
+        if result.backup_root is not None:
+            click.echo(f"Backups: {result.backup_root}")
+        click.echo(f"Postflight: {result.postflight_status}")
+    return result.exit_code
 
 
 def run_interactive_checkup(
@@ -251,9 +279,11 @@ def run_interactive_checkup(
     session.seed(report)
 
     skipped = 0
+    choices_by_finding: dict[str, int] = {}
     for finding in findings:
         options = session.present_finding(finding.finding_id)
         choice = _prompt_menu_choice(finding, options)
+        choices_by_finding[finding.finding_id] = choice
 
         if choice == 4:
             if isinstance(session, ClickInteractiveSession):
@@ -276,8 +306,17 @@ def run_interactive_checkup(
             session.record_choice(finding.finding_id, options[index])
 
     patches = session.approved_patches()
+    postflight_exit = 0
     if apply:
-        apply_approved_patches(patches, dry_run=dry_run, quiet=quiet)
+        postflight_exit = apply_approved_patches(
+            patches,
+            dry_run=dry_run,
+            quiet=quiet,
+            project_root=root,
+            original_target=target,
+            strict=strict,
+            choices_by_finding=choices_by_finding,
+        )
 
     cost = 0.0
     model = ""
@@ -287,4 +326,6 @@ def run_interactive_checkup(
     )
     if not quiet:
         click.echo(f"\n{message}")
+    if postflight_exit:
+        raise click.exceptions.Exit(postflight_exit)
     return message, cost, model
