@@ -40,7 +40,7 @@ def _pi_available() -> bool:
             timeout=15,
         )
         return True
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError):
         return False
 
 
@@ -84,10 +84,11 @@ class PiInteractiveSession:
     only serialises the input report, starts the bridge, and reads the output.
     """
 
-    def __init__(self, bridge: Path | None = None) -> None:
+    def __init__(self, bridge: Path | None = None, timeout: float | None = None) -> None:
         self._report: PromptSourceSetReport | None = None
         self._patches: list[ApprovedPatch] = []
         self._bridge = bridge or _PI_BRIDGE
+        self._timeout = timeout
 
     @staticmethod
     def is_available() -> bool:
@@ -97,8 +98,11 @@ class PiInteractiveSession:
         self._report = report
 
     def run(self) -> None:
+        # Reset before each run so a failed call never leaves stale patches.
+        self._patches = []
         # Resolve the absolute path at call time to avoid PATH-ordering races.
         node = shutil.which("node") or "node"
+        _KNOWN_PATCH_FIELDS = frozenset({"kind", "target", "anchor", "replacement", "finding_id"})
         with tempfile.TemporaryDirectory() as tmp:
             ctx_path = Path(tmp) / "context.json"
             out_path = Path(tmp) / "output.json"
@@ -106,14 +110,20 @@ class PiInteractiveSession:
             subprocess.run(
                 [node, str(self._bridge), str(ctx_path), str(out_path)],
                 check=True,
+                timeout=self._timeout,
             )
             if not out_path.exists():
                 raise RuntimeError(
                     f"Pi bridge exited without writing output to {out_path}"
                 )
-            result = json.loads(out_path.read_text(encoding="utf-8"))
+            try:
+                result = json.loads(out_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"Pi bridge wrote invalid JSON to {out_path}: {exc}"
+                ) from exc
         self._patches = [
-            ApprovedPatch(**p)
+            ApprovedPatch(**{k: p[k] for k in _KNOWN_PATCH_FIELDS if k in p})
             for p in result.get("approved_patches", [])
             if p.get("kind") not in NON_APPROVING_PATCH_KINDS
         ]

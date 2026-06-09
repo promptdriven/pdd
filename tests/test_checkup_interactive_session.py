@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from pdd.checkup_interactive_session import (
+    NON_APPROVING_PATCH_KINDS,
     ApprovedPatch,
     FakeInteractiveSession,
     PiInteractiveSession,
@@ -133,6 +134,7 @@ def test_pi_session_run_filters_non_approving_kinds() -> None:
     patches = session.approved_patches()
     assert len(patches) == 1
     assert patches[0].kind == "vocab_definition"
+    assert all(p.kind not in NON_APPROVING_PATCH_KINDS for p in patches)
 
 
 def test_pi_session_run_raises_on_bridge_error() -> None:
@@ -154,6 +156,65 @@ def test_pi_session_run_raises_when_bridge_writes_no_output() -> None:
         session.seed({})
         with pytest.raises(RuntimeError, match="without writing output"):
             session.run()
+
+
+def test_pi_session_run_resets_patches_before_each_run() -> None:
+    good_output = {"approved_patches": [
+        {"kind": "vocab_definition", "target": "p.prompt",
+         "anchor": {}, "replacement": "x", "finding_id": "F-1"},
+    ]}
+    with patch("shutil.which", return_value="/usr/bin/node"), \
+         patch("subprocess.run", side_effect=_bridge_writer(good_output)):
+        session = PiInteractiveSession()
+        session.seed({})
+        session.run()
+    assert len(session.approved_patches()) == 1
+
+    # Second run fails — patches must be cleared, not left from the first run.
+    with patch("shutil.which", return_value="/usr/bin/node"), \
+         patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "node")):
+        with pytest.raises(subprocess.CalledProcessError):
+            session.run()
+    assert session.approved_patches() == []
+
+
+def test_pi_session_run_ignores_extra_fields_from_bridge() -> None:
+    bridge_output = {"approved_patches": [
+        {"kind": "vocab_definition", "target": "p.prompt", "anchor": {},
+         "replacement": "x", "finding_id": "F-1", "rationale": "extra", "confidence": 0.9},
+    ]}
+    with patch("shutil.which", return_value="/usr/bin/node"), \
+         patch("subprocess.run", side_effect=_bridge_writer(bridge_output)):
+        session = PiInteractiveSession()
+        session.seed({})
+        session.run()
+    patches = session.approved_patches()
+    assert len(patches) == 1
+    assert patches[0].kind == "vocab_definition"
+
+
+def test_pi_session_run_raises_on_invalid_json_output() -> None:
+    def _write_bad_json(cmd, check, **kwargs):
+        Path(cmd[-1]).write_text("not valid json {{{", encoding="utf-8")
+        return MagicMock(returncode=0)
+
+    with patch("shutil.which", return_value="/usr/bin/node"), \
+         patch("subprocess.run", side_effect=_write_bad_json):
+        session = PiInteractiveSession()
+        session.seed({})
+        with pytest.raises(RuntimeError, match="invalid JSON"):
+            session.run()
+
+
+def test_pi_session_accepts_timeout_parameter() -> None:
+    bridge_output = {"approved_patches": []}
+    with patch("shutil.which", return_value="/usr/bin/node") as _wh, \
+         patch("subprocess.run", side_effect=_bridge_writer(bridge_output)) as mock_run:
+        session = PiInteractiveSession(timeout=30.0)
+        session.seed({})
+        session.run()
+    call_kwargs = mock_run.call_args
+    assert call_kwargs.kwargs.get("timeout") == 30.0
 
 
 # --- _pi_available ---
