@@ -5,6 +5,5 @@
 ## Story
 
 As a maintainer investigating incorrect behavior,
-I want PDD to turn a bug report into a focused repair workflow,
-so that the observed output can be brought in line with the desired behavior.
-
+I want PDD to use my bug report or observed-vs-desired output to guide a targeted fix,
+so that the code moves toward the expected behavior without a broad rewrite.
