@@ -311,7 +311,12 @@ class CheckupAgent:
         )
 
         # 2. Confirm plan
-        confirmed_plan = self.session.confirm_plan(plan)
+        # In auto mode the session is fully non-interactive (no prompts at all),
+        # so the suggested plan is accepted as-is rather than asking the operator.
+        if auto:
+            confirmed_plan = plan
+        else:
+            confirmed_plan = self.session.confirm_plan(plan)
         if confirmed_plan is None:
             msg = "Agentic checkup aborted by operator."
             if not quiet:

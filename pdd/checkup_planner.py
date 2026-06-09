@@ -116,10 +116,21 @@ def _default_llm_call(
         temperature=0.1,
         time=0.1,
     )
-    raw: dict = result.get("result", {})
+    # llm_invoke returns {"result": <value>, ...}. With output_pydantic the value
+    # is a _PlanSchema instance; some providers hand back a plain dict instead.
+    payload = result.get("result", {}) if isinstance(result, dict) else result
+    if isinstance(payload, _PlanSchema):
+        tools = list(payload.tools)
+        rationale = payload.rationale
+    elif isinstance(payload, dict):
+        tools = list(payload.get("tools", []))
+        rationale = payload.get("rationale", "")
+    else:  # pydantic-like object without dict access
+        tools = list(getattr(payload, "tools", []) or [])
+        rationale = getattr(payload, "rationale", "")
     # Validate tool names — drop any the LLM hallucinated.
-    validated_tools = [t for t in raw.get("tools", []) if t in available_tools]
-    return {"tools": validated_tools, "rationale": raw.get("rationale", "")}
+    validated_tools = [t for t in tools if t in available_tools]
+    return {"tools": validated_tools, "rationale": rationale}
 
 
 class LLMPlanner:

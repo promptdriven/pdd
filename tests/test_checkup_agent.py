@@ -232,6 +232,51 @@ class TestLLMPlanner:
         assert set(plan.tools) == set(ALL_TOOL_NAMES)
 
 
+class TestDefaultLLMCallParsing:
+    """`_default_llm_call` must parse both pydantic and dict llm_invoke results.
+
+    Regression guard: a real llm_invoke success with output_pydantic returns a
+    pydantic instance (no `.get`), which previously raised AttributeError and
+    silently degraded the LLM planner to deterministic for the wrong reason.
+    All llm_invoke calls are mocked — no network.
+    """
+
+    def test_parses_pydantic_result(self):
+        from pdd import checkup_planner
+
+        class _FakePlan:
+            # Mimics a pydantic instance: attribute access, no `.get`.
+            tools = ["contract", "lint"]
+            rationale = "pydantic path"
+
+        # llm_invoke is imported inside the function from pdd.llm_invoke.
+        with patch("pdd.llm_invoke.llm_invoke", return_value={"result": _FakePlan()}):
+            out = checkup_planner._default_llm_call("some prompt", list(ALL_TOOL_NAMES))
+        assert out["tools"] == ["contract", "lint"]
+        assert out["rationale"] == "pydantic path"
+
+    def test_parses_dict_result(self):
+        from pdd import checkup_planner
+
+        with patch(
+            "pdd.llm_invoke.llm_invoke",
+            return_value={"result": {"tools": ["gate", "drift"], "rationale": "dict path"}},
+        ):
+            out = checkup_planner._default_llm_call("some prompt", list(ALL_TOOL_NAMES))
+        assert out["tools"] == ["gate", "drift"]
+        assert out["rationale"] == "dict path"
+
+    def test_drops_hallucinated_tools(self):
+        from pdd import checkup_planner
+
+        with patch(
+            "pdd.llm_invoke.llm_invoke",
+            return_value={"result": {"tools": ["lint", "not_a_tool"], "rationale": "x"}},
+        ):
+            out = checkup_planner._default_llm_call("p", list(ALL_TOOL_NAMES))
+        assert out["tools"] == ["lint"]
+
+
 # ---------------------------------------------------------------------------
 # Plan
 # ---------------------------------------------------------------------------
