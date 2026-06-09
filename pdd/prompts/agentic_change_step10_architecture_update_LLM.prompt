@@ -59,7 +59,7 @@ You are working on step 10 of 13 in an agentic change workflow. Previous step im
       - Infer from % Requirements section
       - For Python modules: extract function names, signatures, return types
       - For CLI modules: extract command names and descriptions
-      - Use interface type: module | cli | command | frontend | entrypoint
+      - Use interface type: module | cli | command | frontend | config | entrypoint
       - Format as valid JSON
    d. Generate `<pdd-dependency>` tags:
       - Extract from `<include>` directives in the prompt

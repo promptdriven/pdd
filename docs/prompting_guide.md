@@ -1058,8 +1058,8 @@ Validation is **lenient**:
 
 **Validate interface JSON before committing**
 - Use a JSON validator to check syntax
-- Ensure `type` field matches one of: `module`, `cli`, `command`, `frontend`, `entrypoint`
-- Include required nested keys (`functions`, `commands`, or `pages`); `entrypoint` requires no nested key
+- Ensure `type` field matches one of: `module`, `cli`, `command`, `frontend`, `config`, `entrypoint`
+- Include required nested keys (`functions`, `commands`, `pages`, or `keys`); `entrypoint` requires no nested key
 
 **Run "Sync All" after bulk prompt updates**
 - If you've edited multiple prompts, sync all at once
