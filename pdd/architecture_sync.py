@@ -1854,8 +1854,9 @@ def validate_interface_structure(interface: Dict[str, Any]) -> Dict[str, Any]:
     Validate interface JSON structure.
 
     Interface must have:
-    - 'type' field with value: 'module' | 'cli' | 'command' | 'frontend'
-    - Corresponding nested object with appropriate structure
+    - 'type' field with value: 'module' | 'cli' | 'command' | 'frontend' | 'entrypoint'
+    - Corresponding nested object with appropriate structure, except entrypoint
+      which requires no nested object
 
     Args:
         interface: Parsed interface JSON dict
@@ -1878,9 +1879,12 @@ def validate_interface_structure(interface: Dict[str, Any]) -> Dict[str, Any]:
 
     # Check type field
     itype = interface.get('type')
-    if itype not in ['module', 'cli', 'command', 'frontend']:
-        errors.append(f"Invalid type: '{itype}'. Must be: module, cli, command, or frontend")
+    if itype not in ['module', 'cli', 'command', 'frontend', 'entrypoint']:
+        errors.append(f"Invalid type: '{itype}'. Must be: module, cli, command, frontend, or entrypoint")
         return {'valid': False, 'errors': errors}
+
+    if itype == 'entrypoint':
+        return {'valid': True, 'errors': errors}
 
     # Check corresponding nested key exists
     if itype not in interface:
