@@ -3378,6 +3378,11 @@ PDD automatically detects the appropriate context based on:
 - `max_attempts`: Default maximum attempts for fixing operations
 - `outputs`: Output directories or configurations (default: empty dictionary)
 - `auto_deps_csv_path`: Path to the CSV file the auto-deps step uses to store and read dependency information. When unset, sync falls back to `project_dependencies.csv`. This is the `.pddrc` context-level equivalent of the `PDD_AUTO_DEPS_CSV_PATH` environment variable and the `auto-deps --csv` option (see the auto-deps command and Environment Variables sections); the same `project_dependencies.csv` default applies if none of these is set.
+- `compressed_context`: Tri-state compressed sync context override. Omitting inherits `.pddrc` default; `true` forces on; `false` forces off. When on, sync builds bounded phase packages from the prompt, tests, examples, contracts, and recent repair evidence for generate/verify/fix phases. Equivalent CLI flag: `--compressed-context / --no-compressed-context`.
+- `context_compression`: Compression mode for this context (`null`/`off` = disabled, `"test"` = failing-tests slice, `"examples"` = interface-only examples, `"contracts"` = contract extraction, `"all"` = all modes). Default: `null`. Equivalent env var: `PDD_CONTEXT_COMPRESSION`.
+- `compress_examples`: Boolean. When `true`, automatically applies `mode="interface"` to all example files in the `<include>` graph, replacing function bodies with `...`. Default: `false`. Equivalent env var: `PDD_COMPRESS_EXAMPLES`.
+- `compress_test_context`: Boolean. When `true`, uses AST-based slicing to include only failing tests and their necessary fixtures from the test context during `fix` or `test`. Default: `false`. Equivalent env var: `PDD_COMPRESS_TEST_CONTEXT`.
+- `compression_fallback`: Strategy when compression or slicing fails: `"full"` (fall back to full uncompressed content, default) or `"error"` (abort with an error). Equivalent env var: `PDD_COMPRESSION_FALLBACK`.
 
 **Path Behavior**:
 - Paths ending with `/` are treated as explicit directories and do **not** preserve subdirectory basenames (e.g., `commands/analysis` -> `pdd/analysis.py`).
