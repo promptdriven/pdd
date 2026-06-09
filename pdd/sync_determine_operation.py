@@ -309,7 +309,7 @@ def _overlay_configured_output_paths(
         extension = get_extension(language)
         code_path_obj = Path(code_path)
         if code_path.endswith("/") or code_path_obj.suffix == "":
-            merged["code"] = code_path_obj / dir_prefix / f"{name_part}.{extension}"
+            merged["code"] = code_path_obj / dir_prefix / f"{name_part}{_dot(extension)}"
         else:
             merged["code"] = code_path_obj
 
@@ -681,37 +681,43 @@ class SyncLock:
 
 
 def get_extension(language: str) -> str:
-    """Get file extension for a programming language."""
-    extensions = {
-        'python': 'py',
-        'javascript': 'js',
-        'typescript': 'ts',
-        'typescriptreact': 'tsx',
-        'javascriptreact': 'jsx',
-        'prisma': 'prisma',
-        'java': 'java',
-        'cpp': 'cpp',
-        'c': 'c',
-        'ruby': 'rb',
-        'go': 'go',
-        'rust': 'rs',
-        'php': 'php',
-        'swift': 'swift',
-        'kotlin': 'kt',
-        'scala': 'scala',
-        'csharp': 'cs',
-        'css': 'css',
-        'html': 'html',
-        'sql': 'sql',
-        'shell': 'sh',
-        'bash': 'sh',
-        'powershell': 'ps1',
-        'r': 'r',
-        'matlab': 'm',
-        'lua': 'lua',
-        'perl': 'pl',
-    }
-    return extensions.get(language.lower(), language.lower())
+    """Get file extension (without a leading dot) for a programming language.
+
+    Resolves through the shared, PDD_PATH-independent
+    ``pdd.language_extensions.bundled_extension`` reader of the canonical
+    language_format.csv, so the extensions sync *expects* match the ones
+    generation *writes* (issue #551). Falls back to a hard-coded subset for
+    languages absent from the CSV, then to the raw lower-cased language name.
+    """
+    from pdd.language_extensions import bundled_extension
+
+    ext = bundled_extension(language)
+    if ext is not None:
+        return ext
+
+    # CSV unreadable or language absent from it: defer to the SAME hard-coded map
+    # generation uses (construct_paths.BUILTIN_EXT_MAP), so sync and generation
+    # share one offline fallback and cannot diverge even when the bundled CSV
+    # can't be read (issue #551). Returned without a leading dot per this
+    # function's contract; BUILTIN_EXT_MAP stores values with the dot ('' for
+    # Makefile), and unknown languages fall through to the raw language name.
+    from pdd.construct_paths import BUILTIN_EXT_MAP
+
+    lang_lower = language.lower()
+    return BUILTIN_EXT_MAP.get(lang_lower, lang_lower).lstrip('.')
+
+
+def _dot(extension: str) -> str:
+    """Return a dotted suffix (".ext") for *extension*, or "" when empty.
+
+    Languages like Makefile have no canonical extension (an empty cell in
+    language_format.csv), so ``get_extension`` can return ''. Appending
+    ".{extension}" unconditionally would produce a malformed trailing-dot
+    path such as 'tests/test_Build.'; this keeps it clean ('tests/test_Build')
+    and matches how the write side (construct_paths.BUILTIN_EXT_MAP) treats
+    extensionless languages.
+    """
+    return f".{extension}" if extension else ""
 
 
 def _resolve_prompts_root(prompts_dir: str) -> Path:
@@ -869,11 +875,11 @@ def _generate_paths_from_templates(
     # This maintains compatibility with sync workflow that expects these keys.
     # sync_orchestration.py accesses pdd_files['code'] directly (20+ places).
     if 'code' not in result:
-        result['code'] = Path(f"{dir_prefix}{name}.{extension}")
+        result['code'] = Path(f"{dir_prefix}{name}{_dot(extension)}")
     if 'example' not in result:
-        result['example'] = Path(f"examples/{name}_example.{extension}")
+        result['example'] = Path(f"examples/{name}_example{_dot(extension)}")
     if 'test' not in result:
-        result['test'] = Path(f"tests/test_{name}.{extension}")
+        result['test'] = Path(f"tests/test_{name}{_dot(extension)}")
 
     # Handle test_files for Bug #156 compatibility
     if 'test' in result:
@@ -1021,16 +1027,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 else:
                     logger.debug(f"Path source: generate={code_path} (from architecture.json)")
 
-                example_path = project_root / f"{example_dir}{code_stem}_example.{extension}"
-                test_path = project_root / f"{test_dir}test_{code_stem}.{extension}"
+                example_path = project_root / f"{example_dir}{code_stem}_example{_dot(extension)}"
+                test_path = project_root / f"{test_dir}test_{code_stem}{_dot(extension)}"
 
                 # If the flattened prompt basename already has corresponding example/test
                 # artifacts, prefer those over the architecture filepath stem. This keeps
                 # command summaries and sync behavior aligned with repos that intentionally
                 # namespace files such as lib_sse_example.ts or test_api_route.ts.
                 if name != code_stem:
-                    basename_example_path = project_root / f"{example_dir}{name}_example.{extension}"
-                    basename_test_path = project_root / f"{test_dir}test_{name}.{extension}"
+                    basename_example_path = project_root / f"{example_dir}{name}_example{_dot(extension)}"
+                    basename_test_path = project_root / f"{test_dir}test_{name}{_dot(extension)}"
                     preferred_example = False
                     preferred_test = False
                     if basename_example_path.exists():
@@ -1144,26 +1150,26 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 # Code path
                 if generate_output_path and generate_output_path.endswith('/'):
                     # Explicit complete directory - use directly with just filename
-                    code_path = f"{generate_output_path}{name_part}.{extension}"
+                    code_path = f"{generate_output_path}{name_part}{_dot(extension)}"
                 else:
                     # Old behavior - use code_dir + dir_prefix
-                    code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
+                    code_path = f"{code_dir}{dir_prefix}{name_part}{_dot(extension)}"
 
                 # Example path
                 if example_output_path and example_output_path.endswith('/'):
                     # Explicit complete directory - use directly with just filename
-                    example_path = f"{example_output_path}{name_part}_example.{extension}"
+                    example_path = f"{example_output_path}{name_part}_example{_dot(extension)}"
                 else:
                     # Old behavior - use example_dir + dir_prefix
-                    example_path = f"{example_dir}{dir_prefix}{name_part}_example.{extension}"
+                    example_path = f"{example_dir}{dir_prefix}{name_part}_example{_dot(extension)}"
 
                 # Test path
                 if test_output_path and test_output_path.endswith('/'):
                     # Explicit complete directory - use directly with just filename
-                    test_path = f"{test_output_path}test_{name_part}.{extension}"
+                    test_path = f"{test_output_path}test_{name_part}{_dot(extension)}"
                 else:
                     # Old behavior - use test_dir + dir_prefix
-                    test_path = f"{test_dir}{dir_prefix}test_{name_part}.{extension}"
+                    test_path = f"{test_dir}{dir_prefix}test_{name_part}{_dot(extension)}"
 
                 logger.debug(f"Final paths: test={test_path}, example={example_path}, code={code_path}")
 
@@ -1196,7 +1202,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 logger = logging.getLogger(__name__)
                 logger.debug(f"construct_paths failed for non-existent prompt, using defaults: {e}")
                 dir_prefix, name_part = _extract_name_part(basename)
-                fallback_test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
+                fallback_test_path = Path(f"{dir_prefix}test_{name_part}{_dot(extension)}")
                 # Bug #156: Find matching test files even in fallback
                 if Path('.').exists():
                     fallback_matching = sorted(Path('.').glob(f"{glob.escape(dir_prefix)}test_{glob.escape(name_part)}*.{glob.escape(extension)}"))
@@ -1204,8 +1210,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     fallback_matching = [fallback_test_path] if fallback_test_path.exists() else []
                 return {
                     'prompt': Path(prompt_path),
-                    'code': Path(f"{dir_prefix}{name_part}.{extension}"),
-                    'example': Path(f"{dir_prefix}{name_part}_example.{extension}"),
+                    'code': Path(f"{dir_prefix}{name_part}{_dot(extension)}"),
+                    'example': Path(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
                     'test': fallback_test_path,
                     'test_files': fallback_matching or [fallback_test_path]  # Bug #156
                 }
@@ -1265,13 +1271,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
             # Use explicit config path directly when configured (ending with /)
             if generate_output_path and generate_output_path.endswith('/'):
-                code_path = f"{generate_output_path}{name_part}.{extension}"
+                code_path = f"{generate_output_path}{name_part}{_dot(extension)}"
             else:
                 # Old behavior - use path + dir_prefix
                 code_dir = generate_output_path or './'
                 if not code_dir.endswith('/'):
                     code_dir = code_dir + '/'
-                code_path = f"{code_dir}{dir_prefix}{name_part}.{extension}"
+                code_path = f"{code_dir}{dir_prefix}{name_part}{_dot(extension)}"
         
         # Get configured paths for example and test files using construct_paths
         # Note: construct_paths requires files to exist, so we need to handle the case
@@ -1297,7 +1303,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     path_resolution_mode="cwd"
                 )
                 dir_prefix, name_part = _extract_name_part(basename)
-                example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
+                example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example{_dot(get_extension(language))}"))
 
                 # Get test path using test command - handle case where test file doesn't exist yet
                 # Pass basename in command_options to preserve subdirectory structure
@@ -1309,10 +1315,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         context_override=context_override,
                         path_resolution_mode="cwd"
                     )
-                    test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
+                    test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}{_dot(get_extension(language))}"))
                 except FileNotFoundError:
                     # Test file doesn't exist yet - create default path
-                    test_path = Path(f"{dir_prefix}test_{name_part}.{get_extension(language)}")
+                    test_path = Path(f"{dir_prefix}test_{name_part}{_dot(get_extension(language))}")
                 
             finally:
                 # Clean up temporary file if we created it
@@ -1340,7 +1346,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     path_resolution_mode="cwd"
                 )
                 dir_prefix, name_part = _extract_name_part(basename)
-                example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example.{get_extension(language)}"))
+                example_path = Path(example_output_paths.get('output', f"{dir_prefix}{name_part}_example{_dot(get_extension(language))}"))
 
                 try:
                     _, _, test_output_paths, _ = construct_paths(
@@ -1350,10 +1356,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                         context_override=context_override,
                         path_resolution_mode="cwd"
                     )
-                    test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}.{get_extension(language)}"))
+                    test_path = Path(test_output_paths.get('output', f"{dir_prefix}test_{name_part}{_dot(get_extension(language))}"))
                 except Exception:
                     # If test path construction fails, use default naming
-                    test_path = Path(f"{dir_prefix}test_{name_part}.{get_extension(language)}")
+                    test_path = Path(f"{dir_prefix}test_{name_part}{_dot(get_extension(language))}")
                 
             except Exception:
                 # Final fallback to deriving from code path if all else fails
@@ -1393,7 +1399,7 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Fallback to simple naming if construct_paths fails
         extension = get_extension(language)
         dir_prefix, name_part = _extract_name_part(basename)
-        test_path = Path(f"{dir_prefix}test_{name_part}.{extension}")
+        test_path = Path(f"{dir_prefix}test_{name_part}{_dot(extension)}")
         # Bug #156: Try to find matching test files even in fallback
         test_dir = Path('.')
         test_stem = f"{glob.escape(dir_prefix)}test_{glob.escape(name_part)}"
@@ -1412,8 +1418,8 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                     break
         return {
             'prompt': fallback_prompt_path,
-            'code': Path(f"{dir_prefix}{name_part}.{extension}"),
-            'example': Path(f"{dir_prefix}{name_part}_example.{extension}"),
+            'code': Path(f"{dir_prefix}{name_part}{_dot(extension)}"),
+            'example': Path(f"{dir_prefix}{name_part}_example{_dot(extension)}"),
             'test': test_path,
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
