@@ -379,3 +379,36 @@ def test_prompt_forbids_tty_pi_and_provider_calls() -> None:
     assert "MUST NOT prompt on TTY or Pi backends in this module." in prompt
     assert "MUST NOT call external providers." in prompt
     assert "implement Pi/TTY backends" in prompt
+    assert "RepairOption.patch` must be non-optional" in prompt
+
+
+def test_pdd_interface_conformance_allows_dataclass_exports() -> None:
+    """Dataclass types must not be declared as functions with paren signatures."""
+    import json
+    import re
+    from pathlib import Path
+
+    from pdd.code_generator_main import _verify_pdd_interface_signatures
+
+    prompt = Path("pdd/prompts/checkup_interactive_session_python.prompt").read_text(
+        encoding="utf-8"
+    )
+    code = Path("pdd/checkup_interactive_session.py").read_text(encoding="utf-8")
+    match = re.search(r"<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>", prompt, re.S)
+    assert match is not None
+    interface = json.loads(match.group(1))
+    function_names = {
+        item["name"]
+        for item in interface.get("module", {}).get("functions", [])
+        if isinstance(item, dict) and item.get("name")
+    }
+    assert "ApprovedPatch" not in function_names
+    assert "RepairOption" not in function_names
+
+    _verify_pdd_interface_signatures(
+        generated_code=code,
+        prompt_content=prompt,
+        prompt_name="checkup_interactive_session_python.prompt",
+        output_path="pdd/checkup_interactive_session.py",
+        architecture_entry={},
+    )
