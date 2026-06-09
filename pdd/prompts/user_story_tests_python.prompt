@@ -19,10 +19,40 @@ canonical on-disk template at `user_stories/story__template.md` aligned with the
 generator and with `docs/prompting_guide.md` (template uses `## Negative Cases`;
 the guide may say `## Forbidden Outcomes` — same intent).
 
-**Template sections (in order):** `## Covers`, `## Story`, `## Context`,
-`## Acceptance Criteria`, `## Oracle`, `## Non-Oracle`, `## Negative Cases`,
-`## Non-Goals`, `## Notes`. Do not emit `## Prompt Scope`; list scoped prompts in
-`## Context` and in `<!-- pdd-story-prompts: ... -->` metadata.
+**Audience split (human-verified Story vs LLM-confirmed contract).** A story has
+exactly two level-2 (`##`) sections: `## Story` is the ONLY part a human reads
+and signs off on (the one-sentence persona/capability/benefit promise), and
+`## LLM-Confirmed Contract` holds everything machine-checkable as level-3
+(`###`) subsections that `pdd detect --stories` / the LLM verifies against the
+prompts. This keeps the human's sign-off small and durable while the precise,
+evolving evidence stays on the tooling side.
+
+**Template sections (in order):** `## Story`, then `## LLM-Confirmed Contract`
+containing `### Covers`, `### Context`, `### Acceptance Criteria`, `### Oracle`,
+`### Non-Oracle`, `### Negative Cases`, `### Non-Goals`, `### Notes`. Do not emit
+`## Prompt Scope`; list scoped prompts in `### Context` and in
+`<!-- pdd-story-prompts: ... -->` metadata.
+
+**Durability.** The generator must instruct the model to describe behavior by the
+user's stable goal and observable outcome, NEVER by comparison to a specific
+external product / tool / brand / UI (e.g. "like Claude Code's UI", "matches
+Codex") and never anchored to time- or version-sensitive facts ("the current
+best model", "as of 2026") unless the issue itself pins that exact version. When
+an issue mentions an external product only to ILLUSTRATE behavior, extract the
+durable observable structure (e.g. "a usage box with a per-source breakdown")
+rather than copying the comparison. Brittle exclusions (resemblance to any
+third-party tool's UI, which provider is currently "best", cosmetic styling)
+belong in `### Non-Oracle` so a story does not rot into a false failure as the
+ecosystem changes.
+
+**Quick to verify, firm but not harsh.** The human-verified Story is one sentence
+that is faster to check than reading the prompt — never push acceptance detail
+into it, and keep the Contract lean (only what catches a real regression). The
+Contract must be strong enough to fail on a genuine user-visible regression
+(`### Oracle` / `### Negative Cases`) yet loose enough that healthy development —
+refactors, renamed internals, an equivalent UI redesign, a better model — still
+passes. Test the user-facing outcome, not the mechanism; anything that legitimately
+varies during normal development goes in `### Non-Oracle`.
 
 **`generate_user_story()` / `_llm_generate_story_markdown()`**
 - Invoked from `pdd/commands/generate.py` when `pdd test` receives `.prompt` files
@@ -44,10 +74,11 @@ the guide may say `## Forbidden Outcomes` — same intent).
   back to prompt-derived authoring. When the issue source cannot be resolved, it fails
   without an LLM call.
 - **Required-section validation, no deterministic fallback.** Accept the LLM output
-  only when it contains the FULL canonical section set required by issue #1356 —
-  `## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
-  `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, and `## Notes` — (strip a
-  wrapping ``` ``` ``` fence first) and it does not contain unresolved placeholders
+  only when it contains the FULL canonical section set required by issue #1356 in
+  its audience-split shape — `## Story` and `## LLM-Confirmed Contract` at level 2,
+  and `### Covers`, `### Context`, `### Acceptance Criteria`, `### Oracle`,
+  `### Non-Oracle`, `### Negative Cases`, `### Non-Goals`, and `### Notes` at level
+  3 — (strip a wrapping ``` ``` ``` fence first) and it does not contain unresolved placeholders
   such as `<persona>`, `<capability>`, `<benefit>`, `<detail>`, `<state>`, or
   `<action>`. A response carrying only `## Story` and `## Acceptance Criteria` is
   rejected so an incomplete LLM story is never written. When the LLM is unavailable
@@ -124,9 +155,9 @@ the guide may say `## Forbidden Outcomes` — same intent).
    - `generate_user_story` writes the body via `_llm_generate_story_markdown` (LLM,
      issue #1356) and returns failure without writing a story when the LLM is
      unavailable or returns markdown missing any required canonical section
-     (`## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
-     `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Notes`), or leaves
-     template placeholders in the output.
+     (`## Story`, `## LLM-Confirmed Contract`, `### Covers`, `### Context`,
+     `### Acceptance Criteria`, `### Oracle`, `### Non-Oracle`, `### Negative Cases`,
+     `### Non-Goals`, `### Notes`), or leaves template placeholders in the output.
    - `_llm_generate_story_markdown` takes the resolved issue text/ref (NOT prompt
      content), loads the `generate_user_story_LLM` meta-prompt (`load_prompt_template`),
      escapes it via `preprocess(double_curly_brackets=True,

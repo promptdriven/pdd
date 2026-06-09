@@ -505,13 +505,16 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     assert story_text.startswith("<!-- pdd-story-prompts:")
     assert "upload_python.prompt" in story_text
     assert "notify_python.prompt" in story_text
-    assert "## Covers" in story_text
+    # Audience split: Story is the only human-verified `##` section; the rest of
+    # the canonical sections live under the LLM-Confirmed Contract as `###`.
     assert "## Story" in story_text
-    assert "## Context" in story_text
-    assert "## Acceptance Criteria" in story_text
-    assert "## Oracle" in story_text
-    assert "## Non-Oracle" in story_text
-    assert "## Negative Cases" in story_text
+    assert "## LLM-Confirmed Contract" in story_text
+    assert "### Covers" in story_text
+    assert "### Context" in story_text
+    assert "### Acceptance Criteria" in story_text
+    assert "### Oracle" in story_text
+    assert "### Non-Oracle" in story_text
+    assert "### Negative Cases" in story_text
     assert "## Prompt Scope" not in story_text
     assert "<persona>" not in story_text
     assert "<behavior>" not in story_text
@@ -656,7 +659,7 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
     mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "- R1: Upload returns a summary report" in story_text
-    assert "## Negative Cases" in story_text
+    assert "### Negative Cases" in story_text
 
 
 def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
@@ -688,20 +691,23 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
     assert "- R1: Upload returns a summary report" in story_text
 
 
+# Audience-split shape (Story is the only human-verified `##` section; the rest
+# is the LLM-Confirmed Contract nested as `###` sections).
 _LLM_STORY_MD = (
     "# User Story: Upload CSV\n\n"
-    "## Covers\n\n- R1: Upload returns a summary report\n\n"
     "## Story\n\n"
     "As a data analyst, I can upload a CSV file and view a summary report, "
     "so that I can quickly understand my data.\n\n"
-    "## Context\n\n- `prompts/upload_python.prompt`: CSV upload + summary\n\n"
-    "## Acceptance Criteria\n\n"
+    "## LLM-Confirmed Contract\n\n"
+    "### Covers\n\n- R1: Upload returns a summary report\n\n"
+    "### Context\n\n- `prompts/upload_python.prompt`: CSV upload + summary\n\n"
+    "### Acceptance Criteria\n\n"
     "1. Given a valid CSV, when uploaded, then a summary report is shown.\n\n"
-    "## Oracle\n\n- returned value shape\n\n"
-    "## Non-Oracle\n\n- internal helper names\n\n"
-    "## Negative Cases\n\n- Rejecting a valid CSV\n\n"
-    "## Non-Goals\n\n- Editing the CSV\n\n"
-    "## Notes\n\n- n/a\n"
+    "### Oracle\n\n- returned value shape\n\n"
+    "### Non-Oracle\n\n- internal helper names\n\n"
+    "### Negative Cases\n\n- Rejecting a valid CSV\n\n"
+    "### Non-Goals\n\n- Editing the CSV\n\n"
+    "### Notes\n\n- n/a\n"
 )
 
 
@@ -751,25 +757,26 @@ _CONTEXT_PROMPT_AGGREGATE_ONLY = "\n".join(
 
 _CONTEXT_STORY_MD = (
     "# User Story: Audit context-window usage by source\n\n"
-    "## Covers\n\n"
-    "- context_python.prompt: CLI users can run `pdd context <prompt_path>` to see "
-    "per-source token attribution rendered as a Claude-Code `/context`-style usage "
-    "box before generation.\n"
-    "- context_python.prompt: The command supports `--table`, `--json`, `--model`, and "
-    "`--threshold` behavior without making an LLM call.\n\n"
     "## Story\n\n"
     "As a CLI user, I can audit a hydrated prompt's per-source token usage before "
-    "generation, rendered like Claude Code's `/context` display, so that I can "
-    "identify which prompt body, include, test, example, or grounding source "
-    "consumes the context window.\n\n"
-    "## Context\n\n"
+    "generation, shown as a usage box that breaks down estimated usage by source, "
+    "so that I can identify which prompt body, include, test, example, or grounding "
+    "source consumes the context window.\n\n"
+    "## LLM-Confirmed Contract\n\n"
+    "### Covers\n\n"
+    "- context_python.prompt: CLI users can run `pdd context <prompt_path>` to see "
+    "per-source token attribution rendered as a usage box with a per-source "
+    "`Estimated usage by category` breakdown before generation.\n"
+    "- context_python.prompt: The command supports `--table`, `--json`, `--model`, and "
+    "`--threshold` behavior without making an LLM call.\n\n"
+    "### Context\n\n"
     "- `context_python.prompt` defines the `pdd context <prompt_path>` command, the "
-    "default `/context`-style usage box, the `--table` attribution table, JSON "
+    "default per-source usage box, the `--table` attribution table, JSON "
     "output, threshold exit behavior, dynamic-tag warnings, and the no-LLM-call "
     "requirement.\n\n"
-    "## Acceptance Criteria\n\n"
+    "### Acceptance Criteria\n\n"
     "1. Given a prompt with includes, when I run `pdd context <prompt_path>`, then "
-    "the default output is a Claude-Code `/context`-style usage box whose "
+    "the default output is a usage box whose "
     "`Estimated usage by category` breakdown reports token rows per source rather "
     "than only an aggregate total.\n"
     "2. Given `--table` is passed, when the audit completes, then the per-source "
@@ -781,32 +788,32 @@ _CONTEXT_STORY_MD = (
     "then the command exits with code 2.\n"
     "5. Given dynamic tags such as `<shell>` or `<web>` are present, when they are "
     "not expanded, then warning entries are reported without making an LLM call.\n\n"
-    "## Oracle\n\n"
+    "### Oracle\n\n"
     "These details matter for pass/fail:\n"
-    "- The default output is the Claude-Code `/context`-style usage box, with a "
+    "- The default output is a usage box with a "
     "per-source `Estimated usage by category` breakdown.\n"
     "- Per-source attribution rows are present for prompt body and resolved includes.\n"
     "- Aggregate-only token totals are not sufficient.\n"
     "- `--table`, `--json`, `--model`, and `--threshold` behavior matches the prompt.\n"
     "- The command does not make an LLM call for local auditing.\n\n"
-    "## Non-Oracle\n\n"
+    "### Non-Oracle\n\n"
     "These details should not matter:\n"
     "- The exact glyphs used in the usage box and the grid dimensions.\n"
     "- Private helper names.\n"
     "- Table styling.\n"
     "- Internal ordering beyond sorting rows by token count.\n\n"
-    "## Negative Cases\n\n"
+    "### Negative Cases\n\n"
     "- Reporting only an aggregate total with no per-source attribution.\n"
-    "- Dropping the per-source breakdown when rendering the `/context`-style box.\n"
+    "- Dropping the per-source breakdown when rendering the usage box.\n"
     "- Calling an LLM during the deterministic context audit.\n"
     "- Silently ignoring dynamic tags without warnings.\n\n"
-    "## Non-Goals\n\n"
+    "### Non-Goals\n\n"
     "- Generating code from the audited prompt.\n"
     "- Fetching cloud grounding data locally.\n\n"
-    "## Notes\n\n"
+    "### Notes\n\n"
     "- This story should fail validation if the prompt changes from per-source "
     "token attribution to aggregate-only token totals, or removes the default "
-    "`/context`-style usage box.\n"
+    "per-source usage-box breakdown.\n"
 )
 
 
@@ -837,7 +844,7 @@ def test_generate_user_story_uses_llm_output(tmp_path):
     # LLM-authored narrative is present (not the deterministic placeholder).
     assert "As a data analyst, I can upload a CSV file" in story_text
     assert "<persona>" not in story_text
-    assert "## Acceptance Criteria" in story_text
+    assert "### Acceptance Criteria" in story_text
     # Metadata stitched deterministically even though the LLM did not emit it.
     assert story_text.startswith("<!-- pdd-story-prompts:")
     assert "upload_python.prompt" in story_text
@@ -874,10 +881,18 @@ def test_generate_user_story_context_story_protects_per_source_attribution(tmp_p
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "per-source token attribution" in story_text
     assert "Aggregate-only token totals are not sufficient" in story_text
-    # PR #1387's intentional change: the default render is a /context-style box.
-    assert "`/context`-style usage box" in story_text
+    # The regression-catching signal is the observable structure (a per-source
+    # usage-box breakdown vs an aggregate-only total), not a brand comparison.
+    assert "Estimated usage by category" in story_text
+    assert "usage box" in story_text
     assert "`--table`, `--json`, `--model`, and `--threshold`" in story_text
     assert "does not make an LLM call" in story_text
+    # Durability: the story must NOT pin acceptance to a specific external tool's
+    # UI. A future redesign (or a different best-in-class tool) must not make this
+    # story falsely fail, so no Claude Code / Codex / Copilot brand comparison.
+    assert "Claude" not in story_text
+    assert "Codex" not in story_text
+    assert "Copilot" not in story_text
     assert "<pdd-reason>" not in story_text
     assert "\"type\": \"cli\"" not in story_text
 
@@ -1064,6 +1079,95 @@ def test_generate_user_story_rejects_llm_story_missing_canonical_sections(tmp_pa
     assert linked_prompts == []
     mock_detect.assert_not_called()
     assert not (tmp_path / "user_stories").exists()
+
+
+def test_generate_user_story_rejects_flat_pre_audience_split_story(tmp_path):
+    """A complete story in the OLD flat all-`##` shape is rejected.
+
+    The audience split requires `## Story` (human-verified) plus a
+    `## LLM-Confirmed Contract` umbrella with `###` subsections. A story that
+    carries every legacy section but keeps them all at `##` lacks the umbrella
+    and the `###` headings, so generation must reject it and regenerate rather
+    than writing a story that blurs who verifies what.
+    """
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    flat_story = (
+        "# User Story: Upload CSV\n\n"
+        "## Covers\n\n- R1: Upload returns a summary report\n\n"
+        "## Story\n\n"
+        "As a data analyst, I can upload a CSV, so that I understand my data.\n\n"
+        "## Context\n\n- state\n\n"
+        "## Acceptance Criteria\n\n1. Given a CSV, when uploaded, then a report.\n\n"
+        "## Oracle\n\n- returned value shape\n\n"
+        "## Non-Oracle\n\n- helper names\n\n"
+        "## Negative Cases\n\n- Rejecting a valid CSV\n\n"
+        "## Non-Goals\n\n- Editing the CSV\n\n"
+        "## Notes\n\n- n/a\n"
+    )
+    bad_llm = {"result": flat_story, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
+        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+    ):
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is False
+    assert "requires a valid LLM-authored story" in message
+    assert story_file == ""
+    assert linked_prompts == []
+    mock_detect.assert_not_called()
+    assert not (tmp_path / "user_stories").exists()
+
+
+def test_generate_user_story_writes_audience_split_shape(tmp_path):
+    """A valid story keeps `## Story` as the only human-verified level-2 section
+    besides the `## LLM-Confirmed Contract` umbrella, with every contract section
+    demoted to a `###` heading the LLM owns."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    fake_llm = {"result": _LLM_STORY_MD, "cost": 0.05, "model_name": "story-model"}
+    with patch("pdd.user_story_tests.detect_change"), patch(
+        "pdd.llm_invoke.llm_invoke", return_value=fake_llm
+    ):
+        success, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    story_text = Path(story_file).read_text(encoding="utf-8")
+    level2 = [
+        line.strip()
+        for line in story_text.splitlines()
+        if line.startswith("## ") and not line.startswith("### ")
+    ]
+    # The human reads exactly two top-level sections: the Story, and the
+    # contract umbrella (which the human is not asked to verify line-by-line).
+    assert level2 == ["## Story", "## LLM-Confirmed Contract"]
+    for contract_section in (
+        "### Covers",
+        "### Context",
+        "### Acceptance Criteria",
+        "### Oracle",
+        "### Non-Oracle",
+        "### Negative Cases",
+        "### Non-Goals",
+        "### Notes",
+    ):
+        assert contract_section in story_text
 
 
 def test_generate_user_story_fails_when_llm_output_contains_placeholders(tmp_path):

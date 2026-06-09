@@ -546,6 +546,28 @@ Use stories for cross-module behavior, product acceptance criteria, critical edg
 
 Story files live in `user_stories/`. Use `pdd detect --stories` to validate them, `pdd change` to run validation after prompt modifications, and `pdd fix user_stories/story__*.md` to apply a story to prompts and re-validate it. Link stories to prompts with `pdd-story-prompts` metadata.
 
+### Audience split: human-verified Story vs LLM-confirmed contract
+
+A story has exactly two top-level (`##`) sections, and they have different owners:
+
+- **`## Story`** is the *only* part a human reads and signs off on — one
+  plain-language sentence ("As a &lt;persona&gt;, I can &lt;capability&gt;, so
+  that &lt;benefit&gt;.") that a person can verify by using the product. Keep
+  flags, exit codes, JSON shapes, and internals out of it.
+- **`## LLM-Confirmed Contract`** is everything else, nested as level-3 (`###`)
+  sections. It is the machine-checkable evidence `pdd detect --stories` / the LLM
+  uses to confirm the prompts deliver the Story. Humans may skim it but are not
+  asked to verify it line-by-line — the tooling owns it.
+
+**Write durable Stories.** Describe the user's *stable goal* and *observable
+outcome*, never a comparison to a specific external product, tool, brand, or UI
+("works like Claude Code's UI", "matches Codex") and never a time-/version-pinned
+fact ("the current best model", "as of 2026") unless the issue itself makes that
+exact version the requirement. Whichever tool is "best" today may be surpassed
+tomorrow; a story pinned to it rots into a false failure. List the brittle things
+you deliberately excluded under `### Non-Oracle` so the durability boundary is
+explicit.
+
 ### Story Template
 
 ```md
@@ -555,7 +577,24 @@ Story files live in `user_stories/`. Use `pdd detect --stories` to validate them
 
 <!-- Replace or remove every placeholder before committing this story. -->
 
-## Covers
+## Story
+
+As a <persona>,
+I want <behavior>,
+so that <value>.
+
+<!--
+The Story above is the only human-verified part. Keep it durable: describe the
+user's stable goal and what they can do/see, not a resemblance to any specific
+external tool/UI or a time-/version-sensitive fact.
+-->
+
+## LLM-Confirmed Contract
+
+Everything below is machine-checkable evidence the LLM verifies against the
+prompts; it is not part of the human sign-off.
+
+### Covers
 
 For a single-prompt story, keep one prompt in `pdd-story-prompts`.
 For a cross-module story, list prompts comma-separated in `pdd-story-prompts`.
@@ -570,17 +609,11 @@ For cross-module stories, namespace rule IDs by prompt:
 - prompts/<module_a>_<language>.prompt#R1: <rule name>
 - prompts/<module_b>_<language>.prompt#R3: <rule name>
 
-## Story
-
-As a <persona>,
-I want <behavior>,
-so that <value>.
-
-## Context / Fixtures
+### Context / Fixtures
 
 Describe relevant state, assumptions, fixtures, users, records, external services, mocks, spies, logs, events, or dependencies.
 
-## Acceptance Criteria
+### Acceptance Criteria
 
 1. Given ...,
    when ...,
@@ -590,7 +623,7 @@ Describe relevant state, assumptions, fixtures, users, records, external service
    when ...,
    then ...
 
-## Oracle
+### Oracle
 
 List only the observations that matter for this story's pass/fail result.
 
@@ -602,7 +635,7 @@ Examples:
 - The emitted event is <event name>.
 - The returned value has <required shape>.
 
-## Non-Oracle
+### Non-Oracle
 
 List details that should not affect pass/fail.
 
@@ -612,8 +645,10 @@ Examples:
 - Internal class structure does not matter.
 - Exact wording of non-user-facing messages does not matter.
 - Deterministic but irrelevant ordering does not matter.
+- Resemblance to any specific third-party tool's UI or behavior does not matter.
+- Which provider/model is currently considered "best" does not matter.
 
-## Forbidden Outcomes
+### Forbidden Outcomes
 
 List outcomes this story protects against.
 
@@ -621,14 +656,14 @@ For MUST NOT rules, this section is required.
 For ordinary positive stories, this section may be empty or omitted.
 
 *(The canonical on-disk template at `user_stories/story__template.md` and story
-generation from `pdd test <*.prompt>` use **## Negative Cases** for this section —
+generation from `pdd test <*.prompt>` use **### Negative Cases** for this section —
 same intent, different heading.)*
 
-## Non-Goals
+### Non-Goals
 
 What this story explicitly does not cover.
 
-## Notes
+### Notes
 
 Links, edge cases, fixture notes, rationale, follow-up work, or review notes.
 ```
@@ -640,19 +675,21 @@ Example:
 
 # User Story: Refund requests are validated before provider calls
 
-## Covers
-
-- R1: Positive amount
-- R2: Remaining balance
-- R3: No provider call before validation
-
 ## Story
 
 As a support operator,
 I want invalid refund requests to be rejected before provider calls,
 so that customers are not over-refunded and provider state stays consistent.
 
-## Context / Fixtures
+## LLM-Confirmed Contract
+
+### Covers
+
+- R1: Positive amount
+- R2: Remaining balance
+- R3: No provider call before validation
+
+### Context / Fixtures
 
 The payment has been captured for $100.
 Successful prior refunds total $80.
@@ -660,7 +697,7 @@ Pending refunds total $0.
 The payment provider refund API is observed with a spy or mock.
 Payment state is observed from the payment record after the request.
 
-## Acceptance Criteria
+### Acceptance Criteria
 
 1. Given the payment above,
    when the operator requests a $30 refund,
@@ -674,31 +711,31 @@ Payment state is observed from the payment record after the request.
    when the operator requests a $30 refund,
    then the payment state is unchanged.
 
-## Oracle
+### Oracle
 
 The error type is `OverRefundError`.
 The payment provider is not called.
 The payment state is unchanged.
 
-## Non-Oracle
+### Non-Oracle
 
 The exact error message text is not important.
 The private helper names are not important.
 The order of internal validation checks is not important, as long as provider calls do not happen before validation.
 
-## Forbidden Outcomes
+### Forbidden Outcomes
 
 - The payment provider must not be called for an over-refund request.
 - The payment state must not change.
 - A successful-refund audit event must not be written.
 
-## Non-Goals
+### Non-Goals
 
 This story does not test operator authorization.
 This story does not test currency conversion.
 This story does not test customer notification.
 
-## Notes
+### Notes
 
 This is a negative story: it verifies forbidden behavior does not occur.
 ```
@@ -716,22 +753,24 @@ Example:
 
 # User Story: Provider secrets are not leaked
 
-## Covers
-
-- R6: Privacy
-
 ## Story
 
 As a security reviewer,
 I want provider secrets removed from returned errors and logs,
 so that generated code does not leak credentials.
 
-## Context / Fixtures
+## LLM-Confirmed Contract
+
+### Covers
+
+- R6: Privacy
+
+### Context / Fixtures
 
 The payment provider client is mocked to return an error that contains an API key.
 Returned errors and log output are captured by test fixtures.
 
-## Acceptance Criteria
+### Acceptance Criteria
 
 1. Given the payment provider returns an error containing an API key,
    when the module returns an error to the caller,
@@ -741,17 +780,17 @@ Returned errors and log output are captured by test fixtures.
    when the module writes logs,
    then the logs do not contain the API key.
 
-## Oracle
+### Oracle
 
 The returned error does not contain the API key.
 Captured logs do not contain the API key.
 
-## Non-Oracle
+### Non-Oracle
 
 The exact sanitized error wording is not important.
 The exact log message wording is not important.
 
-## Forbidden Outcomes
+### Forbidden Outcomes
 
 - Returned errors must not contain the API key.
 - Logs must not contain the API key.

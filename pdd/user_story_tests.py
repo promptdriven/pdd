@@ -619,16 +619,23 @@ _STORY_META_PROMPT_NAME = "generate_user_story_LLM"
 # #1356) to be accepted. Invalid or unavailable LLM output fails generation
 # instead of writing a deterministic substitute, because deterministic stories
 # can miss prompt behavior and pass mutation tests that should fail.
+#
+# Audience split: ``## Story`` is the only human-verified, level-2 section; the
+# rest of the contract is machine-checkable evidence the LLM confirms, nested as
+# level-3 sections under ``## LLM-Confirmed Contract``. Each required heading is
+# listed at its exact level so a story is accepted only when it carries the new
+# audience-split shape (a flat all-``##`` story is rejected and regenerated).
 _REQUIRED_STORY_SECTIONS = (
-    "## Covers",
     "## Story",
-    "## Context",
-    "## Acceptance Criteria",
-    "## Oracle",
-    "## Non-Oracle",
-    "## Negative Cases",
-    "## Non-Goals",
-    "## Notes",
+    "## LLM-Confirmed Contract",
+    "### Covers",
+    "### Context",
+    "### Acceptance Criteria",
+    "### Oracle",
+    "### Non-Oracle",
+    "### Negative Cases",
+    "### Non-Goals",
+    "### Notes",
 )
 _PLACEHOLDER_TOKEN_RE = re.compile(
     r"<\s*(?:persona|capability|benefit|detail|state|action|behavior|"
