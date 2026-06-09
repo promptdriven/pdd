@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import os
 import time
 from pathlib import Path
 from typing import Callable, List, Optional, Union
@@ -77,12 +78,35 @@ class PathValidator:
                 # If relative, join with project root
                 candidate_path = self.project_root / path_obj
 
-            # 2. Resolve symlinks and '..' components
-            # strict=False allows validating paths for files that don't exist yet (e.g. for writing)
-            resolved_path = candidate_path.resolve()
+            # 2. Enforce containment on a normalized, filesystem-free path BEFORE
+            # resolving. os.path.normpath collapses '..'/'.' purely textually (no
+            # symlink following, no disk access); os.path.commonpath then proves the
+            # candidate is lexically inside project_root. Doing this *before*
+            # resolve() means user-controlled input is validated before any
+            # filesystem canonicalization runs on it — closing the path-traversal
+            # sink at resolve() that a post-hoc check cannot (a later check can't
+            # un-run a dangerous operation already performed on tainted input).
+            root_str = str(self.project_root)
+            normalized = os.path.normpath(str(candidate_path))
+            try:
+                within_root = os.path.commonpath([root_str, normalized]) == root_str
+            except ValueError:
+                # Mixed absolute/relative or different drives -> outside root.
+                within_root = False
+            if not within_root:
+                console.print(f"[bold red]Security Alert:[/bold red] Path traversal attempt: {path}")
+                raise SecurityError(
+                    code="PATH_TRAVERSAL",
+                    message="Access denied: Path is outside the project root."
+                )
 
-            # 3. Check for Directory Traversal
-            # This raises ValueError if resolved_path is not inside project_root
+            # 3. Resolve symlinks and '..' components on the now-contained path.
+            # strict=False allows validating paths for files that don't exist yet (e.g. for writing)
+            resolved_path = Path(normalized).resolve()
+
+            # 4. Defense in depth: re-check containment after symlink resolution,
+            # since a symlink *inside* root could still point outside it. This
+            # raises ValueError if resolved_path is not inside project_root.
             try:
                 relative_path = resolved_path.relative_to(self.project_root)
             except ValueError:

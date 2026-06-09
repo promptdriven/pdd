@@ -18,9 +18,19 @@
 
 % Requirements
   1. **PathValidator class**:
-     - Initialize with project_root Path and optional blacklist_patterns list
+     - Initialize with project_root Path (stored resolved) and optional blacklist_patterns list
      - `validate(path: Union[str, Path]) -> Path`: Resolve and validate path is within project root
-     - Raise `SecurityError` if path escapes project root (directory traversal)
+     - Enforce containment on a normalized, filesystem-free path BEFORE resolving:
+       use `os.path.normpath` to collapse `..`/`.` textually (no symlink following,
+       no disk access), then `os.path.commonpath` to confirm the candidate is
+       lexically inside project_root. Validating user input before any filesystem
+       canonicalization closes the path-traversal sink at `resolve()` that a
+       post-resolve check cannot.
+     - After resolving symlinks on the contained path, re-check containment with
+       `relative_to(project_root)` as defense in depth (a symlink inside the root
+       could still point outside it).
+     - Raise `SecurityError` (code PATH_TRAVERSAL) if path escapes project root at
+       either the pre-resolve containment check or the post-resolve re-check
      - Raise `SecurityError` if path matches blacklist patterns
      - Check both full path and individual components against blacklist
 
