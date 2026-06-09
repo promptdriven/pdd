@@ -73,7 +73,10 @@ Pi session configuration must use an explicit tool allowlist. Do **not** rely on
 
 ```ts
 import { createAgentSession, defineTool } from "@earendil-works/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+// `typebox` is the schema package re-used by pi-coding-agent (it depends on
+// `typebox@1.1.38`, not `@sinclair/typebox`). Install it explicitly so a
+// standalone script can import it; see Packaging Notes.
+import { Type } from "typebox";
 
 const proposeRepairOptions = defineTool({
   name: "propose_repair_options",
@@ -144,7 +147,10 @@ Researched package at time of spike:
 
 - Package: `@earendil-works/pi-coding-agent@0.78.1`
 - Node engine requirement: `>=22.19.0`
-- Manual install (not automated in this PR): `npm install --ignore-scripts @earendil-works/pi-coding-agent`
+- Schema dependency for the prototype snippet: `typebox@1.1.38` (a transitive
+  dependency of the agent package; install it explicitly so the snippet's
+  `import { Type } from "typebox"` resolves in a standalone script).
+- Manual install (not automated in this PR): `npm install --ignore-scripts @earendil-works/pi-coding-agent typebox`
 
 Guard pattern (pseudocode for #1435):
 
