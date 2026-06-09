@@ -508,6 +508,36 @@ def test_release_video_preflight_allows_env_token_without_printing_it(tmp_path: 
     assert "local-secret-token" not in result.stdout + result.stderr
 
 
+def test_release_video_preflight_with_env_token_and_project_reports_fixed_project(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    env = release_video_env({"PDS_TOKEN": "env-secret-token"})
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--preflight",
+            "--project-id",
+            "fixed-project-123",
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+
+    assert "using explicit PDS project fixed-project-123" in result.stdout
+    assert "PDS_TOKEN is set for explicit PDS project fixed-project-123" in result.stdout
+    assert "access to that fixed project" in result.stdout
+    assert "Normal create-mode creates a new per-release project" not in result.stdout
+    assert "env-secret-token" not in result.stdout + result.stderr
+
+
 def test_release_video_publish_requires_youtube_url(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"

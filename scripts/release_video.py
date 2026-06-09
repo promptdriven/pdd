@@ -230,13 +230,22 @@ def preflight_release_video(args: argparse.Namespace) -> int:
         print(f"release-video preflight: using explicit PDS project {project_id}.")
 
     if os.environ.get("PDS_TOKEN", "").strip():
-        print(
-            "release-video preflight: PDS_TOKEN is set; local preflight cannot "
-            "verify token scopes or project access unless the PDS server "
-            "preflight is run. Normal create-mode creates a new per-release "
-            "project, so the token must create that project and continue "
-            "accessing it afterward (or use a backend fix/wildcard token)."
-        )
+        if project_id:
+            print(
+                "release-video preflight: PDS_TOKEN is set for explicit PDS "
+                f"project {project_id}; local preflight cannot verify token "
+                "scopes or access to that fixed project unless the PDS server "
+                "preflight is run."
+            )
+        else:
+            print(
+                "release-video preflight: PDS_TOKEN is set; local preflight "
+                "cannot verify token scopes or project access unless the PDS "
+                "server preflight is run. Normal create-mode creates a new "
+                "per-release project, so the token must create that project "
+                "and continue accessing it afterward (or use a backend "
+                "fix/wildcard token)."
+            )
         return 0
 
     if project_id:

@@ -208,7 +208,9 @@ jobs:
       #                                access. Normal create-mode needs a token
       #                                that can keep accessing the project it
       #                                just created, or a backend fix/wildcard
-      #                                token.
+      #                                token. A project-locked token only works
+      #                                with vars.RELEASE_VIDEO_PROJECT_ID set to
+      #                                that same authorized fixed project.
       #   vars.PDS_CLI_PACKAGE         install spec for the @promptdriven/pds
       #                                CLI, for example @promptdriven/pds@latest
       #                                or a pinned version.
