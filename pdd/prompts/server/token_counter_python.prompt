@@ -54,6 +54,7 @@ A utility module that counts tokens and looks up model context windows using lit
 7. Dataclass `TokenMetrics`: token_count, context_limit (Optional[int]), context_usage_percent (Optional[float]), cost_estimate
 8. Both dataclasses have `to_dict()` methods for serialization
 9. `CostEstimate.to_dict()` includes all new input/output/total fields and preserves legacy keys so existing API models and tests remain compatible
+   - Also expose `input_rate_per_million` and `output_rate_per_million` keys (aliases of `input_cost_per_million`/`output_cost_per_million`) so estimate-mode consumers that read per-million rates work against the single canonical `CostEstimate`
 10. Pricing loaded from CSV with columns: model, input, output
    - `input` and `output` are USD costs per million tokens
    - Missing, blank, or invalid input pricing makes that row unavailable for cost estimation

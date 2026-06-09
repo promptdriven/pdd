@@ -74,6 +74,10 @@
       - Gate success/status messages (completion, model used, total cost, results path) behind `not ctx.obj.get('quiet', False)`.
       - Always print the final conflicts section (e.g., "Conflicts detected" and the list of conflicts), even when `--quiet` is enabled.
 
-   8. **Error Handling**:
+   8. **Estimate Mode**:
+      - `conflicts` is a dependent multi-call flow because structured extraction depends on the first provider response. The CLI command must reject global estimate mode before calling this function; if this function is called directly and `conflicts_in_prompts` raises `llm_invoke.EstimateOnlyResult`, re-raise it unchanged before writing any CSV output.
+
+   9. **Error Handling**:
       - Wrap the main logic in a `try-except` block.
+      - Re-raise `click.UsageError` and `EstimateOnlyResult` unchanged so the command wrapper can preserve Click/estimate semantics.
       - Catch exceptions, display error messages (suppress the error text when `--quiet` is enabled), and exit gracefully using `sys.exit(1)` if necessary.

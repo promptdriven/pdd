@@ -1,15 +1,15 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Click commands for modifying prompts: split (agentic + legacy), change (agentic + manual), and update.</pdd-reason>
+<pdd-reason>Click commands for split/change/update with guarded dry-run estimates.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "command",
   "command": {
     "commands": [
-      {"name": "split", "description": "Split large dev units into smaller ones (agentic default, --legacy for old path)."},
-      {"name": "change", "description": "Modify prompt based on change prompt or issue."},
-      {"name": "update", "description": "Update prompt file based on code changes."}
+      {"name": "split", "description": "Split large dev units; reject global estimate mode for multi-step paths."},
+      {"name": "change", "description": "Modify prompts from a change prompt or issue; reject estimate mode."},
+      {"name": "update", "description": "Update prompt files from code changes; support single-file dry-run estimates."}
     ]
   }
 }
@@ -37,6 +37,7 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 
 2. **split**:
    - Doc: "Split large dev units into smaller, more manageable ones."
+   - If global estimate mode is active (`ctx.obj["estimate"]` or `PDD_ESTIMATE=1`), reject both agentic and legacy split paths with `click.UsageError` because split is multi-step and outside this single-call estimate contract.
    - **Agentic (default)**: 1 arg (`target_file`). Calls `run_agentic_split(target_file, ...)`. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive). Exit(1) on failure.
    - Options (agentic mode): `--diagnose` (steps 0-2 only), `--propose-only` (steps 0-4 only), `--delete-dead` (opt-in dead symbol deletion), `--force-split` (override LEAVE_ALONE diagnosis), `--no-verify` (skip test gate, dev only), `--skip-regen-gate` (skip regen, dev only, logged loudly), `--experimental-language` (opt-in for non-Python), `--no-github-state`, `--timeout-adder` (0.0), `--intent` (reduce|parallel|reuse|tests; skips step 0), `--no-phase-extraction` (skip phase helpers), `--strangler` (sequence N orchestrator passes; see issue #1402 for per-child enforcement), `--max-cost USD` (Issue #1384: help text "Abort if total cost would cross USD threshold."; aborts cleanly with resumable state when accumulated cost crosses threshold; type `click.FloatRange(min=0.01)`, default `None`).
    - **Legacy (`--legacy`)**: 3 args (`input_prompt`, `input_code`, `example_code`, all `exists=True`). Options: `--output-sub`, `--output-modified`. Calls `split_main` with named file arguments and `ctx`.
@@ -44,6 +45,7 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 3. **change**:
    - Doc: "Modify an input prompt file based on a change prompt or issue."
    - Args: `args` (nargs=-1). Options: `--manual`, `--budget` (5.0), `--output`, `--csv`, `--timeout-adder` (0.0), `--no-github-state`, `--clean-restart`.
+   - If global estimate mode is active (`ctx.obj["estimate"]` or `PDD_ESTIMATE=1`), reject both agentic and manual change paths with `click.UsageError` because change is multi-step and outside this single-call estimate contract.
    - **Agentic (default)**: 1 arg (issue_url). Calls `run_agentic_change(use_github_state=not no_github_state, clean_restart=clean_restart, ...)`. Displays: Status, Message, Cost (4 decimals), Model, and changed files. Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive). Exit(1) on failure.
    - **`--clean-restart` flag** (agentic mode only): Boolean flag (default `False`). Help text: "Discard any persisted solving state for this issue and start a fresh full pdd-issue flow from the default base branch, ignoring any previously generated change/issue-N branch artifacts. Use when recovering from a stopped or wrong-model run." Validation: MUST raise `click.UsageError` when combined with `--manual` ("--clean-restart is only valid in agentic mode and cannot be used with --manual") or when the single agentic argument is not a GitHub issue URL ("--clean-restart can only be used with an agentic GitHub issue URL."). When set, forwarded to `run_agentic_change` as `clean_restart=True`; otherwise passes `clean_restart=False`.
    - **Manual (`--manual`)**:
@@ -67,6 +69,10 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
      - 1 arg: `modified_code_file=files[0]` (regeneration).
      - 2 args: `input_prompt_file=files[0]`, `modified_code_file=files[1]` (git-based).
      - 3 args: `input_prompt_file=files[0]`, `modified_code_file=files[1]`, `input_code_file=files[2]`.
+  - **Estimate Mode**:
+     - Detect global estimate mode from `ctx.obj["estimate"]` or `PDD_ESTIMATE=1`; keep command-local `update --dry-run` semantics distinct and do not reinterpret it as cost estimation.
+     - Reject repo-wide mode (`0 args` or `--all`) and `--sync-metadata` with `click.UsageError`; they are not single-file estimates.
+     - For file modes, force `simple=True` to avoid external agentic update routing, call `update_main`, catch `llm_invoke.EstimateOnlyResult`, and return its payload as `(payload, 0.0, payload["model"])` before prompt writes, metadata sync, fingerprint/run-report writes, or cost rows occur.
    - **`--sync-metadata`** (opt-in): When set, `update_main` runs the shared `run_metadata_sync` orchestrator after the prompt update — preserves or seeds prompt PDD tags from the architecture entry, reconciles the architecture.json entry, clears stale run reports, and finalizes the fingerprint last. Compatible with all modes (single-file, regeneration, repo). `failed` in any stage causes the command to exit non-zero (raises `click.exceptions.Exit(1)`); `skipped` is acceptable and passes through (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870 — not implemented here). Help text: "After update, run the shared metadata-sync orchestrator (preserve/seed PDD tags, reconcile architecture.json entry, clear stale run reports, finalize fingerprint last). On any stage failed, exits non-zero. Stages may report skipped for legitimate cases (no architecture.json, unregistered modules). LLM-first refresh of stale-but-present tags is tracked at #870 and is NOT invoked here."
    - Calls `update_main(ctx, input_prompt_file, modified_code_file, input_code_file, output, use_git=git, repo, extensions, directory, simple, base_branch, budget, dry_run, sync_metadata=sync_metadata)` and returns its result (or `None` if it returns `None`).
 

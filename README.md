@@ -726,6 +726,8 @@ These options can be used with any command:
 - `--verbose`: Increase output verbosity for more detailed information. Includes token count and context window usage for each LLM call.
 - `--quiet`: Decrease output verbosity for minimal information.
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
+- `--estimate`, `--dry-run-cost`: Preview the LLM token and cost estimate for supported single-call command forms without calling a provider, writing command outputs, or appending cost CSV rows.
+- `--estimate-json`: Emit the estimate result as machine-readable JSON instead of the human-readable table.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
 - `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
@@ -840,6 +842,21 @@ pdd --output-cost PATH_TO_CSV_FILE [COMMAND] [OPTIONS] [ARGS]...
 ```
 
 The `PATH_TO_CSV_FILE` should be the desired location and filename for the CSV output.
+
+### Dry-Run Cost Estimates
+
+Use the global `--estimate` flag, or its alias `--dry-run-cost`, to preview the LLM cost for command forms that can be represented as one concrete LLM request before running them.
+
+```
+pdd --estimate generate prompts/example_python.prompt
+pdd --estimate-json generate prompts/example_python.prompt
+```
+
+Estimate mode assembles the messages that would be sent to the provider, counts input tokens, predicts output tokens using command-specific ratios, and prints the selected model, input tokens, predicted output tokens, known input/output rates, total estimated cost or `unknown`, and context-window usage percentage. It exits before provider invocation and before command output files are written.
+
+Supported standard/manual command paths include `generate`, `example`, manual `test`, and single-file `update`. PDD rejects agentic, PRD-propagation, repository-wide, metadata-sync, `conflicts`, `crash`, and `fix` modes that could invoke external agents or require provider output before the next request can be assembled.
+
+`--estimate-json` prints the same estimate fields as JSON for scripts. Estimate mode does not append rows to `--output-cost` CSV files; use `--output-cost` for actual-run accounting.
 
 ### Cost Calculation and Presentation
 

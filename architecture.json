@@ -1337,6 +1337,36 @@
     }
   },
   {
+    "reason": "Detects and reports conflicts within prompt files.",
+    "description": "Analyzes two prompt bodies, identifies conflicts, and extracts prompt change instructions.",
+    "dependencies": [
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 36,
+    "filename": "conflicts_in_prompts_python.prompt",
+    "filepath": "pdd/conflicts_in_prompts.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "conflicts_in_prompts",
+            "signature": "(prompt1: str, prompt2: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False) -> Tuple[List[Dict], float, str]",
+            "returns": "Tuple[List[Dict], float, str]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 9300,
+      "y": 2080
+    }
+  },
+  {
     "reason": "CLI entry point for the conflicts command.",
     "description": "Command-line interface for conflicts. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [],
@@ -5650,7 +5680,7 @@
     }
   },
   {
-    "reason": "CLI commands for the Generate Suite: generate, test, and example, with GitHub URL detection for agentic modes.",
+    "reason": "CLI commands for generate/test/example with supported dry-run cost estimates.",
     "description": "Implements the pdd generate, test, and example CLI commands. Routes standard prompt-to-code generation, legacy incremental code patching, explicit experimental incremental PRD propagation, full agentic architecture generation, context examples, and agentic/manual test generation while preserving dry-run and GitHub-state guardrails.",
     "dependencies": [
       "agentic_architecture_python.prompt",
@@ -5677,15 +5707,15 @@
         "commands": [
           {
             "name": "generate",
-            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
+            "description": "Generate code from a prompt or route agentic/PRD modes; support standard dry-run estimates."
           },
           {
             "name": "test",
-            "description": "Generate or enhance tests through agentic issue mode or manual prompt/code mode."
+            "description": "Generate or enhance tests; support manual dry-run estimates."
           },
           {
             "name": "example",
-            "description": "Generate context examples from a prompt and code file."
+            "description": "Generate context examples from prompt and code; support dry-run estimates."
           }
         ]
       }
@@ -8123,7 +8153,7 @@
     }
   },
   {
-    "reason": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
+    "reason": "Implements pdd fix modes with supported manual dry-run estimates.",
     "description": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
     "dependencies": [
       "agentic_e2e_fix_python.prompt",
@@ -8143,7 +8173,7 @@
         "commands": [
           {
             "name": "fix",
-            "description": "Iteratively fix code and tests or orchestrate an agentic GitHub issue fix"
+            "description": "Fix code/tests via agentic, story, or manual modes; support manual dry-run estimates."
           }
         ]
       }
@@ -8344,7 +8374,7 @@
     }
   },
   {
-    "reason": "Click commands for modifying prompts: split (agentic + legacy), change (agentic + manual), and update.",
+    "reason": "Click commands for split/change/update with guarded dry-run estimates.",
     "description": "Provides Click commands `split`, `change`, `update` that bridge the CLI to main logic. Split delegates to run_agentic_split (default) or split_main (legacy); change to run_agentic_change or change_main; update to update_main.",
     "dependencies": [
       "split_main_python.prompt",
@@ -8366,15 +8396,15 @@
         "commands": [
           {
             "name": "split",
-            "description": "Split large dev units into smaller ones (agentic default, --legacy for old path)."
+            "description": "Split large dev units; reject global estimate mode for multi-step paths."
           },
           {
             "name": "change",
-            "description": "Modify prompt based on change prompt or issue."
+            "description": "Modify prompts from a change prompt or issue; reject estimate mode."
           },
           {
             "name": "update",
-            "description": "Update prompt file based on code changes."
+            "description": "Update prompt files from code changes; support single-file dry-run estimates."
           }
         ]
       }
@@ -9033,7 +9063,7 @@
     }
   },
   {
-    "reason": "Defines the main PDDCLI click.Group, global CLI options, result callback, and duplicate-guard recording.",
+    "reason": "Defines the main PDDCLI group, global estimate options, result rendering, and duplicate guard.",
     "description": "Core CLI logic: PDDCLI click.Group, global options, entry function, and result callback that records only successful runs to the duplicate guard store.",
     "dependencies": [
       "dump_python.prompt",
@@ -9060,7 +9090,7 @@
         "functions": [
           {
             "name": "cli",
-            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps)",
+            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, estimate, estimate_json, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps)",
             "returns": "None"
           },
           {
@@ -9402,7 +9432,7 @@
     }
   },
   {
-    "reason": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "reason": "Provides unified LLM invocation with provider retries, context checks, and dry-run cost estimates.",
     "description": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
     "dependencies": [
       "path_resolution_python.prompt",
@@ -9421,7 +9451,7 @@
         "functions": [
           {
             "name": "llm_invoke",
-            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, estimate_only=None)",
             "returns": "Dict[str, Any]"
           },
           {

@@ -121,6 +121,9 @@ Artifacts appear in `dist/`.
 - `--strength`: model strength/size.
 - `--temperature`: creativity vs. determinism.
 - `--time`: thinking tokens/budget.
+- `--estimate` / `--dry-run-cost`: preview token usage and cost for supported single-call command forms before running them.
+- `--estimate-json`: emit the estimate as JSON for automation.
+- Estimate support must fail closed for multi-stage flows such as `conflicts`, `crash`, and `fix`; do not surface a first LLM call as the full command estimate when later calls depend on provider output.
 
 ## Known Limitations and Roadmap
 - Some compile‑time prompts are not yet open‑sourced (pending investor approval). Until then, code edits may require maintainers to sync prompts.

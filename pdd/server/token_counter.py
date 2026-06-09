@@ -130,6 +130,10 @@ class CostEstimate:
             "output_tokens": self.output_tokens,
             "input_cost_per_million": self.input_cost_per_million,
             "output_cost_per_million": self.output_cost_per_million,
+            # Aliases so estimate-mode consumers that read per-million "rate"
+            # keys work against the single canonical CostEstimate.
+            "input_rate_per_million": self.input_cost_per_million,
+            "output_rate_per_million": self.output_cost_per_million,
         }
 
 
