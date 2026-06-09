@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol, Sequence
 
+import click
+from pydantic import BaseModel, Field
+
 
 PromptSourceSetReport = Any
 
@@ -63,7 +66,7 @@ class InteractiveRepairSession(Protocol):
     """Engine-agnostic protocol for interactive prompt-repair sessions.
 
     Lifecycle: seed the report, run the session, then read approved_patches.
-    The session backend (Pi or fake) drives the entire interaction.
+    The session backend (Pi, LLM, or fake) drives the entire interaction.
     """
 
     def seed(self, report: PromptSourceSetReport) -> None:
@@ -75,6 +78,27 @@ class InteractiveRepairSession(Protocol):
     def approved_patches(self) -> list[ApprovedPatch]:
         """Return typed approved patches collected during the session."""
 
+
+# ---------------------------------------------------------------------------
+# Private Pydantic models for LlmInteractiveSession proposal output
+# ---------------------------------------------------------------------------
+
+class _PatchProposal(BaseModel):
+    kind: str = Field(description="Patch kind: vocab_definition, contract_rule, example_rewrite, or custom_rewrite")
+    target: str = Field(description="Relative path to the prompt file to repair")
+    anchor: dict[str, Any] = Field(description="Anchor locating the patch point, e.g. {section: 'R3'} or {pattern: 'old text'}")
+    replacement: str = Field(description="Exact new text to insert or replace")
+    label: str = Field(description="Short one-line label shown in the repair menu")
+    rationale: str = Field(description="One sentence explaining why this patch fixes the finding")
+
+
+class _ProposalSet(BaseModel):
+    proposals: list[_PatchProposal] = Field(description="2-4 concrete repair patch proposals for the finding")
+
+
+# ---------------------------------------------------------------------------
+# Session implementations
+# ---------------------------------------------------------------------------
 
 class PiInteractiveSession:
     """Pi-backed interactive repair session via @earendil-works/pi-coding-agent.
@@ -132,6 +156,98 @@ class PiInteractiveSession:
         return [deepcopy(p) for p in self._patches]
 
 
+class LlmInteractiveSession:
+    """Real interactive repair session using llm_invoke + Click CLI prompts.
+
+    Works without Node.js or the Pi package — uses whichever LLM pdd is
+    configured with. Presents numbered patch menus; the user approves patches
+    in their terminal.
+    """
+
+    def __init__(self, strength: float = 0.5) -> None:
+        self._report: PromptSourceSetReport | None = None
+        self._patches: list[ApprovedPatch] = []
+        self._strength = strength
+
+    def seed(self, report: PromptSourceSetReport) -> None:
+        self._report = report
+
+    def run(self) -> None:
+        self._patches = []
+        for finding in (self._report or {}).get("findings", []):
+            self._patches.extend(self._handle_finding(finding))
+
+    def _handle_finding(self, finding: dict[str, Any]) -> list[ApprovedPatch]:
+        # Lazy import — avoids LiteLLM startup cost when this class isn't used.
+        from pdd.llm_invoke import llm_invoke  # type: ignore[import]
+
+        finding_id = str(finding.get("finding_id") or finding.get("id") or "?")
+        summary = finding.get("summary") or finding.get("check") or ""
+
+        click.echo(f"\n{'─' * 60}")
+        click.echo(f"Finding {finding_id}: {summary}")
+        click.echo("─" * 60)
+        click.echo("Generating repair proposals…")
+
+        try:
+            result = llm_invoke(
+                prompt=(
+                    "Analyze this pdd prompt quality finding and propose concrete repair patches.\n\n"
+                    f"Finding:\n{json.dumps(finding, indent=2)}\n\n"
+                    "Propose 2–4 patches. Each patch must include the exact file path, "
+                    "a precise anchor (section name, pattern, or line marker), and the "
+                    "exact replacement text — write the actual new text, not a description."
+                ),
+                strength=self._strength,
+                temperature=0.0,
+                output_pydantic=_ProposalSet,
+            )
+            proposal_set = result.get("result")
+            if not isinstance(proposal_set, _ProposalSet) or not proposal_set.proposals:
+                click.echo("  (no proposals generated — skipping)")
+                return []
+        except Exception as exc:
+            click.echo(f"  LLM error: {exc} — skipping finding")
+            return []
+
+        for i, p in enumerate(proposal_set.proposals, 1):
+            click.echo(f"\n  [{i}] {p.label}")
+            click.echo(f"      File     : {p.target}")
+            click.echo(f"      Rationale: {p.rationale}")
+        click.echo("  [s] Skip this finding")
+
+        approved: list[ApprovedPatch] = []
+        while True:
+            raw = click.prompt(
+                "\nApprove patch(es) — enter number(s) separated by spaces, or s to skip",
+                default="s",
+            ).strip().lower()
+            if raw == "s":
+                break
+            try:
+                indices = [int(x) for x in raw.split()]
+                if not all(1 <= idx <= len(proposal_set.proposals) for idx in indices):
+                    click.echo(f"  Please enter numbers between 1 and {len(proposal_set.proposals)}")
+                    continue
+                for idx in indices:
+                    p = proposal_set.proposals[idx - 1]
+                    approved.append(ApprovedPatch(
+                        kind=p.kind,
+                        target=Path(p.target),
+                        anchor=p.anchor,
+                        replacement=p.replacement,
+                        finding_id=finding_id,
+                    ))
+                break
+            except ValueError:
+                click.echo("  Please enter numbers or 's'")
+
+        return approved
+
+    def approved_patches(self) -> list[ApprovedPatch]:
+        return [deepcopy(p) for p in self._patches]
+
+
 class FakeInteractiveSession:
     """Deterministic in-memory repair session for unit tests."""
 
@@ -148,3 +264,14 @@ class FakeInteractiveSession:
 
     def approved_patches(self) -> list[ApprovedPatch]:
         return [deepcopy(p) for p in self._patches]
+
+
+def make_session(strength: float = 0.5) -> InteractiveRepairSession:
+    """Return the best available interactive session backend.
+
+    Prefers PiInteractiveSession when Node >=22 and the Pi package are present;
+    falls back to LlmInteractiveSession which uses pdd's configured LLM.
+    """
+    if PiInteractiveSession.is_available():
+        return PiInteractiveSession()
+    return LlmInteractiveSession(strength=strength)

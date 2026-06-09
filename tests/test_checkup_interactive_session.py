@@ -9,8 +9,12 @@ from pdd.checkup_interactive_session import (
     NON_APPROVING_PATCH_KINDS,
     ApprovedPatch,
     FakeInteractiveSession,
+    LlmInteractiveSession,
     PiInteractiveSession,
+    _PatchProposal,
+    _ProposalSet,
     _pi_available,
+    make_session,
 )
 
 
@@ -254,3 +258,151 @@ def test_pi_available_false_on_subprocess_error() -> None:
     with patch("shutil.which", return_value="/usr/bin/node"), \
          patch("subprocess.check_output", side_effect=OSError("fail")):
         assert not _pi_available()
+
+
+# --- LlmInteractiveSession ---
+
+_SAMPLE_PROPOSALS = [
+    {
+        "kind": "vocab_definition",
+        "target": "prompts/refund.prompt",
+        "anchor": {"section": "Vocabulary"},
+        "replacement": "- refund_window: 30 calendar days from purchase",
+        "label": "Add refund window definition",
+        "rationale": "Removes ambiguity about the refund period",
+    },
+    {
+        "kind": "contract_rule",
+        "target": "prompts/refund.prompt",
+        "anchor": {"pattern": "as soon as possible"},
+        "replacement": "within 3 business days of approval",
+        "label": "Replace vague timeline with exact deadline",
+        "rationale": "Specifies a concrete, testable deadline",
+    },
+]
+
+
+def _proposal_set(items: list[dict] | None = None) -> _ProposalSet:
+    return _ProposalSet(proposals=[_PatchProposal(**p) for p in (items or _SAMPLE_PROPOSALS)])
+
+
+def _llm_ok(items: list[dict] | None = None) -> dict:
+    return {"result": _proposal_set(items), "cost": 0.001, "model_name": "test"}
+
+
+def test_llm_session_run_returns_approved_patch_on_selection() -> None:
+    report = {"findings": [{"finding_id": "F-1", "summary": "Ambiguous refund window"}]}
+    with patch("pdd.llm_invoke.llm_invoke", return_value=_llm_ok()), \
+         patch("click.prompt", return_value="1"), \
+         patch("click.echo"):
+        session = LlmInteractiveSession()
+        session.seed(report)
+        session.run()
+
+    patches = session.approved_patches()
+    assert len(patches) == 1
+    assert patches[0].kind == "vocab_definition"
+    assert patches[0].finding_id == "F-1"
+    assert patches[0].target == Path("prompts/refund.prompt")
+
+
+def test_llm_session_run_approves_multiple_patches() -> None:
+    report = {"findings": [{"finding_id": "F-1", "summary": "test"}]}
+    with patch("pdd.llm_invoke.llm_invoke", return_value=_llm_ok()), \
+         patch("click.prompt", return_value="1 2"), \
+         patch("click.echo"):
+        session = LlmInteractiveSession()
+        session.seed(report)
+        session.run()
+
+    patches = session.approved_patches()
+    assert len(patches) == 2
+    assert patches[0].kind == "vocab_definition"
+    assert patches[1].kind == "contract_rule"
+
+
+def test_llm_session_run_skips_finding_on_s_input() -> None:
+    report = {"findings": [{"finding_id": "F-1", "summary": "test"}]}
+    with patch("pdd.llm_invoke.llm_invoke", return_value=_llm_ok()), \
+         patch("click.prompt", return_value="s"), \
+         patch("click.echo"):
+        session = LlmInteractiveSession()
+        session.seed(report)
+        session.run()
+
+    assert session.approved_patches() == []
+
+
+def test_llm_session_run_handles_multiple_findings() -> None:
+    report = {"findings": [
+        {"finding_id": "F-1", "summary": "first"},
+        {"finding_id": "F-2", "summary": "second"},
+    ]}
+    with patch("pdd.llm_invoke.llm_invoke", return_value=_llm_ok([_SAMPLE_PROPOSALS[0]])), \
+         patch("click.prompt", return_value="1"), \
+         patch("click.echo"):
+        session = LlmInteractiveSession()
+        session.seed(report)
+        session.run()
+
+    patches = session.approved_patches()
+    assert len(patches) == 2
+    assert patches[0].finding_id == "F-1"
+    assert patches[1].finding_id == "F-2"
+
+
+def test_llm_session_run_handles_llm_error_gracefully() -> None:
+    report = {"findings": [{"finding_id": "F-1", "summary": "test"}]}
+    with patch("pdd.llm_invoke.llm_invoke", side_effect=RuntimeError("API error")), \
+         patch("click.echo"):
+        session = LlmInteractiveSession()
+        session.seed(report)
+        session.run()
+
+    assert session.approved_patches() == []
+
+
+def test_llm_session_run_resets_patches_on_each_run() -> None:
+    report = {"findings": [{"finding_id": "F-1", "summary": "test"}]}
+    with patch("pdd.llm_invoke.llm_invoke", return_value=_llm_ok([_SAMPLE_PROPOSALS[0]])), \
+         patch("click.prompt", return_value="1"), \
+         patch("click.echo"):
+        session = LlmInteractiveSession()
+        session.seed(report)
+        session.run()
+    assert len(session.approved_patches()) == 1
+
+    # Second run with LLM error — patches reset to empty
+    with patch("pdd.llm_invoke.llm_invoke", side_effect=RuntimeError("fail")), \
+         patch("click.echo"):
+        session.run()
+    assert session.approved_patches() == []
+
+
+def test_llm_session_returns_deep_copies() -> None:
+    report = {"findings": [{"finding_id": "F-1", "summary": "test"}]}
+    with patch("pdd.llm_invoke.llm_invoke", return_value=_llm_ok([_SAMPLE_PROPOSALS[0]])), \
+         patch("click.prompt", return_value="1"), \
+         patch("click.echo"):
+        session = LlmInteractiveSession()
+        session.seed(report)
+        session.run()
+
+    first = session.approved_patches()
+    first[0].anchor["mutated"] = True
+    second = session.approved_patches()
+    assert "mutated" not in second[0].anchor
+
+
+# --- make_session ---
+
+def test_make_session_returns_pi_when_available() -> None:
+    with patch("pdd.checkup_interactive_session._pi_available", return_value=True):
+        session = make_session()
+    assert isinstance(session, PiInteractiveSession)
+
+
+def test_make_session_returns_llm_when_pi_unavailable() -> None:
+    with patch("pdd.checkup_interactive_session._pi_available", return_value=False):
+        session = make_session()
+    assert isinstance(session, LlmInteractiveSession)
