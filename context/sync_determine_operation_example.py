@@ -1,202 +1,95 @@
 """
-Example demonstrating PDD state analysis and deterministic operation selection
-using the `pdd.sync_determine_operation` module.
+Example demonstrating how to resolve file paths and determine the next PDD 
+sync operation based on the current disk state and metadata.
 
-This script simulates different lifecycle stages of a PDD unit (from fresh
-creation to stale tests and coverage gaps) to show how the decision-making
-engine operates.
+This example is non-interactive and runs completely to completion.
 """
 
-import json
 import os
 import sys
-import shutil
+import json
 from pathlib import Path
 
-# Import the core decision-making utilities from the PDD module
+# Add the workspace root to sys.path for importing the pdd package
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from pdd.sync_determine_operation import (
     get_pdd_file_paths,
     sync_determine_operation,
-    Fingerprint,
-    RunReport,
     SyncDecision
 )
 
 
-def setup_mock_project() -> tuple[Path, Path]:
+def run_sync_analysis_example() -> None: 
     """
-    Sets up a temporary local PDD project structure in the ./output folder.
+    Demonstrates file path resolution and sync decision-making for a PDD unit.
     
-    Returns:
-        A tuple of (prompts_dir, meta_dir) paths.
+    Creates a mock environment under the './output' directory to simulate 
+    a new prompt file requiring code generation.
     """
-    # Define and create output directories
-    output_root = Path("./output")
-    prompts_dir = output_root / "prompts"
-    pdd_dir = Path.cwd() / ".pdd"
-    meta_dir = pdd_dir / "meta"
-
+    # Define a clean output space
+    output_dir = Path("./output")
+    prompts_dir = output_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
-    meta_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Create a mock prompt file
-    prompt_file = prompts_dir / "calculator_Python.prompt"
+    # 1. Setup a Mock PDD Unit (Calculator in Python)
+    basename = "calculator"
+    language = "Python"
+    target_coverage = 90.0  # target unit test coverage percentage (0.0 to 100.0)
+
+    # Write a mock prompt file to initiate the workflow
+    prompt_file = prompts_dir / f"{basename}_{language}.prompt"
     prompt_file.write_text(
-        "Generate a simple Calculator class with add and subtract methods.\n"
-        "Ensure all inputs are validated.",
+        "Generate a simple Calculator class with add and subtract methods.", 
         encoding="utf-8"
     )
 
-    # 2. Create a basic .pddrc configuration to help with path routing
-    pddrc_file = Path.cwd() / ".pddrc"
-    pddrc_config = {
-        "contexts": {
-            "default": {
-                "defaults": {
-                    "prompts_dir": "output/prompts",
-                    "generate_output_path": "output/src/",
-                    "test_output_path": "output/tests/"
-                }
-            }
-        }
-    }
-    pddrc_file.write_text(json.dumps(pddrc_config, indent=2), encoding="utf-8")
+    print(f"--- 1. Resolved PDD File Artifact Paths ---")
+    # Resolve the expected locations for code, tests, and examples based on conventions
+    # Inputs:
+    #   - basename (str): The unique module identifier
+    #   - language (str): Target language of the project
+    #   - prompts_dir (str): Relative path to prompts source folder
+    # Outputs:
+    #   - Dict[str, Path]: Maps artifact keys ('prompt', 'code', 'test', 'example') to Path objects
+    paths = get_pdd_file_paths(
+        basename=basename,
+        language=language,
+        prompts_dir=str(prompts_dir)
+    )
 
-    return prompts_dir, meta_dir
+    for artifact, path in paths.items():
+        # Handle 'test_files' list separately from single Path structures
+        path_str = ", ".join(str(p) for p in path) if isinstance(path, list) else str(path)
+        print(f"  • {artifact:<10} -> {path_str}")
 
+    print(f"\n--- 2. Determining Initial Sync Operation ---")
+    # Execute the core deterministic decision logic
+    # Inputs:
+    #   - basename (str): PDD unit base name
+    #   - language (str): Target language
+    #   - target_coverage (float): Target test coverage
+    #   - log_mode (bool): If True, bypass locks entirely for read-only analysis
+    #   - prompts_dir (str): Prompts root directory
+    # Outputs:
+    #   - SyncDecision (dataclass): Contains next operation, reasoning, and estimated costs
+    decision: SyncDecision = sync_determine_operation(
+        basename=basename,
+        language=language,
+        target_coverage=target_coverage,
+        prompts_dir=str(prompts_dir),
+        log_mode=True  # Bypasses local lock-file generation for clean dry-run behavior
+    )
 
-def cleanup_mock_project(prompts_dir: Path, meta_dir: Path) -> None:
-    """Cleans up the mocked configuration files and directories."""
-    # Clean up generated output folder
-    if Path("./output").exists():
-        shutil.rmtree("./output")
-        
-    # Clean up local .pdd metadata
-    pdd_dir = Path.cwd() / ".pdd"
-    if pdd_dir.exists():
-        shutil.rmtree(pdd_dir)
-
-    # Clean up local .pddrc configuration
-    pddrc_file = Path.cwd() / ".pddrc"
-    if pddrc_file.exists():
-        pddrc_file.unlink()
-
-
-def print_decision(scenario: str, decision: SyncDecision) -> None:
-    """Pretty prints the SyncDecision output."""
-    print(f"\n=== Scenario: {scenario} ===")
-    print(f"Recommended Operation : {decision.operation.upper()}")
-    print(f"Reason                : {decision.reason}")
-    print(f"Confidence (0.0-1.0)  : {decision.confidence:.2f}")
-    print(f"Estimated Cost (USD)  : ${decision.estimated_cost:.4f}")
+    # Display decision details
+    print(f"  • Recommended Operation : {decision.operation.upper()}")
+    print(f"  • Decision Rationale    : {decision.reason}")
+    print(f"  • Estimated LLM Cost    : ${decision.estimated_cost:.2f} (USD)")
+    print(f"  • Confidence Level      : {decision.confidence * 100:.1f}%")
+    
     if decision.details:
-        print(f"Details               : {json.dumps(decision.details, indent=2)}")
-
-
-def main() -> None:
-    # Ensure standard PDD_PATH setup is respected. 
-    # (The environment is pre-configured, but we derive the mock directories relative to CWD)
-    prompts_dir, meta_dir = setup_mock_project()
-
-    basename = "calculator"
-    language = "Python"
-    target_coverage = 80.0  # target coverage percentage
-
-    print(f"Starting sync decision example for module '{basename}' [{language}]")
-    print(f"Target Test Coverage: {target_coverage}%")
-
-    # =================Scenario 1: New Module (Untracked)=================
-    # In this scenario, a prompt file exists, but there are no code, tests, 
-    # examples, or metadata fingerprints yet.
-    decision_new = sync_determine_operation(
-        basename=basename,
-        language=language,
-        target_coverage=target_coverage,
-        prompts_dir=str(prompts_dir),
-        log_mode=True  # Bypasses system-level file-locking for read-only analysis
-    )
-    print_decision("New Module (Untracked Prompt)", decision_new)
-
-
-    # =================Scenario 2: Code Exists but Stale Run Report=================
-    # Resolve the expected file paths for our unit so we can mock its outputs
-    paths = get_pdd_file_paths(basename, language, prompts_dir=str(prompts_dir))
-    
-    # Ensure parent folders exist before writing files
-    paths["code"].parent.mkdir(parents=True, exist_ok=True)
-    paths["example"].parent.mkdir(parents=True, exist_ok=True)
-    paths["test"].parent.mkdir(parents=True, exist_ok=True)
-
-    # Write dummy implementations representing a completed cycle
-    paths["code"].write_text("class Calculator:\n    def add(self, a, b): return a + b", encoding="utf-8")
-    paths["example"].write_text("from output.src.calculator import Calculator\nprint(Calculator().add(1, 2))", encoding="utf-8")
-    paths["test"].write_text("from output.src.calculator import Calculator\ndef test_add(): assert Calculator().add(1, 2) == 3", encoding="utf-8")
-
-    # Create a Fingerprint detailing successful code generation
-    fingerprint_data = {
-        "pdd_version": "1.0.0",
-        "timestamp": "2023-10-27T10:00:00Z",
-        "command": "generate",
-        "prompt_hash": "mock_prompt_sha256_hash",
-        "code_hash": "mock_code_sha256_hash",
-        "example_hash": "mock_example_sha256_hash",
-        "test_hash": "mock_test_sha256_hash"
-    }
-    
-    fp_file = meta_dir / f"calculator_python.json"
-    fp_file.write_text(json.dumps(fingerprint_data, indent=2), encoding="utf-8")
-
-    # Create a RunReport indicating low test coverage (e.g. 50% vs target 80%)
-    run_report_data = {
-        "timestamp": "2023-10-27T10:05:00Z",
-        "exit_code": 0,
-        "tests_passed": 1,
-        "tests_failed": 0,
-        "coverage": 50.0,  # Coverage gap
-        "test_hash": "mock_test_sha256_hash"
-    }
-    
-    rr_file = meta_dir / f"calculator_python_run.json"
-    rr_file.write_text(json.dumps(run_report_data, indent=2), encoding="utf-8")
-
-    # Re-evaluate. Because tests pass but coverage (50%) is below the target (80%),
-    # the decision engine should request test extension.
-    decision_low_coverage = sync_determine_operation(
-        basename=basename,
-        language=language,
-        target_coverage=target_coverage,
-        prompts_dir=str(prompts_dir),
-        log_mode=True
-    )
-    print_decision("Low Coverage (Targeting Test Extension)", decision_low_coverage)
-
-
-    # =================Scenario 3: Runtime Crashes in Example=================
-    # Simulating a failing runtime execution context (non-zero exit code)
-    run_report_failed = {
-        "timestamp": "2023-10-27T10:10:00Z",
-        "exit_code": 1,  # Non-zero exit code (Crash)
-        "tests_passed": 0,
-        "tests_failed": 0,
-        "coverage": 0.0,
-        "test_hash": "mock_test_sha256_hash"
-    }
-    rr_file.write_text(json.dumps(run_report_failed, indent=2), encoding="utf-8")
-
-    decision_crash = sync_determine_operation(
-        basename=basename,
-        language=language,
-        target_coverage=target_coverage,
-        prompts_dir=str(prompts_dir),
-        log_mode=True
-    )
-    print_decision("Runtime Crash Recovery Mode", decision_crash)
-
-
-    # Clean up mock directories to leave workspace pristine
-    cleanup_mock_project(prompts_dir, meta_dir)
-    print("\nWorkspace cleaned successfully. Example completed.")
+        print(f"  • Decision Details      : {json.dumps(decision.details)}")
 
 
 if __name__ == "__main__":
-    main()
+    run_sync_analysis_example()
