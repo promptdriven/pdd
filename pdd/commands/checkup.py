@@ -556,9 +556,13 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     if apply and not interactive:
         raise click.UsageError("--apply requires --interactive.")
 
-    if interactive and not _interactive_tty_available():
+    # --auto runs the agentic session with no per-finding prompts, so it is safe
+    # without a terminal (CI / scripted demo replay). Only a genuinely
+    # prompt-driven interactive session requires a real TTY.
+    if interactive and not auto_mode and not _interactive_tty_available():
         raise click.UsageError(
-            "--interactive requires a TTY (stdin and stdout must be a terminal)."
+            "--interactive requires a TTY (stdin and stdout must be a terminal). "
+            "Use --auto for a non-interactive agentic session."
         )
 
     if interactive and as_json:
