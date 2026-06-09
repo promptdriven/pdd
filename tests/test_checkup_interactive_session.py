@@ -1,5 +1,6 @@
+import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -87,6 +88,13 @@ def test_approved_patch_coerces_anchor_to_dict() -> None:
 
 # --- _pi_available ---
 
+def _npm_ok() -> MagicMock:
+    """Return a mock subprocess.CompletedProcess indicating npm probe success."""
+    m = MagicMock()
+    m.returncode = 0
+    return m
+
+
 def test_pi_available_false_when_node_missing() -> None:
     with patch("shutil.which", return_value=None):
         assert not _pi_available()
@@ -98,10 +106,18 @@ def test_pi_available_false_when_node_version_too_low() -> None:
         assert not _pi_available()
 
 
-def test_pi_available_true_when_node_22_plus() -> None:
+def test_pi_available_true_when_node_22_plus_and_package_installed() -> None:
     with patch("shutil.which", return_value="/usr/bin/node"), \
-         patch("subprocess.check_output", return_value="v22.19.0"):
+         patch("subprocess.check_output", return_value="v22.19.0"), \
+         patch("subprocess.run", return_value=_npm_ok()):
         assert _pi_available()
+
+
+def test_pi_available_false_when_npm_package_missing() -> None:
+    with patch("shutil.which", return_value="/usr/bin/node"), \
+         patch("subprocess.check_output", return_value="v22.19.0"), \
+         patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, "node")):
+        assert not _pi_available()
 
 
 def test_pi_available_false_on_subprocess_error() -> None:

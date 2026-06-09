@@ -17,15 +17,29 @@ PromptSourceSetReport = Any
 NON_APPROVING_PATCH_KINDS = frozenset({"skip", "custom_no_patch", "no_patch"})
 
 _PI_MIN_NODE_MAJOR = 22
-_PI_BRIDGE = Path(__file__).parent / "_pi_repair_bridge.js"
+_PI_PACKAGE = "@earendil-works/pi-coding-agent"
+# Bridge uses ESM imports; must be .mjs so Node treats it as an ES module.
+_PI_BRIDGE = Path(__file__).parent / "_pi_repair_bridge.mjs"
 
 
 def _pi_available() -> bool:
-    if shutil.which("node") is None:
+    node = shutil.which("node")
+    if node is None:
         return False
     try:
-        out = subprocess.check_output(["node", "--version"], text=True).strip()
-        return int(out.lstrip("v").split(".")[0]) >= _PI_MIN_NODE_MAJOR
+        ver = subprocess.check_output([node, "--version"], text=True).strip()
+        if int(ver.lstrip("v").split(".")[0]) < _PI_MIN_NODE_MAJOR:
+            return False
+        # Verify the npm package is installed before claiming availability.
+        subprocess.run(
+            [node, "--input-type=module", "--eval",
+             f"import('{_PI_PACKAGE}').then(()=>process.exit(0),()=>process.exit(1))"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+        )
+        return True
     except Exception:
         return False
 
@@ -91,17 +105,19 @@ class PiInteractiveSession:
         self._report = report
 
     def run(self) -> None:
+        # Resolve the absolute path at call time to avoid PATH-ordering races.
+        node = shutil.which("node") or "node"
         with tempfile.TemporaryDirectory() as tmp:
             ctx_path = Path(tmp) / "context.json"
             out_path = Path(tmp) / "output.json"
-            ctx_path.write_text(json.dumps(self._report or {}))
+            ctx_path.write_text(json.dumps(self._report or {}), encoding="utf-8")
             subprocess.run(
-                ["node", str(self._bridge), str(ctx_path), str(out_path)],
+                [node, str(self._bridge), str(ctx_path), str(out_path)],
                 check=True,
             )
-            result = json.loads(out_path.read_text())
+            result = json.loads(out_path.read_text(encoding="utf-8"))
         self._patches = [
-            ApprovedPatch(**p)
+            ApprovedPatch(**{k: v for k, v in p.items() if k != "finding_id"})
             for p in result.get("approved_patches", [])
             if p.get("kind") not in NON_APPROVING_PATCH_KINDS
         ]
