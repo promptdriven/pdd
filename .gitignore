@@ -254,6 +254,7 @@ yarn.lock
 !.pdd/meta/checkup_review_loop_python.json
 !.pdd/meta/commands_checkup_python.json
 !.pdd/meta/commands_prompt_python.json
+!.pdd/meta/construct_paths_python.json
 !.pdd/meta/prompt_lint_python.json
 !.pdd/meta/core_cloud_python.json
 !.pdd/meta/fix_code_loop_python.json
