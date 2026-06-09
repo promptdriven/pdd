@@ -3500,9 +3500,9 @@ def _wire_to_parent_init(output_path: str, exports: list[str], verbose: bool = F
 def code_generator_main(
     ctx: click.Context,
     prompt_file: str,
-    output: Optional[str],
-    original_prompt_file_path: Optional[str],
-    force_incremental_flag: bool,
+    output: Optional[str] = None,
+    original_prompt_file_path: Optional[str] = None,
+    force_incremental_flag: bool = False,
     env_vars: Optional[Dict[str, str]] = None,
     unit_test_file: Optional[str] = None,
     exclude_tests: bool = False,
