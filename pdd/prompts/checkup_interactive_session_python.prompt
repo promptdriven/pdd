@@ -1,0 +1,94 @@
+<pdd-reason>Defines the engine-agnostic interactive prompt-repair session protocol, Pi-backed implementation, and fake backend.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "_pi_available", "signature": "() -> bool", "returns": "bool"},
+      {"name": "ApprovedPatch", "signature": "(kind: str, target: Path, anchor: dict, replacement: str)", "returns": "ApprovedPatch"},
+      {"name": "RepairOption", "signature": "(label: str, preview: str, patch: ApprovedPatch)", "returns": "RepairOption"},
+      {"name": "InteractiveRepairSession", "signature": "(seed(report: PromptSourceSetReport) -> None, run() -> None, approved_patches() -> list[ApprovedPatch])", "returns": "Protocol"},
+      {"name": "PiInteractiveSession", "signature": "(bridge: Path | None = None)", "returns": "PiInteractiveSession"},
+      {"name": "FakeInteractiveSession", "signature": "(patches: Sequence[ApprovedPatch] | None = None)", "returns": "FakeInteractiveSession"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Write `pdd/checkup_interactive_session.py`.
+%
+% This module defines the pure, engine-agnostic session contract for interactive
+% checkup prompt repair, a Pi-backed concrete implementation, and a fake for tests.
+% Pi drives the entire interactive workflow; Python only seeds the report, starts
+% the Pi bridge, and reads approved patches. No Python TTY menu or QA code.
+
+<include>context/python_preamble.prompt</include>
+
+% Public API
+- `_pi_available() -> bool`:
+  - Returns True when `node` is on PATH and its major version >= 22.
+- `ApprovedPatch` dataclass:
+  - `kind: str`
+  - `target: pathlib.Path`
+  - `anchor: dict`
+  - `replacement: str`
+- `RepairOption` dataclass:
+  - `label: str`
+  - `preview: str`
+  - `patch: ApprovedPatch`
+- `InteractiveRepairSession` protocol:
+  - `seed(report: PromptSourceSetReport) -> None`
+  - `run() -> None`
+  - `approved_patches() -> list[ApprovedPatch]`
+- `PiInteractiveSession` concrete Pi-backed backend:
+  - Constructor: `__init__(bridge: Path | None = None)`
+  - `is_available() -> bool` (staticmethod, delegates to `_pi_available`)
+  - Implements `InteractiveRepairSession` protocol
+  - `run()` invokes `node <bridge> <context.json> <output.json>` via subprocess
+- `FakeInteractiveSession` concrete in-memory backend for tests.
+
+% Type guidance
+- The repository may not yet provide a concrete `PromptSourceSetReport` type.
+- Use `from __future__ import annotations`.
+- Define `PromptSourceSetReport = Any` locally unless a real importable type is added later.
+
+% Requirements
+- Use only the standard library (json, shutil, subprocess, tempfile, pathlib, copy, dataclasses, typing).
+- `ApprovedPatch` and `RepairOption` must be dataclasses with type annotations.
+- `InteractiveRepairSession` must be a structural `typing.Protocol` with three methods: `seed`, `run`, `approved_patches`.
+- `PiInteractiveSession.run()` must write the report to a temp context.json, invoke the bridge via subprocess, and parse approved_patches from the output.json.
+- `PiInteractiveSession.run()` must filter out non-approving patch kinds (skip, custom_no_patch, no_patch).
+- `PiInteractiveSession.approved_patches()` must return a deep copy of collected patches.
+- `FakeInteractiveSession` stores constructor-supplied patches, sets `ran = True` in `run()`, and returns deep copies from `approved_patches()`.
+- The module must not write files outside of the subprocess bridge call, apply patches, prompt on a TTY directly, or call provider APIs.
+
+<contract_rules>
+R1 - Pi delegates the full workflow
+`PiInteractiveSession.run()` MUST delegate the interactive session entirely to the
+Node.js bridge. Python MUST NOT render menus, validate choices, or generate proposals.
+
+R2 - Typed approvals only
+`approved_patches()` MUST return only `ApprovedPatch` objects with non-approving
+kinds excluded (skip, custom_no_patch, no_patch).
+
+R3 - Write-free session layer
+The session layer MUST NOT write files, apply patches, or persist artifacts
+outside the temporary directory used by the subprocess bridge.
+
+R4 - Node version guard
+`_pi_available()` MUST return False when `node` is absent from PATH or its major
+version is less than 22.
+</contract_rules>
+
+<capabilities>
+- MAY keep in-memory session state.
+- MAY write a temporary context.json and read a temporary output.json via subprocess.
+- MUST NOT write session artifacts to the project directory.
+- MUST NOT modify prompt files.
+- MUST NOT apply patches.
+- MUST NOT call external providers directly (all LLM calls go through Pi).
+</capabilities>
+
+% Deliverables
+- Code: `pdd/checkup_interactive_session.py`
