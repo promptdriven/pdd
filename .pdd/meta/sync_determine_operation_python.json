@@ -3,11 +3,11 @@
   "timestamp": "2026-06-08T23:21:24.001817+00:00",
   "command": "example",
   "prompt_hash": "349fbad7704e9741593c04e16a46425aebe127f4e05885f841eec3dce83e2ab8",
-  "code_hash": "2b1155d458b645b00a44aa2d75f9da79b9db9545ddb801bd9bd6ae4660d53dee",
+  "code_hash": "6193b657f1e38a80990811cc3710af37abe21d5156516000ece3417ffd8c40c4",
   "example_hash": "c0ffbbcde85d7d1463606e5cffc20855139fab02b9b178e75d072f5677e8552f",
-  "test_hash": "f35cce79d6c7b64397d6b950c2b081f84f9fbd26c4201d497b7b127740c22d61",
+  "test_hash": "3a30ef0bc3d1efb2f92663ac832438dfb475a597f650448146f16d0735f92cab",
   "test_files": {
-    "test_sync_determine_operation.py": "f35cce79d6c7b64397d6b950c2b081f84f9fbd26c4201d497b7b127740c22d61"
+    "test_sync_determine_operation.py": "3a30ef0bc3d1efb2f92663ac832438dfb475a597f650448146f16d0735f92cab"
   },
   "include_deps": {
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
