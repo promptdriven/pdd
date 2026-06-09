@@ -879,18 +879,38 @@ def _generate_user_story_artifacts_for_change(
 
     stories_dir = worktree_path / "user_stories"
     prompts_dir = _common_prompt_root(prompt_files, worktree_path)
-    success, message, cost, model, story_file, linked_prompts = generate_user_story(
-        prompt_files=[str(p) for p in prompt_files],
-        issue=issue_url,
-        stories_dir=str(stories_dir),
-        prompts_dir=str(prompts_dir) if prompts_dir else None,
-        strength=strength,
-        temperature=temperature,
-        time=time_budget,
-        verbose=verbose,
-    )
+    fallback_linked = [_format_rel(p, prompts_dir or worktree_path) for p in prompt_files]
+    try:
+        success, message, cost, model, story_file, linked_prompts = generate_user_story(
+            prompt_files=[str(p) for p in prompt_files],
+            issue=issue_url,
+            stories_dir=str(stories_dir),
+            prompts_dir=str(prompts_dir) if prompts_dir else None,
+            strength=strength,
+            temperature=temperature,
+            time=time_budget,
+            verbose=verbose,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        # Story generation is best-effort: a failure in issue resolution,
+        # provider code, or file I/O must never abort the change workflow after
+        # the pre-PR gate. Surface it as a non-blocking PR-body warning instead.
+        if not quiet:
+            console.print(
+                f"[yellow]User story generation skipped: {exc}[/yellow]"
+            )
+        return (
+            [],
+            (
+                "### User Stories\n"
+                f"- Story generation was attempted for "
+                f"`{', '.join(fallback_linked)}` but skipped: {exc}"
+            ),
+            0.0,
+            "",
+        )
 
-    linked = linked_prompts or [_format_rel(p, prompts_dir or worktree_path) for p in prompt_files]
+    linked = linked_prompts or fallback_linked
     if not success:
         if not quiet:
             console.print(f"[yellow]User story generation skipped: {message}[/yellow]")
