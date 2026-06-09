@@ -164,7 +164,7 @@ sample. It covers:
 
 ## Parent Issue Update
 
-**Required external action before closing #1434:** Update parent issue #1423 with the following text:
+Posted to [#1423](https://github.com/promptdriven/pdd/issues/1423#issuecomment-4662263598) on 2026-06-09:
 
 > **Block 0 decision recorded (#1434):** Use a Hybrid backend for interactive prompt repair sessions.
 >
