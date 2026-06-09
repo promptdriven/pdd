@@ -33,7 +33,7 @@ This unblocks #1423 implementation while keeping destructive control in Python.
 | Question | Result |
 |----------|--------|
 | Session state | **Pass** — persist finding IDs, proposals, user questions, answers, and choices in structured session state. |
-| Tool control | **Pass (with explicit allowlist)** — Pi runs with `tools: ["read", "grep", "propose_repair_options"]` only; `write`, `edit`, and `bash` are not enabled. |
+| Tool control | **Pass (with explicit allowlist)** — Pi prototype ran with `tools: ["read", "grep", "propose_repair_options"]` only; `write`, `edit`, and `bash` defaults disabled. Evidence: `docs/checkup_interactive_session_pi_sample.jsonl` (`session_created` event lists allowlist and `disabled_defaults`). |
 | UX control | **Pass** — Python renders numbered `[1]` through `[4]` menus, validates choices, and gates `--apply`. |
 | Packaging | **Conditional** — Pi requires Node `>=22.19.0` and the `@earendil-works/pi-coding-agent` npm package; Python TTY has no new runtime dependency. |
 
@@ -133,28 +133,63 @@ Researched package at time of spike:
 Guard pattern (pseudocode for #1435):
 
 ```python
-import shutil, subprocess
+import shutil
+import subprocess
+
+PI_MIN_NODE = (22, 19, 0)
+
+
+def _parse_node_version(raw: str) -> tuple[int, int, int] | None:
+    raw = raw.strip().lstrip("v")
+    parts = raw.split(".")
+    if len(parts) < 3:
+        return None
+    try:
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError:
+        return None
+
 
 def _pi_available() -> bool:
     if shutil.which("node") is None:
         return False
     try:
-        out = subprocess.check_output(["node", "--version"], text=True).strip()
-        major = int(out.lstrip("v").split(".")[0])
-        return major >= 22
+        out = subprocess.check_output(["node", "--version"], text=True)
+        version = _parse_node_version(out)
+        return version is not None and version >= PI_MIN_NODE
     except Exception:
         return False
 ```
 
+Boundary cases (full semver, not major-only):
+
+| `node --version` | `_pi_available()` |
+|------------------|-------------------|
+| `v22.18.0` | `False` |
+| `v22.19.0` | `True` |
+
 CI and headless runs must exercise the Python TTY path when `_pi_available()` returns `False`.
 
-## Sample Session Artifact
+## Sample Session Artifacts
 
-See `docs/checkup_interactive_session_tty_sample.json` for a sanitized **Python
-TTY** session artifact that demonstrates the Hybrid decision. The artifact uses
-`backend: "python_tty"` and `decision: "hybrid"` because Python owns menus,
-choice validation, and `--apply` gating in all cases; Pi is not invoked in this
-sample. It covers:
+Two sanitized artifacts support the Hybrid decision. Python owns menus, choice
+validation, and `--apply` gating in all cases; Pi is limited to QA and proposal
+generation when exercised.
+
+### Pi prototype (`docs/checkup_interactive_session_pi_sample.jsonl`)
+
+JSONL reproduction record from `createAgentSession` with the restricted
+allowlist (spike task 1). The `session_created` event documents
+`tools: ["read", "grep", "propose_repair_options"]` and
+`disabled_defaults: ["write", "edit", "bash"]`. Three QA turns retain finding
+F-001 context; a `propose_repair_options` tool call returns P-001 through P-004
+with P-003 recommended. `session_state_retained` confirms menus and apply
+gating stay Python-owned.
+
+### Python TTY (`docs/checkup_interactive_session_tty_sample.json`)
+
+End-to-end Hybrid sample with `backend: "python_tty"` and `decision: "hybrid"`.
+Covers:
 
 1. Seeded `pdd.prompt_source_set_report.v1` finding.
 2. Three retained-context QA turns: "why?", "what check failed?", and "tradeoff?".
