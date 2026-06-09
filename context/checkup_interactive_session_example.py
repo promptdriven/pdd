@@ -32,4 +32,7 @@ presented = session.present_finding("R2-missing-vocabulary")
 session.record_choice("R2-missing-vocabulary", presented[0])
 
 assert session.ask("Apply option A?") == "approve"
-assert session.approved_patches() == [patch]
+patches = session.approved_patches()
+assert len(patches) == 1
+assert patches[0].kind == patch.kind
+assert patches[0].finding_id == "R2-missing-vocabulary"

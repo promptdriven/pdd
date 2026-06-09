@@ -331,3 +331,51 @@ def test_fake_session_satisfies_interactive_repair_session_protocol() -> None:
     assert callable(session.ask)
     assert callable(session.record_choice)
     assert callable(session.approved_patches)
+
+
+# ---------------------------------------------------------------------------
+# #1434 Hybrid scope: protocol layer only (no Pi/TTY backends in #1435)
+# ---------------------------------------------------------------------------
+
+
+def test_module_is_stdlib_only_contract() -> None:
+    """#1435 protocol must not import click, pydantic, llm_invoke, or Pi bridge code."""
+    import ast
+    from pathlib import Path
+
+    source = Path("pdd/checkup_interactive_session.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    imports = {
+        (node.module or "")
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    forbidden = {"click", "pydantic", "pdd.llm_invoke", "pdd.llm_interactive_session"}
+    assert not imports & forbidden
+    assert "_pi_repair_bridge" not in source
+    assert "llm_invoke" not in source
+
+
+def test_docs_hybrid_python_owns_menus_and_apply() -> None:
+    """Docs must align with #1434 Hybrid: Python owns menus/apply, not Pi."""
+    from pathlib import Path
+
+    doc = Path("docs/checkup_interactive_session.md").read_text(encoding="utf-8")
+    assert "**Hybrid**" in doc or "Hybrid" in doc
+    assert "Python always owns" in doc
+    assert "numbered menus" in doc
+    assert "`--apply` gating" in doc
+    assert "do not delegate menus" in doc
+
+
+def test_prompt_forbids_tty_pi_and_provider_calls() -> None:
+    """Prompt contract must forbid TTY/Pi/provider backends in this module."""
+    from pathlib import Path
+
+    prompt = Path("pdd/prompts/checkup_interactive_session_python.prompt").read_text(
+        encoding="utf-8"
+    )
+    assert "Use only the standard library." in prompt
+    assert "MUST NOT prompt on TTY or Pi backends in this module." in prompt
+    assert "MUST NOT call external providers." in prompt
+    assert "implement Pi/TTY backends" in prompt
