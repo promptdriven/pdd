@@ -445,6 +445,41 @@ def test_dynamic_markup_excluded_from_deterministic_total(runner, tmp_path, monk
     assert payload["total_tokens"] == 2
 
 
+def test_semantic_query_include_does_not_invoke_llm_extractor(
+    runner, tmp_path, monkeypatch, patched_tokens
+):
+    """no-LLM contract: a ``<include query="...">`` over an existing file must be
+    deferred — the unresolved-include scan must not run IncludeQueryExtractor (a
+    real model call) while merely auditing context usage."""
+    import pdd.include_query_extractor as iq
+
+    calls = []
+
+    class _ProbeExtractor:  # records any extraction attempt instead of calling a model
+        def __init__(self, *_a, **_k):
+            pass
+
+        def extract(self, *, file_path, query):
+            calls.append((str(file_path), query))
+            raise AssertionError("IncludeQueryExtractor must not run during context audit")
+
+    monkeypatch.setattr(iq, "IncludeQueryExtractor", _ProbeExtractor)
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "data.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        'Body\n<include query="summarize">context/data.py</include>\n', encoding="utf-8"
+    )
+
+    result = runner.invoke(context, [str(prompt), "--json"], obj={})
+    assert result.exit_code == 0, result.output
+    assert calls == [], "extractor was invoked; audit broke the no-LLM contract"
+    # The deferred query include is still surfaced (as a dynamic tag), not hidden.
+    warnings = json.loads(result.output)["warnings"]
+    assert any("query_include" in w and "deferred" in w for w in warnings)
+
+
 # --------------------------------------------------------------------------- #
 # Model default resolution is explicit about the environment (review #4).      #
 # --------------------------------------------------------------------------- #

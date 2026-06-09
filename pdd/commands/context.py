@@ -26,6 +26,7 @@ from ..path_resolution import get_default_resolver
 from ..preprocess import (
     _extract_code_spans,
     _intersects_any_span,
+    _parse_attrs,
     compute_user_intent_paths,
     process_backtick_includes,
     process_include_tags,
@@ -45,14 +46,48 @@ _GROUNDING_UNAVAILABLE_NOTE = "unavailable (requires cloud)"
 # payload (issue #789 review #3), so it is stripped before token counting and
 # surfaced as a warning instead. These match the same forms as
 # ``context_snapshot._DYNAMIC_TAG_PATTERNS`` but span the whole element.
+# A ``<include query="...">`` is an LLM-driven semantic extraction; pass-1
+# hydration defers it and the audit surfaces it as a deferred dynamic tag.
+_QUERY_INCLUDE_PATTERN = re.compile(
+    r"<include\b[^>]*\bquery\s*=[^>]*>.*?</include>|<include\b[^>]*\bquery\s*=[^>]*/>",
+    re.IGNORECASE | re.DOTALL,
+)
 _DYNAMIC_MARKUP_PATTERNS = (
     re.compile(r"<shell\b[^>]*>.*?</shell>|<shell\b[^>]*/>", re.IGNORECASE | re.DOTALL),
     re.compile(r"<web\b[^>]*>.*?</web>|<web\b[^>]*/>", re.IGNORECASE | re.DOTALL),
-    re.compile(
-        r"<include\b[^>]*\bquery\s*=[^>]*>.*?</include>|<include\b[^>]*\bquery\s*=[^>]*/>",
-        re.IGNORECASE | re.DOTALL,
-    ),
+    _QUERY_INCLUDE_PATTERN,
 )
+
+
+# Matches a whole ``<include ...>...</include>`` (or self-closing) element so its
+# attributes can be parsed; used only to decide whether a directive is a
+# semantic ``query=`` include that must be skipped (see below).
+_QUERY_INCLUDE_ELEMENT_RE = re.compile(
+    r"<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>"
+    r"|<include(?P<attrs_self>\s+[^>]*?)\s*/>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _strip_semantic_query_includes(text: str) -> str:
+    """Drop ``<include query="...">`` directives that would invoke the LLM.
+
+    ``preprocess``'s non-recursive include branch runs ``IncludeQueryExtractor``
+    (a real LLM call) for a ``query=`` include unless a deterministic ``select=``
+    is also present, in which case the selector is preferred and no model is
+    invoked. The deterministic audit must never trigger that extraction, so
+    query-only includes are removed before unresolved-include detection runs the
+    real include processors; they remain visible to users through the deferred
+    dynamic-tag warning. (PR #1387 review)
+    """
+
+    def _replace(match: "re.Match") -> str:
+        attrs = _parse_attrs(match.group("attrs") or match.group("attrs_self") or "")
+        if attrs.get("query") and not attrs.get("select"):
+            return ""
+        return match.group(0)
+
+    return _QUERY_INCLUDE_ELEMENT_RE.sub(_replace, text)
 
 
 class _SegmentRecorder:
@@ -214,6 +249,10 @@ def _unresolved_includes(raw: str) -> List[str]:
     expansion at generation time, so they are deferred, not missing.
     """
     _ = get_default_resolver()  # ensure resolver initialization errors surface here
+    # Query includes are deferred (LLM-driven); strip them so the deterministic
+    # include processors below never reach preprocess's semantic-extraction
+    # branch. They are reported via the deferred dynamic-tag warning instead.
+    raw = _strip_semantic_query_includes(raw)
     failed: List[str] = []
     user_intent_paths = compute_user_intent_paths(raw)
     prev_quiet = os.environ.get("PDD_QUIET")
