@@ -52,7 +52,7 @@ from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
 from pdd.pre_checkup_gate import run_pre_checkup_gate
-from pdd.user_story_tests import generate_user_story
+from pdd.user_story_tests import generate_user_story, _contract_path_for_story
 
 # Initialize console for rich output
 console = Console()
@@ -927,16 +927,30 @@ def _generate_user_story_artifacts_for_change(
 
     story_path = Path(story_file)
     story_rel = _format_rel(story_path, worktree_path)
+    files_to_stage = [story_rel]
+    # The two-file story model writes a sibling AI contract under contracts/;
+    # stage it too so the generated contract travels with the change PR rather
+    # than landing as an untracked local file.
+    contract_path = _contract_path_for_story(story_path)
+    contract_rel = None
+    if contract_path.exists():
+        contract_rel = _format_rel(contract_path, worktree_path)
+        files_to_stage.append(contract_rel)
     if not quiet:
         console.print(f"[green]Generated user story:[/green] {story_rel}")
+        if contract_rel:
+            console.print(f"[green]Generated story contract:[/green] {contract_rel}")
         console.print(f"[green]Linked prompts:[/green] {', '.join(linked)}")
+    summary = (
+        "### User Stories\n"
+        f"- `{story_rel}` — issue-derived story linked to: "
+        f"{', '.join(f'`{p}`' for p in linked)}"
+    )
+    if contract_rel:
+        summary += f"\n- `{contract_rel}` — generated machine-checkable contract"
     return (
-        [story_rel],
-        (
-            "### User Stories\n"
-            f"- `{story_rel}` — issue-derived story linked to: "
-            f"{', '.join(f'`{p}`' for p in linked)}"
-        ),
+        files_to_stage,
+        summary,
         cost,
         model,
     )
