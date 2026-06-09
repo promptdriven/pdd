@@ -190,12 +190,15 @@ def _actionable_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     Excludes severity='info' findings and those whose ``source_check`` requires
     external commands (gate, drift, snapshot) or whose ``code`` marks them as
     never prompt-fixable (missing_evidence, drift_readiness, gate_error).
+    Also excludes findings that require user clarification (#1438) — those must
+    go through the interactive repair path, not automated repair.
     """
     return [
         f for f in findings
         if f.get("severity") in ("error", "warn")
         and f.get("source_check") in _PROMPT_FIXABLE_CHECKS
         and f.get("code") not in _NON_FIXABLE_CODES
+        and not f.get("requires_clarification")
     ]
 
 
