@@ -167,7 +167,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     <include>pdd/python_env_detector.py</include>
 </env_detector>
 <pdd.architecture_sync>
-    <include select="def:example_validate_interface,def:example_validate_dependencies,def:example_parse_tags,def:example_generate_tags,def:example_check_existing_tags,def:example_inject_tags_workflow,def:example_get_entry,def:example_update_single_prompt,def:example_sync_all">context/architecture_sync_example.py</include>
+    <include select="def:run_example">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
 <pdd.auth_service>
     <include select="def:get_cached_jwt,def:verify_auth,def:get_refresh_token,def:get_jwt_cache_info,def:has_refresh_token,def:clear_jwt_cache">context/auth_service_example.py</include>
