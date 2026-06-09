@@ -448,9 +448,10 @@ def test_dynamic_markup_excluded_from_deterministic_total(runner, tmp_path, monk
 def test_semantic_query_include_does_not_invoke_llm_extractor(
     runner, tmp_path, monkeypatch, patched_tokens
 ):
-    """no-LLM contract: a ``<include query="...">`` over an existing file must be
-    deferred — the unresolved-include scan must not run IncludeQueryExtractor (a
-    real model call) while merely auditing context usage."""
+    """AC10 / no-LLM contract: a ``<include query="...">`` over an existing file
+    must be deferred — the unresolved-include scan must not run
+    IncludeQueryExtractor (a real model call) while merely auditing context
+    usage."""
     import pdd.include_query_extractor as iq
 
     calls = []

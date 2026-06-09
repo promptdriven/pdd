@@ -21,7 +21,8 @@ Regeneration path (needs a keyed env):
 - AC2: Breaks tokens down per source (prompt body, each include, grounding, ...).
 - AC3: Shows the largest token consumers first.
 - AC4: Supports JSON output for CI and dashboards.
-- AC5: Makes no LLM call for the deterministic portions of the audit.
+- AC5: Makes no LLM call for the deterministic portions of the audit — including
+  never running a `<include query="...">` semantic extraction, which is LLM-backed.
 - AC6: Surfaces deferred/nondeterministic tags with clear warnings.
 - AC7: Per-include attribution reflects what is actually hydrated — a targeted include
   (`lines=`, `select=`, `mode=`, `<include-many>`) is counted by its realized content,
@@ -83,6 +84,13 @@ than triggering a network call.
 9. Given include or include-many syntax inside a fenced/inline code example, when I run
    `pdd context <prompt>`, then it is treated as documentation, not expanded or reported
    unresolved; given a static optional missing include, then it is skipped silently.
+10. Given an `<include query="...">` over an existing file (a semantic, LLM-backed
+    extraction), when I run `pdd context <prompt>` — including `--json` and even with no
+    model credentials configured — then the audit completes deterministically without
+    invoking `IncludeQueryExtractor`, and the directive is surfaced as a deferred
+    dynamic tag rather than executed or counted as hydrated payload. When the include
+    also carries a deterministic `select=`, the audit may use the selector (which makes
+    no model call) instead of deferring.
 
 ## Oracle
 
@@ -93,7 +101,8 @@ These details matter for pass/fail:
   attribution table.
 - Rows are sorted by token count descending.
 - JSON contains exactly the documented keys; `threshold_exceeded` drives exit code 2.
-- No LLM call is made for the deterministic audit.
+- No LLM call is made for the deterministic audit — in particular, an
+  `<include query="...">` never triggers `IncludeQueryExtractor`.
 - Each unexpanded dynamic tag produces a warning.
 - Top-level include identity comes from the expansion path, not string containment.
 - Missing include warnings mirror preprocess code-span and optional semantics.
@@ -111,6 +120,8 @@ These details should not matter:
 - Reporting only an aggregate token total with no per-source attribution.
 - Dropping the per-source breakdown when rendering the `/context`-style box.
 - Making an LLM or network call during a deterministic audit.
+- Running `IncludeQueryExtractor` (semantic, LLM-backed extraction) for an
+  `<include query="...">` while merely auditing context usage.
 - Silently ignoring `<shell>`/`<web>` dynamic tags instead of warning.
 - Failing to exit non-zero when the budget threshold is exceeded.
 - Counting a whole include file when the include only selects part of it (a row whose
