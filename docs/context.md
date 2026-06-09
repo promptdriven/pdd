@@ -79,9 +79,33 @@ Rows are sorted by token count descending. Deferred dynamic-tag warnings appear 
 
 ### JSON output (`--json`)
 
-A single object with keys: `total_tokens`, `context_limit`, `percent_used`, `model`, `rows` (each `{source, tokens, percent}`, sorted by `tokens` descending), `warnings`, and `threshold_exceeded`.
+A single object with these top-level keys (stable for CI/agent callers): `total_tokens`, `context_limit`, `percent_used`, `model`, `rows` (sorted by `tokens` descending), `warnings`, and `threshold_exceeded`.
+
+Each row is:
+
+| Field | Type | Description |
+|---|---|---|
+| `source` | string | Segment label — an include path, `prompt_body`, `grounding`, or a deferred tag like `<shell>`. |
+| `tokens` | int | Tokens this segment contributes to the deterministic hydrated total. |
+| `percent` | float | The row's share of `total_tokens`. |
+| `status` | string | One of `resolved`, `unresolved`, `deferred`, `unavailable`, `body` (see below). |
+| `note` | string \| null | Optional human explanation (e.g. why a row is unresolved/deferred). |
+
+The `status` field lets agents and code determine a row's state **without parsing** the human-readable `note`/`warnings` strings:
+
+- `resolved` — an include whose realized content was hydrated and counted.
+- `unresolved` — a top-level include path that does not resolve to a readable file (0 tokens).
+- `deferred` — nondeterministic markup not expanded in the audit: `<shell>`, `<web>`, semantic `query=` includes, and `${VAR}`-driven `<include-many>` lists (0 tokens).
+- `unavailable` — a known segment that requires PDD Cloud (grounding; 0 tokens, no network call).
+- `body` — the prompt body (everything not attributed to an include).
 
 The JSON mode writes only that JSON object to stdout, with no onboarding banner, command summary, or debug footer.
+
+## Why a top-level command, and how `pdd connect` stays in sync
+
+`pdd context` is a **top-level** command rather than a subcommand or a flag of `generate`/`sync`. A context audit is a standalone, deterministic, no-LLM preflight: CI pipelines and agents must be able to run it on its own to budget-gate context-window cost *without* triggering generation, a sync run, or a cloud session that a grouped surface (e.g. `pdd generate context`) would imply. It is distinct from the global `--context` option (which selects extra context *for* generation, not an audit).
+
+The audit logic lives in a shared core, `pdd.context_audit` (`audit_prompt_file` / `audit_prompt_text` returning a structured `ContextAudit`). Both this CLI and the `pdd connect` server endpoint `POST /api/v1/prompts/context-audit` call that one core, so the scriptable CI surface and the interactive surface always return the same per-source facts — they cannot drift. The connect endpoint mirrors the `--json` shape (same rows, `status`, `warnings`, and `threshold_exceeded`) and preserves the existing `/api/v1/prompts/analyze` fields for compatibility.
 
 ## Attribution semantics
 

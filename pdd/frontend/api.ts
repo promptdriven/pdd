@@ -152,6 +152,40 @@ export interface PromptAnalyzeResponse {
   preprocessing_error: string | null;
 }
 
+// Context-audit types (PR #1387): per-source context-window attribution served
+// by POST /api/v1/prompts/context-audit, backed by the same pdd.context_audit
+// core the `pdd context` CLI uses, so the API and CLI never drift.
+export type ContextAuditRowStatus =
+  | 'resolved'
+  | 'unresolved'
+  | 'deferred'
+  | 'unavailable'
+  | 'body';
+
+export interface ContextAuditRow {
+  source: string;
+  tokens: number;
+  percent: number;          // share of total_tokens
+  status: ContextAuditRowStatus;
+  note: string | null;      // structured reason; never parse this for state — use status
+}
+
+export interface ContextAuditRequest {
+  path: string;
+  model?: string;
+  threshold?: number;       // budget percent; 0 disables
+}
+
+export interface ContextAuditResponse {
+  total_tokens: number;
+  context_limit: number | null;
+  percent_used: number | null;
+  model: string;
+  rows: ContextAuditRow[];
+  warnings: string[];
+  threshold_exceeded: boolean;
+}
+
 // Sync status types
 export type SyncStatusType = 'in_sync' | 'prompt_changed' | 'code_changed' | 'conflict' | 'never_synced';
 
@@ -748,6 +782,18 @@ class PDDApiClient {
    */
   async analyzePrompt(request: PromptAnalyzeRequest): Promise<PromptAnalyzeResponse> {
     return this.request<PromptAnalyzeResponse>('/api/v1/prompts/analyze', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  /**
+   * Audit a prompt's context-window usage by source (prompt body, each include,
+   * grounding), flagging unresolved includes and deferred dynamic tags. Backed
+   * by the shared pdd.context_audit core — the same answer `pdd context` gives.
+   */
+  async contextAudit(request: ContextAuditRequest): Promise<ContextAuditResponse> {
+    return this.request<ContextAuditResponse>('/api/v1/prompts/context-audit', {
       method: 'POST',
       body: JSON.stringify(request),
     });

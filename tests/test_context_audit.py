@@ -1,0 +1,133 @@
+"""Cross-surface parity for the shared context-audit core (PR #1387 review #5).
+
+`pdd context --json` (CLI), `pdd.context_audit.audit_prompt_file` (the shared
+core), and the `pdd connect` `POST /api/v1/prompts/context-audit` endpoint must
+return the **same audit facts** for the same prompt — that is the whole point of
+extracting the core: the two public surfaces can never drift. These tests assert
+that across three scenarios: a normal include, a missing include, and a deferred
+dynamic tag. Token counting is stubbed to a deterministic word count on the core
+module so all three paths agree numerically without an LLM/tokenizer call.
+"""
+import asyncio
+import importlib
+import json
+
+import pytest
+from click.testing import CliRunner
+from unittest.mock import MagicMock
+
+from pdd.commands.context import context
+from pdd.server.routes.prompts import context_audit as context_audit_endpoint, ContextAuditRequest
+
+ca_module = importlib.import_module("pdd.context_audit")
+
+
+def _word_count_tokens(text, model="gpt-4o"):
+    return len(text.split())
+
+
+@pytest.fixture
+def patched_core(monkeypatch):
+    """Deterministic, no-LLM token counting on the shared core (all surfaces)."""
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    monkeypatch.setattr(ca_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(ca_module, "get_context_limit", lambda model: 1000)
+
+
+def _norm(total_tokens, context_limit, percent_used, model, rows, warnings):
+    """Normalize an audit into a comparable, order-independent fact set."""
+    return {
+        "total_tokens": total_tokens,
+        "context_limit": context_limit,
+        "percent_used": percent_used,
+        "model": model,
+        "warnings": sorted(warnings),
+        "rows": sorted((r["source"], r["tokens"], r["status"], r["note"]) for r in rows),
+    }
+
+
+def _facts_cli(prompt):
+    payload = json.loads(
+        CliRunner().invoke(context, [str(prompt), "--json", "--model", "gpt-4o"], obj={}).output
+    )
+    return _norm(
+        payload["total_tokens"], payload["context_limit"], payload["percent_used"],
+        payload["model"], payload["rows"], payload["warnings"],
+    )
+
+
+def _facts_core(prompt):
+    audit = ca_module.audit_prompt_file(str(prompt), model="gpt-4o")
+    rows = [{"source": r.source, "tokens": r.tokens, "status": r.status, "note": r.note}
+            for r in audit.rows]
+    return _norm(
+        audit.total_tokens, audit.context_limit, audit.percent_used,
+        audit.model, rows, audit.warnings,
+    )
+
+
+def _facts_endpoint(prompt, project_root):
+    validator = MagicMock()
+    validator.project_root = project_root
+    validator.validate.return_value = prompt
+    response = asyncio.run(
+        context_audit_endpoint(
+            ContextAuditRequest(path=str(prompt), model="gpt-4o", threshold=80),
+            validator=validator,
+        )
+    )
+    rows = [{"source": r.source, "tokens": r.tokens, "status": r.status, "note": r.note}
+            for r in response.rows]
+    return _norm(
+        response.total_tokens, response.context_limit, response.percent_used,
+        response.model, rows, response.warnings,
+    )
+
+
+def _assert_all_agree(prompt, project_root):
+    cli = _facts_cli(prompt)
+    core = _facts_core(prompt)
+    endpoint = _facts_endpoint(prompt, project_root)
+    assert cli == core, f"CLI vs core mismatch:\n{cli}\n{core}"
+    assert cli == endpoint, f"CLI vs endpoint mismatch:\n{cli}\n{endpoint}"
+    return cli
+
+
+def test_parity_normal_include(tmp_path, monkeypatch, patched_core):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "a.txt").write_text("alpha beta gamma", encoding="utf-8")
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text("Write it now\n<include>context/a.txt</include>", encoding="utf-8")
+
+    facts = _assert_all_agree(prompt, tmp_path)
+    sources = {src: (toks, status) for src, toks, status, _ in facts["rows"]}
+    assert sources["context/a.txt"] == (3, "resolved")
+    assert sources["prompt_body"][1] == "body"
+
+
+def test_parity_missing_include(tmp_path, monkeypatch, patched_core):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text("Body\n<include>context/missing.prompt</include>", encoding="utf-8")
+
+    facts = _assert_all_agree(prompt, tmp_path)
+    statuses = {src: status for src, _, status, _ in facts["rows"]}
+    assert statuses.get("context/missing.prompt") == "unresolved"
+    assert any("missing.prompt" in w and "unresolved" in w for w in facts["warnings"])
+
+
+def test_parity_deferred_dynamic_tag(tmp_path, monkeypatch, patched_core):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "data.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        'Body\n<include query="summarize">context/data.py</include>', encoding="utf-8"
+    )
+
+    facts = _assert_all_agree(prompt, tmp_path)
+    statuses = [status for _, _, status, _ in facts["rows"]]
+    assert "deferred" in statuses
+    assert any("query_include" in w and "deferred" in w for w in facts["warnings"])

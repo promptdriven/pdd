@@ -72,6 +72,7 @@ def prompts_test_env():
         "pdd.preprocess",
         "pdd.sync_determine_operation",
         "pdd.llm_invoke",
+        "pdd.context_audit",
     ]
     # Also track modules that get imported during test and need cleanup
     modules_to_clear = [
@@ -125,6 +126,33 @@ def prompts_test_env():
     mock_llm_invoke.DEFAULT_BASE_MODEL = "claude-sonnet-4-20250514"
     sys.modules["pdd.llm_invoke"] = mock_llm_invoke
 
+    # Mock the shared context-audit core. The endpoint imports it lazily inside
+    # the handler, so a synthetic ContextAudit keeps the endpoint test hermetic
+    # (no real preprocess/token counting); the real-core parity is asserted
+    # end-to-end in tests/test_context_audit_parity.py instead.
+    mock_context_audit = types.ModuleType("pdd.context_audit")
+    _audit_rows = [
+        types.SimpleNamespace(source="context/a.txt", tokens=5, status="resolved", note=None),
+        types.SimpleNamespace(source="prompt_body", tokens=2, status="body", note=None),
+        types.SimpleNamespace(
+            source="grounding", tokens=0, status="unavailable",
+            note="unavailable (requires cloud)",
+        ),
+    ]
+    mock_context_audit.audit_prompt_file = MagicMock(
+        return_value=types.SimpleNamespace(
+            model="gpt-4o", total_tokens=7, context_limit=1000,
+            percent_used=0.7, rows=_audit_rows, warnings=["a deferred warning"],
+        )
+    )
+    mock_context_audit.row_percent = (
+        lambda r, total: round(r.tokens / total * 100, 1) if total else 0.0
+    )
+    mock_context_audit.threshold_exceeded = (
+        lambda pu, t: bool(pu is not None and 0 < t < pu)
+    )
+    sys.modules["pdd.context_audit"] = mock_context_audit
+
     # Import code under test
     from pdd.server.routes.prompts import (
         router,
@@ -135,6 +163,10 @@ def prompts_test_env():
         PromptAnalyzeResponse,
         TokenMetricsResponse,
         CostEstimateResponse,
+        context_audit,
+        ContextAuditRequest,
+        ContextAuditResponse,
+        ContextAuditRow,
         get_sync_status,
         get_available_models,
         check_match,
@@ -166,6 +198,11 @@ def prompts_test_env():
         'PromptAnalyzeResponse': PromptAnalyzeResponse,
         'TokenMetricsResponse': TokenMetricsResponse,
         'CostEstimateResponse': CostEstimateResponse,
+        'context_audit': context_audit,
+        'ContextAuditRequest': ContextAuditRequest,
+        'ContextAuditResponse': ContextAuditResponse,
+        'ContextAuditRow': ContextAuditRow,
+        'mock_context_audit': mock_context_audit,
         'get_sync_status': get_sync_status,
         'get_available_models': get_available_models,
         'check_match': check_match,
@@ -303,6 +340,95 @@ async def test_analyze_direct_content(setup_validator, mock_token_metrics):
 
     assert response.raw_metrics is not None
     assert response.raw_content == "Direct content test"
+
+
+# --- Context audit endpoint (PR #1387 review #3/#5) --- #
+
+@pytest.mark.asyncio
+async def test_context_audit_success(setup_validator, tmp_path):
+    """The endpoint returns the shared core's per-source audit with stable
+    per-row status, mirroring the CLI --json shape."""
+    prompts_test_env, mock_validator = setup_validator
+    context_audit = prompts_test_env['context_audit']
+    ContextAuditRequest = prompts_test_env['ContextAuditRequest']
+
+    prompt = tmp_path / "p.prompt"
+    prompt.write_text("Body\n<include>context/a.txt</include>")
+    mock_validator.validate.return_value = prompt
+    mock_validator.project_root = tmp_path
+
+    request = ContextAuditRequest(path=str(prompt), model="gpt-4o", threshold=80)
+    response = await context_audit(request, validator=mock_validator)
+
+    assert response.total_tokens == 7
+    assert response.context_limit == 1000
+    assert response.model == "gpt-4o"
+    assert response.threshold_exceeded is False  # 0.7% < 80%
+    statuses = {r.status for r in response.rows}
+    assert {"resolved", "body", "unavailable"} <= statuses
+    include_row = next(r for r in response.rows if r.source == "context/a.txt")
+    assert include_row.status == "resolved"
+    assert include_row.percent == round(5 / 7 * 100, 1)
+    assert response.warnings == ["a deferred warning"]
+    # The shared core was used (not pdd.commands.context).
+    prompts_test_env['mock_context_audit'].audit_prompt_file.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_context_audit_threshold_exceeded(setup_validator, tmp_path):
+    """When usage exceeds the budget threshold, threshold_exceeded is True (the
+    endpoint reports the fact; it never exits a process)."""
+    import types as _types
+    prompts_test_env, mock_validator = setup_validator
+    context_audit = prompts_test_env['context_audit']
+    ContextAuditRequest = prompts_test_env['ContextAuditRequest']
+
+    prompt = tmp_path / "big.prompt"
+    prompt.write_text("Body")
+    mock_validator.validate.return_value = prompt
+    mock_validator.project_root = tmp_path
+    prompts_test_env['mock_context_audit'].audit_prompt_file.return_value = (
+        _types.SimpleNamespace(
+            model="gpt-4o", total_tokens=950, context_limit=1000,
+            percent_used=95.0, rows=[], warnings=[],
+        )
+    )
+
+    request = ContextAuditRequest(path=str(prompt), model="gpt-4o", threshold=80)
+    response = await context_audit(request, validator=mock_validator)
+    assert response.threshold_exceeded is True
+
+
+@pytest.mark.asyncio
+async def test_context_audit_file_not_found(setup_validator, tmp_path):
+    """A non-existent prompt path is a 404, not a silent empty audit."""
+    prompts_test_env, mock_validator = setup_validator
+    context_audit = prompts_test_env['context_audit']
+    ContextAuditRequest = prompts_test_env['ContextAuditRequest']
+
+    mock_validator.validate.return_value = tmp_path / "missing.prompt"
+    mock_validator.project_root = tmp_path
+
+    request = ContextAuditRequest(path="missing.prompt")
+    with pytest.raises(HTTPException) as exc:
+        await context_audit(request, validator=mock_validator)
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_context_audit_security_error(setup_validator, tmp_path):
+    """A path that fails validation surfaces as a 403."""
+    prompts_test_env, mock_validator = setup_validator
+    context_audit = prompts_test_env['context_audit']
+    ContextAuditRequest = prompts_test_env['ContextAuditRequest']
+
+    mock_validator.validate.side_effect = MockSecurityError("path traversal blocked")
+    mock_validator.project_root = tmp_path
+
+    request = ContextAuditRequest(path="../../etc/passwd")
+    with pytest.raises(HTTPException) as exc:
+        await context_audit(request, validator=mock_validator)
+    assert exc.value.status_code == 403
 
 
 @pytest.mark.asyncio

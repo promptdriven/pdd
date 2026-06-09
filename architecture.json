@@ -9902,7 +9902,8 @@
     "reason": "Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation, displayed by default as a Claude-Code /context-style usage box.",
     "description": "Implements the `pdd context` CLI command that preprocesses a prompt file the same way generation does and reports token attribution broken down by source (prompt body, each include, tests, examples, shell output, web output, grounding), rendered by default as a Claude-Code /context-style usage box (--table for the raw table, --json for machine-readable output).",
     "dependencies": [
-      "commands/replay_python.prompt"
+      "commands/replay_python.prompt",
+      "context_audit_python.prompt"
     ],
     "priority": 249,
     "filename": "commands/context_python.prompt",
@@ -9918,6 +9919,50 @@
           {
             "name": "context",
             "description": "Show context-window usage by source for a preprocessed prompt"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Shared, deterministic, no-LLM context-audit core consumed by both the pdd context CLI and the pdd connect context-audit endpoint, so the two surfaces never drift.",
+    "description": "Implements the pdd/context_audit.py core: preprocesses a prompt the same way generation's first pass does and returns a structured ContextAudit of per-source token attribution (prompt body, each include, grounding) with stable per-row status (resolved/unresolved/deferred/unavailable/body), surfacing unresolved includes and deferred dynamic tags. Presentation-free and applies no budget policy; reuses pdd.server.token_counter and pdd.preprocess and makes no LLM call.",
+    "dependencies": [],
+    "priority": 249,
+    "filename": "context_audit_python.prompt",
+    "filepath": "pdd/context_audit.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "audit_prompt_file",
+            "signature": "(prompt_path: str, model: str)",
+            "returns": "ContextAudit"
+          },
+          {
+            "name": "audit_prompt_text",
+            "signature": "(text: str, model: str, *, base_dir: Optional[str] = None)",
+            "returns": "ContextAudit"
+          },
+          {
+            "name": "percent",
+            "signature": "(part: int, whole: Optional[int])",
+            "returns": "Optional[float]"
+          },
+          {
+            "name": "row_percent",
+            "signature": "(row: AuditRow, total_tokens: int)",
+            "returns": "float"
+          },
+          {
+            "name": "threshold_exceeded",
+            "signature": "(percent_used: Optional[float], threshold: int)",
+            "returns": "bool"
           }
         ]
       }

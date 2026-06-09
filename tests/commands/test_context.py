@@ -28,9 +28,12 @@ from pdd.cli import cli
 from pdd.commands.context import context
 
 # ``pdd.commands.__init__`` binds the name ``context`` to the command function,
-# shadowing the submodule attribute. Fetch the real module object so
-# monkeypatching ``count_tokens``/``get_context_limit`` targets module globals.
+# shadowing the submodule attribute. Fetch the real module object for the
+# command. Token counting now lives in the shared ``pdd.context_audit`` core
+# (PR #1387 review #2), so ``count_tokens``/``get_context_limit`` are
+# monkeypatched on that module's globals, not on the command module.
 cx_module = importlib.import_module("pdd.commands.context")
+ca_module = importlib.import_module("pdd.context_audit")
 
 
 @pytest.fixture
@@ -53,8 +56,8 @@ def patched_tokens(monkeypatch):
     explicitly instead.
     """
     monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
-    monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
-    monkeypatch.setattr(cx_module, "get_context_limit", lambda model: 1000)
+    monkeypatch.setattr(ca_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(ca_module, "get_context_limit", lambda model: 1000)
 
 
 @pytest.fixture
@@ -147,8 +150,23 @@ def test_json_shape_and_keys(runner, prompt_with_include, patched_tokens):
         r for r in payload["rows"] if r["source"] == "context/preamble.prompt"
     )
     assert include_row["tokens"] == 5
+    # review #4: each row carries a stable status + note so agents/code callers
+    # never parse human warning strings to learn a row's state.
     for row in payload["rows"]:
-        assert set(row.keys()) == {"source", "tokens", "percent"}
+        assert set(row.keys()) == {"source", "tokens", "percent", "status", "note"}
+        assert row["status"] in {
+            "resolved",
+            "unresolved",
+            "deferred",
+            "unavailable",
+            "body",
+        }
+    assert include_row["status"] == "resolved"
+    body_row = next(r for r in payload["rows"] if r["source"] == "prompt_body")
+    assert body_row["status"] == "body"
+    grounding_row = next(r for r in payload["rows"] if r["source"] == "grounding")
+    assert grounding_row["status"] == "unavailable"
+    assert grounding_row["note"] and "cloud" in grounding_row["note"]
 
 
 def test_cli_json_output_is_machine_readable_without_summary(
@@ -177,9 +195,9 @@ def test_model_option_overrides_default(runner, prompt_with_include, patched_tok
 
 def test_threshold_exceeded_exits_2_box(runner, prompt_with_include, monkeypatch):
     """AC4: exceeding the budget threshold exits with code 2 (box mode)."""
-    monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(ca_module, "count_tokens", _word_count_tokens)
     # Tiny limit forces total tokens well above the default 80% threshold.
-    monkeypatch.setattr(cx_module, "get_context_limit", lambda model: 10)
+    monkeypatch.setattr(ca_module, "get_context_limit", lambda model: 10)
     result = runner.invoke(context, [str(prompt_with_include)], obj={})
     assert result.exit_code == 2, result.output
     assert "context budget exceeded" in result.output
@@ -187,8 +205,8 @@ def test_threshold_exceeded_exits_2_box(runner, prompt_with_include, monkeypatch
 
 def test_threshold_exceeded_exits_2_json(runner, prompt_with_include, monkeypatch):
     """AC4: exceeding the budget threshold sets threshold_exceeded and exits 2."""
-    monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
-    monkeypatch.setattr(cx_module, "get_context_limit", lambda model: 10)
+    monkeypatch.setattr(ca_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(ca_module, "get_context_limit", lambda model: 10)
     result = runner.invoke(context, [str(prompt_with_include), "--json"], obj={})
     assert result.exit_code == 2
     assert json.loads(result.output)["threshold_exceeded"] is True
@@ -196,8 +214,8 @@ def test_threshold_exceeded_exits_2_json(runner, prompt_with_include, monkeypatc
 
 def test_threshold_zero_disables_check(runner, prompt_with_include, monkeypatch):
     """AC4: --threshold 0 disables the budget check."""
-    monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
-    monkeypatch.setattr(cx_module, "get_context_limit", lambda model: 10)
+    monkeypatch.setattr(ca_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(ca_module, "get_context_limit", lambda model: 10)
     result = runner.invoke(
         context, [str(prompt_with_include), "--threshold", "0"], obj={}
     )
@@ -234,8 +252,8 @@ def test_dynamic_tag_warning_without_llm_call(runner, tmp_path, monkeypatch, pat
 def test_unknown_model_limit_reported_gracefully(runner, prompt_with_include, monkeypatch):
     """AC1: when the model context limit is unknown, the box still renders and
     says so instead of crashing."""
-    monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
-    monkeypatch.setattr(cx_module, "get_context_limit", lambda model: None)
+    monkeypatch.setattr(ca_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(ca_module, "get_context_limit", lambda model: None)
     result = runner.invoke(context, [str(prompt_with_include)], obj={})
     assert result.exit_code == 0, result.output
     assert "context limit unknown" in result.output
@@ -562,8 +580,8 @@ def test_select_query_fallback_is_deferred_without_llm_extractor(
 def test_default_model_falls_back_to_gpt4o_when_env_unset(runner, prompt_with_include, monkeypatch):
     """review #4: with PDD_MODEL_DEFAULT unset, the default model is gpt-4o."""
     monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
-    monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
-    monkeypatch.setattr(cx_module, "get_context_limit", lambda model: 1000)
+    monkeypatch.setattr(ca_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(ca_module, "get_context_limit", lambda model: 1000)
     result = runner.invoke(context, [str(prompt_with_include), "--json"], obj={})
     assert json.loads(result.output)["model"] == "gpt-4o"
 
@@ -572,7 +590,7 @@ def test_default_model_honors_pdd_model_default_env(runner, prompt_with_include,
     """review #4: when PDD_MODEL_DEFAULT is set, the default honors it (so the
     suite is not silently env-sensitive — the behavior is asserted explicitly)."""
     monkeypatch.setenv("PDD_MODEL_DEFAULT", "claude-sonnet-4-6")
-    monkeypatch.setattr(cx_module, "count_tokens", _word_count_tokens)
-    monkeypatch.setattr(cx_module, "get_context_limit", lambda model: 1000)
+    monkeypatch.setattr(ca_module, "count_tokens", _word_count_tokens)
+    monkeypatch.setattr(ca_module, "get_context_limit", lambda model: 1000)
     result = runner.invoke(context, [str(prompt_with_include), "--json"], obj={})
     assert json.loads(result.output)["model"] == "claude-sonnet-4-6"

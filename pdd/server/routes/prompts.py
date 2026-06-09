@@ -66,6 +66,37 @@ class PromptAnalyzeResponse(BaseModel):
     preprocessing_error: Optional[str] = Field(None, description="Preprocessing error if any")
 
 
+class ContextAuditRow(BaseModel):
+    """One attributed source segment of a hydrated prompt's context usage."""
+    source: str = Field(..., description="Segment label (include path, prompt_body, grounding, …)")
+    tokens: int = Field(..., description="Tokens this segment contributes to the hydrated payload")
+    percent: float = Field(..., description="Percent of total_tokens")
+    status: str = Field(..., description="resolved | unresolved | deferred | unavailable | body")
+    note: Optional[str] = Field(None, description="Human note (e.g. why a row is unresolved/deferred)")
+
+
+class ContextAuditRequest(BaseModel):
+    """Request to audit a prompt file's context-window usage by source."""
+    path: str = Field(..., description="Path to prompt file (relative to project root)")
+    model: str = Field("claude-sonnet-4-20250514", description="Model used for context-limit lookup")
+    threshold: int = Field(80, ge=0, le=100, description="Budget threshold percent; 0 disables")
+
+
+class ContextAuditResponse(BaseModel):
+    """Deterministic, no-LLM per-source context-window audit of a prompt.
+
+    Mirrors the ``pdd context --json`` shape 1:1 so the CLI and the connect API
+    return the same audit facts from one shared implementation (PR #1387).
+    """
+    total_tokens: int = Field(..., description="Deterministic hydrated token total (excludes deferred markup)")
+    context_limit: Optional[int] = Field(None, description="Model context limit (None if unknown)")
+    percent_used: Optional[float] = Field(None, description="total_tokens as a percent of context_limit")
+    model: str = Field(..., description="Model the audit was computed for")
+    rows: list[ContextAuditRow] = Field(default_factory=list, description="Per-source attribution, largest first")
+    warnings: list[str] = Field(default_factory=list, description="Deferred/unresolved warnings")
+    threshold_exceeded: bool = Field(False, description="Whether percent_used exceeds the threshold")
+
+
 class SyncStatusResponse(BaseModel):
     """Response from sync status check."""
     status: str = Field(..., description="Sync status: in_sync, prompt_changed, code_changed, conflict, never_synced")
@@ -357,6 +388,64 @@ async def analyze_prompt(
             processed_metrics=processed_metrics,
             preprocessing_succeeded=preprocessing_succeeded,
             preprocessing_error=preprocessing_error,
+        )
+
+    except SecurityError as e:
+        raise HTTPException(status_code=403, detail=e.message)
+
+
+@router.post("/context-audit", response_model=ContextAuditResponse)
+async def context_audit(
+    request: ContextAuditRequest,
+    validator: PathValidator = Depends(get_path_validator),
+):
+    """
+    Audit a prompt file's context-window usage by source.
+
+    Deterministic and LLM-free: preprocesses the prompt the same way generation's
+    first pass does and attributes tokens per source (prompt body, each include,
+    grounding), flagging unresolved includes and deferred dynamic tags. Backed by
+    the shared ``pdd.context_audit`` core — the exact implementation the
+    ``pdd context`` CLI uses — so the API and CLI never drift (PR #1387).
+    """
+    try:
+        abs_path = validator.validate(request.path)
+
+        if not abs_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {request.path}")
+        if abs_path.is_dir():
+            raise HTTPException(status_code=400, detail=f"Cannot audit directory: {request.path}")
+
+        # Imported here (matching this module's circular-import convention) and
+        # never via pdd.commands.* — the CLI and this endpoint share ONE core.
+        from pdd.context_audit import audit_prompt_file, row_percent, threshold_exceeded
+
+        # Resolve includes relative to the project root exactly as the CLI does
+        # when run from there, so the audit rows match the CLI's answer.
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(validator.project_root)
+            audit = audit_prompt_file(str(abs_path), model=request.model)
+        finally:
+            os.chdir(original_cwd)
+
+        return ContextAuditResponse(
+            total_tokens=audit.total_tokens,
+            context_limit=audit.context_limit,
+            percent_used=audit.percent_used,
+            model=audit.model,
+            rows=[
+                ContextAuditRow(
+                    source=r.source,
+                    tokens=r.tokens,
+                    percent=row_percent(r, audit.total_tokens),
+                    status=r.status,
+                    note=r.note,
+                )
+                for r in audit.rows
+            ],
+            warnings=audit.warnings,
+            threshold_exceeded=threshold_exceeded(audit.percent_used, request.threshold),
         )
 
     except SecurityError as e:
