@@ -1,12 +1,15 @@
 {
-  "pdd_version": "0.0.267.dev0",
-  "timestamp": "2026-06-09T00:26:14.598279+00:00",
-  "command": "fix",
+  "pdd_version": "0.0.266",
+  "timestamp": "2026-06-09T00:36:50.988793+00:00",
+  "command": "example",
   "prompt_hash": "d0da42dec926cca9da0b6ac499a2764830e30016e9a24f5749677a90fb976b3f",
   "code_hash": "6aa1ea0d41f73c40b02b72603f6193d4b6e51fdefb57d62f501311365a9ab1b8",
-  "example_hash": null,
+  "example_hash": "91a9137de063da9671886f64be60bf572b100e5e4f2ca380a4e49d34fb5b988e",
   "test_hash": null,
-  "test_files": null,
+  "test_files": {
+    "test_context_snapshot_policy.py": "123557c02253b3cf88a5f17daddf0ca71b41e7cada231054152afb9530f9a014",
+    "test_context_snapshot_replay.py": "6e492182f15054d5abd48807d984be1ce2d671687d458175a8be6c382a498fc4"
+  },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
