@@ -1023,6 +1023,7 @@ def _generate_user_story_artifacts_for_change(
 
     # 3) Validate ONLY the linked story/prompt subset and report (#1454).
     failing_stories: List[str] = []
+    validation_error: Optional[str] = None
     if linked_story_paths:
         try:
             passed, results, vcost, vmodel = run_user_story_tests(
@@ -1053,6 +1054,10 @@ def _generate_user_story_artifacts_for_change(
                 )
         except Exception as exc:  # pylint: disable=broad-except
             # Validation is best-effort under warn; never abort the workflow.
+            # Under strict, however, an unrunnable validator must NOT fail open:
+            # remember the error so the policy gate below can block on it, since
+            # we cannot prove the linked stories pass.
+            validation_error = str(exc)
             summary_lines.append(f"- Validation skipped: {exc}")
             if not quiet:
                 console.print(f"[yellow]Story validation skipped: {exc}[/yellow]")
@@ -1068,6 +1073,10 @@ def _generate_user_story_artifacts_for_change(
         problems.append(f"no linked story for: {', '.join(uncovered_names)}")
     if failing_stories:
         problems.append(f"failing linked story check(s): {', '.join(failing_stories)}")
+    if validation_error:
+        # A validation that could not run leaves coverage unproven; treat it as a
+        # problem so strict policy blocks (warn only reports it, below).
+        problems.append(f"validation failed/skipped: {validation_error}")
     if problems:
         joined = "; ".join(problems)
         if policy == "strict":

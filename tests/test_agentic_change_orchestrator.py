@@ -406,6 +406,77 @@ def test_story_strict_blocks_on_failing_validation(tmp_path, monkeypatch):
     assert "Blocking (strict policy)" in summary
 
 
+def test_story_strict_blocks_when_validation_cannot_run(tmp_path, monkeypatch):
+    # Regression: strict policy must NOT fail open when the validator itself
+    # raises. Without a passing linked-story check, coverage is unproven, so
+    # strict has to block before Step 13 rather than silently proceed.
+    monkeypatch.setenv("PDD_STORY_POLICY", "strict")
+    _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        side_effect=RuntimeError("validator down"),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert block is not None
+    assert "strict story policy" in block
+    assert "validation failed/skipped: validator down" in block
+    assert "Blocking (strict policy)" in summary
+
+
+def test_story_warn_does_not_block_when_validation_cannot_run(tmp_path, monkeypatch):
+    # Counterpart to the strict case: under warn the same validator exception
+    # is reported but never blocks.
+    monkeypatch.setenv("PDD_STORY_POLICY", "warn")
+    _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        side_effect=RuntimeError("validator down"),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert block is None
+    assert "Validation skipped: validator down" in summary
+
+
 def test_story_strict_blocks_when_generation_leaves_prompt_uncovered(tmp_path, monkeypatch):
     monkeypatch.setenv("PDD_STORY_POLICY", "strict")
     _make_prompt(tmp_path)
