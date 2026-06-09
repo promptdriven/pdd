@@ -3,6 +3,7 @@ Checkup command — GitHub issue-driven project health check, or local diagnosti
 """
 # pylint: disable=unknown-option-value
 import math
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -30,6 +31,11 @@ from .coverage import coverage_cmd
 from .gate import gate_cmd
 from .drift import drift_cmd
 from .prompt import prompt_lint
+
+
+def _interactive_tty_available() -> bool:
+    """Return True when stdin and stdout are interactive terminals."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def _forward_subcommand_json(
@@ -385,6 +391,27 @@ def _forward_subcommand_json(
     help="Wall-clock timeout for the prompt repair loop in seconds (default: 120).",
 )
 @click.option(
+    "--interactive",
+    "interactive",
+    is_flag=True,
+    default=False,
+    help="With .prompt targets: enter interactive per-finding repair session.",
+)
+@click.option(
+    "--apply",
+    "apply",
+    is_flag=True,
+    default=False,
+    help="With --interactive: apply selected repairs. Requires --interactive.",
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    default=False,
+    help="With --interactive --apply: preview changes without writing any files.",
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -449,6 +476,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     max_prompt_repair_rounds: Optional[int],
     max_prompt_token_growth: Optional[int],
     max_prompt_repair_seconds: Optional[float],
+    interactive: bool,
+    apply: bool,
+    dry_run: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     pdd checkup = verifier namespace
@@ -498,6 +528,17 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup drift <DEVUNIT> [OPTIONS]
     """
     ctx.ensure_object(dict)
+
+    if apply and not interactive:
+        raise click.UsageError("--apply requires --interactive.")
+
+    if interactive and not _interactive_tty_available():
+        raise click.UsageError(
+            "--interactive requires a TTY (stdin and stdout must be a terminal)."
+        )
+
+    if interactive and as_json:
+        raise click.UsageError("--interactive cannot be combined with --json.")
 
     if show_help and target not in {
         "lint",
@@ -683,10 +724,31 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
         return "validate-arch-includes: ok", 0.0, ""
 
+    if interactive and target is not None and not is_prompt_shaped_target(
+        target,
+        project_root=project_root,
+    ):
+        raise click.UsageError(
+            "--interactive is only supported for prompt-shaped checkup targets."
+        )
+
     if pr_url is None and target is not None and is_prompt_shaped_target(
         target,
         project_root=project_root,
     ):
+        if interactive:
+            from ..checkup_interactive_main import run_interactive_checkup  # pylint: disable=import-outside-toplevel
+
+            return run_interactive_checkup(
+                target,
+                apply=apply,
+                dry_run=dry_run,
+                project_root=project_root,
+                strict=strict,
+                quiet=ctx.obj.get("quiet", False),
+                explicit_interactive=True,
+            )
+
         import json as _json  # pylint: disable=import-outside-toplevel
 
         quiet = ctx.obj.get("quiet", False)

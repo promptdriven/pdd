@@ -43,9 +43,10 @@ def _maybe_run_prompt_gate(
     project_root: Optional[str],
     quiet: bool,
     dry_run: bool = False,
+    interactive: bool = False,
 ) -> tuple[bool, int]:
     """Run the prompt gate; return ``(should_continue, exit_code)``."""
-    if dry_run:
+    if dry_run and not interactive:
         return True, 0
     root = Path(project_root or Path.cwd()).resolve()
     return maybe_run_workflow_prompt_gate(
@@ -54,6 +55,8 @@ def _maybe_run_prompt_gate(
         no_prompt_checkup=no_prompt_checkup,
         project_root=root,
         quiet=quiet,
+        interactive=interactive,
+        dry_run=dry_run,
     )
 
 
@@ -65,6 +68,7 @@ def _enforce_prompt_gate_or_exit(
     project_root: Optional[str],
     quiet: bool,
     dry_run: bool = False,
+    interactive: bool = False,
 ) -> None:
     """Raise ``click.Exit`` when strict prompt checkup blocks downstream work."""
     should_continue, exit_code = _maybe_run_prompt_gate(
@@ -74,6 +78,7 @@ def _enforce_prompt_gate_or_exit(
         project_root=project_root,
         quiet=quiet,
         dry_run=dry_run,
+        interactive=interactive,
     )
     if not should_continue:
         raise click.exceptions.Exit(exit_code)
@@ -181,6 +186,13 @@ class GenerateCommand(click.Command):
     default=False,
     help="Disable automatic prompt checkup for this run.",
 )
+@click.option(
+    "--interactive",
+    "interactive",
+    is_flag=True,
+    default=False,
+    help="With --prompt-checkup: run interactive per-finding repair on changed prompts.",
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -206,6 +218,7 @@ def generate(
     compress: bool,
     prompt_checkup: Optional[str],
     no_prompt_checkup: bool,
+    interactive: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -349,6 +362,7 @@ def generate(
                     project_root=project_root,
                     quiet=quiet,
                     dry_run=dry_run,
+                    interactive=interactive,
                 )
             return (message, cost, model) if success else None
 
@@ -396,6 +410,7 @@ def generate(
                     no_prompt_checkup=no_prompt_checkup,
                     project_root=project_root,
                     quiet=quiet,
+                    interactive=interactive,
                 )
             return (message, cost, model) if success else None
 

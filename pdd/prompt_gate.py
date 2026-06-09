@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -204,6 +205,9 @@ def maybe_run_workflow_prompt_gate(
     no_prompt_checkup: bool,
     project_root: Path,
     quiet: bool = False,
+    interactive: bool = False,
+    apply: bool = False,
+    dry_run: bool = False,
 ) -> tuple[bool, int]:
     """Shared hook for generate/change workflows that touch ``.prompt`` files."""
     prompt_paths = [
@@ -212,6 +216,34 @@ def maybe_run_workflow_prompt_gate(
         if path.is_file()
     ]
     if not prompt_paths:
+        return True, 0
+
+    if apply and not interactive:
+        raise click.UsageError("--apply requires --interactive.")
+
+    if interactive:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            raise click.UsageError(
+                "--interactive requires a TTY (stdin and stdout must be a terminal)."
+            )
+        from .checkup_interactive_main import run_interactive_checkup  # pylint: disable=import-outside-toplevel
+
+        gate_mode = resolve_prompt_gate_mode(
+            cli_prompt_checkup=cli_prompt_checkup,
+            no_prompt_checkup=no_prompt_checkup,
+            project_root=project_root,
+        )
+        strict = gate_mode == "strict"
+        for prompt_path in prompt_paths:
+            run_interactive_checkup(
+                str(prompt_path),
+                apply=apply,
+                dry_run=dry_run,
+                project_root=project_root,
+                strict=strict,
+                quiet=quiet,
+                explicit_interactive=True,
+            )
         return True, 0
 
     gate_mode = resolve_prompt_gate_mode(
