@@ -202,6 +202,9 @@ def _actionable_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     ]
 
 
+_CLARIFICATION_CODE_MARKERS = ("VAGUE",)
+
+
 def _lint_findings(issues: Sequence[LintIssue]) -> List[Dict[str, Any]]:
     return [
         {
@@ -211,6 +214,10 @@ def _lint_findings(issues: Sequence[LintIssue]) -> List[Dict[str, Any]]:
             "line": issue.line,
             "message": issue.message,
             "evidence": issue.section,
+            "requires_clarification": any(
+                marker in (issue.code or "").upper()
+                for marker in _CLARIFICATION_CODE_MARKERS
+            ),
         }
         for issue in issues
     ]

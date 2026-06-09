@@ -235,15 +235,24 @@ def maybe_run_workflow_prompt_gate(
         )
         strict = gate_mode == "strict"
         for prompt_path in prompt_paths:
-            run_interactive_checkup(
-                str(prompt_path),
-                apply=apply,
-                dry_run=dry_run,
-                project_root=project_root,
-                strict=strict,
-                quiet=quiet,
-                explicit_interactive=True,
-            )
+            try:
+                run_interactive_checkup(
+                    str(prompt_path),
+                    apply=apply,
+                    dry_run=dry_run,
+                    project_root=project_root,
+                    strict=strict,
+                    quiet=quiet,
+                    explicit_interactive=True,
+                )
+            except click.exceptions.Exit as exc:
+                click.echo(
+                    f"Interactive checkup stopped for {prompt_path.name} "
+                    f"(exit {exc.exit_code}). "
+                    "Check the output above for details.",
+                    err=True,
+                )
+                return False, exc.exit_code
         return True, 0
 
     gate_mode = resolve_prompt_gate_mode(

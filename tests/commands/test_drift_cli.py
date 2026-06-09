@@ -133,3 +133,49 @@ def test_no_top_level_pdd_drift_command(runner: CliRunner) -> None:
     lines = [line.strip() for line in result.output.splitlines()]
     assert "drift" not in lines
     assert any(line.startswith("checkup") for line in lines)
+
+
+def test_preview_does_not_inject_dry_run_into_drift(
+    runner: CliRunner, tmp_path: Path, monkeypatch
+) -> None:
+    """--preview must never inject --dry-run into drift args (#1519 finding #3).
+
+    pdd checkup drift <unit> --preview → drift must NOT receive --dry-run;
+    drift --dry-run suppresses regeneration, which is unrelated to interactive apply preview.
+    """
+    _write_smoke_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    captured = {}
+
+    def _fake_drift_main(args, **kwargs):
+        captured["args"] = list(args)
+        return 0
+
+    with patch("pdd.commands.checkup.drift_cmd.main", side_effect=_fake_drift_main):
+        result = runner.invoke(
+            checkup,
+            ["drift", "refund_payment", "--preview"],
+            catch_exceptions=False,
+        )
+
+    assert "--dry-run" not in captured.get("args", []), (
+        "--preview must not forward --dry-run to drift"
+    )
+
+
+def test_explicit_dry_run_still_forwarded_to_drift(
+    runner: CliRunner, tmp_path: Path, monkeypatch
+) -> None:
+    """User passing --dry-run directly as a drift arg must still reach drift unchanged."""
+    _write_smoke_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(
+        checkup,
+        ["drift", "refund_payment", "--dry-run", "--json"],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["dry_run"] is True
