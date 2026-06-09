@@ -2270,6 +2270,39 @@ class TestPrModeSourceArtifacts:
         assert "do NOT post GitHub comments from Step 7" in prompt
         assert "orchestrator posts the final PR/issue report after" in prompt
 
+    def test_step7_prompt_requires_acceptance_probe_checklist(self) -> None:
+        prompt = (
+            Path(__file__).resolve().parent.parent
+            / "pdd"
+            / "prompts"
+            / "agentic_checkup_step7_verify_LLM.prompt"
+        ).read_text(encoding="utf-8")
+
+        assert "build an acceptance-probe" in prompt
+        assert "negative or adversarial probe" in prompt
+        assert "Do not mark `issue_aligned: true` solely from" in prompt
+        assert "`gpt-4` does not get priced from `openai/gpt-4o`" in prompt
+        assert "`azure/gpt-4.1-mini`" in prompt
+
+    def test_checkup_test_prompts_require_negative_acceptance_coverage(self) -> None:
+        prompt_dir = Path(__file__).resolve().parent.parent / "pdd" / "prompts"
+        regression_prompt = (
+            prompt_dir / "agentic_checkup_step6_2_regression_tests_LLM.prompt"
+        ).read_text(encoding="utf-8")
+        e2e_prompt = (
+            prompt_dir / "agentic_checkup_step6_3_e2e_tests_LLM.prompt"
+        ).read_text(encoding="utf-8")
+
+        assert "boundary, negative, or adversarial input" in regression_prompt
+        assert "look-alike or partially matching value" in regression_prompt
+        assert "`gpt-4` does not inherit a price from `openai/gpt-4o`" in (
+            regression_prompt
+        )
+        assert "near-match failure" in regression_prompt
+        assert "realistic negative or adversarial flow" in e2e_prompt
+        assert "near-miss case that must remain unselected/unknown" in e2e_prompt
+        assert "partial-match, or fallback result" in e2e_prompt
+
     def test_architecture_records_agentic_checkup_cwd_parameter(self) -> None:
         arch_path = Path(__file__).resolve().parent.parent / "architecture.json"
         architecture = json.loads(arch_path.read_text(encoding="utf-8"))
