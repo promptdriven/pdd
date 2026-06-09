@@ -49,6 +49,7 @@ Trust-boundary invariants:
 
 from __future__ import annotations
 
+import ast
 import datetime as _dt
 import fnmatch
 import json
@@ -3287,13 +3288,34 @@ def gate_results_to_findings(
 
 
 def extract_pddrc_defaults_keys(content: str) -> Set[str]:
-    """Helper to extract .pddrc keys from construct_paths.py content."""
-    match = re.search(r"_PDDRC_DEFAULTS_KEYS\s*=\s*\{([^}]+)\}", content)
-    if not match:
+    """Extract _PDDRC_DEFAULTS_KEYS from construct_paths.py source using AST parsing."""
+    try:
+        tree = ast.parse(content)
+    except Exception:
         return set()
-    block = match.group(1)
-    keys = re.findall(r'["\']([^"\']+)["\']', block)
-    return {k.strip() for k in keys if k.strip()}
+    for node in tree.body:
+        # Handle plain assignment (x = {...}) and annotated assignment (x: T = {...})
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "_PDDRC_DEFAULTS_KEYS"
+            for t in node.targets
+        ):
+            value_node = node.value
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "_PDDRC_DEFAULTS_KEYS"
+            and node.value is not None
+        ):
+            value_node = node.value
+        else:
+            continue
+        try:
+            value = ast.literal_eval(value_node)
+            if isinstance(value, set):
+                return {k.strip() for k in value if isinstance(k, str) and k.strip()}
+        except ValueError:
+            pass
+    return set()
 
 
 def get_markdown_section(text: str, start_marker: str, end_markers: List[str]) -> str:
