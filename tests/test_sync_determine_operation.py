@@ -5370,14 +5370,26 @@ class TestIssue551CanonicalExtensionInGetPddFilePaths:
 
         paths = get_pdd_file_paths("Makefile", "Makefile", "prompts")
 
-        assert ".makefile" not in paths["example"].name.lower(), (
-            f"Issue #551 (Makefile): example path must not contain .makefile, "
-            f"got {paths['example'].name!r}"
-        )
-        assert ".makefile" not in paths["test"].name.lower(), (
-            f"Issue #551 (Makefile): test path must not contain .makefile, "
-            f"got {paths['test'].name!r}"
-        )
+        # The empty extension must not leave a malformed trailing-dot path
+        # (e.g. "Makefile_example.") via the unconditional ".{extension}" join.
+        for key in ("code", "example", "test"):
+            name = paths[key].name
+            assert not name.endswith("."), (
+                f"Issue #551 (Makefile): {key} path must not end with a trailing "
+                f"dot, got {name!r}"
+            )
+            assert ".makefile" not in name.lower(), (
+                f"Issue #551 (Makefile): {key} path must not contain .makefile, "
+                f"got {name!r}"
+            )
+
+        # test_files entries must likewise be free of trailing dots.
+        for tf in paths.get("test_files", []):
+            tf_name = Path(tf).name
+            assert not tf_name.endswith("."), (
+                f"Issue #551 (Makefile): test_files entry must not end with a "
+                f"trailing dot, got {tf_name!r}"
+            )
 
     def test_test_files_list_uses_canonical_extension(self, tmp_path, monkeypatch):
         """test_files key in get_pdd_file_paths return must also use the canonical extension.
