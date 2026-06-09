@@ -5236,3 +5236,209 @@ class TestDocContractCheck:
             encoding="utf-8",
         )
         assert run_doc_contract_check(tmp_path, base_ref="HEAD~1") == 0
+
+
+class TestExtractPddrcDefaultsKeys:
+    """Direct unit tests for extract_pddrc_defaults_keys (AST-based parser)."""
+
+    def test_single_line_set_literal(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_PDDRC_DEFAULTS_KEYS = {"a", "b", "c"}\n'
+        assert extract_pddrc_defaults_keys(content) == {"a", "b", "c"}
+
+    def test_multiline_set_literal(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = 'x = 1\n_PDDRC_DEFAULTS_KEYS = {\n    "key_a",\n    "key_b",\n}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_comment_with_closing_brace_inside_literal(self):
+        # This is the case the old regex silently failed on
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_PDDRC_DEFAULTS_KEYS = {\n    "key_a",  # e.g. {default}\n    "key_b",\n}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_missing_assignment_returns_empty(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        assert extract_pddrc_defaults_keys("x = 1\n") == set()
+
+    def test_syntax_error_returns_empty(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        assert extract_pddrc_defaults_keys("def (broken syntax") == set()
+
+    def test_whitespace_padded_keys_are_stripped(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_PDDRC_DEFAULTS_KEYS = {" key_a ", "key_b"}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_nested_assignment_not_extracted(self):
+        # tree.body only visits top-level nodes; a nested assignment should not be found
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = 'def f():\n    _PDDRC_DEFAULTS_KEYS = {"nested_key"}\n'
+        assert extract_pddrc_defaults_keys(content) == set()
+
+    def test_annotated_assignment_is_extracted(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = 'from typing import Set\n_PDDRC_DEFAULTS_KEYS: Set[str] = {"key_a", "key_b"}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_chained_assignment_is_extracted(self):
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_ALIAS = _PDDRC_DEFAULTS_KEYS = {"key_a", "key_b"}\n'
+        assert extract_pddrc_defaults_keys(content) == {"key_a", "key_b"}
+
+    def test_whitespace_only_keys_excluded(self):
+        # keys that strip to "" must not appear in the result
+        from pdd.checkup_gates import extract_pddrc_defaults_keys
+        content = '_PDDRC_DEFAULTS_KEYS = {"real_key", "   "}\n'
+        assert extract_pddrc_defaults_keys(content) == {"real_key"}
+
+
+class TestIssue1486RegressionCompressionKeys:
+    """Regression test for GitHub issue #1486.
+
+    origin/main merged 5 compression .pddrc keys into _PDDRC_DEFAULTS_KEYS
+    (via fork PRs #73/#76) without updating README's Available Context Settings
+    section.  Any `pdd change` run on a worktree whose base predated that merge
+    hit the doc-contract gate with errors like:
+
+        Doc Contract Failure: .pddrc key 'compression_fallback' is not
+          documented in README.md under 'Available Context Settings' section.
+
+    This blocked autonomous solver jobs for issues #1434 and #1436:
+      - Job AjWALQYOPOedGcYemp9D (#1434): compression_fallback, compressed_context,
+        compress_examples
+      - Job hIsixcIY4lMc5S5pHtNG (#1436): context_compression
+
+    PR #1487 fixes the gap by documenting all 5 keys in README.
+    """
+
+    # 12-key baseline matching origin/main state before the compression merge
+    _CONSTRUCT_PRE_MERGE = (
+        '_PDDRC_DEFAULTS_KEYS = {\n'
+        '    "generate_output_path",\n'
+        '    "test_output_path",\n'
+        '    "example_output_path",\n'
+        '    "prompts_dir",\n'
+        '    "default_language",\n'
+        '    "target_coverage",\n'
+        '    "strength",\n'
+        '    "temperature",\n'
+        '    "budget",\n'
+        '    "max_attempts",\n'
+        '    "outputs",\n'
+        '    "auto_deps_csv_path",\n'
+        '}\n'
+    )
+
+    # 17-key post-merge state (5 compression keys added, no README update)
+    _CONSTRUCT_POST_MERGE = (
+        '_PDDRC_DEFAULTS_KEYS = {\n'
+        '    "generate_output_path",\n'
+        '    "test_output_path",\n'
+        '    "example_output_path",\n'
+        '    "prompts_dir",\n'
+        '    "default_language",\n'
+        '    "target_coverage",\n'
+        '    "strength",\n'
+        '    "temperature",\n'
+        '    "budget",\n'
+        '    "max_attempts",\n'
+        '    "outputs",\n'
+        '    "auto_deps_csv_path",\n'
+        '    "compressed_context",\n'
+        '    "context_compression",\n'
+        '    "compress_examples",\n'
+        '    "compress_test_context",\n'
+        '    "compression_fallback",\n'
+        '}\n'
+    )
+
+    _README_PRE_FIX = (
+        '**Available Context Settings**:\n'
+        '- `prompts_dir`: Directory for prompt files.\n'
+        '- `generate_output_path`: Where generated code is saved.\n'
+        '- `test_output_path`: Where test files are saved.\n'
+        '- `example_output_path`: Where example files are saved.\n'
+        '- `default_language`: Default programming language.\n'
+        '- `target_coverage`: Default test coverage target.\n'
+        '- `strength`: Default AI model strength.\n'
+        '- `temperature`: Default AI model temperature.\n'
+        '- `budget`: Default budget for iterative commands.\n'
+        '- `max_attempts`: Default maximum attempts for fixing.\n'
+        '- `outputs`: Output directories (default: empty dict).\n'
+        '- `auto_deps_csv_path`: Path to the auto-deps CSV file.\n'
+        '\n**Path Behavior**:\n'
+    )
+
+    _README_POST_FIX = (
+        '**Available Context Settings**:\n'
+        '- `prompts_dir`: Directory for prompt files.\n'
+        '- `generate_output_path`: Where generated code is saved.\n'
+        '- `test_output_path`: Where test files are saved.\n'
+        '- `example_output_path`: Where example files are saved.\n'
+        '- `default_language`: Default programming language.\n'
+        '- `target_coverage`: Default test coverage target.\n'
+        '- `strength`: Default AI model strength.\n'
+        '- `temperature`: Default AI model temperature.\n'
+        '- `budget`: Default budget for iterative commands.\n'
+        '- `max_attempts`: Default maximum attempts for fixing.\n'
+        '- `outputs`: Output directories (default: empty dict).\n'
+        '- `auto_deps_csv_path`: Path to the auto-deps CSV file.\n'
+        '- `compressed_context`: Boolean. Enable compressed sync context.\n'
+        '- `context_compression`: Mode string: "test", "examples", "contracts", "all", or "off".\n'
+        '- `compress_examples`: Whether to compress example files (default: false).\n'
+        '- `compress_test_context`: Whether to compress test context (default: false).\n'
+        '- `compression_fallback`: Fallback when compression fails (default: "full").\n'
+        '\n**Path Behavior**:\n'
+    )
+
+    def _setup_repo(self, tmp_path: Path) -> None:
+        """Create a base commit with the pre-merge state."""
+        _git_init(tmp_path)
+        (tmp_path / "README.md").write_text(self._README_PRE_FIX, encoding="utf-8")
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "construct_paths.py").write_text(
+            self._CONSTRUCT_PRE_MERGE, encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x",
+             "commit", "-m", "base: 12 keys pre-compression-merge", "-q"],
+            cwd=tmp_path, check=True,
+        )
+
+    def test_gate_fails_with_undocumented_compression_keys(self, tmp_path: Path) -> None:
+        """Reproduces the exact failure from jobs AjWALQYOPOedGcYemp9D and hIsixcIY4lMc5S5pHtNG.
+
+        After the compression merge, _PDDRC_DEFAULTS_KEYS has 5 new keys that are
+        absent from README.  The gate must return 1.
+        """
+        from pdd.checkup_gates import run_doc_contract_check
+
+        self._setup_repo(tmp_path)
+        # Simulate the post-merge worktree: 5 new keys, README unchanged
+        (tmp_path / "pdd" / "construct_paths.py").write_text(
+            self._CONSTRUCT_POST_MERGE, encoding="utf-8"
+        )
+        result = run_doc_contract_check(tmp_path, base_ref="HEAD")
+        assert result == 1, (
+            "Gate must fail: compress_examples, compress_test_context, "
+            "compressed_context, compression_fallback, context_compression "
+            "are present in _PDDRC_DEFAULTS_KEYS but absent from README "
+            "(reproduces issues #1434 / #1436)"
+        )
+
+    def test_gate_passes_after_readme_fix(self, tmp_path: Path) -> None:
+        """Verifies PR #1487 fixes the issue: documenting the 5 keys makes the gate pass."""
+        from pdd.checkup_gates import run_doc_contract_check
+
+        self._setup_repo(tmp_path)
+        # Post-merge state with fix applied: both construct_paths and README updated
+        (tmp_path / "pdd" / "construct_paths.py").write_text(
+            self._CONSTRUCT_POST_MERGE, encoding="utf-8"
+        )
+        (tmp_path / "README.md").write_text(self._README_POST_FIX, encoding="utf-8")
+        result = run_doc_contract_check(tmp_path, base_ref="HEAD")
+        assert result == 0, (
+            "Gate must pass: all 5 compression keys are now documented in README"
+        )
