@@ -9991,6 +9991,46 @@
     }
   },
   {
+    "reason": "Defines the engine-agnostic interactive prompt-repair session protocol and fake backend.",
+    "description": "Defines typed repair options, approved patches, a structural interactive repair session protocol, and an in-memory fake backend for checkup prompt repair.",
+    "dependencies": [],
+    "priority": 240,
+    "filename": "checkup_interactive_session_python.prompt",
+    "filepath": "pdd/checkup_interactive_session.py",
+    "tags": [
+      "module",
+      "python",
+      "checkup"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ApprovedPatch",
+            "signature": "(kind: str, target: Path, anchor: dict, replacement: str, finding_id: str = '')",
+            "returns": "ApprovedPatch"
+          },
+          {
+            "name": "RepairOption",
+            "signature": "(label: str, preview: str, patch: ApprovedPatch)",
+            "returns": "RepairOption"
+          },
+          {
+            "name": "InteractiveRepairSession",
+            "signature": "(seed(report: PromptSourceSetReport) -> None, present_finding(finding_id: str) -> list[RepairOption], ask(question: str) -> str, record_choice(finding_id: str, option: RepairOption) -> None, approved_patches() -> list[ApprovedPatch])",
+            "returns": "Protocol"
+          },
+          {
+            "name": "FakeInteractiveSession",
+            "signature": "(options_by_finding=None, answers=None)",
+            "returns": "FakeInteractiveSession"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Owns the normalized pdd.prompt_source_set_report.v1 report and the deterministic per-engine clarification heuristics that route findings to interactive vs. automated repair.",
     "description": "Single owner of the pdd.prompt_source_set_report.v1 report consumed by `pdd checkup` prompt targets and downstream interactive/non-interactive prompt repair. Orchestrates the deterministic lint, contract, coverage, gate, snapshot, and drift engines, aggregates their results into one PromptSourceSetReport of SourceSetFinding objects, owns as_dict() serialization, and applies code/status-driven heuristics that set requires_clarification and a compact clarification_reason without calling an LLM or mutating source.",
     "dependencies": [
