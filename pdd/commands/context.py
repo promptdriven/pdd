@@ -190,7 +190,9 @@ def _hydrate(text: str) -> Tuple[str, _SegmentRecorder]:
     """
     recorder = _SegmentRecorder()
     prev_quiet = os.environ.get("PDD_QUIET")
+    prev_no_query_fallback = os.environ.get("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK")
     os.environ["PDD_QUIET"] = "1"
+    os.environ["PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK"] = "1"
     try:
         # The include processor prints progress lines that are not gated by
         # quiet mode; redirect stdout so they cannot corrupt --json output.
@@ -208,6 +210,12 @@ def _hydrate(text: str) -> Tuple[str, _SegmentRecorder]:
             os.environ.pop("PDD_QUIET", None)
         else:
             os.environ["PDD_QUIET"] = prev_quiet
+        if prev_no_query_fallback is None:
+            os.environ.pop("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK", None)
+        else:
+            os.environ[
+                "PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK"
+            ] = prev_no_query_fallback
 
 
 def _display_source(source: str) -> str:
@@ -256,7 +264,9 @@ def _unresolved_includes(raw: str) -> List[str]:
     failed: List[str] = []
     user_intent_paths = compute_user_intent_paths(raw)
     prev_quiet = os.environ.get("PDD_QUIET")
+    prev_no_query_fallback = os.environ.get("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK")
     os.environ["PDD_QUIET"] = "1"
+    os.environ["PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK"] = "1"
     try:
         with contextlib.redirect_stdout(io.StringIO()):
             checked = process_backtick_includes(
@@ -282,6 +292,12 @@ def _unresolved_includes(raw: str) -> List[str]:
             os.environ.pop("PDD_QUIET", None)
         else:
             os.environ["PDD_QUIET"] = prev_quiet
+        if prev_no_query_fallback is None:
+            os.environ.pop("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK", None)
+        else:
+            os.environ[
+                "PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK"
+            ] = prev_no_query_fallback
     return sorted({path for path in failed if "${" not in path and "{" not in path})
 
 

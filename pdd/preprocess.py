@@ -31,6 +31,11 @@ def _is_quiet_mode() -> bool:
     return os.getenv("PDD_QUIET") == "1"
 
 
+def _is_context_audit_no_query_fallback() -> bool:
+    """Return True when context audit must defer semantic query fallbacks."""
+    return os.getenv("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK") == "1"
+
+
 def _warn_selector_fallback(
     file_path: str,
     mode: str,
@@ -860,6 +865,9 @@ def process_include_tags(
                                 raise
                             except ImportError as e:
                                 fallback_query = attrs.get('query')
+                                if fallback_query and _is_context_audit_no_query_fallback():
+                                    _dbg(f"Deferred query fallback during context audit for {file_path}")
+                                    return match.group(0)
                                 if fallback_query:
                                     try:
                                         from pdd.include_query_extractor import IncludeQueryExtractor
@@ -883,6 +891,9 @@ def process_include_tags(
                                 _warn_selector_fallback(file_path, mode, e, selectors=selectors_str)
                             except SelectorError as e:
                                 fallback_query = attrs.get('query')
+                                if fallback_query and _is_context_audit_no_query_fallback():
+                                    _dbg(f"Deferred query fallback during context audit for {file_path}")
+                                    return match.group(0)
                                 if fallback_query:
                                     try:
                                         from pdd.include_query_extractor import IncludeQueryExtractor
@@ -909,6 +920,9 @@ def process_include_tags(
                                 if fallback_strategy == "error":
                                     raise CompressionFallbackError(str(e)) from e
                                 fallback_query = attrs.get('query')
+                                if fallback_query and _is_context_audit_no_query_fallback():
+                                    _dbg(f"Deferred query fallback during context audit for {file_path}")
+                                    return match.group(0)
                                 if fallback_query:
                                     try:
                                         from pdd.include_query_extractor import IncludeQueryExtractor

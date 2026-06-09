@@ -55,6 +55,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
    - If `query=` was also present, try query extraction before applying fallback.
 7. `<include query="...">file</include>` — delegate to `IncludeQueryExtractor.extract()`. Deferred when `recursive=True` (leave tag intact). On import error or exception, return inline error message in brackets (e.g., `[Error: pdd.include_query_extractor not found...]`).
 8. When both `select=` and `query=` present, keep `select=` and discard `query=`; fall back to `query=` only if `select=` fails
+   - If `PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK=1`, do not run the `query=` fallback after selector failure; leave the original include tag intact so deterministic context audits can report the semantic query as deferred without making an LLM call.
 9. Image includes (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px and convert to base64 data URL. GIF first frame converted to static image. HEIC converted to JPEG (requires `pillow_heif`).
 10. `<include-many>` — comma/newline-separated paths; concatenate with newlines. Missing files → `[File not found: path]`. Deferred when `recursive=True`.
 11. `<shell>cmd</shell>` — execute command string in a shell, replace with stdout. Timeout controlled by `PDD_SHELL_TIMEOUT` env var (default 30s). On non-zero exit, insert error message with exit code and combined stdout/stderr. On timeout, insert timeout message. Deferred when `recursive=True`.

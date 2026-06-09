@@ -481,6 +481,53 @@ def test_semantic_query_include_does_not_invoke_llm_extractor(
     assert any("query_include" in w and "deferred" in w for w in warnings)
 
 
+def test_select_query_fallback_is_deferred_without_llm_extractor(
+    runner, tmp_path, monkeypatch, patched_tokens
+):
+    """no-LLM contract: when a deterministic select fails on an include that
+    also has query=, context audit must defer the query fallback instead of
+    invoking IncludeQueryExtractor."""
+    import pdd.content_selector as selector_module
+    import pdd.include_query_extractor as iq
+
+    calls = []
+
+    class _ProbeExtractor:
+        def __init__(self, *_a, **_k):
+            pass
+
+        def extract(self, *, file_path, query):
+            calls.append((str(file_path), query))
+            raise AssertionError("IncludeQueryExtractor must not run during context audit")
+
+    def _selector_fails(*_args, **_kwargs):
+        raise selector_module.SelectorError("forced selector failure")
+
+    monkeypatch.setattr(iq, "IncludeQueryExtractor", _ProbeExtractor)
+    monkeypatch.setattr(
+        selector_module.ContentSelector,
+        "select",
+        _selector_fails,
+    )
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "data.py").write_text(
+        "def f():\n    return 1\n", encoding="utf-8"
+    )
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(
+        'Body\n<include select="def:missing" query="summarize">context/data.py</include>\n',
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(context, [str(prompt), "--json"], obj={})
+    assert result.exit_code == 0, result.output
+    assert calls == [], "extractor was invoked; audit broke the no-LLM contract"
+    payload = json.loads(result.output)
+    assert payload["total_tokens"] == 1
+    assert any("query_include" in w and "deferred" in w for w in payload["warnings"])
+
+
 # --------------------------------------------------------------------------- #
 # Model default resolution is explicit about the environment (review #4).      #
 # --------------------------------------------------------------------------- #
