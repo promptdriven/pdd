@@ -445,6 +445,32 @@ def test_dynamic_markup_excluded_from_deterministic_total(runner, tmp_path, monk
     assert payload["total_tokens"] == 2
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Body\n```\n<shell>echo hello world</shell>\n```\nTail",
+        "Body\n```xml\n<web>https://example.com</web>\n```\nTail",
+        'Body\n```\n<include query="summarize">context/data.py</include>\n```\nTail',
+        "Body `<shell>echo hello world</shell>` Tail",
+        "Body `<web>https://example.com</web>` Tail",
+        'Body `<include query="summarize">context/data.py</include>` Tail',
+    ],
+)
+def test_dynamic_markup_inside_code_spans_is_literal_prompt_text(
+    runner, tmp_path, monkeypatch, patched_tokens, body
+):
+    """review #6: dynamic syntax in fenced/inline code is documentation, not a
+    deferred directive, so it is neither warned on nor stripped from counting."""
+    monkeypatch.chdir(tmp_path)
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text(body, encoding="utf-8")
+    result = runner.invoke(context, [str(prompt), "--json"], obj={})
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert not any("dynamic tag" in w for w in payload["warnings"])
+    assert payload["total_tokens"] == _word_count_tokens(body)
+
+
 def test_semantic_query_include_does_not_invoke_llm_extractor(
     runner, tmp_path, monkeypatch, patched_tokens
 ):

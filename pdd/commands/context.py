@@ -20,7 +20,6 @@ from typing import Dict, List, Optional, Tuple
 
 import click
 
-from ..context_snapshot import detect_dynamic_tags
 from ..core.errors import handle_error
 from ..path_resolution import get_default_resolver
 from ..preprocess import (
@@ -57,6 +56,16 @@ _DYNAMIC_MARKUP_PATTERNS = (
     re.compile(r"<web\b[^>]*>.*?</web>|<web\b[^>]*/>", re.IGNORECASE | re.DOTALL),
     _QUERY_INCLUDE_PATTERN,
 )
+_DYNAMIC_TAG_DETECT_PATTERNS = {
+    "shell": re.compile(r"<shell\b[^>]*>.*?</shell>|<shell\b[^>]*/>", re.IGNORECASE | re.DOTALL),
+    "web": re.compile(r"<web\b[^>]*>.*?</web>|<web\b[^>]*/>", re.IGNORECASE | re.DOTALL),
+    "query_include": _QUERY_INCLUDE_PATTERN,
+}
+_DYNAMIC_TAG_OPENING_PATTERNS = {
+    "shell": re.compile(r"<shell(?:\s[^>]*)?>", re.IGNORECASE),
+    "web": re.compile(r"<web(?:\s[^>]*)?>", re.IGNORECASE),
+    "query_include": re.compile(r"<include\b[^>]*\bquery\s*=", re.IGNORECASE),
+}
 
 
 # Matches a whole ``<include ...>...</include>`` (or self-closing) element so its
@@ -132,8 +141,41 @@ class _SegmentRecorder:
 def _strip_dynamic_markup(text: str) -> str:
     """Remove deferred dynamic-tag markup so it is not counted as payload."""
     for pattern in _DYNAMIC_MARKUP_PATTERNS:
-        text = pattern.sub("", text)
+        text = _strip_pattern_outside_code(text, pattern)
     return text
+
+
+def _strip_pattern_outside_code(text: str, pattern: "re.Pattern") -> str:
+    """Strip pattern matches that do not intersect fenced/inline code spans."""
+    code_spans = _extract_code_spans(text)
+    parts: List[str] = []
+    pos = 0
+    for match in pattern.finditer(text):
+        parts.append(text[pos:match.start()])
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            parts.append(match.group(0))
+        pos = match.end()
+    parts.append(text[pos:])
+    return "".join(parts)
+
+
+def _detect_dynamic_tags_outside_code(text: str) -> List[str]:
+    """Return deferred dynamic tags, ignoring literal examples in code spans."""
+    code_spans = _extract_code_spans(text)
+    found: List[str] = []
+    for name, pattern in _DYNAMIC_TAG_DETECT_PATTERNS.items():
+        if any(
+            not _intersects_any_span(match.start(), match.end(), code_spans)
+            for match in pattern.finditer(text)
+        ):
+            found.append(name)
+            continue
+        if any(
+            not _intersects_any_span(match.start(), match.end(), code_spans)
+            for match in _DYNAMIC_TAG_OPENING_PATTERNS[name].finditer(text)
+        ):
+            found.append(name)
+    return found
 
 
 # ``<include-many>`` is deferred past the recursive pass-1 hydration the audit
@@ -314,7 +356,7 @@ def _build_rows(prompt_path: str, model: str) -> Tuple[List[Dict], int, List[str
     warnings: List[str] = []
     # Scan the *expanded* payload, not just the raw prompt, so dynamic tags that
     # live inside an included file are surfaced too (review #3).
-    for tag in detect_dynamic_tags(expanded):
+    for tag in _detect_dynamic_tags_outside_code(expanded):
         warnings.append(
             f"dynamic tag <{tag}> detected but not expanded "
             "(nondeterministic, deferred); excluded from the deterministic total"
