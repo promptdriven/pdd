@@ -9,6 +9,8 @@ from unittest.mock import patch
 import pytest
 
 from pdd.user_story_tests import (
+    _contract_path_for_story,
+    _story_content_hash,
     cache_story_prompt_links,
     discover_prompt_files,
     discover_story_files,
@@ -16,6 +18,7 @@ from pdd.user_story_tests import (
     resolve_issue_source,
     run_user_story_fix,
     run_user_story_tests,
+    sync_user_story_contract,
 )
 
 
@@ -35,6 +38,19 @@ def _write_issue(tmp_path, body=_DEFAULT_ISSUE_BODY, name="issue.md"):
     issue_path = tmp_path / name
     issue_path.write_text(body, encoding="utf-8")
     return str(issue_path)
+
+
+@pytest.fixture(autouse=True)
+def _stub_contract_llm():
+    """Stub the contract LLM call for the whole module so generation tests never
+    hit the network. The real contract WRITER still runs, so a contract file is
+    produced from ``_CONTRACT_MD``. Tests that assert issue-specific contract
+    content override this with their own ``_llm_generate_story_contract`` patch."""
+    with patch(
+        "pdd.user_story_tests._llm_generate_story_contract",
+        return_value=(_CONTRACT_MD, 0.0, "contract-model"),
+    ):
+        yield
 
 
 def test_user_story_tests_no_stories(tmp_path):
@@ -495,6 +511,7 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     assert success is True
     assert "Generated story file:" in message
     assert "linked from prompt inputs" in message
+    assert "Generated contract file:" in message
     assert cost == pytest.approx(0.05)
     assert model == "story-model"
     assert linked_prompts == ["upload_python.prompt", "notify_python.prompt"]
@@ -502,22 +519,28 @@ def test_generate_user_story_creates_story_file_and_links(tmp_path):
     output_path = Path(story_file)
     assert output_path.exists()
     story_text = output_path.read_text(encoding="utf-8")
+    # The HUMAN story file holds only the metadata link + the one-sentence Story.
     assert story_text.startswith("<!-- pdd-story-prompts:")
     assert "upload_python.prompt" in story_text
     assert "notify_python.prompt" in story_text
-    assert "## Covers" in story_text
     assert "## Story" in story_text
-    assert "## Context" in story_text
-    assert "## Acceptance Criteria" in story_text
-    assert "## Oracle" in story_text
-    assert "## Non-Oracle" in story_text
-    assert "## Negative Cases" in story_text
-    assert "## Prompt Scope" not in story_text
-    assert "<persona>" not in story_text
-    assert "<behavior>" not in story_text
-    assert "scoped prompt capabilities" not in story_text
     assert "As a data analyst, I can upload a CSV file" in story_text
-    assert "scoped prompt capabilities" not in story_text
+    # Contract sections must NOT be in the human file (they live in the contract).
+    assert "## Covers" not in story_text
+    assert "## Acceptance Criteria" not in story_text
+    assert "<persona>" not in story_text
+    # The CONTRACT file is a separate sibling under contracts/.
+    contract_path = output_path.parent / "contracts" / (
+        output_path.name[len("story__"):-len(".md")] + ".contract.md"
+    )
+    assert contract_path.exists()
+    contract_text = contract_path.read_text(encoding="utf-8")
+    assert "pdd-story-contract" in contract_text
+    assert 'issue-ref=' in contract_text
+    assert "story-hash=" in contract_text
+    assert "## Covers" in contract_text
+    assert "## Acceptance Criteria" in contract_text
+    assert "## Candidate Prompts" in contract_text
 
 
 def test_generate_user_story_links_prompt_inputs_without_detection(tmp_path):
@@ -601,16 +624,22 @@ def test_generate_user_story_derives_unit_test_ready_details_from_issue(tmp_path
         ),
     )
 
-    csv_story = _LLM_STORY_MD.replace(
-        "As a data analyst, I can upload a CSV file and view a summary report",
-        "As a data analyst, I can upload a CSV file with a header row and view row_count and column_names",
-    ).replace(
-        "Rejecting a valid CSV",
-        "Logging raw uploaded cell values",
+    csv_story = (
+        "# User Story: CSV report\n\n"
+        "## Story\n\n"
+        "As a data analyst, I can upload a CSV file with a header row and view "
+        "row_count and column_names, so that I can quickly understand my data.\n"
+    )
+    csv_contract = _CONTRACT_MD.replace(
+        "- Rejecting a valid CSV",
+        "- Logging raw uploaded cell values",
     )
     with patch(
         "pdd.user_story_tests._llm_generate_story_markdown",
         return_value=(csv_story, 0.05, "story-model"),
+    ), patch(
+        "pdd.user_story_tests._llm_generate_story_contract",
+        return_value=(csv_contract, 0.02, "contract-model"),
     ), patch("pdd.user_story_tests.detect_change") as mock_detect:
         success, _, _, _, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt)],
@@ -622,13 +651,17 @@ def test_generate_user_story_derives_unit_test_ready_details_from_issue(tmp_path
     assert success is True
     assert linked_prompts == ["csv_report_python.prompt"]
     mock_detect.assert_not_called()
+    # The human Story carries the issue-derived capability detail (not the prompt's).
     story_text = Path(story_file).read_text(encoding="utf-8")
     assert "As a data analyst" in story_text
     assert "header row" in story_text
     assert "row_count and column_names" in story_text
-    assert "Logging raw uploaded cell values" in story_text
     assert "<persona>" not in story_text
-    assert "List forbidden outcomes" not in story_text
+    # The forbidden behavior is an issue-derived contract Negative Case.
+    contract_path = _contract_path_for_story(Path(story_file))
+    contract_text = contract_path.read_text(encoding="utf-8")
+    assert "Logging raw uploaded cell values" in contract_text
+    assert "List forbidden outcomes" not in contract_text
 
 
 def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
@@ -654,9 +687,10 @@ def test_generate_user_story_seeds_covers_and_negative_cases(tmp_path):
 
     assert success is True
     mock_detect.assert_not_called()
-    story_text = Path(story_file).read_text(encoding="utf-8")
-    assert "- R1: Upload returns a summary report" in story_text
-    assert "## Negative Cases" in story_text
+    # Covers/Negative Cases live in the generated contract, not the human story.
+    contract_text = _contract_path_for_story(Path(story_file)).read_text(encoding="utf-8")
+    assert "- R1: Upload returns a summary report" in contract_text
+    assert "## Negative Cases" in contract_text
 
 
 def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
@@ -684,16 +718,24 @@ def test_generate_user_story_multi_prompt_seeds_cross_module(tmp_path):
 
     assert success is True
     mock_detect.assert_not_called()
-    story_text = Path(story_file).read_text(encoding="utf-8")
-    assert "- R1: Upload returns a summary report" in story_text
+    contract_text = _contract_path_for_story(Path(story_file)).read_text(encoding="utf-8")
+    assert "- R1: Upload returns a summary report" in contract_text
 
 
+# Two-file model: the human-verified Story file holds ONLY the one-sentence
+# Story; the machine-checkable contract lives in a separate file.
 _LLM_STORY_MD = (
     "# User Story: Upload CSV\n\n"
-    "## Covers\n\n- R1: Upload returns a summary report\n\n"
     "## Story\n\n"
     "As a data analyst, I can upload a CSV file and view a summary report, "
-    "so that I can quickly understand my data.\n\n"
+    "so that I can quickly understand my data.\n"
+)
+
+# Default contract body returned by the stubbed contract LLM call. The real
+# contract WRITER still runs, so generation tests produce a real contract file
+# under user_stories/contracts/ with this body + the derived-from header.
+_CONTRACT_MD = (
+    "## Covers\n\n- R1: Upload returns a summary report\n\n"
     "## Context\n\n- `prompts/upload_python.prompt`: CSV upload + summary\n\n"
     "## Acceptance Criteria\n\n"
     "1. Given a valid CSV, when uploaded, then a summary report is shown.\n\n"
@@ -701,6 +743,7 @@ _LLM_STORY_MD = (
     "## Non-Oracle\n\n- internal helper names\n\n"
     "## Negative Cases\n\n- Rejecting a valid CSV\n\n"
     "## Non-Goals\n\n- Editing the CSV\n\n"
+    "## Candidate Prompts\n\n- `upload_python.prompt` — implements CSV upload (primary)\n\n"
     "## Notes\n\n- n/a\n"
 )
 
@@ -749,27 +792,32 @@ _CONTEXT_PROMPT_AGGREGATE_ONLY = "\n".join(
 )
 
 
-_CONTEXT_STORY_MD = (
+# Context-window example split into the two-file model: a plain human Story and a
+# separate per-source contract. The durable, regression-catching signal
+# (per-source breakdown vs aggregate-only) lives in the contract; the Story is a
+# single readable sentence with no brand comparison.
+_CONTEXT_HUMAN_STORY = (
     "# User Story: Audit context-window usage by source\n\n"
+    "## Story\n\n"
+    "As a CLI user, I can see how many tokens each part of my prompt uses before "
+    "generating, so that I can find and trim what consumes the context window.\n"
+)
+
+_CONTEXT_CONTRACT_MD = (
     "## Covers\n\n"
     "- context_python.prompt: CLI users can run `pdd context <prompt_path>` to see "
-    "per-source token attribution rendered as a Claude-Code `/context`-style usage "
-    "box before generation.\n"
+    "per-source token attribution rendered as a usage box with a per-source "
+    "`Estimated usage by category` breakdown before generation.\n"
     "- context_python.prompt: The command supports `--table`, `--json`, `--model`, and "
     "`--threshold` behavior without making an LLM call.\n\n"
-    "## Story\n\n"
-    "As a CLI user, I can audit a hydrated prompt's per-source token usage before "
-    "generation, rendered like Claude Code's `/context` display, so that I can "
-    "identify which prompt body, include, test, example, or grounding source "
-    "consumes the context window.\n\n"
     "## Context\n\n"
     "- `context_python.prompt` defines the `pdd context <prompt_path>` command, the "
-    "default `/context`-style usage box, the `--table` attribution table, JSON "
+    "default per-source usage box, the `--table` attribution table, JSON "
     "output, threshold exit behavior, dynamic-tag warnings, and the no-LLM-call "
     "requirement.\n\n"
     "## Acceptance Criteria\n\n"
     "1. Given a prompt with includes, when I run `pdd context <prompt_path>`, then "
-    "the default output is a Claude-Code `/context`-style usage box whose "
+    "the default output is a usage box whose "
     "`Estimated usage by category` breakdown reports token rows per source rather "
     "than only an aggregate total.\n"
     "2. Given `--table` is passed, when the audit completes, then the per-source "
@@ -783,7 +831,7 @@ _CONTEXT_STORY_MD = (
     "not expanded, then warning entries are reported without making an LLM call.\n\n"
     "## Oracle\n\n"
     "These details matter for pass/fail:\n"
-    "- The default output is the Claude-Code `/context`-style usage box, with a "
+    "- The default output is a usage box with a "
     "per-source `Estimated usage by category` breakdown.\n"
     "- Per-source attribution rows are present for prompt body and resolved includes.\n"
     "- Aggregate-only token totals are not sufficient.\n"
@@ -794,19 +842,22 @@ _CONTEXT_STORY_MD = (
     "- The exact glyphs used in the usage box and the grid dimensions.\n"
     "- Private helper names.\n"
     "- Table styling.\n"
+    "- Resemblance to any specific third-party tool's UI.\n"
     "- Internal ordering beyond sorting rows by token count.\n\n"
     "## Negative Cases\n\n"
     "- Reporting only an aggregate total with no per-source attribution.\n"
-    "- Dropping the per-source breakdown when rendering the `/context`-style box.\n"
+    "- Dropping the per-source breakdown when rendering the usage box.\n"
     "- Calling an LLM during the deterministic context audit.\n"
     "- Silently ignoring dynamic tags without warnings.\n\n"
     "## Non-Goals\n\n"
     "- Generating code from the audited prompt.\n"
     "- Fetching cloud grounding data locally.\n\n"
+    "## Candidate Prompts\n\n"
+    "- `context_python.prompt` — implements the context-window usage command (primary)\n\n"
     "## Notes\n\n"
     "- This story should fail validation if the prompt changes from per-source "
     "token attribution to aggregate-only token totals, or removes the default "
-    "`/context`-style usage box.\n"
+    "per-source usage-box breakdown.\n"
 )
 
 
@@ -837,7 +888,11 @@ def test_generate_user_story_uses_llm_output(tmp_path):
     # LLM-authored narrative is present (not the deterministic placeholder).
     assert "As a data analyst, I can upload a CSV file" in story_text
     assert "<persona>" not in story_text
-    assert "## Acceptance Criteria" in story_text
+    # Acceptance criteria live in the generated contract, not the human story.
+    assert "## Acceptance Criteria" not in story_text
+    assert "## Acceptance Criteria" in _contract_path_for_story(
+        Path(story_file)
+    ).read_text(encoding="utf-8")
     # Metadata stitched deterministically even though the LLM did not emit it.
     assert story_text.startswith("<!-- pdd-story-prompts:")
     assert "upload_python.prompt" in story_text
@@ -859,7 +914,10 @@ def test_generate_user_story_context_story_protects_per_source_attribution(tmp_p
 
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.user_story_tests._llm_generate_story_markdown",
-        return_value=(_CONTEXT_STORY_MD, 0.05, "story-model"),
+        return_value=(_CONTEXT_HUMAN_STORY, 0.05, "story-model"),
+    ), patch(
+        "pdd.user_story_tests._llm_generate_story_contract",
+        return_value=(_CONTEXT_CONTRACT_MD, 0.02, "contract-model"),
     ):
         success, _, _, _, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -872,12 +930,23 @@ def test_generate_user_story_context_story_protects_per_source_attribution(tmp_p
     assert linked_prompts == ["context_python.prompt"]
     mock_detect.assert_not_called()
     story_text = Path(story_file).read_text(encoding="utf-8")
-    assert "per-source token attribution" in story_text
-    assert "Aggregate-only token totals are not sufficient" in story_text
-    # PR #1387's intentional change: the default render is a /context-style box.
-    assert "`/context`-style usage box" in story_text
-    assert "`--table`, `--json`, `--model`, and `--threshold`" in story_text
-    assert "does not make an LLM call" in story_text
+    contract_text = _contract_path_for_story(Path(story_file)).read_text(encoding="utf-8")
+    # The concrete, regression-catching requirements live in the CONTRACT.
+    assert "per-source token attribution" in contract_text
+    assert "Aggregate-only token totals are not sufficient" in contract_text
+    # The regression-catching signal is the observable structure (a per-source
+    # usage-box breakdown vs an aggregate-only total), not a brand comparison.
+    assert "Estimated usage by category" in contract_text
+    assert "usage box" in contract_text
+    assert "`--table`, `--json`, `--model`, and `--threshold`" in contract_text
+    assert "does not make an LLM call" in contract_text
+    # Durability: neither file pins acceptance to a specific external tool's UI.
+    # A future redesign (or a different best-in-class tool) must not make this
+    # story falsely fail, so no Claude Code / Codex / Copilot brand comparison.
+    for text in (story_text, contract_text):
+        assert "Claude" not in text
+        assert "Codex" not in text
+        assert "Copilot" not in text
     assert "<pdd-reason>" not in story_text
     assert "\"type\": \"cli\"" not in story_text
 
@@ -892,12 +961,18 @@ def test_run_user_story_tests_passes_then_fails_for_harmful_context_prompt_chang
 
     prompt_one = prompts_dir / "context_python.prompt"
     prompt_one.write_text(_CONTEXT_PROMPT_BASE, encoding="utf-8")
+    # Two-file model: the human Story plus its sibling contract. Validation
+    # combines them into the detect oracle, so the per-source requirements that
+    # catch the regression live in the contract.
     story = stories_dir / "story__context.md"
     story.write_text(
         "<!-- pdd-story-prompts: context_python.prompt -->\n\n"
-        f"{_CONTEXT_STORY_MD}",
+        f"{_CONTEXT_HUMAN_STORY}",
         encoding="utf-8",
     )
+    contract = _contract_path_for_story(story)
+    contract.parent.mkdir(parents=True, exist_ok=True)
+    contract.write_text(_CONTEXT_CONTRACT_MD, encoding="utf-8")
 
     harmful_changes = [
         {
@@ -996,15 +1071,15 @@ def test_generate_user_story_fails_when_llm_errors(tmp_path):
 
 
 def test_generate_user_story_fails_when_llm_output_malformed(tmp_path):
-    """LLM output missing a required section is rejected without writing a
-    deterministic substitute story."""
+    """LLM output missing the required `## Story` heading is rejected without
+    writing a deterministic substitute story."""
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
     prompt_one = prompts_dir / "upload_python.prompt"
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
 
-    # Missing '## Acceptance Criteria'.
-    malformed = "# User Story: x\n\n## Story\n\nAs a user, I can do things.\n"
+    # No '## Story' heading at all — not a valid human story.
+    malformed = "# User Story: x\n\nThis prose has no Story section heading.\n"
     bad_llm = {"result": malformed, "cost": 0.05, "model_name": "story-model"}
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
         "pdd.llm_invoke.llm_invoke", return_value=bad_llm
@@ -1026,28 +1101,24 @@ def test_generate_user_story_fails_when_llm_output_malformed(tmp_path):
     assert not (tmp_path / "user_stories").exists()
 
 
-def test_generate_user_story_rejects_llm_story_missing_canonical_sections(tmp_path):
-    """Issue #1356: an LLM story carrying only `## Story` and
-    `## Acceptance Criteria` is incomplete and must be rejected without writing
-    a deterministic substitute story."""
+def test_generate_user_story_accepts_minimal_human_story(tmp_path):
+    """The human story file is intentionally tiny: a title + the `## Story`
+    sentence is a COMPLETE, valid human story (the contract carries everything
+    else). This is the inverse of the old single-file rule that required every
+    canonical section in one file."""
     prompts_dir = tmp_path / "prompts"
     prompts_dir.mkdir()
     prompt_one = prompts_dir / "upload_python.prompt"
     prompt_one.write_text("Handle file uploads.", encoding="utf-8")
 
-    # Only '## Story' + '## Acceptance Criteria' — every other canonical
-    # section (Covers, Context, Oracle, Non-Oracle, Negative Cases, Non-Goals,
-    # Notes) is missing, so this must not be written as-is.
-    incomplete = (
+    minimal = (
         "# User Story: Upload\n\n"
         "## Story\n\n"
-        "As a user, I can upload a file, so that I get a report.\n\n"
-        "## Acceptance Criteria\n\n"
-        "1. Given a file, when uploaded, then a report appears.\n"
+        "As a user, I can upload a file, so that I get a report.\n"
     )
-    bad_llm = {"result": incomplete, "cost": 0.05, "model_name": "story-model"}
+    good_llm = {"result": minimal, "cost": 0.05, "model_name": "story-model"}
     with patch("pdd.user_story_tests.detect_change") as mock_detect, patch(
-        "pdd.llm_invoke.llm_invoke", return_value=bad_llm
+        "pdd.llm_invoke.llm_invoke", return_value=good_llm
     ):
         success, message, cost, model, story_file, linked_prompts = generate_user_story(
             prompt_files=[str(prompt_one)],
@@ -1056,14 +1127,171 @@ def test_generate_user_story_rejects_llm_story_missing_canonical_sections(tmp_pa
             prompts_dir=str(prompts_dir),
         )
 
-    assert success is False
-    assert "requires a valid LLM-authored story" in message
-    assert cost == pytest.approx(0.05)
-    assert model == "story-model"
-    assert story_file == ""
-    assert linked_prompts == []
+    assert success is True
+    assert Path(story_file).exists()
+    assert linked_prompts == ["upload_python.prompt"]
     mock_detect.assert_not_called()
-    assert not (tmp_path / "user_stories").exists()
+    # The contract is still produced (via the autouse stub).
+    assert _contract_path_for_story(Path(story_file)).exists()
+
+
+def test_generate_writes_two_files_human_story_and_contract(tmp_path):
+    """Generation writes a tiny human Story file plus a sibling AI contract under
+    contracts/, with a derived-from header linking them and a Candidate Prompts
+    list. The human file is the only thing a person verifies."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change"), patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    ):
+        success, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    story_path = Path(story_file)
+    # Human file: only one ## section (the Story); the contract sections are NOT here.
+    story_text = story_path.read_text(encoding="utf-8")
+    level2 = [ln.strip() for ln in story_text.splitlines() if ln.startswith("## ")]
+    assert level2 == ["## Story"]
+
+    # Contract file is a sibling under contracts/<slug>.contract.md.
+    contract_path = story_path.parent / "contracts" / "upload.contract.md"
+    assert contract_path == _contract_path_for_story(story_path)
+    assert contract_path.exists()
+    contract_text = contract_path.read_text(encoding="utf-8")
+    # Derived-from header links the contract back to the human Story for sync.
+    assert "pdd-story-contract" in contract_text
+    assert 'derived-from-story="../story__upload.md"' in contract_text
+    assert "story-hash=" in contract_text
+    # Contract carries the machine-checkable sections + candidate prompts.
+    for section in (
+        "## Covers", "## Acceptance Criteria", "## Oracle",
+        "## Negative Cases", "## Candidate Prompts",
+    ):
+        assert section in contract_text
+
+
+def test_generate_contract_failure_is_non_blocking(tmp_path):
+    """If the contract step fails, the human Story is still written (it is the
+    source of truth); the message notes the contract can be generated later."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+
+    with patch("pdd.user_story_tests.detect_change"), patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    ), patch(
+        "pdd.user_story_tests._llm_generate_story_contract",
+        return_value=(None, 0.0, "contract-model"),
+    ):
+        success, message, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=_write_issue(tmp_path),
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    assert success is True
+    assert Path(story_file).exists()
+    assert "Contract generation was skipped" in message
+    assert not _contract_path_for_story(Path(story_file)).exists()
+
+
+def test_sync_regenerates_contract_when_story_changes(tmp_path):
+    """Editing the human Story re-aligns the contract (regenerated from the edited
+    Story + the issue recorded in the contract header). An unchanged Story is a
+    no-op."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_one = prompts_dir / "upload_python.prompt"
+    prompt_one.write_text("Handle file uploads.", encoding="utf-8")
+    issue_src = _write_issue(tmp_path)
+
+    with patch("pdd.user_story_tests.detect_change"), patch(
+        "pdd.user_story_tests._llm_generate_story_markdown",
+        return_value=(_LLM_STORY_MD, 0.05, "story-model"),
+    ):
+        _, _, _, _, story_file, _ = generate_user_story(
+            prompt_files=[str(prompt_one)],
+            issue=issue_src,
+            stories_dir=str(tmp_path / "user_stories"),
+            prompts_dir=str(prompts_dir),
+        )
+
+    story_path = Path(story_file)
+    contract_path = _contract_path_for_story(story_path)
+    original_hash = _story_content_hash(story_path.read_text(encoding="utf-8"))
+    assert f'story-hash="{original_hash}"' in contract_path.read_text(encoding="utf-8")
+
+    # Unchanged Story -> sync is a no-op (no regeneration).
+    changed, msg, _, _, _ = sync_user_story_contract(
+        str(story_path), prompts_dir=str(prompts_dir)
+    )
+    assert changed is False
+    assert "already aligned" in msg
+
+    # Human edits the Story -> contract is regenerated to align with the new text.
+    edited = story_path.read_text(encoding="utf-8").replace(
+        "view a summary report", "view a summary report and download it as JSON"
+    )
+    story_path.write_text(edited, encoding="utf-8")
+    new_hash = _story_content_hash(edited)
+    assert new_hash != original_hash
+
+    with patch(
+        "pdd.user_story_tests._llm_generate_story_contract",
+        return_value=(_CONTRACT_MD, 0.02, "contract-model"),
+    ):
+        changed, msg, _, _, _ = sync_user_story_contract(
+            str(story_path), prompts_dir=str(prompts_dir)
+        )
+    assert changed is True
+    assert "Regenerated contract" in msg
+    assert f'story-hash="{new_hash}"' in contract_path.read_text(encoding="utf-8")
+
+
+def test_validation_uses_story_plus_contract_as_oracle(tmp_path):
+    """detect_change receives the human Story AND its contract combined."""
+    prompts_dir = tmp_path / "prompts"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir()
+    stories_dir.mkdir()
+    (prompts_dir / "upload_python.prompt").write_text("uploads", encoding="utf-8")
+
+    story = stories_dir / "story__upload.md"
+    story.write_text(
+        "<!-- pdd-story-prompts: upload_python.prompt -->\n\n" + _LLM_STORY_MD,
+        encoding="utf-8",
+    )
+    contract = _contract_path_for_story(story)
+    contract.parent.mkdir(parents=True, exist_ok=True)
+    contract.write_text(_CONTRACT_MD, encoding="utf-8")
+
+    seen = {}
+
+    def fake_detect(prompt_paths, oracle, *_a, **_k):
+        seen["oracle"] = oracle
+        return [], 0.1, "gpt-test"
+
+    with patch("pdd.user_story_tests.detect_change", side_effect=fake_detect):
+        passed, _, _, _ = run_user_story_tests(
+            prompts_dir=str(prompts_dir), stories_dir=str(stories_dir), quiet=True
+        )
+
+    assert passed is True
+    # The oracle must contain both the human Story sentence and a contract section.
+    assert "As a data analyst, I can upload a CSV file" in seen["oracle"]
+    assert "## Acceptance Criteria" in seen["oracle"]
 
 
 def test_generate_user_story_fails_when_llm_output_contains_placeholders(tmp_path):
