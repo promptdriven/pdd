@@ -44,6 +44,12 @@ DRIFT_WS="$DEMO_DIR/drift_workspace"
 # Relative prompt paths (cwd is REPO_ROOT for every pdd call).
 REL="demos/checkup_interactive/prompts"
 
+# Disable the CLI's "Checking for updates" prompt. In an interactive session it
+# would otherwise consume the first keystroke (and could upgrade the package out
+# from under the editable install).
+export PDD_SKIP_UPDATE_CHECK=1
+export PDD_AUTO_UPDATE=false
+
 PASS=0
 FAIL=0
 
