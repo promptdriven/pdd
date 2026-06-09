@@ -52,7 +52,14 @@ from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
 from pdd.pre_checkup_gate import run_pre_checkup_gate
-from pdd.user_story_tests import generate_user_story, _contract_path_for_story
+from pdd.user_story_tests import (
+    generate_user_story,
+    run_user_story_tests,
+    discover_story_files,
+    _contract_path_for_story,
+    _parse_story_prompt_metadata,
+    _read_story,
+)
 
 # Initialize console for rich output
 console = Console()
@@ -856,6 +863,53 @@ def _format_rel(path: Path, root: Path) -> str:
         return path.as_posix()
 
 
+_VALID_STORY_POLICIES = ("off", "warn", "strict")
+_DEFAULT_STORY_POLICY = "warn"
+
+
+def _resolve_story_policy() -> str:
+    """Resolve the agentic-change user-story policy: ``off | warn | strict``.
+
+    Controlled by ``PDD_STORY_POLICY`` (issue #1454). The prompt-story workflow
+    must be opt-in-safe before any default strict enforcement, so unknown/empty
+    values fall back to the safe default (``warn``): create/reuse + link +
+    validate and REPORT coverage, but never block the change PR. ``off`` skips
+    creation and checking entirely; ``strict`` blocks the PR when a changed
+    prompt still has no passing linked story.
+    """
+    raw = (os.environ.get("PDD_STORY_POLICY") or "").strip().lower()
+    if raw in _VALID_STORY_POLICIES:
+        return raw
+    return _DEFAULT_STORY_POLICY
+
+
+def _find_linked_stories_for_prompts(
+    prompt_files: Sequence[Path],
+    stories_dir: Path,
+) -> Tuple[Dict[Path, List[Path]], List[Path]]:
+    """Map each changed prompt to existing stories that already link it.
+
+    A story "covers" a changed prompt when its ``pdd-story-prompts`` metadata
+    references that prompt (matched by filename). Returns
+    ``(prompt_to_stories, uncovered_prompts)`` so the caller can reuse existing
+    coverage and only GENERATE a new story for prompts that have none — avoiding
+    the duplicate ``story__<slug>_1.md`` coverage #1454 calls out.
+    """
+    prompt_to_stories: Dict[Path, List[Path]] = {p: [] for p in prompt_files}
+    changed_by_name: Dict[str, Path] = {p.name.lower(): p for p in prompt_files}
+    for story_path in discover_story_files(str(stories_dir)):
+        try:
+            refs = _parse_story_prompt_metadata(_read_story(story_path))
+        except OSError:
+            continue
+        for ref in refs:
+            matched = changed_by_name.get(Path(ref.strip()).name.lower())
+            if matched is not None and story_path not in prompt_to_stories[matched]:
+                prompt_to_stories[matched].append(story_path)
+    uncovered = [p for p in prompt_files if not prompt_to_stories[p]]
+    return prompt_to_stories, uncovered
+
+
 def _generate_user_story_artifacts_for_change(
     *,
     issue_url: str,
@@ -866,94 +920,163 @@ def _generate_user_story_artifacts_for_change(
     time_budget: float,
     verbose: bool,
     quiet: bool,
-) -> Tuple[List[str], str, float, str]:
-    """Generate issue-derived story artifacts before Step 13 creates the PR.
+) -> Tuple[List[str], str, float, str, Optional[str]]:
+    """Create/reuse, link, and validate story coverage before Step 13 makes the PR.
 
-    Returns ``(story_files_to_stage, pr_summary, cost, model)``. The summary is
-    rendered into the PR body so reviewers can see which story coverage was
-    created or why generation was skipped.
+    Returns ``(story_files_to_stage, pr_summary, cost, model, block_message)``
+    (issue #1454). The summary is rendered into the PR body so reviewers can see
+    which coverage was reused/created and whether the linked stories pass.
+    ``block_message`` is non-None only under ``strict`` policy when a changed
+    prompt still has no passing linked story; the caller hard-blocks on it.
     """
+    policy = _resolve_story_policy()
+    if policy == "off":
+        # `off` skips creation and checking entirely (#1454).
+        return (
+            [],
+            "### User Stories\n- Skipped: story policy is `off` (`PDD_STORY_POLICY=off`).",
+            0.0,
+            "",
+            None,
+        )
+
     prompt_files = _story_prompt_files_for_change(changed_files, worktree_path)
     if not prompt_files:
-        return [], "None", 0.0, ""
+        return [], "None", 0.0, "", None
 
     stories_dir = worktree_path / "user_stories"
     prompts_dir = _common_prompt_root(prompt_files, worktree_path)
-    fallback_linked = [_format_rel(p, prompts_dir or worktree_path) for p in prompt_files]
-    try:
-        success, message, cost, model, story_file, linked_prompts = generate_user_story(
-            prompt_files=[str(p) for p in prompt_files],
-            issue=issue_url,
-            stories_dir=str(stories_dir),
-            prompts_dir=str(prompts_dir) if prompts_dir else None,
-            strength=strength,
-            temperature=temperature,
-            time=time_budget,
-            verbose=verbose,
-        )
-    except Exception as exc:  # pylint: disable=broad-except
-        # Story generation is best-effort: a failure in issue resolution,
-        # provider code, or file I/O must never abort the change workflow after
-        # the pre-PR gate. Surface it as a non-blocking PR-body warning instead.
+
+    total_cost = 0.0
+    model_used = ""
+    files_to_stage: List[str] = []
+    summary_lines: List[str] = ["### User Stories", f"- Policy: `{policy}`"]
+    # Stories whose linked coverage we will validate (reused + newly generated).
+    linked_story_paths: List[Path] = []
+
+    # 1) Reuse existing linked stories; only generate for the rest (#1454).
+    prompt_to_stories, uncovered = _find_linked_stories_for_prompts(
+        prompt_files, stories_dir
+    )
+    reused = sorted(
+        {s for stories in prompt_to_stories.values() for s in stories},
+        key=lambda p: str(p).lower(),
+    )
+    for story_path in reused:
+        linked_story_paths.append(story_path)
+        rel = _format_rel(story_path, worktree_path)
+        summary_lines.append(f"- `{rel}` — reused existing linked story")
         if not quiet:
-            console.print(
-                f"[yellow]User story generation skipped: {exc}[/yellow]"
+            console.print(f"[green]Reusing existing user story:[/green] {rel}")
+
+    # 2) Generate one issue-derived story for the prompts with no coverage yet.
+    still_uncovered: List[Path] = list(uncovered)
+    if uncovered:
+        uncovered_refs = [_format_rel(p, prompts_dir or worktree_path) for p in uncovered]
+        try:
+            success, message, cost, model, story_file, linked_prompts = generate_user_story(
+                prompt_files=[str(p) for p in uncovered],
+                issue=issue_url,
+                stories_dir=str(stories_dir),
+                prompts_dir=str(prompts_dir) if prompts_dir else None,
+                strength=strength,
+                temperature=temperature,
+                time=time_budget,
+                verbose=verbose,
             )
-        return (
-            [],
-            (
-                "### User Stories\n"
-                f"- Story generation was attempted for "
-                f"`{', '.join(fallback_linked)}` but skipped: {exc}"
-            ),
-            0.0,
-            "",
-        )
+        except Exception as exc:  # pylint: disable=broad-except
+            # Story generation is best-effort: a failure in issue resolution,
+            # provider code, or file I/O must never abort the change workflow
+            # after the pre-PR gate. Degrade to a PR-body warning instead.
+            success, message, cost, model = False, str(exc), 0.0, ""
+            linked_prompts = []
+        total_cost += cost
+        model_used = model_used or model
+        if success:
+            story_path = Path(story_file)
+            still_uncovered = []
+            linked_story_paths.append(story_path)
+            story_rel = _format_rel(story_path, worktree_path)
+            files_to_stage.append(story_rel)
+            linked = linked_prompts or uncovered_refs
+            line = (
+                f"- `{story_rel}` — issue-derived story linked to: "
+                f"{', '.join(f'`{p}`' for p in linked)}"
+            )
+            # The two-file model writes a sibling AI contract under contracts/;
+            # stage it too so the contract travels with the change PR rather than
+            # landing as an untracked local file.
+            contract_path = _contract_path_for_story(story_path)
+            if contract_path.exists():
+                contract_rel = _format_rel(contract_path, worktree_path)
+                files_to_stage.append(contract_rel)
+                line += f"\n- `{contract_rel}` — generated machine-checkable contract"
+            summary_lines.append(line)
+            if not quiet:
+                console.print(f"[green]Generated user story:[/green] {story_rel}")
+        else:
+            summary_lines.append(
+                f"- Story generation skipped for `{', '.join(uncovered_refs)}`: {message}"
+            )
+            if not quiet:
+                console.print(f"[yellow]User story generation skipped: {message}[/yellow]")
 
-    linked = linked_prompts or fallback_linked
-    if not success:
-        if not quiet:
-            console.print(f"[yellow]User story generation skipped: {message}[/yellow]")
-        return (
-            [],
-            (
-                "### User Stories\n"
-                f"- Story generation was attempted for `{', '.join(linked)}` "
-                f"but skipped: {message}"
-            ),
-            cost,
-            model,
-        )
+    # 3) Validate ONLY the linked story/prompt subset and report (#1454).
+    failing_stories: List[str] = []
+    if linked_story_paths:
+        try:
+            passed, results, vcost, vmodel = run_user_story_tests(
+                stories_dir=str(stories_dir),
+                prompts_dir=str(prompts_dir) if prompts_dir else None,
+                story_files=sorted(set(linked_story_paths), key=lambda p: str(p).lower()),
+                strength=strength,
+                temperature=temperature,
+                time=time_budget,
+                verbose=verbose,
+                quiet=quiet,
+            )
+            total_cost += vcost
+            model_used = model_used or vmodel
+            failing_stories = [
+                _format_rel(Path(str(r.get("story"))), worktree_path)
+                for r in results
+                if not r.get("passed")
+            ]
+            if passed:
+                summary_lines.append(
+                    f"- Validation: ✅ all {len(results)} linked story check(s) passed"
+                )
+            else:
+                summary_lines.append(
+                    f"- Validation: ❌ {len(failing_stories)} of {len(results)} "
+                    f"linked story check(s) failed: {', '.join(f'`{s}`' for s in failing_stories)}"
+                )
+        except Exception as exc:  # pylint: disable=broad-except
+            # Validation is best-effort under warn; never abort the workflow.
+            summary_lines.append(f"- Validation skipped: {exc}")
+            if not quiet:
+                console.print(f"[yellow]Story validation skipped: {exc}[/yellow]")
 
-    story_path = Path(story_file)
-    story_rel = _format_rel(story_path, worktree_path)
-    files_to_stage = [story_rel]
-    # The two-file story model writes a sibling AI contract under contracts/;
-    # stage it too so the generated contract travels with the change PR rather
-    # than landing as an untracked local file.
-    contract_path = _contract_path_for_story(story_path)
-    contract_rel = None
-    if contract_path.exists():
-        contract_rel = _format_rel(contract_path, worktree_path)
-        files_to_stage.append(contract_rel)
-    if not quiet:
-        console.print(f"[green]Generated user story:[/green] {story_rel}")
-        if contract_rel:
-            console.print(f"[green]Generated story contract:[/green] {contract_rel}")
-        console.print(f"[green]Linked prompts:[/green] {', '.join(linked)}")
-    summary = (
-        "### User Stories\n"
-        f"- `{story_rel}` — issue-derived story linked to: "
-        f"{', '.join(f'`{p}`' for p in linked)}"
-    )
-    if contract_rel:
-        summary += f"\n- `{contract_rel}` — generated machine-checkable contract"
-    return (
-        files_to_stage,
-        summary,
-        cost,
-        model,
-    )
+    # 4) Enforce the policy. `warn` only reports; `strict` blocks when a changed
+    #    prompt still has no passing linked story.
+    block_message: Optional[str] = None
+    problems: List[str] = []
+    if still_uncovered:
+        uncovered_names = [
+            _format_rel(p, prompts_dir or worktree_path) for p in still_uncovered
+        ]
+        problems.append(f"no linked story for: {', '.join(uncovered_names)}")
+    if failing_stories:
+        problems.append(f"failing linked story check(s): {', '.join(failing_stories)}")
+    if problems:
+        joined = "; ".join(problems)
+        if policy == "strict":
+            block_message = f"strict story policy ({joined})"
+            summary_lines.append(f"- ⛔ Blocking (strict policy): {joined}")
+        else:
+            summary_lines.append(f"- ⚠️ Warning (non-blocking): {joined}")
+
+    return files_to_stage, "\n".join(summary_lines), total_cost, model_used, block_message
 
 
 def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
@@ -2601,7 +2724,7 @@ def run_agentic_change_orchestrator(
         except Exception:  # pylint: disable=broad-except
             pass
 
-    story_files_to_stage, user_story_summary, story_cost, story_model = (
+    story_files_to_stage, user_story_summary, story_cost, story_model, story_block_message = (
         _generate_user_story_artifacts_for_change(
             issue_url=issue_url,
             changed_files=changed_files,
@@ -2632,6 +2755,24 @@ def run_agentic_change_orchestrator(
         context["files_to_stage"] = ", ".join(merged_to_stage)
     context["user_story_summary"] = user_story_summary
     state["total_cost"] = total_cost
+
+    # Issue #1454: under PDD_STORY_POLICY=strict, block before Step 13 when a
+    # changed prompt still has no passing linked story. The default policy
+    # (`warn`) only reports coverage in the PR body; `off` skips entirely. This
+    # block must run only for `strict` — _generate_user_story_artifacts_for_change
+    # returns a non-None message exclusively in that case.
+    if story_block_message:
+        state["step_outputs"]["12.6"] = f"FAILED: {story_block_message}"
+        save_workflow_state(
+            cwd, issue_number, "change", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+            dedupe=effective_clean_restart,
+        )
+        return (
+            False,
+            f"Stopped at step 12.6: {story_block_message}",
+            total_cost, model_used, changed_files,
+        )
 
     # Identify test files for affected modules (#377 Bug B)
     impacted_tests: List[str] = []

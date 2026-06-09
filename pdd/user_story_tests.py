@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import warnings
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -792,6 +793,27 @@ def _contract_path_for_story(story_path: Path) -> Path:
     return story_path.parent / CONTRACTS_SUBDIR / f"{slug}{CONTRACT_SUFFIX}"
 
 
+def _compose_story_oracle(story_path: Path, story_content: str) -> str:
+    """Return the full detection oracle: human Story plus its generated contract.
+
+    The human ``story__<slug>.md`` carries the prompt-link metadata and prose; the
+    sibling ``contracts/<slug>.contract.md`` carries the machine-checkable
+    acceptance criteria, negative cases, and oracle guidance the LLM detects
+    against. Both ``run_user_story_tests`` (validation) and ``run_user_story_fix``
+    (repair) must detect against the SAME combined oracle -- otherwise a fix
+    derived from the tiny story alone loses the contract's acceptance criteria and
+    can no-op or under-specify a change that later fails validation. When no
+    contract exists yet, the story content is the oracle on its own.
+    """
+    contract_path = _contract_path_for_story(story_path)
+    if contract_path.exists():
+        try:
+            return f"{story_content}\n\n{contract_path.read_text(encoding='utf-8')}"
+        except OSError:
+            return story_content
+    return story_content
+
+
 def _normalized_story_for_hash(story_text: str) -> str:
     """Return story text normalized for hashing.
 
@@ -1360,16 +1382,7 @@ def run_user_story_tests(  # pylint: disable=too-many-arguments,redefined-outer-
         # The oracle is the human Story PLUS its generated contract (when present).
         # The human file carries the prompt-link metadata; the contract carries the
         # machine-checkable acceptance criteria the LLM detects against.
-        oracle_content = story_content
-        contract_path = _contract_path_for_story(story_path)
-        if contract_path.exists():
-            try:
-                oracle_content = (
-                    f"{story_content}\n\n"
-                    f"{contract_path.read_text(encoding='utf-8')}"
-                )
-            except OSError:
-                oracle_content = story_content
+        oracle_content = _compose_story_oracle(story_path, story_content)
         story_prompt_files = prompt_files
         if metadata_prompt_refs:
             resolved_story_prompts: List[Path] = []
@@ -1481,9 +1494,14 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
         return False, f"User story file not found: {story_file}", 0.0, "", []
 
     story_content = _read_story(story_path)
+    # Detect and repair against the SAME oracle validation uses: the human Story
+    # plus its generated contract. With the two-file story model, the tiny story
+    # file alone omits the acceptance criteria/oracle, so `pdd fix` would no-op or
+    # produce an under-specified change that later fails `run_user_story_tests`.
+    oracle_content = _compose_story_oracle(story_path, story_content)
     changes_list, detect_cost, detect_model = detect_change(
         [str(p) for p in prompt_files],
-        story_content,
+        oracle_content,
         strength,
         temperature,
         time,
@@ -1505,6 +1523,27 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
     original_skip = ctx_obj.get("skip_user_stories")
     ctx_obj["skip_user_stories"] = True
 
+    # change_main reads the change spec from a file, so the contract-aware oracle
+    # has to reach it on disk. When a contract is present, write the combined
+    # Story+contract to a temp file and feed that as the change prompt; otherwise
+    # the story file itself is the full oracle and is passed directly.
+    change_prompt_file = str(story_path)
+    oracle_tmp_path: Optional[str] = None
+    if oracle_content != story_content:
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=f"__{story_path.name}",
+            prefix="pdd_story_oracle_",
+            delete=False,
+        )
+        try:
+            tmp.write(oracle_content)
+        finally:
+            tmp.close()
+        oracle_tmp_path = tmp.name
+        change_prompt_file = oracle_tmp_path
+
     try:
         for change in changes_list:
             prompt_name = str(change.get("prompt_name") or "")
@@ -1520,7 +1559,7 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
 
             result_message, cost, model = change_main(
                 ctx=ctx,
-                change_prompt_file=str(story_path),
+                change_prompt_file=change_prompt_file,
                 input_code=str(code_path),
                 input_prompt_file=str(prompt_path),
                 output=None,
@@ -1540,6 +1579,11 @@ def run_user_story_fix(  # pylint: disable=too-many-arguments,too-many-locals,to
             ctx_obj.pop("skip_user_stories", None)
         else:
             ctx_obj["skip_user_stories"] = original_skip
+        if oracle_tmp_path:
+            try:
+                os.unlink(oracle_tmp_path)
+            except OSError:
+                pass
 
     if errors:
         return False, "\n".join(errors), total_cost, model_name, changed_files

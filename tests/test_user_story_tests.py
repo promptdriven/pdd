@@ -1672,3 +1672,102 @@ def test_user_story_fix_treats_plain_error_message_as_failure(tmp_path):
     assert ctx.obj.get("skip_user_stories") is None
     mock_story_tests.assert_not_called()
     assert mock_change.call_args[1]["input_code"] == str(code_path)
+
+
+def test_user_story_fix_detect_and_change_are_contract_aware(tmp_path):
+    """Regression for PR #1501 review item 4: the repair path must detect AND
+    change against the human Story PLUS its generated contract, not the tiny
+    story file alone. Otherwise `pdd fix user_stories/story__x.md` drops the
+    contract's acceptance criteria/oracle and can no-op or under-specify."""
+    prompts_dir = tmp_path / "prompts" / "sub"
+    src_dir = tmp_path / "src" / "sub"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir(parents=True)
+    src_dir.mkdir(parents=True)
+    stories_dir.mkdir()
+
+    prompt_path = prompts_dir / "calc_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    code_path = src_dir / "calc.py"
+    code_path.write_text("code", encoding="utf-8")
+
+    story_path = stories_dir / "story__calc.md"
+    story_path.write_text("## Story\nAs a user I want calc.\n", encoding="utf-8")
+    contract_path = _contract_path_for_story(story_path)
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_text = (
+        "## Acceptance Criteria\n1. CONTRACT_ONLY_CRITERION must hold.\n"
+    )
+    contract_path.write_text(contract_text, encoding="utf-8")
+
+    detected_oracle = {}
+    change_prompt_contents = {}
+
+    def fake_detect_change(prompts, change_description, *args, **kwargs):
+        detected_oracle["text"] = change_description
+        return ([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")
+
+    def fake_change_main(**kwargs):
+        change_prompt_contents["text"] = Path(
+            kwargs["change_prompt_file"]
+        ).read_text(encoding="utf-8")
+        return (f"Modified prompt saved to {prompt_path}", 0.2, "change-model")
+
+    ctx = SimpleNamespace(obj={})
+
+    with patch("pdd.user_story_tests.discover_prompt_files", return_value=[prompt_path]), \
+         patch("pdd.user_story_tests.detect_change", side_effect=fake_detect_change), \
+         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
+         patch("pdd.change_main.change_main", side_effect=fake_change_main), \
+         patch("pdd.user_story_tests.run_user_story_tests", return_value=(True, [], 0.3, "verify-model")):
+        success, message, cost, model, changed_files = run_user_story_fix(
+            ctx=ctx,
+            story_file=str(story_path),
+            prompts_dir=str(tmp_path / "prompts"),
+            quiet=True,
+        )
+
+    assert success is True, message
+    # detect_change saw the combined oracle (story + contract criterion).
+    assert "CONTRACT_ONLY_CRITERION" in detected_oracle["text"]
+    assert "As a user I want calc." in detected_oracle["text"]
+    # change_main received the combined oracle on disk, not just the story file.
+    assert "CONTRACT_ONLY_CRITERION" in change_prompt_contents["text"]
+    assert "As a user I want calc." in change_prompt_contents["text"]
+
+
+def test_user_story_fix_without_contract_passes_story_directly(tmp_path):
+    """When no contract exists, the story file is the full oracle and is passed
+    to change_main directly (no temp file indirection)."""
+    prompts_dir = tmp_path / "prompts" / "sub"
+    src_dir = tmp_path / "src" / "sub"
+    stories_dir = tmp_path / "user_stories"
+    prompts_dir.mkdir(parents=True)
+    src_dir.mkdir(parents=True)
+    stories_dir.mkdir()
+
+    prompt_path = prompts_dir / "calc_python.prompt"
+    prompt_path.write_text("prompt", encoding="utf-8")
+    (src_dir / "calc.py").write_text("code", encoding="utf-8")
+    story_path = stories_dir / "story__calc.md"
+    story_path.write_text("## Story\nplain story\n", encoding="utf-8")
+
+    ctx = SimpleNamespace(obj={})
+
+    with patch("pdd.user_story_tests.discover_prompt_files", return_value=[prompt_path]), \
+         patch("pdd.user_story_tests.detect_change",
+               return_value=([{"prompt_name": "calc_python.prompt"}], 0.1, "detect-model")), \
+         patch("pdd.user_story_tests.get_extension", return_value=".py"), \
+         patch("pdd.change_main.change_main",
+               return_value=(f"Modified prompt saved to {prompt_path}", 0.2, "change-model")) as mock_change, \
+         patch("pdd.user_story_tests.run_user_story_tests", return_value=(True, [], 0.3, "verify-model")):
+        success, *_ = run_user_story_fix(
+            ctx=ctx,
+            story_file=str(story_path),
+            prompts_dir=str(tmp_path / "prompts"),
+            quiet=True,
+        )
+
+    assert success is True
+    # No contract => change_main is handed the story path itself.
+    assert mock_change.call_args[1]["change_prompt_file"] == str(story_path)
