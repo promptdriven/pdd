@@ -546,18 +546,26 @@ Use stories for cross-module behavior, product acceptance criteria, critical edg
 
 Story files live in `user_stories/`. Use `pdd detect --stories` to validate them, `pdd change` to run validation after prompt modifications, and `pdd fix user_stories/story__*.md` to apply a story to prompts and re-validate it. Link stories to prompts with `pdd-story-prompts` metadata.
 
-### Audience split: human-verified Story vs LLM-confirmed contract
+### Two files: human-verified Story + AI-generated contract
 
-A story has exactly two top-level (`##`) sections, and they have different owners:
+A user story is split across **two files** with different owners:
 
-- **`## Story`** is the *only* part a human reads and signs off on — one
-  plain-language sentence ("As a &lt;persona&gt;, I can &lt;capability&gt;, so
-  that &lt;benefit&gt;.") that a person can verify by using the product. Keep
-  flags, exit codes, JSON shapes, and internals out of it.
-- **`## LLM-Confirmed Contract`** is everything else, nested as level-3 (`###`)
-  sections. It is the machine-checkable evidence `pdd detect --stories` / the LLM
-  uses to confirm the prompts deliver the Story. Humans may skim it but are not
-  asked to verify it line-by-line — the tooling owns it.
+- **The human Story** at `user_stories/story__<name>.md` is the *only* thing a
+  person reads and signs off on — one plain-language sentence ("As a
+  &lt;persona&gt;, I can &lt;capability&gt;, so that &lt;benefit&gt;.") they can
+  verify by using the product. It is the **source of truth**. Keep flags, exit
+  codes, JSON shapes, and internals out of it.
+- **The contract** at `user_stories/contracts/<name>.contract.md` is
+  **generated** from the human Story + the original issue. It holds the
+  machine-checkable sections (`## Covers`, `## Acceptance Criteria`, `## Oracle`,
+  …) plus a `## Candidate Prompts` list of other prompts the story could run
+  against. `pdd detect --stories` / the LLM uses it to confirm the prompts
+  deliver the Story. Humans don't hand-edit it.
+
+**Edit the Story, not the contract.** When you change the human Story, the
+contract is regenerated from the edited Story + the issue to re-align (a
+`story-hash` in the contract header tracks this). Validation feeds the Story and
+its contract **combined** to `detect_change`.
 
 **Keep it readable.** A human can only verify the Story quickly if they can read
 it quickly. Write the Story in plain, everyday language a newcomer who does not
@@ -572,36 +580,35 @@ outcome*, never a comparison to a specific external product, tool, brand, or UI
 fact ("the current best model", "as of 2026") unless the issue itself makes that
 exact version the requirement. Whichever tool is "best" today may be surpassed
 tomorrow; a story pinned to it rots into a false failure. List the brittle things
-you deliberately excluded under `### Non-Oracle` so the durability boundary is
-explicit.
+the contract deliberately excludes under its `## Non-Oracle` so the durability
+boundary is explicit.
 
 ### Story Template
+
+The human Story file — `user_stories/story__<name>.md` (the only part you write
+and verify by hand):
 
 ```md
 <!-- pdd-story-prompts: prompts/<module>_<language>.prompt -->
 
 # User Story: <name>
 
-<!-- Replace or remove every placeholder before committing this story. -->
-
 ## Story
 
 As a <persona>,
 I want <behavior>,
 so that <value>.
+```
 
-<!--
-The Story above is the only human-verified part. Keep it durable: describe the
-user's stable goal and what they can do/see, not a resemblance to any specific
-external tool/UI or a time-/version-sensitive fact.
--->
+The generated contract — `user_stories/contracts/<name>.contract.md` (produced
+from the Story + issue; shown here for reference, not for hand-authoring):
 
-## LLM-Confirmed Contract
+```md
+<!-- pdd-story-contract derived-from-story="../story__<name>.md" story-hash="<auto>" issue-ref="<url|number|path>" -->
 
-Everything below is machine-checkable evidence the LLM verifies against the
-prompts; it is not part of the human sign-off.
+# Contract: <name>
 
-### Covers
+## Covers
 
 For a single-prompt story, keep one prompt in `pdd-story-prompts`.
 For a cross-module story, list prompts comma-separated in `pdd-story-prompts`.
@@ -616,11 +623,11 @@ For cross-module stories, namespace rule IDs by prompt:
 - prompts/<module_a>_<language>.prompt#R1: <rule name>
 - prompts/<module_b>_<language>.prompt#R3: <rule name>
 
-### Context / Fixtures
+## Context / Fixtures
 
 Describe relevant state, assumptions, fixtures, users, records, external services, mocks, spies, logs, events, or dependencies.
 
-### Acceptance Criteria
+## Acceptance Criteria
 
 1. Given ...,
    when ...,
@@ -630,7 +637,7 @@ Describe relevant state, assumptions, fixtures, users, records, external service
    when ...,
    then ...
 
-### Oracle
+## Oracle
 
 List only the observations that matter for this story's pass/fail result.
 
@@ -642,7 +649,7 @@ Examples:
 - The emitted event is <event name>.
 - The returned value has <required shape>.
 
-### Non-Oracle
+## Non-Oracle
 
 List details that should not affect pass/fail.
 
@@ -655,25 +662,32 @@ Examples:
 - Resemblance to any specific third-party tool's UI or behavior does not matter.
 - Which provider/model is currently considered "best" does not matter.
 
-### Forbidden Outcomes
+## Negative Cases
 
-List outcomes this story protects against.
+List forbidden outcomes this story protects against.
 
 For MUST NOT rules, this section is required.
-For ordinary positive stories, this section may be empty or omitted.
+For ordinary positive stories, it may be empty.
 
-*(The canonical on-disk template at `user_stories/story__template.md` and story
-generation from `pdd test <*.prompt>` use **### Negative Cases** for this section —
-same intent, different heading.)*
+## Candidate Prompts
 
-### Non-Goals
+Other prompts in this codebase the story could also be run against:
+
+- `prompts/<module>_<language>.prompt` — <one-line reason> (primary)
+- `prompts/<other>_<language>.prompt` — <one-line reason> (related|possible)
+
+## Non-Goals
 
 What this story explicitly does not cover.
 
-### Notes
+## Notes
 
 Links, edge cases, fixture notes, rationale, follow-up work, or review notes.
 ```
+
+The two worked examples below predate the two-file split; read them as the
+*combined* content (the `## Story` belongs in the human file, the remaining
+sections in the generated contract).
 
 Example:
 

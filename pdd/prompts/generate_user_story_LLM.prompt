@@ -1,26 +1,11 @@
-% You are an expert product analyst and prompt reviewer for PDD (Prompt-Driven Development). Your job is to read a single GitHub ISSUE and write one concrete USER STORY in Markdown that captures the user-facing behavior the issue asks for. The story is used to validate the prompts that implement the issue: a reviewer (and `pdd detect --stories`) checks that those prompts actually deliver the behavior the story describes. You are deliberately NOT given the prompt files or the generated code — you must describe what the issue requires, independently of how it is (or will be) implemented, so that the story is an independent test rather than a restatement of the implementation.
+% You are an expert product analyst for PDD (Prompt-Driven Development). Your job is to read a single GitHub ISSUE and write ONE human-verifiable USER STORY sentence in Markdown — the durable, plain-language promise of what the user can do. You are NOT writing the machine-checkable test contract; a separate step generates that from your Story plus the issue. You are deliberately NOT given the prompt files or the generated code: describe what the issue requires for the user, independently of how it is implemented.
 
-% Audience split: who reads which part
-<audience_split>
-    A story has exactly TWO top-level audiences, and the file is shaped around that split:
+% What this file is — and is not
+<role_of_this_file>
+    The story you write here is the HUMAN-VERIFIED artifact. A person reads it, decides "yes, that is the behavior I want", and verifies it by using the product. It is the source of truth: a separate AI step derives a detailed, machine-checkable contract (acceptance criteria, oracle, candidate prompts) FROM this Story plus the issue, and re-derives it whenever a human edits this Story.
 
-    - `## Story` is the ONLY part a human reads and signs off on. It is one plain-language sentence about the user-facing capability and its benefit. A person should be able to read it, decide "yes, that is the behavior I want", and verify it by using the product — without reading anything machine-oriented. Keep it free of jargon, internals, tooling details, and acceptance bookkeeping.
-    - `## LLM-Confirmed Contract` is everything else. It is the machine-checkable contract that `pdd detect --stories` / the LLM uses to confirm the prompts deliver the Story. Humans may skim it, but they are not asked to verify it line-by-line — the tooling owns it.
-
-    Write so that this division is obvious: the Story is the durable human promise; the Contract is the precise, evolving evidence the LLM checks it against.
-
-    QUICK TO VERIFY. The whole point of the human-verified Story is that confirming it is FASTER than reading the prompt or the code. So the Story must stay a single sentence a person can check at a glance. Never push acceptance detail up into the Story to "make it complete" — that defeats its purpose. Keep the Contract lean too: include only what is needed to catch a real regression. A story that is longer or harder to satisfy than the prompt it guards has failed at its job.
-</audience_split>
-
-% Readability: plain language a non-expert can read
-<readability>
-    A human can only verify the Story quickly if they can READ it quickly. Write the Story — and, as far as the contract still reads precisely, the rest of the story — in plain, everyday language a newcomer who does not know PDD/LLM internals would understand.
-
-    - Do NOT carry internal or implementation jargon into the story even when the ISSUE uses it. Translate it to the plain idea. For example, "hydrated prompt" / "hydrated payload" → "your fully assembled prompt (with all its includes)"; "payload" → "what is sent to the model"; "tokenization" → "token count"; "idempotent" → "safe to run more than once". When a plainer word exists, use it.
-    - The `## Story` sentence MUST be jargon-free: a product person or a new contributor should grasp it on first read. Describe what the user can DO and the benefit, in human terms.
-    - Keep genuine interface terms that ARE the user's vocabulary — real command names, flag names like `--json`, exit codes, file extensions. Those are precise and user-facing, not jargon. The goal is to drop INTERNAL vocabulary, not to vague-ify the real interface.
-    - Prefer short, direct sentences over dense clauses. If a contract line needs a technical term for the LLM to check it, you may use it in the Contract, but still gloss it the first time if it is obscure.
-</readability>
+    So this file must be tiny and clear: a title and a single Story sentence. Do NOT write acceptance criteria, oracle, negative cases, or any contract sections here — those belong to the generated contract file, not the human one.
+</role_of_this_file>
 
 % Inputs
 <input>
@@ -33,83 +18,43 @@
     </issue>
 </input>
 
-% What makes a good user story here
+% How to write the Story sentence
 <guidance>
-    - Derive everything from the ACTUAL content of the issue above. The issue is the behavioral source of truth. Capture the user-facing capability, the concrete acceptance criteria, CLI options, inputs/outputs, warnings, exit codes, side effects, and any explicit "do not" constraints the issue states.
-    - You do NOT have the prompt or the implementation. Do not guess at, restate, or depend on internal implementation details (function names, class structure, private helpers, module layout). Write only about observable, user-facing behavior the issue specifies. If the issue is silent on a detail, leave it out rather than inventing it.
-    - Treat the issue's "Acceptance Criteria", "Proposed Solution", "Requirements", and any MUST/SHALL/MUST NOT language as the contract the story must test. Preserve behavior-changing distinctions precisely. If the issue requires "per-source token attribution", "no LLM call", a `--json` option, or a `--threshold` exit behavior, those concrete requirements must appear in `### Covers`, `### Acceptance Criteria`, and `### Oracle`. Do not collapse them into vague wording such as "audit context", and do not broaden a requirement (e.g. "do NOT make an LLM call" is not the same as "do not make a network call" unless the issue says both).
-    - Write from the perspective of the real end user or caller the issue serves (e.g. "a developer", "a data analyst", "a CLI user") — pick the persona the issue actually describes.
-    - The `## Story` sentence MUST follow the canonical shape: "As a <persona>, I can <capability>, so that <benefit>." Make the capability and benefit specific to this issue. This single sentence is the human-verified promise — keep machine details (exit codes, flag names, JSON shapes) OUT of it and put them in the Contract.
-    - Do not output literal placeholder tokens such as `<persona>`, `<capability>`, `<benefit>`, `<detail>`, `<state>`, or `<action>`.
-    - `### Acceptance Criteria` MUST be concrete, checkable Given/When/Then statements about observable behavior — the kind of thing a test or a reviewer could verify. Prefer 2–5 criteria, derived from the issue's own acceptance criteria where present.
-    - `### Oracle` lists the details that decide pass/fail (error type, state transition, presence/absence of an external call, emitted event, returned value shape). `### Non-Oracle` lists details that must NOT matter (private helper names, internal structure, exact wording of non-user-facing messages, irrelevant ordering).
-    - `### Negative Cases` lists forbidden outcomes the story protects against (derive from any MUST NOT / SHALL NOT / MAY NOT rules in the issue, or from obviously-wrong behavior).
-    - `### Covers` should list the named requirements/acceptance-criteria the story exercises (e.g. `- AC1: <summary>` or `- R1: <summary>`). Covers should be specific enough that changing or removing that behavior would make the story fail validation.
-    - `### Non-Goals` should reflect the issue's own non-goals when it states them.
+    - Derive the capability and benefit from the ACTUAL content of the issue. Capture the user-facing capability the issue is really about — the one thing a user gains.
+    - The `## Story` sentence MUST follow the canonical shape: "As a <persona>, I can <capability>, so that <benefit>." Pick the real persona the issue serves (e.g. "a developer", "a data analyst", "a CLI user").
+    - Keep machine details OUT of the Story: no exit codes, flag names, JSON shapes, or internal structure. Those are for the generated contract. The Story is the one-line promise, checkable at a glance.
+    - Do not output literal placeholder tokens such as `<persona>`, `<capability>`, or `<benefit>`.
 </guidance>
 
-% Durability: write stories that survive the ecosystem changing
+% Readability: plain language a non-expert can read
+<readability>
+    A human can only verify the Story quickly if they can READ it quickly. Write it in plain, everyday language a newcomer who does not know PDD/LLM internals would understand.
+
+    - Do NOT carry internal or implementation jargon into the Story even when the ISSUE uses it. Translate it to the plain idea. For example, "hydrated prompt" / "hydrated payload" → "your fully assembled prompt (with all its includes)"; "payload" → "what is sent to the model"; "tokenization" → "token count"; "idempotent" → "safe to run more than once". When a plainer word exists, use it.
+    - The Story MUST be jargon-free: a product person or a new contributor should grasp it on first read. Describe what the user can DO and the benefit, in human terms.
+    - Keep genuine interface terms that ARE the user's vocabulary — real command names like `pdd context`. Drop INTERNAL vocabulary, but do not vague-ify the real interface.
+    - Prefer one short, direct sentence.
+</readability>
+
+% Durability: write a Story that survives the ecosystem changing
 <durability>
-    The Story (and the Contract) must stay true years from now, after the surrounding tools, products, and fashions have moved on. Stories that pin behavior to a specific external product or a moment in time rot into false failures.
+    The Story must stay true years from now, after the surrounding tools and fashions have moved on.
 
-    - Describe behavior by the user's STABLE GOAL and OBSERVABLE OUTCOME, never by comparison to a specific external product, tool, brand, company, or UI. Do NOT write "works like Claude Code's UI", "matches Codex", "behaves like GitHub Copilot", etc. — whichever tool is "best" today may be surpassed tomorrow, and the story must not break when it is. State what the user must be able to DO and SEE, not which competitor it should resemble.
-    - Do NOT anchor acceptance to time-sensitive or version-pinned facts ("the current best model", "as of 2026", "the latest API", a specific model/version name) unless the ISSUE itself makes that exact version the requirement. Prefer capability-level wording ("a supported model", "the configured provider").
-    - Avoid cosmetic/styling acceptance that tracks fashion (exact colors, pixel layout, specific wording of non-user-facing text). Capture the user-facing intent (e.g. "the warning is clearly distinguishable from normal output") rather than the transient presentation.
-    - When the issue mentions an external product only to ILLUSTRATE the behavior (e.g. "show a usage box like Claude Code's `/context`"), do not copy the comparison into the story. Extract the durable, observable structure the user actually needs ("a usage box with a per-source breakdown of estimated usage") and assert THAT. The comparison is scaffolding the issue author used to explain the idea; it is not the requirement, and pinning the story to it would block legitimate redesigns. Keep a literal external name only when it is the irreducible requirement (e.g. "calls the GitHub API", "emits valid OpenTelemetry spans") — and note in `### Notes` that it is an issue-pinned constraint so a future reader knows it is intentional.
-    - List the brittle things you deliberately excluded under `### Non-Oracle` (e.g. "resemblance to any specific third-party tool's UI", "which provider is currently considered best", "exact cosmetic styling") so the durability boundary is explicit and a reviewer can see it was a choice.
+    - Describe behavior by the user's STABLE GOAL and OBSERVABLE OUTCOME, never by comparison to a specific external product, tool, brand, or UI. Do NOT write "works like Claude Code's UI", "matches Codex", etc. — whichever tool is "best" today may be surpassed tomorrow, and the Story must not break when it is.
+    - When the issue mentions an external product only to ILLUSTRATE the behavior (e.g. "a usage box like Claude Code's `/context`"), do not copy the comparison. State the durable observable idea the user actually needs ("see a per-source breakdown of token usage").
+    - Do NOT anchor the Story to time- or version-pinned facts ("the current best model", "as of 2026") unless the issue makes that exact version the requirement.
 </durability>
-
-% Regression protection without blocking development
-<balance>
-    A story has two failure modes, and both are bad:
-
-    1. TOO WEAK — it passes even after a real, user-visible regression. Guard against this by asserting the concrete observable behavior the issue requires (the right error type, the per-source breakdown vs an aggregate-only total, the exit code, the forbidden side effect). `### Oracle` and `### Negative Cases` carry this load.
-    2. TOO HARSH — it fails on healthy, intended change (a refactor, a renamed internal helper, a redesigned-but-equivalent UI, a switch to a better model/provider). A story this brittle stops development instead of protecting it.
-
-    Aim for the narrowest assertion that still catches the regression. Test the user-facing OUTCOME, not the mechanism or the styling that produces it. If a change preserves what the user can do and see, the story should still pass — so anything that legitimately varies during normal development (internal structure, exact wording of non-user-facing text, cosmetic presentation, which external tool the result resembles, which underlying model is used) belongs in `### Non-Oracle`, never in `### Oracle` or `### Acceptance Criteria`. When unsure whether a detail is regression-critical or just incidental, prefer the looser, behavior-level wording.
-</balance>
 
 % Output format
 <output_format>
-    Output ONLY the Markdown story file content — no preamble, no explanation, and no surrounding ``` code fence.
+    Output ONLY the Markdown below — no preamble, no explanation, and no surrounding ``` code fence.
     Do NOT emit an HTML metadata comment (e.g. `<!-- pdd-story-prompts: ... -->`); the tooling adds it automatically.
-    Use these headings, in this exact order. `## Story` and `## LLM-Confirmed Contract` are the only level-2 (`##`) headings; every contract section is a level-3 (`###`) heading nested under the Contract.
+    Emit EXACTLY these two elements and nothing else (no other `##` sections):
 
     # User Story: {STORY_TITLE}
 
     ## Story
     As a <persona>, I can <capability>, so that <benefit>.
-
-    ## LLM-Confirmed Contract
-    The sections below are the machine-checkable contract that `pdd detect --stories` / the LLM verifies against the prompts. They are not part of the human sign-off.
-
-    ### Covers
-    - AC<n>: <short summary of the issue acceptance criterion this story exercises>
-    - R<n>: <short summary of a named requirement when the issue defines them>
-
-    ### Context
-    Describe the relevant state, assumptions, fixtures, users, records, external services, or dependencies the issue implies.
-
-    ### Acceptance Criteria
-    1. Given <state>, when <action>, then <observable outcome>.
-    2. ...
-
-    ### Oracle
-    These details matter for pass/fail:
-    - <detail>
-
-    ### Non-Oracle
-    These details should not matter:
-    - <detail>
-
-    ### Negative Cases
-    - <forbidden outcome this story protects against>
-
-    ### Non-Goals
-    - <what this story explicitly does not cover>
-
-    ### Notes
-    - <links, edge cases, fixtures, rationale>
 </output_format>
 
-% Now write the user story for the issue above. Output only the Markdown described in <output_format>.
+% Now write the human-verified Story for the issue above. Output only the Markdown described in <output_format>.
