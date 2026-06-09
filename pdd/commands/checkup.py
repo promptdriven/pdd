@@ -412,6 +412,28 @@ def _forward_subcommand_json(
     help="With --interactive --apply: preview changes without writing any files.",
 )
 @click.option(
+    "--planner",
+    "planner",
+    type=click.Choice(["deterministic", "llm"], case_sensitive=False),
+    default=None,
+    help=(
+        "With --interactive: planning strategy for the agentic checkup session. "
+        "'deterministic' (default) runs all tools in fixed order. "
+        "'llm' asks an LLM to suggest which tools matter most."
+    ),
+)
+@click.option(
+    "--auto",
+    "auto_mode",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --interactive --planner: apply the best repair option automatically "
+        "for every finding without per-finding prompts. "
+        "In interactive mode the operator can also type 'a' mid-session to switch."
+    ),
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -479,6 +501,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     interactive: bool,
     apply: bool,
     dry_run: bool,
+    planner: Optional[str],
+    auto_mode: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     pdd checkup = verifier namespace
@@ -737,6 +761,30 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         project_root=project_root,
     ):
         if interactive:
+            _quiet = ctx.obj.get("quiet", False)
+            # --auto without --planner implicitly enables the deterministic planner.
+            _effective_planner = planner or ("deterministic" if auto_mode else None)
+            if _effective_planner is not None:
+                from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
+                    CheckupAgent,
+                    TerminalCheckupSession,
+                )
+                from ..checkup_planner import make_planner  # pylint: disable=import-outside-toplevel
+
+                _planner = make_planner(_effective_planner)
+                _agent_session = TerminalCheckupSession(quiet=_quiet)
+                _agent = CheckupAgent(_planner, _agent_session)
+                return _agent.run(
+                    target,
+                    project_root=project_root,
+                    strict=strict,
+                    apply=apply,
+                    dry_run=dry_run,
+                    quiet=_quiet,
+                    explicit_interactive=True,
+                    auto=auto_mode,
+                )
+
             from ..checkup_interactive_main import run_interactive_checkup  # pylint: disable=import-outside-toplevel
 
             return run_interactive_checkup(
@@ -745,7 +793,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 dry_run=dry_run,
                 project_root=project_root,
                 strict=strict,
-                quiet=ctx.obj.get("quiet", False),
+                quiet=_quiet,
                 explicit_interactive=True,
             )
 
