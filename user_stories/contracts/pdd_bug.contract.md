@@ -65,4 +65,3 @@ These details should not matter:
 
 This story is part of the user-story coverage split requested from the PR 1501
 integration comment so each command can be reviewed independently.
-

@@ -73,4 +73,3 @@ These details should not matter:
 This story directly reflects the PR 1501 integration comment: the parent branch
 must stage the generated contract sidecar alongside the human story so both
 travel with the change PR.
-

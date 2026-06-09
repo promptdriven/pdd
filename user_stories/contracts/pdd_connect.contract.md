@@ -69,4 +69,3 @@ These details should not matter:
 
 This story is part of the command-by-command user-story split requested from
 the PR 1501 integration comment.
-
