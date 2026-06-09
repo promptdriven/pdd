@@ -681,30 +681,23 @@ class SyncLock:
 
 
 def get_extension(language: str) -> str:
-    """Get file extension for a programming language.
+    """Get file extension (without a leading dot) for a programming language.
 
-    Uses the canonical language_format.csv mapping bundled with the package.
-    Falls back to a hard-coded subset for common languages if the CSV is
-    unavailable, then falls back to the raw lower-cased language name.
+    Resolves through the shared, PDD_PATH-independent
+    ``pdd.language_extensions.bundled_extension`` reader of the canonical
+    language_format.csv, so the extensions sync *expects* match the ones
+    generation *writes* (issue #551). Falls back to a hard-coded subset for
+    languages absent from the CSV, then to the raw lower-cased language name.
     """
+    from pdd.language_extensions import bundled_extension
+
+    ext = bundled_extension(language)
+    if ext is not None:
+        return ext
+
     lang_lower = language.lower()
-
-    # Canonical lookup: read the first matching row from the package-local CSV.
-    # This works without PDD_PATH being set in the environment.
-    try:
-        import csv as _csv_module
-        _csv_path = Path(__file__).parent / "data" / "language_format.csv"
-        with open(_csv_path, newline='', encoding='utf-8') as _csv_f:
-            for row in _csv_module.DictReader(_csv_f):
-                if row.get('language', '').lower() == lang_lower:
-                    ext = row.get('extension', '')
-                    if isinstance(ext, str):
-                        return ext.lstrip('.')
-                    break
-    except Exception:
-        pass
-
-    # Hard-coded fallback for the most common languages.
+    # Hard-coded fallback for languages absent from the CSV (or if it is
+    # unreadable — a logged, observable condition; see bundled_extension).
     _extensions = {
         'python': 'py',
         'javascript': 'js',

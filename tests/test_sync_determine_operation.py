@@ -5413,3 +5413,41 @@ class TestIssue551CanonicalExtensionInGetPddFilePaths:
             assert Path(tf).suffix != ".yaml", (
                 f"Issue #551: test_files must not contain .yaml path, got {tf!r}"
             )
+
+    def test_pdd_path_unset_generation_matches_sync_extension(self, tmp_path, monkeypatch):
+        """Issue #551 (FM1): with PDD_PATH unset, the extension generation WRITES
+        (construct_paths' offline fallback) must equal the extension sync EXPECTS
+        (get_pdd_file_paths). Before the shared-CSV fix, generation wrote
+        ci_example.yaml (BUILTIN_EXT_MAP) while sync expected ci_example.yml
+        (bundled CSV) -> sync looped regenerating forever.
+        """
+        from pdd.construct_paths import construct_paths
+
+        monkeypatch.delenv("PDD_PATH", raising=False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "prompts").mkdir(parents=True, exist_ok=True)
+        prompt_file = tmp_path / "prompts" / "ci_YAML.prompt"
+        code_file = tmp_path / "ci.yml"
+        prompt_file.write_text("% CI pipeline example\n")
+        code_file.write_text("on: [push]\n")
+
+        # What generation writes for `pdd example` when PDD_PATH is unset.
+        _, _, output_paths, _ = construct_paths(
+            input_file_paths={"prompt_file": str(prompt_file), "code_file": str(code_file)},
+            force=True,
+            quiet=True,
+            command="example",
+            command_options={},
+        )
+        written = Path(output_paths["output"])
+
+        # What sync expects for the same module.
+        expected = get_pdd_file_paths("ci", "YAML", "prompts")["example"]
+
+        assert written.suffix == ".yml", (
+            f"FM1: generation should write .yml offline, got {written.name!r}"
+        )
+        assert written.suffix == expected.suffix, (
+            f"FM1: generation writes {written.suffix!r} but sync expects "
+            f"{expected.suffix!r} (PDD_PATH unset) -> #551 regeneration loop"
+        )

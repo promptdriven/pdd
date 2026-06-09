@@ -1459,8 +1459,17 @@ def construct_paths(
         if not file_extension and (language or '').lower() != 'prompt':
             raise ValueError('empty extension')
     except Exception:
-        file_extension = BUILTIN_EXT_MAP.get(language.lower(), f".{language.lower()}" if language else '')
-    
+        # Offline fallback: read the same bundled language_format.csv that sync's
+        # get_extension uses, so generation's written extension stays aligned with
+        # the path sync expects when PDD_PATH is unset (issue #551). Only resort to
+        # BUILTIN_EXT_MAP for languages the bundled CSV does not list.
+        from pdd.language_extensions import bundled_extension
+        _bundled = bundled_extension(language)
+        if _bundled is not None:
+            file_extension = f".{_bundled}" if _bundled else ''
+        else:
+            file_extension = BUILTIN_EXT_MAP.get(language.lower(), f".{language.lower()}" if language else '')
+
     # Handle --format option for commands that support it (e.g., example)
     format_option = command_options.get("format")
     if format_option and command == "example":
