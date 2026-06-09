@@ -672,7 +672,14 @@ make release-local BUMP=minor  # minor bump
 make release-local BUMP=major  # major bump
 ```
 
-`make release-local` injects the local Infisical `PDS_RELEASE_TOKEN`, tags `HEAD` with the next `vX.Y.Z`, pushes the tag, then runs `make release-video`. The release-video step asks Claude Code to turn the release diff/notes into a short video script and calls the Prompt Driven Studio CLI (`pds release-video create --target publish --platform youtube --privacy unlisted --wait`) to create and upload an unlisted YouTube video. Set `PDS_CLI` if `pds` is not on `PATH`, and set `RELEASE_VIDEO_PROJECT_ID` only for emergency recovery with a fixed-project PDS token. Use `RELEASE_VIDEO=0` only for an emergency release that must skip paid video generation/upload. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
+`make release-local` injects the local Infisical `PDS_RELEASE_TOKEN`, tags `HEAD` with the next `vX.Y.Z`, pushes the tag, then runs `make release-video`. The release-video step asks Claude Code to turn the release diff/notes into a short video script and calls the Prompt Driven Studio CLI (`pds release-video create --target publish --platform youtube --privacy unlisted --wait`) to create and upload an unlisted YouTube video. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
+
+Release-video diagnostics and recovery:
+
+- Run `make check-release-video-config` before a local release. If `PDS_TOKEN` is set, local preflight can only confirm that a token exists; it cannot verify scopes or project access unless the PDS server preflight is run.
+- Normal create-mode creates a new per-release PDS project. The token must be able to create that project and continue accessing it afterward; otherwise use a backend fix/wildcard token or set `RELEASE_VIDEO_PROJECT_ID` for an authorized fixed project.
+- If Claude Code quota/auth blocks script generation, reuse a generated script artifact with `RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md make release-video RELEASE_TAG=<tag>`.
+- Set `PDS_CLI` if `pds` is not on `PATH`. Use `RELEASE_VIDEO=0` only for an emergency release that must skip paid video generation/upload.
 
 ### 9. Troubleshooting Development Setup
 
