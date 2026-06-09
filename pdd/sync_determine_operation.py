@@ -695,39 +695,16 @@ def get_extension(language: str) -> str:
     if ext is not None:
         return ext
 
+    # CSV unreadable or language absent from it: defer to the SAME hard-coded map
+    # generation uses (construct_paths.BUILTIN_EXT_MAP), so sync and generation
+    # share one offline fallback and cannot diverge even when the bundled CSV
+    # can't be read (issue #551). Returned without a leading dot per this
+    # function's contract; BUILTIN_EXT_MAP stores values with the dot ('' for
+    # Makefile), and unknown languages fall through to the raw language name.
+    from pdd.construct_paths import BUILTIN_EXT_MAP
+
     lang_lower = language.lower()
-    # Hard-coded fallback for languages absent from the CSV (or if it is
-    # unreadable — a logged, observable condition; see bundled_extension).
-    _extensions = {
-        'python': 'py',
-        'javascript': 'js',
-        'typescript': 'ts',
-        'typescriptreact': 'tsx',
-        'javascriptreact': 'jsx',
-        'prisma': 'prisma',
-        'java': 'java',
-        'cpp': 'cpp',
-        'c': 'c',
-        'ruby': 'rb',
-        'go': 'go',
-        'rust': 'rs',
-        'php': 'php',
-        'swift': 'swift',
-        'kotlin': 'kt',
-        'scala': 'scala',
-        'csharp': 'cs',
-        'css': 'css',
-        'html': 'html',
-        'sql': 'sql',
-        'shell': 'sh',
-        'bash': 'sh',
-        'powershell': 'ps1',
-        'r': 'r',
-        'matlab': 'm',
-        'lua': 'lua',
-        'perl': 'pl',
-    }
-    return _extensions.get(lang_lower, lang_lower)
+    return BUILTIN_EXT_MAP.get(lang_lower, lang_lower).lstrip('.')
 
 
 def _dot(extension: str) -> str:
