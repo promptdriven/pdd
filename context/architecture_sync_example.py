@@ -17,8 +17,13 @@ from rich.console import Console
 # Import the architecture_sync module
 from pdd.architecture_sync import (
     generate_tags_from_architecture,
+    get_architecture_entry_for_prompt,
+    has_pdd_tags,
     parse_prompt_tags,
+    sync_all_prompts_to_architecture,
     update_architecture_from_prompt,
+    validate_dependencies,
+    validate_interface_structure,
 )
 
 console = Console()
@@ -75,6 +80,224 @@ Here starts the actual prompt prose instructions...
     )
 
     return prompts_dir, architecture_path
+
+
+def example_parse_tags():
+    """Parse PDD metadata tags from prompt content."""
+    prompt_content = """
+<pdd-reason>Handles user authentication and session management</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "authenticate", "signature": "(username: str, password: str) -> Optional[User]", "returns": "Optional[User]"},
+      {"name": "create_session", "signature": "(user: User) -> str", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>database_python.prompt</pdd-dependency>
+<pdd-dependency>config_python.prompt</pdd-dependency>
+
+% Role & Scope
+Your goal is to implement user authentication...
+"""
+
+    tags = parse_prompt_tags(prompt_content)
+
+    print(f"Reason: {tags['reason']}")
+    print(f"Interface type: {tags['interface']['type']}")
+    print(f"Dependencies: {tags['dependencies']}")
+    print(f"Has dependency tags: {tags['has_dependency_tags']}")
+
+    return tags
+
+
+def example_update_single_prompt():
+    """Update architecture.json from a single prompt file's PDD tags."""
+    result = update_architecture_from_prompt(
+        prompt_filename="user_service_python.prompt",
+        prompts_dir=Path("prompts"),
+        architecture_path=Path("architecture.json"),
+        dry_run=True,
+    )
+
+    if result["success"]:
+        if result["updated"]:
+            print("Changes detected:")
+            for field, change in result["changes"].items():
+                print(f"  {field}: {change['old']} -> {change['new']}")
+        else:
+            print("No changes needed")
+    else:
+        print(f"Error: {result['error']}")
+
+    return result
+
+
+def example_sync_all():
+    """Sync all prompt files to architecture.json."""
+    result = sync_all_prompts_to_architecture(
+        prompts_dir=Path("prompts"),
+        architecture_path=Path("architecture.json"),
+        dry_run=True,
+    )
+
+    print(f"Success: {result['success']}")
+    print(f"Updated: {result['updated_count']} modules")
+    print(f"Skipped: {result['skipped_count']} modules")
+
+    if result["errors"]:
+        print("Errors:")
+        for error in result["errors"]:
+            print(f"  - {error}")
+
+    return result
+
+
+def example_validate_dependencies():
+    """Validate that all dependencies exist and are unique."""
+    dependencies = [
+        "database_python.prompt",
+        "config_python.prompt",
+        "missing_file.prompt",
+        "database_python.prompt",
+    ]
+
+    result = validate_dependencies(dependencies, prompts_dir=Path("prompts"))
+
+    print(f"Valid: {result['valid']}")
+    print(f"Missing files: {result['missing']}")
+    print(f"Duplicates: {result['duplicates']}")
+
+    return result
+
+
+def example_validate_interface():
+    """Validate interface JSON structure."""
+    valid_interface = {
+        "type": "module",
+        "module": {
+            "functions": [
+                {
+                    "name": "process",
+                    "signature": "(data: Dict) -> Dict",
+                    "returns": "Dict",
+                }
+            ]
+        },
+    }
+
+    result = validate_interface_structure(valid_interface)
+    print(f"Valid interface: {result['valid']}")
+
+    invalid_interface = {
+        "type": "module"
+    }
+
+    result = validate_interface_structure(invalid_interface)
+    print(f"Invalid interface errors: {result['errors']}")
+
+    return result
+
+
+def example_generate_tags():
+    """Generate PDD tags from an architecture.json entry."""
+    arch_entry = {
+        "filename": "user_service_python.prompt",
+        "filepath": "pdd/user_service.py",
+        "reason": "Handles user authentication and profile management",
+        "interface": {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "authenticate",
+                        "signature": "(username, password)",
+                        "returns": "User",
+                    }
+                ]
+            },
+        },
+        "dependencies": ["database_python.prompt", "config_python.prompt"],
+    }
+
+    tags = generate_tags_from_architecture(arch_entry)
+    print("Generated tags:")
+    print(tags)
+
+    return tags
+
+
+def example_check_existing_tags():
+    """Check if a prompt already has PDD tags before injecting derived metadata."""
+    prompt_with_tags = """
+<pdd-reason>Existing reason</pdd-reason>
+
+% Role & Scope
+...
+"""
+
+    prompt_without_tags = """
+% Role & Scope
+Your goal is to implement...
+"""
+
+    print(f"Prompt with tags: {has_pdd_tags(prompt_with_tags)}")
+    print(f"Prompt without tags: {has_pdd_tags(prompt_without_tags)}")
+
+    return has_pdd_tags(prompt_with_tags), has_pdd_tags(prompt_without_tags)
+
+
+def example_get_entry():
+    """Look up architecture entry by prompt filename."""
+    entry = get_architecture_entry_for_prompt(
+        "llm_invoke_python.prompt",
+        architecture_path=Path("architecture.json"),
+    )
+
+    if entry:
+        print(f"Found entry for: {entry['filename']}")
+        print(f"Reason: {entry.get('reason', 'N/A')}")
+    else:
+        print("No entry found")
+
+    return entry
+
+
+def example_inject_tags_workflow():
+    """Generate and inject PDD tags into a prompt that does not have them yet."""
+    prompt_filename = "my_module_python.prompt"
+    prompt_content = """
+% Role & Scope
+Your goal is to implement a data processor...
+
+% Requirements
+1. Process input data
+2. Return results
+"""
+
+    if has_pdd_tags(prompt_content):
+        print("Prompt already has PDD tags, skipping injection")
+        return prompt_content
+
+    arch_entry = get_architecture_entry_for_prompt(prompt_filename)
+
+    if not arch_entry:
+        print(f"No architecture entry found for {prompt_filename}")
+        return prompt_content
+
+    tags = generate_tags_from_architecture(arch_entry)
+
+    if tags:
+        final_content = tags + "\n\n" + prompt_content
+        print("Tags injected successfully!")
+        return final_content
+
+    return prompt_content
 
 
 def main() -> None:
