@@ -21,7 +21,7 @@ variables:
     required: false
     type: string
     description: System layer or interface type for context.
-    examples: [backend, frontend, api, graphql, cli, job, message, config, module, component, page]
+    examples: [backend, frontend, api, graphql, cli, job, message, config, module, component, page, entrypoint]
   PRD_FILE:
     required: false
     type: path
@@ -171,7 +171,7 @@ IMPORTANT: Your reply MUST begin with `<prompt>` on the very first line and end 
   ```
 
 % Architecture awareness (ARCHITECTURE_FILE is required):
-- Align the "Requirements" and "Instructions" with the selected item's `interface.type` (e.g., page, component, module, api, graphql, cli, job, message, config).
+- Align the "Requirements" and "Instructions" with the selected item's `interface.type` (e.g., page, component, module, api, graphql, cli, job, message, config, entrypoint).
 - For `api`, outline endpoints (method, path, auth) consistent with the architecture description; for `page`/`component`, describe route/props/data sources; for `job`, include trigger and retry policy; for `config`, list keys and sources.
 - For Next.js App Router `page` items, enforce the rendering model based on `interface.page.renderingModel`:
   - "server" (or absent): Generate as React Server Component. The component may be `async`. MUST NOT use `'use client'` directive or React hooks (`useState`, `useEffect`, `useRouter`, etc.). Include these constraints explicitly in the Requirements and Instructions sections.
