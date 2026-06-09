@@ -315,6 +315,38 @@ def test_format_code_with_explicit_output_path(mock_ctx, mock_construct_paths, m
     rewritten = tmp_path / "custom_example.py"
     assert not rewritten.exists(), f"Path {rewritten} must not exist (user supplied .md explicitly)"
 
+def test_format_code_preserves_explicit_typescriptreact_filename(
+    mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path
+):
+    """Issue #551: explicit TypeScriptReact --output filenames are preserved."""
+    mock_ctx.obj['local'] = True
+    prompt_file = tmp_path / "app_page_TypeScriptReact.prompt"
+    code_file = tmp_path / "app_page.tsx"
+    explicit_output = tmp_path / "examples" / "app" / "app_page_example.tsx.bak"
+    prompt_file.write_text("Prompt")
+    code_content = "export function AppPage() { return <div>Hello</div>; }"
+    code_file.write_text(code_content)
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": "Prompt", "code_file": code_content},
+        {"output": str(explicit_output)},
+        "typescriptreact",
+    )
+    mock_context_generator.return_value = ("// Generated TSX", 0.0, "model")
+
+    context_generator_main(
+        mock_ctx,
+        str(prompt_file),
+        str(code_file),
+        str(explicit_output),
+        format="code",
+    )
+
+    assert explicit_output.exists(), f"Expected {explicit_output} to exist"
+    assert explicit_output.read_text() == "// Generated TSX"
+    rewritten = explicit_output.with_suffix(".tsx")
+    assert not rewritten.exists(), f"Unexpected rewritten output: {rewritten}"
+
 def test_format_md_without_explicit_output(mock_ctx, mock_construct_paths, mock_context_generator, mock_get_jwt_token, tmp_path):
     """Test that --format md option works with default output path generation."""
     mock_ctx.obj['local'] = True

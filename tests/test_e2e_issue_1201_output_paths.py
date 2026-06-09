@@ -186,3 +186,195 @@ contexts:
             # Test/example honor .pddrc subdirectories
             assert test_path.parent.name == "tests_custom"
             assert example_path.parent.name == "examples_custom"
+
+
+class TestIssue551SyncOrchestratorCanonicalExtensions:
+    """E2E regression tests for issue #551 (reopened): YAML/Markdown sync paths use canonical extensions.
+
+    The bug: `get_pdd_file_paths` in `sync_determine_operation.py` used a local `get_extension`
+    helper that returned raw language names (``yaml``, ``markdown``) instead of canonical
+    CSV-backed extensions (``.yml``, ``.md``).  Because `sync_orchestration` exposes those paths
+    in ``final_state`` and sync decision logic checks those exact paths for existence,
+    canonical artifacts were treated as missing — triggering an indefinite regeneration loop.
+
+    The fix (commit 89a2eba) updated `get_extension` to perform a CSV lookup first so
+    YAML → ``.yml`` and Markdown → ``.md``.
+
+    These tests verify that the fix holds end-to-end through the sync orchestration layer.
+    """
+
+    @pytest.fixture
+    def yaml_project(self, tmp_path):
+        """Minimal YAML project: architecture.json says ci.yml, prompt file present."""
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "architecture.json").write_text(json.dumps({
+            "modules": [{"filename": "ci_YAML.prompt", "filepath": "ci.yml"}]
+        }))
+        (tmp_path / "prompts" / "ci_YAML.prompt").write_text("Generate CI workflow.\n")
+        return tmp_path
+
+    @pytest.fixture
+    def markdown_project(self, tmp_path):
+        """Minimal Markdown project: architecture.json says manifest.md, prompt file present."""
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "architecture.json").write_text(json.dumps({
+            "modules": [{"filename": "manifest_Markdown.prompt", "filepath": "manifest.md"}]
+        }))
+        (tmp_path / "prompts" / "manifest_Markdown.prompt").write_text("Generate manifest.\n")
+        return tmp_path
+
+    def test_sync_orchestration_yaml_final_state_uses_yml_extension(self, yaml_project, monkeypatch):
+        """
+        sync_orchestration for a YAML module must expose ``.yml`` paths in final_state.
+
+        Before the fix get_extension('YAML') returned 'yaml', so final_state exposed
+        ``.yaml`` paths even though the actual code file was ``.yml``.
+        """
+        monkeypatch.chdir(yaml_project)
+        from pdd.sync_orchestration import sync_orchestration
+
+        mock_decision = SyncDecision(operation="nothing", reason="all synced")
+        with patch("pdd.sync_orchestration.sync_determine_operation", return_value=mock_decision), \
+             patch("pdd.sync_orchestration.get_pdd_file_paths", wraps=get_pdd_file_paths) as mock_paths:
+            result = sync_orchestration(
+                basename="ci",
+                language="YAML",
+                prompts_dir="prompts",
+                quiet=True,
+            )
+
+        assert result["success"] is True
+        mock_paths.assert_called()
+
+        final = result["final_state"]
+        example_path = Path(final["example"]["path"])
+        test_path = Path(final["test"]["path"])
+
+        assert example_path.suffix == ".yml", (
+            f"Bug #551: sync_orchestration final_state example path uses "
+            f"{example_path.suffix!r} instead of canonical '.yml'. "
+            f"Full path: {example_path}"
+        )
+        assert test_path.suffix == ".yml", (
+            f"Bug #551: sync_orchestration final_state test path uses "
+            f"{test_path.suffix!r} instead of canonical '.yml'. "
+            f"Full path: {test_path}"
+        )
+        assert example_path.name == "ci_example.yml"
+        assert test_path.name == "test_ci.yml"
+
+    def test_sync_orchestration_markdown_final_state_uses_md_extension(self, markdown_project, monkeypatch):
+        """
+        sync_orchestration for a Markdown module must expose ``.md`` paths in final_state,
+        not ``.markdown``.
+        """
+        monkeypatch.chdir(markdown_project)
+        from pdd.sync_orchestration import sync_orchestration
+
+        mock_decision = SyncDecision(operation="nothing", reason="all synced")
+        with patch("pdd.sync_orchestration.sync_determine_operation", return_value=mock_decision), \
+             patch("pdd.sync_orchestration.get_pdd_file_paths", wraps=get_pdd_file_paths) as mock_paths:
+            result = sync_orchestration(
+                basename="manifest",
+                language="Markdown",
+                prompts_dir="prompts",
+                quiet=True,
+            )
+
+        assert result["success"] is True
+        mock_paths.assert_called()
+
+        final = result["final_state"]
+        example_path = Path(final["example"]["path"])
+        test_path = Path(final["test"]["path"])
+
+        assert example_path.suffix == ".md", (
+            f"Bug #551: sync_orchestration final_state example path uses "
+            f"{example_path.suffix!r} instead of canonical '.md'. "
+            f"Full path: {example_path}"
+        )
+        assert test_path.suffix == ".md", (
+            f"Bug #551: sync_orchestration final_state test path uses "
+            f"{test_path.suffix!r} instead of canonical '.md'. "
+            f"Full path: {test_path}"
+        )
+        assert example_path.name == "manifest_example.md"
+        assert test_path.name == "test_manifest.md"
+
+    def test_yaml_canonical_artifacts_prevent_regeneration_loop(self, tmp_path, monkeypatch):
+        """
+        Regression: when ci_example.yml and test_ci.yml already exist and are current,
+        sync must recognize them (operation='nothing') rather than treating them as missing.
+
+        Bug #551 caused get_pdd_file_paths to return ``.yaml`` paths while the canonical
+        artifacts were ``.yml``, so the example/test were always seen as missing and sync
+        re-generated them indefinitely.
+        """
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "examples").mkdir()
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "architecture.json").write_text(json.dumps({
+            "modules": [{"filename": "ci_YAML.prompt", "filepath": "ci.yml"}]
+        }))
+        (tmp_path / "prompts" / "ci_YAML.prompt").write_text("Generate CI workflow.\n")
+        (tmp_path / "ci.yml").write_text("name: ci\non: push\njobs: {}\n")
+        (tmp_path / "examples" / "ci_example.yml").write_text("name: ci-example\n")
+        (tmp_path / "tests" / "test_ci.yml").write_text("name: ci-test\n")
+
+        paths = get_pdd_file_paths("ci", "YAML", "prompts")
+
+        assert paths["example"].suffix == ".yml", (
+            f"Bug #551: get_pdd_file_paths returned example path with suffix "
+            f"{paths['example'].suffix!r} instead of '.yml'. "
+            "The pre-existing ci_example.yml would be treated as missing."
+        )
+        assert paths["test"].suffix == ".yml", (
+            f"Bug #551: get_pdd_file_paths returned test path with suffix "
+            f"{paths['test'].suffix!r} instead of '.yml'. "
+            "The pre-existing test_ci.yml would be treated as missing."
+        )
+        assert paths["example"].exists(), (
+            f"Canonical example file {paths['example']} should exist — "
+            "if get_pdd_file_paths returns a .yaml path instead, it will be treated "
+            "as missing and trigger an infinite re-generation loop."
+        )
+        assert paths["test"].exists(), (
+            f"Canonical test file {paths['test']} should exist — "
+            "if get_pdd_file_paths returns a .yaml path instead, it will be treated "
+            "as missing and trigger an infinite re-generation loop."
+        )
+
+    def test_cli_sync_yaml_resolves_to_orchestration_with_yaml_language(
+        self, yaml_project, base_ctx_obj, monkeypatch
+    ):
+        """
+        CLI smoke-test: ``pdd sync ci --language YAML`` reaches sync_orchestration
+        with language='YAML' so that path derivation uses the canonical extension.
+        """
+        monkeypatch.chdir(yaml_project)
+        runner = CliRunner()
+        cli = _make_cli(sync, base_ctx_obj)
+
+        captured: dict = {}
+
+        def _capturing_orchestration(**kwargs):
+            captured.update(kwargs)
+            return {
+                "success": True,
+                "total_cost": 0.0,
+                "model_name": "stub",
+                "summary": "OK",
+            }
+
+        with patch("pdd.sync_main.sync_orchestration", side_effect=_capturing_orchestration):
+            result = runner.invoke(cli, ["sync", "ci"], catch_exceptions=False)
+
+        assert result.exit_code == 0, f"CLI exited {result.exit_code}:\n{result.output}"
+        assert captured.get("language", "").lower() == "yaml", (
+            f"sync_orchestration received language={captured.get('language')!r}, expected 'yaml' (YAML)"
+        )
