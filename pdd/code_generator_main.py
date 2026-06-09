@@ -31,6 +31,7 @@ from .architecture_sync import (
     get_architecture_entry_for_prompt,
     has_pdd_tags,
     generate_tags_from_architecture,
+    parse_prompt_tags,
 )
 from .architecture_registry import extract_modules
 from .architecture_include_validation import validate_prompt_contract_context
@@ -2593,13 +2594,8 @@ def _extract_pdd_interface_signatures(
     if not prompt_content:
         return declarations, False
 
-    # Reuse the canonical parser from architecture_sync (verified non-circular
-    # at module import time).
-    try:
-        from .architecture_sync import parse_prompt_tags
-    except ImportError:
-        return declarations, False
-
+    # parse_prompt_tags is imported at module top level (architecture_sync is a
+    # hard dependency imported there), so it is always available here.
     tags = parse_prompt_tags(prompt_content)
     parse_error = tags.get("interface_parse_error")
     if parse_error:
@@ -2654,6 +2650,41 @@ def _extract_pdd_interface_signatures(
             continue
         declarations.append((name, params))
     return declarations, False
+
+
+def _collect_pdd_interface_names(prompt_content: Optional[str]) -> Set[str]:
+    """Collect declared ``module.functions`` *names* from a prompt's ``<pdd-interface>``.
+
+    Mirrors the architecture.json declared-symbol collection (the function ``name``
+    fields under a ``type: "module"`` interface) but sourced from the prompt, so the
+    camelCase naming exemption honors a name the author declared in the
+    source-of-truth prompt even before ``architecture.json`` is regenerated to match
+    (issue #1446). Unlike :func:`_extract_pdd_interface_signatures`, this keeps
+    description-only declarations (no paren signature), because the exemption keys on
+    the name alone.
+
+    The camelCase guard only ever runs for ``type: "module"`` interfaces (the only
+    shape that populates declared symbols and reaches the guard), so collection is
+    scoped to that type. Returns an empty set when ``prompt_content`` is absent or
+    has no parseable ``<pdd-interface>`` — the exemption is best-effort and never
+    blocks generation (the ``<pdd-interface>`` signature check owns parse-error
+    logging, so we stay silent here to avoid a double warning).
+    """
+    names: Set[str] = set()
+    if not prompt_content:
+        return names
+    tags = parse_prompt_tags(prompt_content)
+    if tags.get("interface_parse_error"):
+        return names
+    interface = tags.get("interface")
+    if not isinstance(interface, dict) or interface.get("type") != "module":
+        return names
+    for func in (interface.get("module") or {}).get("functions") or []:
+        if isinstance(func, dict):
+            name = func.get("name")
+            if isinstance(name, str) and name:
+                names.add(name)
+    return names
 
 
 def _verify_pdd_interface_signatures(
@@ -2879,12 +2910,17 @@ def _verify_architecture_conformance(
     the interface contract, so this check runs even when ``architecture.json``
     has no matching entry.
     """
+    # Names declared in the prompt's <pdd-interface> are also intentional public
+    # API for the camelCase naming check (issue #1446), even when architecture.json
+    # has not yet been regenerated to match — the prompt is the source of truth.
+    camel_exempt_names = _collect_pdd_interface_names(prompt_content)
     entry = _verify_architecture_json_conformance(
         generated_code=generated_code,
         prompt_name=prompt_name,
         arch_path=arch_path,
         language=language,
         output_path=output_path,
+        camel_exempt_names=camel_exempt_names,
     )
 
     # Additionally enforce the prompt's <pdd-interface> signature contract.
@@ -2908,6 +2944,8 @@ def _verify_architecture_json_conformance(
     arch_path: Optional[str],
     language: Optional[str],
     output_path: Optional[str],
+    *,
+    camel_exempt_names: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Pre-existing architecture.json symbol-existence + camelCase check.
 
@@ -3008,8 +3046,20 @@ def _verify_architecture_json_conformance(
     # guard inspects the method segment, not only the class-name prefix.
     if detected_lang in ("python", "py") or prompt_name.endswith("_Python.prompt"):
         camel_pattern = re.compile(r"^[a-z]+[A-Z]")
+        # Exempt declared interface names from the camelCase naming check only:
+        # a name declared in architecture.json (``declared_symbols``) OR in the
+        # prompt's ``<pdd-interface>`` (``camel_exempt_names``, the source of
+        # truth, supplied by the caller) is intentional public API (e.g. Firebase
+        # Cloud Function exports like ``generateCode``), not accidental drift — so
+        # only UNDECLARED camelCase is flagged (issue #1446). This exemption is
+        # scoped to naming and never weakens the missing-symbol check above.
+        exempt_names = set(declared_symbols)
+        if camel_exempt_names:
+            exempt_names |= camel_exempt_names
         camel_exports: List[str] = []
         for s in actual_symbols:
+            if s in exempt_names:
+                continue
             for part in s.split("."):
                 if not part.startswith("_") and camel_pattern.match(part):
                     camel_exports.append(s)
