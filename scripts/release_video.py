@@ -20,6 +20,54 @@ YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+CLAUDE_FAILURE_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "credential-limit",
+        (
+            r"hit\s+your\s+(?:session\s+|usage\s+|weekly\s+|monthly\s+)?limit"
+            r"[^\n]{0,80}?\bresets?\b",
+            r"weekly\s+(?:usage\s+)?limit",
+            r"usage\s+limit",
+            r"session\s+limit",
+        ),
+    ),
+    (
+        "quota",
+        (
+            r"quota\s+(?:exhausted|exceeded|reached)",
+            r"daily\s+quota",
+            r"terminal\s*quota\s*error",
+        ),
+    ),
+    (
+        "billing/credit-exhaustion",
+        (
+            r"credit\s+balance\s+is\s+too\s+low",
+            r"insufficient\s+(?:credit|balance|funds)",
+        ),
+    ),
+    (
+        "oauth/login",
+        (
+            r"not\s+logged\s+in",
+            r"please\s+run\s+/login",
+            r"claude\s+auth\s+login",
+        ),
+    ),
+    (
+        "auth",
+        (
+            r"authentication[_\s]error",
+            r"authentication\s+failed",
+            r"failed\s+to\s+authenticate",
+            r"invalid\s+(?:bearer|api\s+key|key)",
+            r"\b401\b",
+            r"unauthorized",
+            r"access\s+denied",
+            r"permission\s+denied",
+        ),
+    ),
+)
 
 
 class ReleaseVideoError(RuntimeError):
@@ -65,15 +113,22 @@ def main(argv: list[str] | None = None) -> int:
 
         context_path.write_text(context, encoding="utf8")
         release_notes_path.write_text(release_notes_from_context(context), encoding="utf8")
-        script_text = generate_script_with_claude(
-            context=context,
-            claude_cli=args.claude_cli,
-            claude_model=args.claude_model,
-            claude_tools=args.claude_tools,
-            prompt_template=Path(args.prompt_template),
-            timeout=args.claude_timeout,
-            cwd=repo,
-        )
+        if args.script_path:
+            script_text, source_script_path = load_release_video_script(
+                Path(args.script_path),
+                repo,
+            )
+            print(f"release-video: using prewritten script from {source_script_path}")
+        else:
+            script_text = generate_script_with_claude(
+                context=context,
+                claude_cli=args.claude_cli,
+                claude_model=args.claude_model,
+                claude_tools=args.claude_tools,
+                prompt_template=Path(args.prompt_template),
+                timeout=args.claude_timeout,
+                cwd=repo,
+            )
         script_path.write_text(script_text, encoding="utf8")
 
         response = create_release_video(
@@ -135,6 +190,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=os.environ.get("RELEASE_VIDEO_PROMPT_TEMPLATE", str(DEFAULT_RELEASE_VIDEO_PROMPT)),
         help="Prompt template used to generate the release-video script.",
     )
+    parser.add_argument(
+        "--script-path",
+        default=os.environ.get("RELEASE_VIDEO_SCRIPT_PATH", ""),
+        help=(
+            "Use an existing release-video script instead of invoking Claude Code. "
+            "Useful when reusing a generated artifact after Claude Code quota/auth failure."
+        ),
+    )
     parser.add_argument("--pds-cli", default=os.environ.get("PDS_CLI", "pds"))
     parser.add_argument(
         "--project-id",
@@ -165,10 +228,27 @@ def preflight_release_video(args: argparse.Namespace) -> int:
     project_id = str(args.project_id or "").strip()
     if project_id:
         print(f"release-video preflight: using explicit PDS project {project_id}.")
-        return 0
 
     if os.environ.get("PDS_TOKEN", "").strip():
-        print("release-video preflight: PDS_TOKEN is set; token scopes cannot be verified locally.")
+        if project_id:
+            print(
+                "release-video preflight: PDS_TOKEN is set for explicit PDS "
+                f"project {project_id}; local preflight cannot verify token "
+                "scopes or access to that fixed project unless the PDS server "
+                "preflight is run."
+            )
+        else:
+            print(
+                "release-video preflight: PDS_TOKEN is set; local preflight "
+                "cannot verify token scopes or project access unless the PDS "
+                "server preflight is run. Normal create-mode creates a new "
+                "per-release project, so the token must create that project "
+                "and continue accessing it afterward (or use a backend "
+                "fix/wildcard token)."
+            )
+        return 0
+
+    if project_id:
         return 0
 
     config_path = pds_config_path()
@@ -195,16 +275,24 @@ def preflight_release_video(args: argparse.Namespace) -> int:
         print(
             "release-video preflight warning: active local PDS profile "
             f"{profile_name!r} is pinned to project {profile_project_id!r}. "
-            "Normal releases create a new per-release project. The profile token "
-            "may fail with \"PDS agent token is not allowed for this project\". "
-            "Use a release-scoped PDS_TOKEN or PDS_PROFILE, set "
-            "RELEASE_VIDEO_PROJECT_ID for an authorized fixed project, or use "
-            "RELEASE_VIDEO=0 for recovery.",
+            "Normal create-mode releases create a new per-release project and "
+            "require credentials that can create that project and continue "
+            "accessing it afterward. The profile token may fail with "
+            "\"PDS agent token is not allowed for this project\". Local "
+            "preflight cannot verify server-side scopes unless the PDS server "
+            "preflight is run. Use a release-scoped PDS_TOKEN/PDS_PROFILE, a "
+            "backend fix/wildcard token, RELEASE_VIDEO_PROJECT_ID for an "
+            "authorized fixed project, or RELEASE_VIDEO=0 for recovery.",
             file=sys.stderr,
         )
         return 0
 
-    print(f"release-video preflight: active local PDS profile {profile_name!r} has no fixed project id.")
+    print(
+        f"release-video preflight: active local PDS profile {profile_name!r} "
+        "has no fixed project id. Local preflight still cannot prove the "
+        "token can create and continue accessing a release project; run the "
+        "PDS server preflight for authoritative validation."
+    )
     return 0
 
 
@@ -457,11 +545,93 @@ def generate_script_with_claude(
     if claude_tools.strip():
         command.extend(["--allowedTools", claude_tools.strip()])
     prompt = render_release_video_prompt(context, prompt_template, cwd)
-    completed = run(command, cwd=cwd, input_text=prompt, timeout=timeout)
+    try:
+        completed = run(command, cwd=cwd, input_text=prompt, timeout=timeout, check=False)
+    except ReleaseVideoError as exc:
+        raise ReleaseVideoError(
+            "Claude Code script generation failed before PDS publish; "
+            f"PDS was not invoked. {exc}"
+        ) from exc
+    if completed.returncode != 0:
+        raise ReleaseVideoError(format_claude_script_generation_failure(command, completed))
     script = normalize_release_video_script(strip_markdown_fence(completed.stdout.strip()))
     if len(script) < 200:
         raise ReleaseVideoError("Claude Code produced an unexpectedly short release video script.")
     return script.rstrip() + "\n"
+
+
+def classify_claude_quota_auth_failure(output: str) -> str | None:
+    msg = output.lower()
+    for classification, patterns in CLAUDE_FAILURE_CLASSES:
+        if any(re.search(pattern, msg) for pattern in patterns):
+            return classification
+    return None
+
+
+def format_claude_script_generation_failure(
+    command: list[str],
+    completed: subprocess.CompletedProcess[str],
+) -> str:
+    combined_output = "\n".join(
+        text for text in (completed.stderr.strip(), completed.stdout.strip()) if text
+    )
+    classification = classify_claude_quota_auth_failure(combined_output)
+    message = (
+        "Claude Code script generation failed before PDS publish "
+        f"(exit {completed.returncode}); PDS was not invoked."
+    )
+    if classification:
+        message += (
+            f" Detected Claude Code quota/auth class {classification!r}; "
+            "check Claude Code auth/subscription state or retry with "
+            "RELEASE_VIDEO_SCRIPT_PATH pointing at a previously generated script."
+        )
+    else:
+        message += " This is a script-generation failure, not a PDS publish failure."
+    return f"{message} Command: {shlex.join(command)}. Details: {process_details(completed)}"
+
+
+def process_details(completed: subprocess.CompletedProcess[str]) -> str:
+    details: list[str] = []
+    stderr = completed.stderr.strip()
+    stdout = completed.stdout.strip()
+    if stderr:
+        details.append(f"stderr: {truncate(stderr, 1200)}")
+    if stdout:
+        details.append(f"stdout: {truncate(stdout, 1200)}")
+    if not details:
+        details.append(f"exit code {completed.returncode}")
+    return " | ".join(details)
+
+
+def load_release_video_script(script_path: Path, cwd: Path) -> tuple[str, Path]:
+    path = resolve_release_video_script_path(script_path, cwd)
+    try:
+        raw_script = path.read_text(encoding="utf8")
+    except OSError as exc:
+        raise ReleaseVideoError(f"Could not read release-video script {path}: {exc}") from exc
+    script = normalize_release_video_script(strip_markdown_fence(raw_script.strip()))
+    if len(script) < 200:
+        raise ReleaseVideoError(
+            f"Release-video script override {path} is unexpectedly short."
+        )
+    return script.rstrip() + "\n", path
+
+
+def resolve_release_video_script_path(script_path: Path, cwd: Path) -> Path:
+    if script_path.is_absolute():
+        if script_path.exists():
+            return script_path
+        raise ReleaseVideoError(f"Release-video script override not found: {script_path}")
+    candidates = [
+        cwd / script_path,
+        REPO_ROOT / script_path,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.resolve()
+    tried = "\n".join(str(candidate) for candidate in candidates)
+    raise ReleaseVideoError(f"Release-video script override not found. Tried:\n{tried}")
 
 
 def render_release_video_prompt(context: str, prompt_template: Path, cwd: Path) -> str:
