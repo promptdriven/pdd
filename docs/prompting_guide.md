@@ -559,6 +559,13 @@ A story has exactly two top-level (`##`) sections, and they have different owner
   uses to confirm the prompts deliver the Story. Humans may skim it but are not
   asked to verify it line-by-line — the tooling owns it.
 
+**Keep it readable.** A human can only verify the Story quickly if they can read
+it quickly. Write the Story in plain, everyday language a newcomer who does not
+know PDD/LLM internals would understand. Translate internal jargon to the plain
+idea even when the issue uses it (e.g. "hydrated prompt" → "your fully assembled
+prompt"); keep genuine interface terms (command names, `--json`, exit codes)
+because those are the user's own vocabulary, not jargon.
+
 **Write durable Stories.** Describe the user's *stable goal* and *observable
 outcome*, never a comparison to a specific external product, tool, brand, or UI
 ("works like Claude Code's UI", "matches Codex") and never a time-/version-pinned

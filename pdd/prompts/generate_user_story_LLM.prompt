@@ -12,6 +12,16 @@
     QUICK TO VERIFY. The whole point of the human-verified Story is that confirming it is FASTER than reading the prompt or the code. So the Story must stay a single sentence a person can check at a glance. Never push acceptance detail up into the Story to "make it complete" — that defeats its purpose. Keep the Contract lean too: include only what is needed to catch a real regression. A story that is longer or harder to satisfy than the prompt it guards has failed at its job.
 </audience_split>
 
+% Readability: plain language a non-expert can read
+<readability>
+    A human can only verify the Story quickly if they can READ it quickly. Write the Story — and, as far as the contract still reads precisely, the rest of the story — in plain, everyday language a newcomer who does not know PDD/LLM internals would understand.
+
+    - Do NOT carry internal or implementation jargon into the story even when the ISSUE uses it. Translate it to the plain idea. For example, "hydrated prompt" / "hydrated payload" → "your fully assembled prompt (with all its includes)"; "payload" → "what is sent to the model"; "tokenization" → "token count"; "idempotent" → "safe to run more than once". When a plainer word exists, use it.
+    - The `## Story` sentence MUST be jargon-free: a product person or a new contributor should grasp it on first read. Describe what the user can DO and the benefit, in human terms.
+    - Keep genuine interface terms that ARE the user's vocabulary — real command names, flag names like `--json`, exit codes, file extensions. Those are precise and user-facing, not jargon. The goal is to drop INTERNAL vocabulary, not to vague-ify the real interface.
+    - Prefer short, direct sentences over dense clauses. If a contract line needs a technical term for the LLM to check it, you may use it in the Contract, but still gloss it the first time if it is obscure.
+</readability>
+
 % Inputs
 <input>
     <story_title>

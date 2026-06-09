@@ -45,6 +45,13 @@ third-party tool's UI, which provider is currently "best", cosmetic styling)
 belong in `### Non-Oracle` so a story does not rot into a false failure as the
 ecosystem changes.
 
+**Readable, plain language.** The generator must keep stories readable by a
+newcomer who does not know PDD/LLM internals. The `## Story` sentence must be
+jargon-free, and internal vocabulary must be translated to plain words even when
+the issue uses it (e.g. "hydrated prompt" -> "your fully assembled prompt"). Real
+interface terms (command names, flags like `--json`, exit codes) are kept because
+they are the user's own vocabulary, not jargon.
+
 **Quick to verify, firm but not harsh.** The human-verified Story is one sentence
 that is faster to check than reading the prompt — never push acceptance detail
 into it, and keep the Contract lean (only what catches a real regression). The
