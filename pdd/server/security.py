@@ -67,42 +67,30 @@ class PathValidator:
             SecurityError: If the path is invalid, blocked, or traverses outside root.
         """
         try:
-            # 1. Construct the full candidate path
+            # 1. Parse user input and require a relative path.
             path_obj = Path(path)
-            
             if path_obj.is_absolute():
-                # If absolute, we must ensure it starts with project_root before resolving
-                # to catch simple string mismatches, but the real check is relative_to below.
-                candidate_path = path_obj
-            else:
-                # If relative, join with project root
-                candidate_path = self.project_root / path_obj
+                console.print(f"[bold red]Security Alert:[/bold red] Absolute path rejected: {path}")
+                raise SecurityError(
+                    code="PATH_TRAVERSAL",
+                    message="Access denied: Absolute paths are not allowed."
+                )
 
-            # 2. Enforce containment on a normalized, filesystem-free path BEFORE
-            # resolving. os.path.normpath collapses '..'/'.' purely textually (no
-            # symlink following, no disk access); os.path.commonpath then proves the
-            # candidate is lexically inside project_root. Doing this *before*
-            # resolve() means user-controlled input is validated before any
-            # filesystem canonicalization runs on it — closing the path-traversal
-            # sink at resolve() that a post-hoc check cannot (a later check can't
-            # un-run a dangerous operation already performed on tainted input).
-            root_str = str(self.project_root)
-            normalized = os.path.normpath(str(candidate_path))
-            try:
-                within_root = os.path.commonpath([root_str, normalized]) == root_str
-            except ValueError:
-                # Mixed absolute/relative or different drives -> outside root.
-                within_root = False
-            if not within_root:
+            # 2. Normalize as a relative path and block traversal segments.
+            normalized_relative = os.path.normpath(str(path_obj))
+            if normalized_relative in ("", "."):
+                normalized_relative = "."
+            if normalized_relative == ".." or normalized_relative.startswith(".." + os.sep):
                 console.print(f"[bold red]Security Alert:[/bold red] Path traversal attempt: {path}")
                 raise SecurityError(
                     code="PATH_TRAVERSAL",
                     message="Access denied: Path is outside the project root."
                 )
 
-            # 3. Resolve symlinks and '..' components on the now-contained path.
+            # 3. Anchor to trusted root, then resolve.
+            candidate_path = self.project_root / normalized_relative
             # strict=False allows validating paths for files that don't exist yet (e.g. for writing)
-            resolved_path = Path(normalized).resolve()
+            resolved_path = candidate_path.resolve(strict=False)
 
             # 4. Defense in depth: re-check containment after symlink resolution,
             # since a symlink *inside* root could still point outside it. This
