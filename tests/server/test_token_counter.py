@@ -2,13 +2,13 @@ import csv
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from z3 import Solver, Int, Real, unsat
 
 from pdd.server import token_counter
 from pdd.server.token_counter import (
     count_tokens,
     get_context_limit,
     estimate_cost,
+    estimate_completion_cost,
     get_token_metrics,
     CostEstimate,
     TokenMetrics,
@@ -28,6 +28,8 @@ def mock_pricing_csv(tmp_path):
         "claude-3-opus,15.00,75.00",
         "claude-sonnet-4-20250514,3.00,15.00",
         "gemini-1.5-pro,3.50,10.50",
+        "local-free,0,0",
+        "legacy-input-only,2.50,",
     ]
     p = tmp_path / "llm_model.csv"
     p.write_text("\n".join(csv_content))
@@ -213,6 +215,15 @@ def test_estimate_cost_exact_match(mock_pricing_csv):
     assert estimate.cost_per_million == 30.00
 
 
+def test_estimate_cost_accepts_string_pricing_csv_path(mock_pricing_csv):
+    """Legacy callers may pass pricing_csv as a string path."""
+    token_counter._load_model_pricing.cache_clear()
+    estimate = estimate_cost(1000, "gpt-4", str(mock_pricing_csv))
+
+    assert estimate is not None
+    assert estimate.input_cost == pytest.approx(0.03)
+
+
 def test_estimate_cost_partial_match(mock_pricing_csv):
     """Cost estimation with a partial model name match."""
     token_counter._load_model_pricing.cache_clear()
@@ -223,14 +234,196 @@ def test_estimate_cost_partial_match(mock_pricing_csv):
     assert estimate.cost_per_million == 15.00
 
 
-def test_estimate_cost_fallback_defaults(mock_pricing_csv):
-    """Falls back to known defaults when model not found in CSV."""
+def test_estimate_cost_allows_input_only_legacy_pricing(mock_pricing_csv):
+    """Input-only estimates remain usable when an older CSV lacks output rates."""
     token_counter._load_model_pricing.cache_clear()
-    # "unknown-model" not in CSV → falls back to claude-sonnet-4-20250514 ($3.00/M)
-    estimate = estimate_cost(1000, "unknown-super-model", mock_pricing_csv)
+    estimate = estimate_cost(1_000_000, "legacy-input-only", mock_pricing_csv)
+
     assert estimate is not None
-    assert estimate.model == "claude-sonnet-4-20250514"
-    assert estimate.cost_per_million == 3.00
+    assert estimate.input_cost == pytest.approx(2.50)
+    assert estimate.output_cost_per_million is None
+
+
+def test_estimate_cost_unknown_model_returns_none(mock_pricing_csv):
+    """Unknown model pricing must be explicit None, not a guessed default."""
+    token_counter._load_model_pricing.cache_clear()
+    estimate = estimate_cost(1000, "unknown-super-model", mock_pricing_csv)
+    assert estimate is None
+
+
+def test_estimate_cost_rejects_provider_prefixed_near_matches(tmp_path):
+    """Bare model names must not inherit prices from provider-scoped near matches."""
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join(
+            [
+                "model,input,output",
+                "azure/gpt-4.1-mini,0.4,1.6",
+                "github_copilot/gpt-4o,0.0,0.0",
+                "openai/gpt-4o,2.5,10.0",
+                "gpt-4.1-mini,0.4,1.6",
+            ]
+        )
+    )
+
+    token_counter._load_model_pricing.cache_clear()
+
+    assert estimate_completion_cost(1000, 1000, "gpt-4", pricing_csv) is None
+    assert estimate_completion_cost(1000, 1000, "gpt-4o", pricing_csv) is None
+
+
+def test_estimate_cost_preserves_exact_provider_and_unqualified_matches(tmp_path):
+    """Conservative matching still allows exact provider-qualified/unqualified rows."""
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join(
+            [
+                "model,input,output",
+                "openai/gpt-4o,2.5,10.0",
+                "gpt-4.1-mini,0.4,1.6",
+                "local-free,0,0",
+            ]
+        )
+    )
+
+    token_counter._load_model_pricing.cache_clear()
+
+    provider_estimate = estimate_completion_cost(
+        1_000_000, 1_000_000, "openai/gpt-4o", pricing_csv
+    )
+    assert provider_estimate is not None
+    assert provider_estimate.matched_model == "openai/gpt-4o"
+    assert provider_estimate.total_cost == pytest.approx(12.5)
+
+    unqualified_estimate = estimate_completion_cost(
+        1_000_000, 1_000_000, "gpt-4.1-mini", pricing_csv
+    )
+    assert unqualified_estimate is not None
+    assert unqualified_estimate.matched_model == "gpt-4.1-mini"
+    assert unqualified_estimate.total_cost == pytest.approx(2.0)
+
+    zero_estimate = estimate_completion_cost(1000, 1000, "local-free", pricing_csv)
+    assert zero_estimate is not None
+    assert zero_estimate.total_cost == pytest.approx(0.0)
+
+
+def test_estimate_completion_cost_uses_input_and_output_rates(mock_pricing_csv):
+    """Completion estimates include separate deterministic input/output rates."""
+    token_counter._load_model_pricing.cache_clear()
+    estimate = estimate_completion_cost(
+        input_tokens=1_000_000,
+        predicted_output_tokens=500_000,
+        model="gpt-4",
+        pricing_csv=mock_pricing_csv,
+    )
+
+    assert estimate is not None
+    assert estimate.input_cost == pytest.approx(30.00)
+    assert estimate.output_cost == pytest.approx(30.00)
+    assert estimate.total_cost == pytest.approx(60.00)
+    assert estimate.input_tokens == 1_000_000
+    assert estimate.output_tokens == 500_000
+    assert estimate.input_cost_per_million == 30.00
+    assert estimate.output_cost_per_million == 60.00
+
+
+def test_estimate_completion_cost_zero_rates_are_known_prices(mock_pricing_csv):
+    """Explicit zero input/output rates are valid known prices, not unknown."""
+    token_counter._load_model_pricing.cache_clear()
+    estimate = estimate_completion_cost(1000, 2000, "local-free", mock_pricing_csv)
+
+    assert estimate is not None
+    assert estimate.input_cost == pytest.approx(0.0)
+    assert estimate.output_cost == pytest.approx(0.0)
+    assert estimate.total_cost == pytest.approx(0.0)
+
+
+def test_estimate_completion_cost_requires_output_rate(mock_pricing_csv):
+    """Completion estimates are unknown when only input pricing is available."""
+    token_counter._load_model_pricing.cache_clear()
+    assert (
+        estimate_completion_cost(1000, 1000, "legacy-input-only", mock_pricing_csv)
+        is None
+    )
+
+
+def test_estimate_completion_cost_unknown_model_returns_none(mock_pricing_csv):
+    """Completion pricing also refuses to invent prices for unknown models."""
+    token_counter._load_model_pricing.cache_clear()
+    assert (
+        estimate_completion_cost(1000, 1000, "unknown-super-model", mock_pricing_csv)
+        is None
+    )
+
+
+# ---------------------------------------------------------------------------
+# default pricing CSV resolution (#1357: usable pre-flight cost primitives)
+# ---------------------------------------------------------------------------
+
+def test_default_pricing_csv_resolution_order(tmp_path, monkeypatch):
+    """Resolution prefers $HOME/.pdd, then cwd/.pdd, then the bundled CSV."""
+    home = tmp_path / "home"
+    project = tmp_path / "project"
+    (home / ".pdd").mkdir(parents=True)
+    (project / ".pdd").mkdir(parents=True)
+    home_csv = home / ".pdd" / "llm_model.csv"
+    project_csv = project / ".pdd" / "llm_model.csv"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    monkeypatch.chdir(project)
+
+    # Nothing user/project-level yet -> falls back to the bundled package CSV.
+    assert token_counter.default_pricing_csv() == token_counter._BUNDLED_PRICING_CSV
+    assert token_counter._BUNDLED_PRICING_CSV.is_file()  # bundled CSV ships with the package
+
+    # Project-level CSV wins over the bundled fallback.
+    project_csv.write_text("model,input,output\ngpt-4,30.00,60.00\n")
+    assert token_counter.default_pricing_csv() == project_csv
+
+    # $HOME-level CSV takes precedence over the project CSV.
+    home_csv.write_text("model,input,output\ngpt-4,30.00,60.00\n")
+    assert token_counter.default_pricing_csv() == home_csv
+
+
+def test_estimate_completion_cost_uses_default_pricing_when_csv_omitted(monkeypatch, mock_pricing_csv):
+    """With no pricing_csv, the completion estimate resolves the canonical CSV."""
+    token_counter._load_model_pricing.cache_clear()
+    monkeypatch.setattr(token_counter, "default_pricing_csv", lambda: mock_pricing_csv)
+
+    estimate = estimate_completion_cost(
+        input_tokens=1_000_000, predicted_output_tokens=500_000, model="gpt-4"
+    )
+
+    assert estimate is not None
+    assert estimate.total_cost == pytest.approx(60.00)
+
+
+def test_estimate_completion_cost_no_default_pricing_returns_none(monkeypatch):
+    """When no pricing source exists at all, cost stays explicitly unknown."""
+    token_counter._load_model_pricing.cache_clear()
+    monkeypatch.setattr(token_counter, "default_pricing_csv", lambda: None)
+    assert estimate_completion_cost(1000, 1000, "gpt-4") is None
+
+
+def test_estimate_completion_cost_explicit_missing_path_not_replaced(monkeypatch, tmp_path):
+    """An explicit (but missing) path is honored, never swapped for the default."""
+    token_counter._load_model_pricing.cache_clear()
+    sentinel = {"called": False}
+
+    def _should_not_run():
+        sentinel["called"] = True
+        return None
+
+    monkeypatch.setattr(token_counter, "default_pricing_csv", _should_not_run)
+    assert estimate_completion_cost(1000, 1000, "gpt-4", tmp_path / "nope.csv") is None
+    assert sentinel["called"] is False
+
+
+def test_estimate_cost_default_none_still_unknown(monkeypatch, mock_pricing_csv):
+    """Legacy input-only API keeps treating None pricing_csv as 'no pricing'."""
+    token_counter._load_model_pricing.cache_clear()
+    # Even if a default exists, estimate_cost must not auto-resolve it.
+    monkeypatch.setattr(token_counter, "default_pricing_csv", lambda: mock_pricing_csv)
+    assert estimate_cost(1000, "gpt-4") is None
 
 
 def test_estimate_cost_serialization(mock_pricing_csv):
@@ -239,10 +432,17 @@ def test_estimate_cost_serialization(mock_pricing_csv):
     estimate = estimate_cost(1000, "gpt-4", mock_pricing_csv)
     data = estimate.to_dict()
     assert data["input_cost"] == pytest.approx(0.03)
+    assert data["output_cost"] == pytest.approx(0.0)
+    assert data["total_cost"] == pytest.approx(0.03)
     assert data["currency"] == "USD"
     assert data["tokens"] == 1000
+    assert data["input_tokens"] == 1000
+    assert data["output_tokens"] == 0
     assert "model" in data
+    assert "matched_model" in data
     assert "cost_per_million" in data
+    assert "input_cost_per_million" in data
+    assert "output_cost_per_million" in data
 
 
 # ---------------------------------------------------------------------------
@@ -324,11 +524,12 @@ def test_z3_cost_calculation_properties():
     - Cost is non-negative for non-negative tokens and positive price.
     - Cost scales linearly with token count.
     """
-    s = Solver()
+    z3 = pytest.importorskip("z3")
+    s = z3.Solver()
 
-    tokens = Int("tokens")
-    price_per_million = Real("price_per_million")
-    cost = Real("cost")
+    tokens = z3.Int("tokens")
+    price_per_million = z3.Real("price_per_million")
+    cost = z3.Real("cost")
 
     # cost = (tokens / 1_000_000) * price_per_million
     calc_cost = (ToReal(tokens) / 1_000_000.0) * price_per_million
@@ -338,7 +539,7 @@ def test_z3_cost_calculation_properties():
 
     # Negate the property: cost < 0 must be unsatisfiable
     s.add(cost < 0)
-    assert s.check() == unsat, "Found a case where cost is negative despite positive inputs"
+    assert s.check() == z3.unsat, "Found a case where cost is negative despite positive inputs"
 
 
 def test_z3_context_usage_percentage():
@@ -348,11 +549,12 @@ def test_z3_context_usage_percentage():
     - tokens > limit   →  usage > 100%
     - tokens == 0      →  usage == 0%
     """
-    s = Solver()
+    z3 = pytest.importorskip("z3")
+    s = z3.Solver()
 
-    tokens = Int("tokens")
-    limit = Int("limit")
-    usage = Real("usage")
+    tokens = z3.Int("tokens")
+    limit = z3.Int("limit")
+    usage = z3.Real("usage")
 
     # usage = (tokens / limit) * 100
     calc_usage = (ToReal(tokens) / ToReal(limit)) * 100.0
@@ -364,21 +566,21 @@ def test_z3_context_usage_percentage():
     s.push()
     s.add(tokens == limit)
     s.add(usage != 100.0)
-    assert s.check() == unsat, "Usage should be 100% when tokens equal the limit"
+    assert s.check() == z3.unsat, "Usage should be 100% when tokens equal the limit"
     s.pop()
 
     # Case 2: tokens > limit → usage > 100
     s.push()
     s.add(tokens > limit)
     s.add(usage <= 100.0)
-    assert s.check() == unsat, "Usage should be > 100% when tokens exceed the limit"
+    assert s.check() == z3.unsat, "Usage should be > 100% when tokens exceed the limit"
     s.pop()
 
     # Case 3: tokens == 0 → usage == 0
     s.push()
     s.add(tokens == 0)
     s.add(usage != 0.0)
-    assert s.check() == unsat, "Usage should be 0% when token count is zero"
+    assert s.check() == z3.unsat, "Usage should be 0% when token count is zero"
     s.pop()
 
 

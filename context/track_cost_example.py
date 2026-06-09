@@ -10,6 +10,8 @@ Each CSV row contains:
     - model:            successful model name (string)
     - command:          Click command name (string)
     - cost:             cost in USD (float, e.g. 0.05 means $0.05)
+    - input_tokens:     prompt token count (integer, blank when unavailable)
+    - output_tokens:    completion token count (integer, blank when unavailable)
     - input_files:      semicolon-separated input file paths
     - output_files:     semicolon-separated output file paths
     - attempted_models: semicolon-separated audit log of models tried
@@ -29,7 +31,7 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import click  # noqa: E402
-from typing import Optional, Tuple  # noqa: E402
+from typing import Any, Dict, Optional, Tuple  # noqa: E402
 
 from pdd.track_cost import track_cost  # noqa: E402
 
@@ -42,7 +44,7 @@ from pdd.track_cost import track_cost  # noqa: E402
 )
 @click.pass_context
 def cli(ctx, output_cost):
-    """Tiny demo CLI that mimics how `pdd` wires track_cost into its commands."""
+    """Tiny demo CLI that stores output_cost as a CSV path string in ctx.obj."""
     ctx.ensure_object(dict)
     ctx.obj['output_cost'] = output_cost
 
@@ -54,12 +56,18 @@ def cli(ctx, output_cost):
               help='Path to write generated output (output).')
 @click.pass_context
 @track_cost
-def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
-    """Pretend to run an LLM and return (output_path, cost_usd, model_name).
+def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[Dict[str, Any], float, str]:
+    """Pretend to run an LLM and return (payload, cost_usd, model_name).
+
+    Args:
+        ctx: Click context containing the output cost CSV path and attempt log.
+        prompt_file: Existing prompt file path used as the command input.
+        output: Optional generated output file path written by this command.
 
     Returns:
-        Tuple of (output_string, cost_in_dollars, successful_model_name).
-        track_cost extracts cost from index [-2] and model from index [-1].
+        Tuple of (payload, cost_in_dollars, successful_model_name). The payload
+        contains token counts in tokens. track_cost extracts cost from index
+        [-2], model from index [-1], and token counts from the payload.
     """
     with open(prompt_file, 'r', encoding='utf-8') as fh:
         prompt = fh.read()
@@ -80,8 +88,16 @@ def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, 
         with open(output, 'w', encoding='utf-8') as fh:
             fh.write(generated)
 
-    # cost: $0.05, model: the one that eventually succeeded
-    return generated, 0.05, 'deepseek/deepseek-chat'
+    payload = {
+        'output': generated,
+        'usage': {
+            'input_tokens': len(prompt.split()),
+            'output_tokens': len(generated.split()),
+        },
+    }
+
+    # cost: $0.05 USD, model: the one that eventually succeeded
+    return payload, 0.05, 'deepseek/deepseek-chat'
 
 
 def _print_csv(cost_path: str) -> None:
@@ -128,6 +144,8 @@ def main() -> int:
         data_row = rows[1]
         assert header[-1] == 'attempted_models', f'expected attempted_models last, got {header}'
         print('attempted_models column is last:', header[-1] == 'attempted_models')
+        assert header[4:6] == ['input_tokens', 'output_tokens'], header
+        print('token columns are present:', header[4:6])
 
         # Verify the full fallback history made it into the CSV row, proving the
         # per-command scoping in track_cost preserves `attempted_models` written

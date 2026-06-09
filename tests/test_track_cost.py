@@ -1,6 +1,34 @@
+# Test plan:
+# 1. Decorator preserves wrapped command return values, metadata behavior, and command exception propagation.
+# 2. Output cost path is accepted from ctx.obj keys and from PDD_OUTPUT_COST_PATH, and missing paths skip writing.
+# 3. CSV creation writes the exact fresh header, including token columns and attempted_models as the last column.
+# 4. Existing CSVs append rows without rewriting headers, including empty existing files and legacy headers.
+# 5. Legacy CSVs missing attempted_models and/or token columns warn once per absolute file path.
+# 6. Cost/model extraction follows trailing tuple/list elements and handles short or non-tuple results.
+# 7. Token extraction covers direct/nested dicts, direct/nested objects, tuple payloads, invalid values, and blank CSV output.
+# 8. File collection records existing input files, output-prefixed parameters, multiple values, and ignores non-string values.
+# 9. attempted_models comes from ctx.obj, preserves order, sanitizes semicolons, defaults to the model, and does not leak between commands.
+# 10. CSV writing is skipped under PYTEST_CURRENT_TEST and logging failures use rprint without interrupting successful commands.
+# 11. Public API imports and exact public function signatures remain stable.
+# 12. Helper branch coverage includes no Click context, env fallback, fresh files, empty files, legacy files, and error paths.
+
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+
+import pdd
+
+pdd.__path__.insert(0, str(PROJECT_ROOT / "pdd"))
+sys.modules.pop("pdd.track_cost", None)
+sys.modules.pop("pdd.agentic_sync_runner", None)
+
 import pytest
 import unittest.mock as mock
 from unittest.mock import MagicMock, mock_open, patch
+import csv
+import inspect
 import os
 import re
 from datetime import datetime
@@ -47,6 +75,11 @@ def create_mock_context(command_name: str, params: dict, obj: dict = None):
         mock_ctx.obj = None
 
     return mock_ctx
+
+
+def _isfile_for_existing_inputs(path):
+    """Mock helper: cost CSV is new, command input paths exist."""
+    return not str(path).endswith('cost.csv')
 
 
 @pytest.fixture
@@ -129,15 +162,11 @@ def test_csv_row_appended_if_file_exists_with_content(mock_click_context, mock_o
 
     handle = mock_open_file()
     assert not any('timestamp,model,command,cost,input_files,output_files' in call.args[0] for call in handle.write.call_args_list)
-    # Legacy mode kicks in because mocked readline returns empty (no header) -> no attempted_models column
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    # Mocked readline returns empty, so the append falls back to the fresh schema.
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,,,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
-    # Legacy-CSV path emits a one-time UX warning telling the user how to
-    # opt in to the new attempted_models column.
-    mock_rprint.assert_called_once()
-    warn_msg = mock_rprint.call_args[0][0]
-    assert "attempted_models" in warn_msg and "/path/to/cost.csv" in warn_msg
+    mock_rprint.assert_not_called()
     assert result == ('/path/to/output', 25.5, 'gpt-3')
 
 
@@ -167,9 +196,9 @@ def test_csv_header_written_if_file_exists_but_empty(mock_click_context, mock_op
 
     handle = mock_open_file()
     # Header MUST be written when file is empty (with attempted_models column)
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n')
     # Data row should follow (command name is 'sync' from mock context)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,sync,25.5,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,sync,25.5,,,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     mock_rprint.assert_not_called()
@@ -213,7 +242,7 @@ def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rpr
     mock_click_context.return_value = mock_ctx
 
     # Mock os.path.isfile to return False (file does not exist)
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path and mode
@@ -221,10 +250,10 @@ def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rpr
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n')
 
     # Use a regex pattern to match the row, ignoring the specific timestamp
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,,,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -252,7 +281,7 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
     monkeypatch.setenv('PDD_OUTPUT_COST_PATH', '/env/path/cost.csv')
 
     # Mock os.path.isfile to return False (file does not exist)
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called with the path from environment variable
@@ -260,10 +289,10 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n')
 
     # Use a regex pattern to match the row, ignoring the specific timestamp
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,,,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -289,7 +318,7 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
     mock_click_context.return_value = mock_ctx
 
     # Mock os.path.isfile to return False (file does not exist)
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called once
@@ -298,9 +327,9 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written first (newly created files include attempted_models)
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n')
     # Data row should be written
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,,,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -328,7 +357,7 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
     def train_command(ctx, input_file: str, output: str = None) -> Tuple[str, float, str]:
         return ('/path/to/output', 50.0, 'bert-base')
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = train_command(mock_ctx, '/path/to/input.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path
@@ -337,9 +366,9 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n')
     # Data row should have correct cost and model
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,bert-base,train,50.0,/path/to/input.txt,/path/to/output,bert-base\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,bert-base,train,50.0,,,/path/to/input.txt,/path/to/output,bert-base\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -350,7 +379,7 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
 
 def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint):
     """
-    Test that when the command result tuple is too short, cost and model are set to empty strings.
+    Test that when the command result tuple is too short, cost/model fall back to 0.0 and unknown.
     """
     # Define a command that returns a short tuple
     @track_cost
@@ -368,7 +397,7 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = short_result_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
@@ -377,9 +406,9 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
-    # Data row should have empty cost and model; attempted_models defaults to the model_name (empty here)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,short,,/path/to/prompt.txt,,\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n')
+    # Data row should have fallback cost/model; attempted_models defaults to the model_name.
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,unknown,short,0.0,,,/path/to/prompt.txt,,unknown\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -409,7 +438,7 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = process_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt')
 
     # Ensure that open was called with the correct path
@@ -418,9 +447,9 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n')
     # Data row should have correct input and output files
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,custom-model,process,15.0,/path/to/input.txt,/path/to/output.txt,custom-model\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,custom-model,process,15.0,,,/path/to/input.txt,/path/to/output.txt,custom-model\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -450,7 +479,7 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = batch_command(
             mock_ctx,
             ['/path/to/input1.txt', '/path/to/input2.txt'],
@@ -464,9 +493,9 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n')
     # Data row should have multiple input and output files separated by semicolons
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,batch-model,batch,100.0,/path/to/input1.txt;/path/to/input2.txt,/path/to/output1.txt;/path/to/output2.txt,batch-model\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,batch-model,batch,100.0,,,/path/to/input1.txt;/path/to/input2.txt,/path/to/output1.txt;/path/to/output2.txt,batch-model\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -532,7 +561,7 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = mixed_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt', config={'key': 'value'})
 
     # Ensure that open was called with the correct path
@@ -541,7 +570,7 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Data row should include only string file paths (with attempted_models column at end)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,mixed-model,mixed,30.0,/path/to/input.txt,/path/to/output.txt,mixed-model\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,mixed-model,mixed,30.0,,,/path/to/input.txt,/path/to/output.txt,mixed-model\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -568,7 +597,7 @@ def test_missing_click_context(mock_open_file, mock_rprint):
 
 def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
     """
-    Test that if the command result is not a tuple, cost and model are set to empty strings.
+    Test that if the command result is not a tuple, cost/model fall back to 0.0 and unknown.
     """
     # Define a command that returns a non-tuple result
     @track_cost
@@ -586,7 +615,7 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = non_tuple_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
@@ -594,8 +623,8 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
-    # Data row should have empty cost and model; attempted_models defaults to model_name (empty)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,non_tuple,,/path/to/prompt.txt,,\r\n')
+    # Data row should have fallback cost/model; attempted_models defaults to model_name.
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,unknown,non_tuple,0.0,,,/path/to/prompt.txt,,unknown\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -886,16 +915,16 @@ def test_attempted_models_from_ctx_obj_joined_with_semicolons(
     })
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         cmd(mock_ctx, '/path/to/prompt.txt')
 
     handle = mock_open_file()
     handle.write.assert_any_call(
-        'timestamp,model,command,cost,input_files,output_files,attempted_models\r\n'
+        'timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models\r\n'
     )
     row_pattern = re.compile(
         r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,deepseek/deepseek-chat,generate,0.1,'
-        r'/path/to/prompt.txt,,vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat\r\n'
+        r',,/path/to/prompt.txt,,vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat\r\n'
     )
     assert any(row_pattern.match(c.args[0]) for c in handle.write.call_args_list)
 
@@ -914,7 +943,7 @@ def test_attempted_models_sanitizes_semicolons_to_colons(
     })
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         cmd(mock_ctx, '/p.txt')
 
     handle = mock_open_file()
@@ -941,13 +970,13 @@ def test_attempted_models_defaults_to_model_name_when_missing(
     )
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
+    with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         cmd(mock_ctx, '/p.txt')
 
     handle = mock_open_file()
     row_pattern = re.compile(
         r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,solo-model,generate,0.2,'
-        r'/p.txt,,solo-model\r\n'
+            r',,/p.txt,,solo-model\r\n'
     )
     assert any(row_pattern.match(c.args[0]) for c in handle.write.call_args_list)
 
@@ -1038,17 +1067,111 @@ def test_new_csv_includes_attempted_models_header(
     cmd(mock_ctx, str(tmp_path / 'p.txt'))
 
     lines = cost_path.read_text(encoding='utf-8').splitlines()
-    assert lines[0] == 'timestamp,model,command,cost,input_files,output_files,attempted_models'
+    assert lines[0] == 'timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models'
     # Data row ends with the joined attempted_models string
     assert lines[1].endswith(',m0;m1'), lines[1]
 
 
+def test_new_csv_records_token_counts_from_usage_payload(
+    mock_click_context, mock_rprint, tmp_path
+):
+    """Fresh cost CSV rows record actual input/output tokens when available."""
+    cost_path = tmp_path / 'fresh_tokens.csv'
+
+    @track_cost
+    def cmd(ctx, prompt_file: str):
+        ctx.obj['attempted_models'] = ['m1']
+        return ({'usage': {'input_tokens': '123', 'output_tokens': 45}}, 0.5, 'm1')
+
+    mock_ctx = _make_ctx_with_dict_obj('gen', {'output_cost': str(cost_path)})
+    mock_click_context.return_value = mock_ctx
+
+    cmd(mock_ctx, str(tmp_path / 'p.txt'))
+
+    rows = list(csv.DictReader(cost_path.open(encoding='utf-8')))
+    assert rows[0]['input_tokens'] == '123'
+    assert rows[0]['output_tokens'] == '45'
+    assert rows[0]['attempted_models'] == 'm1'
+
+
+def test_existing_csv_without_token_headers_preserves_header(
+    mock_click_context, mock_rprint, tmp_path
+):
+    """Existing CSVs with attempted_models but no token columns are not rewritten."""
+    cost_path = tmp_path / 'legacy_without_tokens.csv'
+    cost_path.write_text(
+        'timestamp,model,command,cost,input_files,output_files,attempted_models\r\n',
+        encoding='utf-8',
+    )
+
+    @track_cost
+    def cmd(ctx, prompt_file: str):
+        ctx.obj['attempted_models'] = ['m1']
+        return ({'usage': {'input_tokens': 123, 'output_tokens': 45}}, 0.5, 'm1')
+
+    mock_ctx = _make_ctx_with_dict_obj('gen', {'output_cost': str(cost_path)})
+    mock_click_context.return_value = mock_ctx
+
+    cmd(mock_ctx, str(tmp_path / 'p.txt'))
+
+    lines = cost_path.read_text(encoding='utf-8').splitlines()
+    assert lines[0] == 'timestamp,model,command,cost,input_files,output_files,attempted_models'
+    assert lines[1].count(',') == 6, lines[1]
+    assert lines[1].endswith(',m1'), lines[1]
+    legacy_warnings = [
+        c for c in mock_rprint.call_args_list
+        if 'input_tokens' in c.args[0] and 'output_tokens' in c.args[0]
+    ]
+    assert len(legacy_warnings) == 1
+
+
 def test_extract_cost_and_model_short_or_non_tuple():
-    """extract_cost_and_model returns ('', '') for short/non-tuple results."""
+    """extract_cost_and_model returns (0.0, 'unknown') for unavailable cost/model."""
     from pdd.track_cost import extract_cost_and_model
-    assert extract_cost_and_model(('only-one',)) == ('', '')
-    assert extract_cost_and_model('not a tuple') == ('', '')
+    assert extract_cost_and_model(('only-one',)) == (0.0, 'unknown')
+    assert extract_cost_and_model('not a tuple') == (0.0, 'unknown')
     assert extract_cost_and_model(('out', 1.0, 'gpt')) == (1.0, 'gpt')
+
+
+def test_extract_token_counts_from_nested_object_attributes():
+    """extract_token_counts reads nested usage/token attributes from objects."""
+    from pdd.track_cost import extract_token_counts
+
+    class Usage:
+        input_tokens = '12'
+        output_tokens = 7.0
+
+    class ResultPayload:
+        usage = Usage()
+
+    assert extract_token_counts(ResultPayload()) == (12, 7)
+
+
+def test_extract_token_counts_from_tuple_payload_ignores_invalid_values():
+    """extract_token_counts scans tuple payloads before cost/model and ignores invalid counts."""
+    from pdd.track_cost import extract_token_counts
+
+    result = (
+        {'usage': {'input_tokens': 'bad', 'output_tokens': -4}},
+        {'tokens': {'input_tokens': 33, 'output_tokens': '44'}},
+        0.25,
+        'model-name',
+    )
+
+    assert extract_token_counts(result) == (33, 44)
+
+
+def test_public_api_signatures_and_import_surface_are_stable():
+    """Public function signatures and required module imports are preserved."""
+    import pdd.track_cost as track_cost_module
+
+    assert hasattr(track_cost_module, 'functools')
+    assert track_cost_module.datetime is datetime
+    assert str(inspect.signature(track_cost_module.track_cost)) == '(func)'
+    assert str(inspect.signature(track_cost_module.extract_cost_and_model)) == '(result: Any) -> Tuple[Any, str]'
+    assert str(inspect.signature(track_cost_module.extract_token_counts)) == '(result: Any) -> Tuple[Optional[int], Optional[int]]'
+    assert str(inspect.signature(track_cost_module.collect_files)) == '(args, kwargs) -> Tuple[List[str], List[str]]'
+    assert str(inspect.signature(track_cost_module.looks_like_file)) == '(path_str) -> bool'
 
 
 def test_looks_like_file_basic():
@@ -1108,7 +1231,7 @@ def test_attempted_models_does_not_leak_between_tracked_commands(
     lines = cost_path.read_text(encoding='utf-8').splitlines()
     # header + 2 data rows
     assert len(lines) == 3, lines
-    assert lines[0] == 'timestamp,model,command,cost,input_files,output_files,attempted_models'
+    assert lines[0] == 'timestamp,model,command,cost,input_tokens,output_tokens,input_files,output_files,attempted_models'
     # First row carries the simulated fallback history.
     assert lines[1].endswith(',failed-model;success-model'), lines[1]
     # Second row falls back to its own [model_name], not the first command's history.
