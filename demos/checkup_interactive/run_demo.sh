@@ -171,32 +171,49 @@ compare_check() {
 # ---------------------------------------------------------------------------
 
 demo_overview() {
-  header "OVERVIEW — pdd checkup <prompt> runs all 6 checks in one pass"
-  local prompt="$PROMPTS/01_clean_task.prompt"
-  info "Target: $prompt"
-  info "Command: pdd checkup $prompt --explain --json"
+  header "OVERVIEW — pdd checkup <prompt> runs all 6 checks for every prompt"
+  echo "  Running 'pdd checkup <prompt> --explain --json' on all five demo prompts."
+  echo "  Each prompt is designed to trigger a different check."
   echo
 
-  run_json checkup "$prompt" --explain --json
+  # Print table header
+  printf "  %-36s  %-8s  %-10s  %-10s  %-6s  %-10s\n" \
+    "Prompt" "lint" "contract" "coverage" "gate" "snapshot"
+  printf "  %-36s  %-8s  %-10s  %-10s  %-6s  %-10s\n" \
+    "------" "----" "--------" "--------" "----" "--------"
 
-  info "Check inventory reported by the unified command:"
-  echo
-  all_check_statuses "$JSON_OUT" | while IFS=: read -r name status; do
-    printf "    %-12s  %s\n" "$name" "$status"
+  local all_ok=1
+  for prompt_file in "$PROMPTS"/0*.prompt; do
+    local name
+    name=$(basename "$prompt_file")
+    run_json checkup "$prompt_file" --explain --json
+    local l c cov g s
+    l=$(check_status "$JSON_OUT" "lint")
+    c=$(check_status "$JSON_OUT" "contract")
+    cov=$(check_status "$JSON_OUT" "coverage")
+    g=$(check_status "$JSON_OUT" "gate")
+    s=$(check_status "$JSON_OUT" "snapshot")
+    printf "  %-36s  %-8s  %-10s  %-10s  %-6s  %-10s\n" \
+      "$name" "$l" "$c" "$cov" "$g" "$s"
+
+    # Confirm all 5 check names appear in unified output (structural check)
+    local checks_reported
+    checks_reported=$(all_check_statuses "$JSON_OUT" | cut -d: -f1 | sort | tr '\n' ' ')
+    for want in lint contract coverage gate snapshot; do
+      if ! echo "$checks_reported" | grep -qw "$want"; then
+        all_ok=0
+      fi
+    done
   done
   echo
 
-  # Verify all six check names appear
-  local checks_reported
-  checks_reported=$(all_check_statuses "$JSON_OUT" | cut -d: -f1 | sort | tr '\n' ' ')
-  for want in lint contract coverage gate snapshot; do
-    if echo "$checks_reported" | grep -qw "$want"; then
-      pass "Check '$want' reported by unified command"
-    else
-      fail "Check '$want' MISSING from unified command output"
-    fi
-  done
-  note "Drift appears as a finding (not a check name) when evidence exists; gate=skip means no manifest yet."
+  if [[ "$all_ok" -eq 1 ]]; then
+    pass "All 5 prompts: unified command reports lint, contract, coverage, gate, snapshot"
+  else
+    fail "One or more check names missing from unified output"
+  fi
+  note "Drift appears as a finding (not a check row) when a .pdd/evidence/ manifest exists."
+  note "gate=skip means no evidence manifest yet — expected for new devunits."
 }
 
 demo_lint() {
@@ -411,6 +428,102 @@ print(n)
 }
 
 # ---------------------------------------------------------------------------
+# Interactive repair session walkthrough
+# ---------------------------------------------------------------------------
+
+demo_repair_session() {
+  header "INTERACTIVE REPAIR SESSION — what --interactive --apply --preview looks like"
+  echo "  This walkthrough simulates the per-finding menu that appears when you run:"
+  echo
+  echo -e "    ${CYAN}pdd checkup <prompt> --interactive --apply --preview${RESET}"
+  echo
+  echo "  (Requires a real TTY — run that command directly from your terminal.)"
+  echo "  This demo shows the EXACT menu format you will see, using real findings"
+  echo "  from 02_vague_requirements.prompt."
+  echo
+
+  # Fetch real findings from the vague prompt
+  run_json checkup "$PROMPTS/02_vague_requirements.prompt" --explain --json
+  local findings_json="$JSON_OUT"
+
+  local finding_count
+  finding_count=$(echo "$findings_json" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+findings = data.get('reports', [{}])[0].get('findings', [])
+print(len(findings))
+" 2>/dev/null)
+
+  echo -e "  ${BOLD}Prompt has $finding_count findings. The session walks through each one.${RESET}"
+  echo "  For this demo, we show the first 3 in simulated form:"
+  echo
+
+  # Render simulated menu for first 3 findings
+  echo "$findings_json" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+findings = data.get('reports', [{}])[0].get('findings', [])
+for i, f in enumerate(findings[:3]):
+    fid = f.get('id', '?')
+    msg = f.get('message', '?')
+    evidence = (f.get('evidence') or '')[:80].strip()
+    action = f.get('recommended_action', 'Apply suggested repair')
+    preview = (evidence or msg)[:70]
+    alt = (f.get('message') or '')[:70]
+    rc = '  *** requires_clarification=true — routed to interactive, not auto-repair ***' if f.get('requires_clarification') else ''
+    print()
+    print(f'  Finding {i+1}/{len(findings)}')
+    print(f'  [{fid}]')
+    print(f'  {msg}')
+    if evidence:
+        print(f'  Evidence: {evidence}')
+    if rc:
+        print(f'  {rc}')
+    print()
+    print(f'  Choose one:')
+    print(f'  [1] {action} — {preview}')
+    print(f'  [2] Alternative repair — {alt}')
+    print(f'  [3] Write my own definition')
+    print(f'  [4] Skip this finding')
+    print(f'  Choice [4]:  <- user types 1, 2, 3, or 4')
+" 2>/dev/null
+
+  echo
+  echo "  After all findings are answered:"
+  echo "    --preview  → shows what patches WOULD be written, no files changed"
+  echo "    --apply    → writes the patches to the prompt file"
+  echo "    (no flag)  → records choices in session but does not write"
+  echo
+  echo "  To run the real interactive session (TTY required):"
+  echo
+  echo -e "  ${CYAN}pdd checkup demos/checkup_interactive/prompts/02_vague_requirements.prompt \\${RESET}"
+  echo -e "  ${CYAN}    --interactive --apply --preview${RESET}"
+  echo
+  echo "  To apply the repairs for real (will modify the prompt file):"
+  echo
+  echo -e "  ${CYAN}pdd checkup demos/checkup_interactive/prompts/02_vague_requirements.prompt \\${RESET}"
+  echo -e "  ${CYAN}    --interactive --apply${RESET}"
+  echo -e "  ${CYAN}git checkout -- demos/checkup_interactive/prompts/  # undo afterwards${RESET}"
+  echo
+
+  # Structural check: confirm findings have the right shape for the menu
+  local menu_ok
+  menu_ok=$(echo "$findings_json" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+findings = data.get('reports', [{}])[0].get('findings', [])
+required = {'id', 'message', 'recommended_action', 'requires_clarification', 'source_check'}
+missing = [f.get('id','?') for f in findings if not required.issubset(f.keys())]
+print('ok' if not missing else f'missing fields in: {missing}')
+" 2>/dev/null)
+  if [[ "$menu_ok" == "ok" ]]; then
+    pass "All findings have the fields required to drive the interactive menu"
+  else
+    fail "Finding structure broken: $menu_ok"
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
@@ -433,7 +546,7 @@ show_menu() {
   echo "Demonstrates that 'pdd checkup <prompt>' routes through the same"
   echo "call abstraction layer as the six direct subcommands."
   echo
-  echo "  1) Overview    — all checks visible in unified --explain --json"
+  echo "  1) Overview    — table of all 5 prompts × all 6 checks"
   echo "  2) Lint        — vague-term detection (02_vague_requirements)"
   echo "  3) Contract    — contract rule validation (03_contract_coverage)"
   echo "  4) Coverage    — contract coverage matrix (03_contract_coverage)"
@@ -441,6 +554,7 @@ show_menu() {
   echo "  6) Snapshot    — nondeterministic context (05_snapshot_candidate)"
   echo "  7) Drift       — direct subcommand only (evidence required)"
   echo "  8) Adversarial — error paths and edge cases"
+  echo "  9) Repair      — walkthrough of --interactive --apply --preview menu"
   echo "  a) All         — run all automated checks"
   echo "  q) Quit"
   echo
@@ -456,6 +570,7 @@ run_all() {
   demo_snapshot
   demo_drift
   demo_adversarial
+  demo_repair_session
   print_summary
 }
 
@@ -471,7 +586,7 @@ for arg in "$@"; do
   case "$arg" in
     --all) MODE="all" ;;
     --mode) : ;;  # next arg is the mode value
-    lint|contract|coverage|gate|snapshot|drift|adversarial|overview)
+    lint|contract|coverage|gate|snapshot|drift|adversarial|overview|repair)
       MODE="$arg" ;;
   esac
 done
@@ -494,8 +609,9 @@ if [[ -n "$MODE" ]]; then
     coverage)   demo_coverage;  print_summary ;;
     gate)       demo_gate;      print_summary ;;
     snapshot)   demo_snapshot;  print_summary ;;
-    drift)      demo_drift;     print_summary ;;
-    adversarial) demo_adversarial; print_summary ;;
+    drift)      demo_drift;          print_summary ;;
+    adversarial) demo_adversarial;   print_summary ;;
+    repair)     demo_repair_session; print_summary ;;
     *) echo "Unknown mode: $MODE"; exit 1 ;;
   esac
   exit 0
@@ -514,6 +630,7 @@ while true; do
     6) demo_snapshot ;;
     7) demo_drift ;;
     8) demo_adversarial ;;
+    9) demo_repair_session ;;
     a|A) run_all ;;
     q|Q) echo "Bye."; exit 0 ;;
     *) echo "Unknown choice: $choice" ;;
