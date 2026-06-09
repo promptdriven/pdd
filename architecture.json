@@ -2026,7 +2026,7 @@
         "functions": [
           {
             "name": "code_generator_main",
-            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str] = None, original_prompt_file_path: Optional[str] = None, force_incremental_flag: bool = False, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, compress: bool = False)",
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str] = None, original_prompt_file_path: Optional[str] = None, force_incremental_flag: bool = False, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, compress: bool = False, snapshot_context: bool = False, compressed_context: Optional[Mapping[str, Any]] = None)",
             "returns": "Tuple[str, bool, float, str]"
           }
         ]

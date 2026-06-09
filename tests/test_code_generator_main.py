@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import os
 import pathlib
@@ -7965,6 +7966,27 @@ class TestPddInterfaceSignatureConformance:
         exc = excinfo.value
         assert "update_main.value" in exc.missing_symbols
         assert "annotation" in exc.repair_directive
+
+    def test_code_generator_main_prompt_contract_matches_runtime_signature(self):
+        """The active prompt interface must mirror the generated entrypoint signature."""
+        from pdd.code_generator_main import _extract_pdd_interface_signatures
+
+        prompt_content = pathlib.Path(
+            "pdd/prompts/code_generator_main_python.prompt"
+        ).read_text(encoding="utf-8")
+        declarations, parse_error = _extract_pdd_interface_signatures(
+            prompt_content,
+            "code_generator_main_python.prompt",
+        )
+
+        assert parse_error is False
+        declared_params = {
+            name: [param_name for param_name, _, _ in params]
+            for name, params in declarations
+        }
+        assert declared_params["code_generator_main"] == list(
+            inspect.signature(code_generator_main).parameters
+        )
 
     def test_missing_kwarg_in_function_raises_conformance_error(self, tmp_path):
         """Missing kwarg declared in <pdd-interface> raises ArchitectureConformanceError."""
