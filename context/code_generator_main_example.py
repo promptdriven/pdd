@@ -272,6 +272,59 @@ def example_camelcase_violation(workdir):
         raise AssertionError("undeclared camelCase 'processData' should have been rejected")
 
 
+def example_pdd_interface_camelcase(workdir):
+    """A camelCase name declared in the prompt's ``<pdd-interface>`` is allowed even
+    when ``architecture.json`` does not (yet) declare it.
+
+    The prompt is PDD's source of truth, so ``makeWidget`` — declared in the prompt
+    interface but absent from ``architecture.json`` — is intentional public API and
+    must NOT trip the snake_case guard (issue #1446). ``architecture.json`` here
+    declares only the snake_case ``process_data`` so the guard still runs, and
+    ``makeWidget`` is declared description-only (no signature) to show the exemption
+    keys on the declared name alone.
+    """
+    print_section("Example 5 — camelCase declared in the prompt <pdd-interface> allowed")
+    arch = [
+        {
+            "filename": "widgets_Python.prompt",
+            "filepath": "src/widgets.py",
+            "interface": {
+                "type": "module",
+                "module": {
+                    "functions": [
+                        {"name": "process_data", "signature": "def process_data(data)"},
+                    ]
+                },
+            },
+        }
+    ]
+    arch_path = workdir / "architecture.json"
+    arch_path.write_text(json.dumps(arch))
+
+    prompt_content = (
+        '<pdd-interface>{"type":"module","module":{"functions":'
+        '[{"name":"makeWidget","description":"builds a widget"},'
+        '{"name":"process_data","signature":"(data)"}]}}'
+        "</pdd-interface>\n"
+        "% You are an expert Python engineer.\n"
+    )
+    code = (
+        "def process_data(data):\n    return data\n\n"
+        "def makeWidget():\n    return 1\n"
+    )
+    # Must NOT raise: makeWidget is declared in the prompt <pdd-interface>.
+    _verify_architecture_conformance(
+        generated_code=code,
+        prompt_name="widgets_Python.prompt",
+        arch_path=str(arch_path),
+        language="python",
+        verbose=False,
+        output_path=str(workdir / "src" / "widgets.py"),
+        prompt_content=prompt_content,
+    )
+    print("prompt-declared camelCase export 'makeWidget' accepted (no conformance error)")
+
+
 def main():
     workdir = pathlib.Path("./output/code_generator_main_example_output").resolve()
     if workdir.exists():
@@ -301,6 +354,7 @@ def main():
         example_architecture_conformance_pass(workdir)
         example_architecture_conformance_failure(workdir)
         example_camelcase_violation(workdir)
+        example_pdd_interface_camelcase(workdir)
 
     print()
     print("All examples ran to completion.")

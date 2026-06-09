@@ -3276,6 +3276,137 @@ class TestVerifyArchitectureConformance:
             verbose=False,
         )
 
+    def test_prompt_interface_declared_camelcase_passes(self, tmp_path):
+        """camelCase declared in the prompt's ``<pdd-interface>`` (not yet in
+        ``architecture.json``) is intentional public API and must NOT trip the guard.
+
+        Issue #1446 (FM2): the prompt is the source of truth, so a name the author
+        declared there is exempt even before ``architecture.json`` is regenerated to
+        match. Here ``architecture.json`` declares only the snake_case
+        ``process_data`` (so the guard runs), while ``generateThing`` is declared
+        solely in the prompt interface.
+        """
+        arch = [
+            {
+                "filename": "main_Python.prompt",
+                "filepath": "src/main.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "process_data", "signature": "def process_data(data)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"generateThing","signature":"(req)"},'
+            '{"name":"process_data","signature":"(data)"}]}}'
+            "</pdd-interface>\n"
+            "% You are an expert Python engineer.\n"
+        )
+        generated_code = (
+            "def process_data(data):\n    return data\n\n"
+            "def generateThing(req):\n    return req\n"
+        )
+        # Must NOT raise: generateThing is declared in the prompt <pdd-interface>.
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="main_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_prompt_interface_description_only_camelcase_passes(self, tmp_path):
+        """A description-only camelCase declaration (no paren signature) in the
+        prompt ``<pdd-interface>`` is still exempt (issue #1446, FM2).
+
+        This is the discriminating case: the signature-bearing extractor used by
+        the ``<pdd-interface>`` *signature* check skips no-signature entries, so the
+        naming exemption must collect declared NAMES directly — not piggyback on the
+        signature extractor — or ``makeWidget`` would be wrongly flagged.
+        """
+        arch = [
+            {
+                "filename": "main_Python.prompt",
+                "filepath": "src/main.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "process_data", "signature": "def process_data(data)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"makeWidget","description":"builds a widget"},'
+            '{"name":"process_data","signature":"(data)"}]}}'
+            "</pdd-interface>\n"
+            "% You are an expert Python engineer.\n"
+        )
+        generated_code = (
+            "def process_data(data):\n    return data\n\n"
+            "def makeWidget():\n    return 1\n"
+        )
+        # Must NOT raise: makeWidget is declared (description-only) in the prompt.
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name="main_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_undeclared_camelcase_fails_even_with_prompt_interface(self, tmp_path):
+        """The prompt-interface exemption must not blanket-allow camelCase: an
+        export declared in NEITHER ``architecture.json`` NOR the prompt
+        ``<pdd-interface>`` is still rejected (issue #1446).
+        """
+        arch = [
+            {
+                "filename": "main_Python.prompt",
+                "filepath": "src/main.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "process_data", "signature": "def process_data(data)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"process_data","signature":"(data)"}]}}'
+            "</pdd-interface>\n"
+            "% You are an expert Python engineer.\n"
+        )
+        generated_code = (
+            "def process_data(data):\n    return data\n\n"
+            "def sneakyExport(x):\n    return x\n"
+        )
+        with pytest.raises(click.UsageError, match="camelCase"):
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name="main_Python.prompt",
+                arch_path=str(tmp_path / "architecture.json"),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+
     def test_skips_when_no_architecture_file(self, tmp_path):
         """Conformance check silently skips when architecture.json doesn't exist."""
         _verify_architecture_conformance(
