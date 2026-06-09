@@ -7974,6 +7974,8 @@ class TestPddInterfaceSignatureConformance:
         prompt_content = pathlib.Path(
             "pdd/prompts/code_generator_main_python.prompt"
         ).read_text(encoding="utf-8")
+        metadata_header = prompt_content.split("\n---\n", 1)[0]
+        assert metadata_header.count("<pdd-interface>") == 1
         declarations, parse_error = _extract_pdd_interface_signatures(
             prompt_content,
             "code_generator_main_python.prompt",

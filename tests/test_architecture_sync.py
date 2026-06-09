@@ -1270,6 +1270,21 @@ def test_validate_interface_structure_cli_valid():
     assert result['valid'] is True
 
 
+def test_validate_interface_structure_config_valid():
+    """Config interfaces are valid when they declare their keys object."""
+    interface = {
+        "type": "config",
+        "config": {
+            "keys": []
+        }
+    }
+
+    result = validate_interface_structure(interface)
+
+    assert result['valid'] is True
+    assert result['errors'] == []
+
+
 def test_validate_interface_structure_entrypoint_valid_without_nested_key():
     """Entrypoint interfaces are valid with only the type marker."""
     interface = {
