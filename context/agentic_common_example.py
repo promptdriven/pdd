@@ -52,16 +52,18 @@ def example_run_agentic_task(cwd: Path) -> None:
             stdout=json.dumps(mocked_json),
             stderr="",
         )
-        success, output, cost, provider = run_agentic_task(
+        result = run_agentic_task(
             "Fix the failing workflow.",
             cwd,
             verbose=False,
             max_retries=1,
         )
+        success, output, cost, provider = result
 
     console.print(f"Success: {success}")
     console.print(f"Provider: {provider}")
     console.print(f"Cost: ${cost:.2f}")
+    console.print(f"Usage: {result.usage}")
     console.print(f"Output: {output}")
 
 

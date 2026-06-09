@@ -22,6 +22,8 @@ from rich.console import Console
 
 _steer_logger = logging.getLogger(__name__ + ".steer")
 
+AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
+
 
 def _load_model_data(*args, **kwargs):
     """Lazily load model data from ``pdd.llm_invoke``.
@@ -101,6 +103,84 @@ class TokenMatch:
 
     def __bool__(self) -> bool:
         return True
+
+
+class AgenticTaskResult(tuple):
+    """Public result for ``run_agentic_task`` with legacy four-item unpacking.
+
+    The underlying tuple has five fields so downstream bridges can detect
+    structured usage with ``isinstance(result, tuple)``, ``len(result) >= 5``,
+    and ``result[4]``. Iteration intentionally yields the historical four
+    fields to preserve existing ``success, output, cost, provider = ...``
+    callers.
+    """
+
+    def __new__(
+        cls,
+        success: bool,
+        output_text: str,
+        cost_usd: float,
+        provider: str,
+        usage: AgenticUsage = None,
+    ) -> "AgenticTaskResult":
+        return tuple.__new__(
+            cls,
+            (success, output_text, cost_usd, provider, usage),
+        )
+
+    def __iter__(self):
+        return (tuple.__getitem__(self, i) for i in range(4))
+
+    @property
+    def success(self) -> bool:
+        return bool(tuple.__getitem__(self, 0))
+
+    @property
+    def output_text(self) -> str:
+        return str(tuple.__getitem__(self, 1))
+
+    @property
+    def cost_usd(self) -> float:
+        return float(tuple.__getitem__(self, 2))
+
+    @property
+    def provider(self) -> str:
+        return str(tuple.__getitem__(self, 3))
+
+    @property
+    def usage(self) -> AgenticUsage:
+        return tuple.__getitem__(self, 4)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-serializable mapping shape for structured consumers."""
+        return {
+            "success": self.success,
+            "output_text": self.output_text,
+            "cost_usd": self.cost_usd,
+            "provider": self.provider,
+            "usage": self.usage,
+        }
+
+
+class _ProviderRunResult(tuple):
+    """Internal provider result carrying optional structured usage."""
+
+    def __new__(
+        cls,
+        success: bool,
+        output_text: str,
+        cost_usd: float,
+        model: Optional[str],
+        usage: AgenticUsage = None,
+    ) -> "_ProviderRunResult":
+        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage))
+
+    def __iter__(self):
+        return (tuple.__getitem__(self, i) for i in range(4))
+
+    @property
+    def usage(self) -> AgenticUsage:
+        return tuple.__getitem__(self, 4)
 
 
 @dataclass
@@ -2344,7 +2424,7 @@ def run_agentic_task(
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
     steers: Optional[List[SteerEntry]] = None,
-) -> Tuple[bool, str, float, str]:
+) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
 
@@ -2366,7 +2446,9 @@ def run_agentic_task(
         steers: Optional list of mid-run steering entries to inject into the instruction.
 
     Returns:
-        (success, output_text, cost_usd, provider_used)
+        AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
+        Four-value unpacking remains supported for legacy callers; structured
+        consumers can read ``result.usage`` or ``result[4]``.
     """
     # get_agent_provider_preference() must be called first: for
     # PDD_AGENTIC_PROVIDER=antigravity it sets PDD_GOOGLE_CLI=agy as a side
@@ -2381,7 +2463,7 @@ def run_agentic_task(
         msg = "No agent providers are available (check CLI installation and API keys)"
         if not quiet:
             console.print(f"[bold red]{msg}[/bold red]")
-        return False, msg, 0.0, ""
+        return AgenticTaskResult(False, msg, 0.0, "", None)
 
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
     effective_deadline = deadline if deadline is not None else get_job_deadline()
@@ -2478,11 +2560,16 @@ def run_agentic_task(
                 if verbose and attempt > 1:
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
-                success, output, cost, actual_model = _run_with_provider(
+                provider_result = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
                     reasoning_time=reasoning_time,
                 )
+                success = bool(provider_result[0])
+                output = str(provider_result[1])
+                cost = float(provider_result[2])
+                actual_model = provider_result[3]
+                usage = provider_result[4] if len(provider_result) > 4 else None
                 last_output = output
                 # Issue #1376: prefer the model the provider actually reported;
                 # fall back to the requested model from env vars when the JSON
@@ -2609,7 +2696,7 @@ def run_agentic_task(
                             model=effective_model,
                             include_bodies=verbose,
                         )
-                        return True, output, cost, provider
+                        return AgenticTaskResult(True, output, cost, provider, usage)
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
                 # Issue #1376 codex round 2: log each failed attempt inside
@@ -2705,7 +2792,13 @@ def run_agentic_task(
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break
 
-        return False, f"All agent providers failed: {'; '.join(provider_errors)}", 0.0, ""
+        return AgenticTaskResult(
+            False,
+            f"All agent providers failed: {'; '.join(provider_errors)}",
+            0.0,
+            "",
+            None,
+        )
 
     finally:
         # Cleanup prompt file
@@ -3242,18 +3335,48 @@ def _find_claude_interactive_session_file(
 def _estimate_claude_interactive_session_cost(
     session_id: str,
     env: Dict[str, str],
-) -> Tuple[float, Optional[str]]:
+) -> Tuple[float, Optional[str], AgenticUsage]:
     """Estimate interactive Claude cost from the persisted session transcript."""
+    usage, latest_model = _extract_claude_interactive_session_usage(session_id, env)
+    if not usage:
+        return 0.0, latest_model, None
+
+    total_cost = 0.0
+    for record in usage.get("claude", []):
+        model_name = str(record.get("model") or latest_model or "claude-sonnet")
+        total_cost += _calculate_anthropic_cost(
+            {
+                "usage": {
+                    "input_tokens": record.get("input_tokens", 0),
+                    "output_tokens": record.get("output_tokens", 0),
+                    "cache_read_input_tokens": record.get("cached_input_tokens", 0),
+                    "cache_creation_input_tokens": record.get(
+                        "cache_creation_input_tokens",
+                        0,
+                    ),
+                },
+                "modelUsage": {model_name: {}},
+            }
+        )
+
+    return total_cost, latest_model, usage
+
+
+def _extract_claude_interactive_session_usage(
+    session_id: str,
+    env: Dict[str, str],
+) -> Tuple[AgenticUsage, Optional[str]]:
+    """Extract JSON-serializable Claude usage from an interactive transcript."""
     session_file = _find_claude_interactive_session_file(session_id, env)
     if session_file is None:
-        return 0.0, None
+        return None, None
 
     per_request_usage: Dict[str, Dict[str, Any]] = {}
     latest_model: Optional[str] = None
     try:
         raw_lines = session_file.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return 0.0, None
+        return None, None
 
     for raw_line in raw_lines:
         try:
@@ -3290,7 +3413,7 @@ def _estimate_claude_interactive_session_cost(
         }
 
     if not per_request_usage:
-        return 0.0, latest_model
+        return None, latest_model
 
     usage_keys = (
         "input_tokens",
@@ -3312,16 +3435,21 @@ def _estimate_claude_interactive_session_cost(
             except (TypeError, ValueError):
                 continue
 
-    total_cost = 0.0
+    usage_records: List[Dict[str, Any]] = []
     for model_name, usage in usage_by_model.items():
-        total_cost += _calculate_anthropic_cost(
+        usage_records.append(
             {
-                "usage": usage,
-                "modelUsage": {model_name: {}},
+                "model": model_name,
+                "input_tokens": int(usage.get("input_tokens", 0)),
+                "output_tokens": int(usage.get("output_tokens", 0)),
+                "cached_input_tokens": int(usage.get("cache_read_input_tokens", 0)),
+                "cache_creation_input_tokens": int(
+                    usage.get("cache_creation_input_tokens", 0)
+                ),
             }
         )
 
-    return total_cost, latest_model
+    return {"claude": usage_records}, latest_model
 
 
 def _claude_assistant_row_is_synthetic_error(item: Dict[str, Any]) -> bool:
@@ -3782,10 +3910,16 @@ def _run_claude_interactive_with_mcp(
     timeout: float,
     env: Dict[str, str],
     use_playwright: bool = False,
-) -> Tuple[bool, str, float, Optional[str]]:
+) -> _ProviderRunResult:
     """Run Claude Code interactively and collect its result through MCP."""
     if os.name != "posix":
-        return False, "Claude Code interactive mode requires a POSIX platform", 0.0, None
+        return _ProviderRunResult(
+            False,
+            "Claude Code interactive mode requires a POSIX platform",
+            0.0,
+            None,
+            None,
+        )
 
     job_id = uuid.uuid4().hex
     session_id = str(uuid.uuid4())
@@ -3819,13 +3953,19 @@ def _run_claude_interactive_with_mcp(
             job_id=job_id,
             session_id=session_id,
         )
-        session_cost, session_model = _estimate_claude_interactive_session_cost(
+        session_cost, session_model, usage = _estimate_claude_interactive_session_cost(
             session_id,
             env,
         )
         if session_cost > 0.0 or cost == 0.0:
             cost = session_cost
-        return success, text, cost, model or session_model or env.get("CLAUDE_MODEL")
+        return _ProviderRunResult(
+            success,
+            text,
+            cost,
+            model or session_model or env.get("CLAUDE_MODEL"),
+            usage,
+        )
 
 
 def _run_with_provider(
