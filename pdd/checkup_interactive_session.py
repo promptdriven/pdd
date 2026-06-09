@@ -191,13 +191,13 @@ class LlmInteractiveSession:
 
         try:
             result = llm_invoke(
-                prompt=(
+                messages=[{"role": "user", "content": (
                     "Analyze this pdd prompt quality finding and propose concrete repair patches.\n\n"
                     f"Finding:\n{json.dumps(finding, indent=2)}\n\n"
                     "Propose 2–4 patches. Each patch must include the exact file path, "
                     "a precise anchor (section name, pattern, or line marker), and the "
                     "exact replacement text — write the actual new text, not a description."
-                ),
+                )}],
                 strength=self._strength,
                 temperature=0.0,
                 output_pydantic=_ProposalSet,
