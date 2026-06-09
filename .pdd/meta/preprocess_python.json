@@ -1,16 +1,12 @@
 {
-  "pdd_version": "0.0.263",
-  "timestamp": "2026-06-06T00:03:50.713042+00:00",
-  "command": "example",
-  "prompt_hash": "6838e9c6efc37a5a0197b62119966bf5efc9983bca1ef224ceca0fed3c812d61",
+  "pdd_version": "0.0.267.dev0",
+  "timestamp": "2026-06-09T00:20:22.319210+00:00",
+  "command": "fix",
+  "prompt_hash": "ee2a3bada76c66157971c9270925174e6b3393d67d034fe8f83e854fef3cbaeb",
   "code_hash": "e92713c711aad961fdba67f66f84327a71545e00552245b320c0e6ad191c187e",
-  "example_hash": "a0a52213acbd07537b57628812ce2471735512ffe06936b58bae300d5db2d7bf",
-  "test_hash": "0b24940dc9c79288d3a9f34b5c8127efa3dd98ddb69e21f2bf01e53a79f3f7a0",
-  "test_files": {
-    "test_preprocess.py": "0b24940dc9c79288d3a9f34b5c8127efa3dd98ddb69e21f2bf01e53a79f3f7a0",
-    "test_preprocess_main.py": "0fa3887c7a4e2c3f051ce719117b8f07444da419b35363b9dff4a2b5ae0f17e9",
-    "test_preprocess_main_pdd_tags.py": "abddfe41c460aa7dcd4186028134deb4eef0a85419a7f6f59869a274c25f7ee8"
-  },
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
   "include_deps": {
     "context/firecrawl_example.py": "4674cc7e418515545b7df1d025fd024ce2006932ede48cebc5c067bc6756f3f1",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",

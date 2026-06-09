@@ -63,6 +63,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 14. Snapshot capture:
    - Thread `snapshot_recorder` through all top-level and child preprocessing calls without changing the default return value.
    - Record deterministic include inputs and content hashes for XML includes, backtick includes, and include-many inputs that are actually resolved.
+   - When recording a resolved include, pass the current recursion depth as `include_depth` (e.g. the size of the `_seen` stack) so attribution-oriented recorders can distinguish top-level includes from nested ones. The recorder accepts and may ignore it; recorders must tolerate this keyword.
    - When snapshot capture is enabled, record shell command, stdout, stderr, exit status, timeout metadata, resolved replacement text, and whether redaction was applied.
    - When snapshot capture is enabled, record web URL, resolved markdown content, source/cache metadata when available, replacement text, and whether redaction was applied.
    - When snapshot capture is enabled, record semantic `query=` include inputs, extracted text, model/cache metadata when available, replacement text, and whether the tag was nondeterministic.
