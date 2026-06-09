@@ -4,10 +4,28 @@
 {
   "type": "module",
   "module": {
+    "dataclasses": [
+      {
+        "name": "ApprovedPatch",
+        "fields": [
+          {"name": "kind", "type": "str"},
+          {"name": "target", "type": "Path"},
+          {"name": "anchor", "type": "dict"},
+          {"name": "replacement", "type": "str"},
+          {"name": "finding_id", "type": "str", "default": "''"}
+        ]
+      },
+      {
+        "name": "RepairOption",
+        "fields": [
+          {"name": "label", "type": "str"},
+          {"name": "preview", "type": "str"},
+          {"name": "patch", "type": "ApprovedPatch"}
+        ]
+      }
+    ],
     "functions": [
-      {"name": "ApprovedPatch", "signature": "(kind: str, target: Path, anchor: dict, replacement: str, finding_id: str = '')", "returns": "ApprovedPatch"},
-      {"name": "RepairOption", "signature": "(label: str, preview: str, patch: ApprovedPatch)", "returns": "RepairOption"},
-      {"name": "InteractiveRepairSession", "signature": "(seed(report: PromptSourceSetReport) -> None, present_finding(finding_id: str) -> list[RepairOption], ask(question: str) -> str, record_choice(finding_id: str, option: RepairOption) -> None, approved_patches() -> list[ApprovedPatch])", "returns": "Protocol"},
+      {"name": "InteractiveRepairSession", "returns": "Protocol"},
       {"name": "FakeInteractiveSession", "signature": "(options_by_finding=None, answers=None)", "returns": "FakeInteractiveSession"}
     ]
   }

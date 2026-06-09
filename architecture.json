@@ -10005,20 +10005,13 @@
     "interface": {
       "type": "module",
       "module": {
+        "dataclasses": [
+          "ApprovedPatch",
+          "RepairOption"
+        ],
         "functions": [
           {
-            "name": "ApprovedPatch",
-            "signature": "(kind: str, target: Path, anchor: dict, replacement: str, finding_id: str = '')",
-            "returns": "ApprovedPatch"
-          },
-          {
-            "name": "RepairOption",
-            "signature": "(label: str, preview: str, patch: ApprovedPatch)",
-            "returns": "RepairOption"
-          },
-          {
             "name": "InteractiveRepairSession",
-            "signature": "(seed(report: PromptSourceSetReport) -> None, present_finding(finding_id: str) -> list[RepairOption], ask(question: str) -> str, record_choice(finding_id: str, option: RepairOption) -> None, approved_patches() -> list[ApprovedPatch])",
             "returns": "Protocol"
           },
           {
