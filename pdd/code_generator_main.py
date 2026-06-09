@@ -31,6 +31,7 @@ from .architecture_sync import (
     get_architecture_entry_for_prompt,
     has_pdd_tags,
     generate_tags_from_architecture,
+    parse_prompt_tags,
 )
 from .architecture_registry import extract_modules
 from .architecture_include_validation import validate_prompt_contract_context
@@ -2593,13 +2594,8 @@ def _extract_pdd_interface_signatures(
     if not prompt_content:
         return declarations, False
 
-    # Reuse the canonical parser from architecture_sync (verified non-circular
-    # at module import time).
-    try:
-        from .architecture_sync import parse_prompt_tags
-    except ImportError:
-        return declarations, False
-
+    # parse_prompt_tags is imported at module top level (architecture_sync is a
+    # hard dependency imported there), so it is always available here.
     tags = parse_prompt_tags(prompt_content)
     parse_error = tags.get("interface_parse_error")
     if parse_error:
@@ -2656,10 +2652,7 @@ def _extract_pdd_interface_signatures(
     return declarations, False
 
 
-def _collect_pdd_interface_names(
-    prompt_content: Optional[str],
-    prompt_name: str,
-) -> Set[str]:
+def _collect_pdd_interface_names(prompt_content: Optional[str]) -> Set[str]:
     """Collect declared ``module.functions`` *names* from a prompt's ``<pdd-interface>``.
 
     Mirrors the architecture.json declared-symbol collection (the function ``name``
@@ -2679,10 +2672,6 @@ def _collect_pdd_interface_names(
     """
     names: Set[str] = set()
     if not prompt_content:
-        return names
-    try:
-        from .architecture_sync import parse_prompt_tags
-    except ImportError:
         return names
     tags = parse_prompt_tags(prompt_content)
     if tags.get("interface_parse_error"):
@@ -2924,7 +2913,7 @@ def _verify_architecture_conformance(
     # Names declared in the prompt's <pdd-interface> are also intentional public
     # API for the camelCase naming check (issue #1446), even when architecture.json
     # has not yet been regenerated to match — the prompt is the source of truth.
-    camel_exempt_names = _collect_pdd_interface_names(prompt_content, prompt_name)
+    camel_exempt_names = _collect_pdd_interface_names(prompt_content)
     entry = _verify_architecture_json_conformance(
         generated_code=generated_code,
         prompt_name=prompt_name,
@@ -2955,6 +2944,7 @@ def _verify_architecture_json_conformance(
     arch_path: Optional[str],
     language: Optional[str],
     output_path: Optional[str],
+    *,
     camel_exempt_names: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Pre-existing architecture.json symbol-existence + camelCase check.
