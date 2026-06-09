@@ -10029,5 +10029,74 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Owns the normalized pdd.prompt_source_set_report.v1 report and the deterministic per-engine clarification heuristics that route findings to interactive vs. automated repair.",
+    "description": "Single owner of the pdd.prompt_source_set_report.v1 report consumed by `pdd checkup` prompt targets and downstream interactive/non-interactive prompt repair. Orchestrates the deterministic lint, contract, coverage, gate, snapshot, and drift engines, aggregates their results into one PromptSourceSetReport of SourceSetFinding objects, owns as_dict() serialization, and applies code/status-driven heuristics that set requires_clarification and a compact clarification_reason without calling an LLM or mutating source.",
+    "dependencies": [
+      "prompt_lint_python.prompt",
+      "contract_check_python.prompt",
+      "coverage_contracts_python.prompt",
+      "gate_python.prompt",
+      "construct_paths_python.prompt",
+      "user_story_tests_python.prompt",
+      "evidence_store_python.prompt"
+    ],
+    "priority": 245,
+    "filename": "checkup_prompt_main_python.prompt",
+    "filepath": "pdd/checkup_prompt_main.py",
+    "tags": [
+      "checkup",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "constants": [
+          {
+            "name": "REPORT_SCHEMA",
+            "value": "pdd.prompt_source_set_report.v1"
+          }
+        ],
+        "classes": [
+          {
+            "name": "SourceSetFinding",
+            "kind": "dataclass"
+          },
+          {
+            "name": "PromptSourceSetReport",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "build_prompt_source_set_report",
+            "signature": "(prompt_path: Path, *, target: str, project_root: Optional[Path] = None, strict: bool = False, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> PromptSourceSetReport",
+            "returns": "PromptSourceSetReport"
+          },
+          {
+            "name": "run_checkup_prompt",
+            "signature": "(target: str, *, explain: bool = False, as_json: bool = False, quiet: bool = False, strict: bool = False, project_root: Optional[Path] = None) -> tuple[bool, str, float, str, int]",
+            "returns": "tuple[bool, str, float, str, int]"
+          },
+          {
+            "name": "run_checkup_prompt_paths",
+            "signature": "(prompt_paths: Sequence[Path], *, target: str = '', project_root: Optional[Path] = None, strict: bool = False) -> tuple[list[PromptSourceSetReport], int]",
+            "returns": "tuple[list[PromptSourceSetReport], int]"
+          },
+          {
+            "name": "render_prompt_source_set_report",
+            "signature": "(report: PromptSourceSetReport, *, quiet: bool = False) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "render_automatic_gate_summary",
+            "signature": "(reports: Sequence[PromptSourceSetReport], *, mode: str, quiet: bool = False) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    }
   }
 ]
