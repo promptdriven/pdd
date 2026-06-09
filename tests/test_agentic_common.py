@@ -694,7 +694,7 @@ def test_estimate_claude_interactive_session_cost_dedupes_request_ids(tmp_path):
         encoding="utf-8",
     )
 
-    cost, model = _estimate_claude_interactive_session_cost(
+    cost, model, usage = _estimate_claude_interactive_session_cost(
         session_id,
         {"HOME": str(home)},
     )
@@ -712,6 +712,29 @@ def test_estimate_claude_interactive_session_cost_dedupes_request_ids(tmp_path):
     )
     assert cost == pytest.approx(expected_cost)
     assert model == "claude-opus-4-8"
+    assert usage == {
+        "claude": [
+            {
+                "model": "claude-opus-4-8",
+                "input_tokens": (
+                    request_1_usage["input_tokens"]
+                    + request_2_usage["input_tokens"]
+                ),
+                "output_tokens": (
+                    request_1_usage["output_tokens"]
+                    + request_2_usage["output_tokens"]
+                ),
+                "cached_input_tokens": (
+                    request_1_usage["cache_read_input_tokens"]
+                    + request_2_usage["cache_read_input_tokens"]
+                ),
+                "cache_creation_input_tokens": (
+                    request_1_usage["cache_creation_input_tokens"]
+                    + request_2_usage["cache_creation_input_tokens"]
+                ),
+            }
+        ]
+    }
 
 
 def test_extract_claude_interactive_session_usage_dedupes_by_request_id(tmp_path):
@@ -832,24 +855,26 @@ def test_run_claude_interactive_with_mcp_uses_session_usage_cost(tmp_path):
         return_value=(True, "done", 0.0, None),
     ) as mock_runner, patch(
         "pdd.agentic_common._estimate_claude_interactive_session_cost",
-        return_value=(0.123, "claude-haiku-4-5-20251001"),
+        return_value=(0.123, "claude-haiku-4-5-20251001", None),
     ) as mock_session_cost:
         mock_uuid.side_effect = [
             type("U", (), {"hex": "job123"})(),
             "11111111-2222-4333-8444-555555555555",
         ]
-        success, text, cost, model = _run_claude_interactive_with_mcp(
+        result = _run_claude_interactive_with_mcp(
             cli_path="/bin/claude",
             prompt_path=prompt_path,
             cwd=tmp_path,
             timeout=30,
             env={"HOME": str(tmp_path)},
         )
+        success, text, cost, model = result
 
     assert success is True
     assert text == "done"
     assert cost == pytest.approx(0.123)
     assert model == "claude-haiku-4-5-20251001"
+    assert result[4] is None
     cmd = mock_runner.call_args.args[0]
     assert "--session-id" in cmd
     assert cmd[cmd.index("--session-id") + 1] == "11111111-2222-4333-8444-555555555555"
@@ -888,13 +913,15 @@ def test_run_claude_interactive_with_mcp_returns_structured_usage(tmp_path):
             type("U", (), {"hex": "job123"})(),
             "11111111-2222-4333-8444-555555555555",
         ]
-        success, text, cost, model, returned_usage = _run_claude_interactive_with_mcp(
+        result = _run_claude_interactive_with_mcp(
             cli_path="/bin/claude",
             prompt_path=prompt_path,
             cwd=tmp_path,
             timeout=30,
             env={"HOME": str(tmp_path)},
         )
+        success, text, cost, model = result
+        returned_usage = result[4]
 
     assert success is True
     assert text == "done"
@@ -1548,9 +1575,13 @@ def test_estimate_session_cost_ignores_synthetic_rows(tmp_path):
         ],
     )
 
-    cost, model = _estimate_claude_interactive_session_cost(session_id, {"HOME": str(home)})
+    cost, model, usage = _estimate_claude_interactive_session_cost(
+        session_id,
+        {"HOME": str(home)},
+    )
     assert cost == 0.0
     assert model is None
+    assert usage is None
 
 
 def test_estimate_session_cost_real_model_with_trailing_synthetic(tmp_path):
@@ -1577,12 +1608,26 @@ def test_estimate_session_cost_real_model_with_trailing_synthetic(tmp_path):
         ],
     )
 
-    cost, model = _estimate_claude_interactive_session_cost(session_id, {"HOME": str(home)})
+    cost, model, usage = _estimate_claude_interactive_session_cost(
+        session_id,
+        {"HOME": str(home)},
+    )
     expected = _calculate_anthropic_cost(
         {"usage": real_usage, "modelUsage": {"claude-opus-4-8": {}}}
     )
     assert model == "claude-opus-4-8"
     assert cost == pytest.approx(expected)
+    assert usage == {
+        "claude": [
+            {
+                "model": "claude-opus-4-8",
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "cached_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }
+        ]
+    }
 
 
 def test_google_provider_delivers_prompt_via_positional_arg(mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess):
