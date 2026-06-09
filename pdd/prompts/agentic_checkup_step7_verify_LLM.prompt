@@ -83,6 +83,26 @@ If issues remain after this verification, the workflow may loop back to steps 3-
    - If `<pr_changed_files>` includes a full API changed-file list artifact path, read that local file before selecting PR-scoped verification tests; the inline list may be a bounded preview.
    - Capture the full output for every command you do run.
 
+   Before deciding the test list is sufficient, build an acceptance-probe
+   checklist from `<issue_content>`:
+   - For each explicit acceptance criterion, identify at least one positive
+     probe and, when the criterion constrains unknown/rejected/absent/
+     unchanged/unguessed behavior, at least one negative or adversarial probe.
+   - Check whether existing tests or cheap manual commands actually exercise
+     those probes on the current worktree. If not, run a small targeted command
+     or add/report a blocking test-coverage finding.
+   - Near-match, alias, prefix/suffix, default, fallback, and fixture-collision
+     cases are required probes for conservative matching behavior. For example,
+     when model pricing must remain unknown for unknown models, verify that
+     `gpt-4` does not get priced from `openai/gpt-4o` or
+     `azure/gpt-4.1-mini`, while exact provider-qualified and exact
+     unqualified matches still work.
+   - If a focused suite passes but the acceptance-probe checklist has an
+     unchecked negative/adversarial criterion, set `"success": false` and
+     include a blocking `test_failure` or `interface_mismatch` issue explaining
+     the missing or failing probe. Do not mark `issue_aligned: true` solely from
+     happy-path tests.
+
 3. **Compare results** with previous steps:
    - Which previously failing tests now pass?
    - Are there any new failures introduced by the fixes?

@@ -55,12 +55,22 @@ Write a **regression test** for EVERY bug fixed in Step 6a:
    - Verifies the fix works correctly
    - Would fail if the fix were reverted
    - Is placed in the project's existing test directory following its conventions
+   - Exercises at least one boundary, negative, or adversarial input from the
+     source issue's acceptance criteria, not only the happy path. When the
+     issue says a value must remain unknown, rejected, absent, unchanged, or
+     unguessed, add a test proving a look-alike or partially matching value
+     does not get accepted. For example, a pricing matcher must test that
+     `gpt-4` does not inherit a price from `openai/gpt-4o` or
+     `azure/gpt-4.1-mini`.
 3. **Examples of regression tests:**
    - Missing dependency: test that imports the module successfully
    - Wrong import path: test that the correct export exists at the expected path
    - Interface mismatch: test that the function returns the expected type/fields
    - Build error: test that the module can be imported without errors
    - Failing test fix: additional assertions confirming the correct behavior
+   - Conservative matching/unknown handling: test exact-match success and
+     near-match failure in the same fixture so substring or family-prefix
+     matching cannot pass by accident
 
 % Output
 
@@ -95,5 +105,9 @@ FILES_MODIFIED: path/to/file3, path/to/file4
 - Write a regression test for EVERY fix from Step 6a — do not skip any
 - Follow the project's existing test conventions (framework, directory, naming)
 - Each test should be specific enough to catch a reversion of its corresponding fix
+- Do not count a happy-path test as sufficient when the source issue includes
+  an explicit unknown/rejection/conservative-behavior requirement; include a
+  regression that would fail for a broad fallback, substring match, default
+  value, swallowed error, or other plausible over-acceptance bug
 - Post your findings as a GitHub comment before completing — EXCEPT in a PR-only review (no linked issue, #1292), where you skip posting and the orchestrator owns the single PR report
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
