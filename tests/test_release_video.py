@@ -1,3 +1,4 @@
+import importlib.util
 import json
 import os
 import subprocess
@@ -16,6 +17,7 @@ def release_video_env(extra: dict | None = None) -> dict:
         "CLAUDE_TIMEOUT",
         "RELEASE_VIDEO_CLAUDE_TOOLS",
         "RELEASE_VIDEO_PROMPT_TEMPLATE",
+        "RELEASE_VIDEO_SCRIPT_PATH",
     ):
         env.pop(key, None)
     if extra:
@@ -83,6 +85,46 @@ print("# PDD v1.1.0 Release Video\\n\\n"
       "Visual direction: show the changelog, a terminal running make release, and the uploaded YouTube receipt.")
 """,
     )
+
+
+def claude_failure_stub(tmp_path: Path, stderr: str, exit_code: int = 1) -> Path:
+    return write_executable(
+        tmp_path / "claude-failure-stub.py",
+        f"""#!/usr/bin/env python3
+import sys
+
+sys.stderr.write({stderr!r})
+raise SystemExit({exit_code})
+""",
+    )
+
+
+def reusable_script_text() -> str:
+    return """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 ships release video automation so maintainers can publish a clear story for every CLI release without changing the package publishing path.
+
+VISUAL: show the release tag, changelog excerpt, and terminal command side by side.
+
+## Details
+
+NARRATOR:
+The script highlights what changed, why it matters for developers, and how the generated release artifact flows into the PDS publish step for an unlisted YouTube video.
+
+VISUAL: show the PDS response with the YouTube URL ready for release notes.
+"""
+
+
+def load_release_video_module():
+    spec = importlib.util.spec_from_file_location("release_video", SCRIPT)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def pds_stub(tmp_path: Path, response: dict) -> Path:
@@ -233,6 +275,116 @@ def test_release_video_can_pass_custom_claude_tool_allowlist(tmp_path: Path):
     assert claude_argv[claude_argv.index("--allowedTools") + 1] == "Read,Grep,Bash(git show *)"
 
 
+def test_release_video_can_reuse_existing_script_without_invoking_claude(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    env = release_video_env({"PDS_STUB_CAPTURE": str(capture)})
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--script-path",
+            str(existing_script),
+            "--claude-cli",
+            str(tmp_path / "missing-claude"),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/reused"}},
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+
+    assert f"using prewritten script from {existing_script}" in result.stdout
+    assert "https://youtu.be/reused" in result.stdout
+    assert not (repo / "claude_prompt.txt").exists()
+    output_dir = tmp_path / "videos" / "v1.1.0"
+    script_text = (output_dir / "release_video_script.md").read_text(encoding="utf8")
+    assert "\n## Opening (0:00 - 0:30)" in script_text
+    assert "\n## Details (0:30 - 1:00)" in script_text
+    pds_call = json.loads(capture.read_text(encoding="utf8"))["argv"]
+    assert pds_call[pds_call.index("--script") + 1] == str(
+        output_dir / "release_video_script.md"
+    )
+
+
+def test_release_video_claude_quota_failure_is_script_generation_diagnostic(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    env = release_video_env({"PDS_STUB_CAPTURE": str(capture)})
+    claude = claude_failure_stub(
+        tmp_path,
+        "You've hit your weekly limit; resets on Jun 12, 2026 at 9am UTC\n",
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--claude-cli",
+            str(claude),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/quota"}},
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "Claude Code script generation failed before PDS publish" in result.stderr
+    assert "PDS was not invoked" in result.stderr
+    assert "quota/auth class 'credential-limit'" in result.stderr
+    assert "RELEASE_VIDEO_SCRIPT_PATH" in result.stderr
+    assert not capture.exists()
+
+
+def test_release_video_claude_quota_auth_classifier():
+    release_video = load_release_video_module()
+
+    assert (
+        release_video.classify_claude_quota_auth_failure(
+            "You've hit your weekly limit; resets tomorrow."
+        )
+        == "credential-limit"
+    )
+    assert (
+        release_video.classify_claude_quota_auth_failure("please run /login")
+        == "oauth/login"
+    )
+    assert release_video.classify_claude_quota_auth_failure("401 unauthorized") == "auth"
+    assert release_video.classify_claude_quota_auth_failure("temporary network error") is None
+
+
 def test_release_video_fails_for_missing_prompt_template(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     missing_prompt = tmp_path / "missing_release_video_LLM.prompt"
@@ -348,9 +500,42 @@ def test_release_video_preflight_allows_env_token_without_printing_it(tmp_path: 
 
     assert result.returncode == 0
     assert "PDS_TOKEN is set" in result.stdout
+    assert "local preflight cannot verify token scopes or project access" in result.stdout
+    assert "PDS server preflight" in result.stdout
+    assert "continue accessing it afterward" in result.stdout
     assert "release-video preflight warning" not in result.stderr
     assert "env-secret-token" not in result.stdout + result.stderr
     assert "local-secret-token" not in result.stdout + result.stderr
+
+
+def test_release_video_preflight_with_env_token_and_project_reports_fixed_project(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    env = release_video_env({"PDS_TOKEN": "env-secret-token"})
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--preflight",
+            "--project-id",
+            "fixed-project-123",
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+
+    assert "using explicit PDS project fixed-project-123" in result.stdout
+    assert "PDS_TOKEN is set for explicit PDS project fixed-project-123" in result.stdout
+    assert "access to that fixed project" in result.stdout
+    assert "Normal create-mode creates a new per-release project" not in result.stdout
+    assert "env-secret-token" not in result.stdout + result.stderr
 
 
 def test_release_video_publish_requires_youtube_url(tmp_path: Path):
