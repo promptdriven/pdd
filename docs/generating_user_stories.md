@@ -119,11 +119,20 @@ The `<slug>` is derived from the prompt file names (e.g.
 `prompts/commands/generate_python.prompt` → `story__pdd_test.md`). Pass
 `--output <dir-or-path>` to control where the Story is written.
 
-> `pdd test` has four modes. Story generation is selected automatically when the
-> positional arguments are **all `.prompt` files** and you pass `--issue`. (The
-> other modes: a bare GitHub issue URL runs agentic UI test generation;
-> `--manual PROMPT CODE` generates unit tests; a single `story__*.md` argument
-> just refreshes prompt-link metadata — see Step 5.)
+`pdd test` is one command with **four modes**, auto-selected from the arguments.
+Story generation is the `--issue` + `.prompt` combination; the others are listed
+here so the disambiguation is in one place:
+
+| You run | Mode |
+| --- | --- |
+| `pdd test --issue <url\|number\|file> prompts/x.prompt` | **Generate a user story (+ contract)** |
+| `pdd test user_stories/story__<slug>.md` | Refresh a story's prompt-link metadata (Step 5) |
+| `pdd test --manual <prompt> <code/example>` | Generate unit tests |
+| `pdd test <github-issue-URL>` | Agentic UI test generation |
+
+> Note the two issue-related paths are different: `--issue` **plus `.prompt`
+> arguments** means "make a user story", whereas a **bare** GitHub issue URL with
+> no `--issue` flag runs agentic UI test generation.
 
 ## Step 3 — Review and verify the Story (the human gate)
 
