@@ -87,9 +87,13 @@ _DYNAMIC_TAG_OPENING_PATTERNS = {
 # Matches a whole ``<include ...>...</include>`` (or self-closing) element so its
 # attributes can be parsed; used only to decide whether a directive is a
 # semantic ``query=`` include that must be skipped (see below).
+# Possessive `[^>]*+` with a single leading `\s` (not `\s+`) keeps the attribute
+# scan linear: CodeQL py/polynomial-redos flags the `\s+[^>]*?` overlap (both can
+# match whitespace), and this prompt text reaches the regex from a remote source
+# via the connect /context-audit endpoint (PR #1387).
 _QUERY_INCLUDE_ELEMENT_RE = re.compile(
-    r"<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>"
-    r"|<include(?P<attrs_self>\s+[^>]*?)\s*/>",
+    r"<include(?P<attrs>\s[^>]*+)?>(?P<content>.*?)</include>"
+    r"|<include(?P<attrs_self>\s[^>]*?)/>",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -227,7 +231,7 @@ def _detect_dynamic_tags_outside_code(text: str) -> List[str]:
 # counted; lists whose paths come from ``${VAR}`` only materialize at generation
 # time, so they are reported as deferred rather than counted as markup.
 _INCLUDE_MANY_RE = re.compile(
-    r"<include-many(?:\s+[^>]*?)?>(?P<inner>.*?)</include-many>", re.DOTALL
+    r"<include-many(?:\s[^>]*+)?>(?P<inner>.*?)</include-many>", re.DOTALL
 )
 
 

@@ -193,7 +193,7 @@ def _scan_risky_placeholders(text: str) -> Tuple[List[Tuple[int, str]], List[Tup
                 line_no = text.count("\n", 0, m.start()) + 1
                 single_brace.append((line_no, m.group(0)))
         # JavaScript template placeholders like ${...}
-        for m in re.finditer(r"\$\{[^\}]+\}", text):
+        for m in re.finditer(r"\$\{[^\}]++\}", text):
             if not _is_inside_any_span(m.start(), fence_spans):
                 line_no = text.count("\n", 0, m.start()) + 1
                 template_brace.append((line_no, m.group(0)))
@@ -236,8 +236,8 @@ def compute_user_intent_paths(text: str) -> set:
     # body form (with optional attrs) and self-closing form. Both forms can
     # carry a `path="..."` attribute, which takes precedence over body content.
     include_pattern = (
-        r'<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>'
-        r'|<include(?P<attrs_self>\s+[^>]*?)\s*/>'
+        r'<include(?P<attrs>\s[^>]*+)?>(?P<content>.*?)</include>'
+        r'|<include(?P<attrs_self>\s[^>]*?)/>'
     )
     for m in re.finditer(include_pattern, text, flags=re.DOTALL):
         attrs = _parse_attrs(m.group('attrs') or m.group('attrs_self') or "")
@@ -246,12 +246,12 @@ def compute_user_intent_paths(text: str) -> set:
         p = (path_attr or body).strip()
         if p:
             paths.add(p)
-    for m in re.finditer(r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', text, flags=re.DOTALL):
+    for m in re.finditer(r'<include-many(?:\s[^>]*+)?>(.*?)</include-many>', text, flags=re.DOTALL):
         inner = m.group(1)
         for raw in [s.strip() for part in inner.splitlines() for s in part.split(',')]:
             if raw:
                 paths.add(raw)
-    for m in re.finditer(r"```<([^>]*?)>```", text):
+    for m in re.finditer(r"```<([^>]*+)>```", text):
         p = m.group(1).strip()
         if p:
             paths.add(p)
@@ -489,7 +489,7 @@ def process_backtick_includes(
     if _seen is None:
         _seen = set()
     # More specific pattern that doesn't match nested > characters
-    pattern = r"```<([^>]*?)>```"
+    pattern = r"```<([^>]*+)>```"
     def replace_include(match):
         file_path = match.group(1).strip()
         try:
@@ -608,7 +608,7 @@ def process_xml_tags(
         user_intent_many_paths: Optional[set] = _user_intent_paths
     elif _failed is not None:
         user_intent_many_paths = set()
-        for m in re.finditer(r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', text, flags=re.DOTALL):
+        for m in re.finditer(r'<include-many(?:\s[^>]*+)?>(.*?)</include-many>', text, flags=re.DOTALL):
             inner = m.group(1)
             for raw in [s.strip() for part in inner.splitlines() for s in part.split(',')]:
                 if raw:
@@ -679,7 +679,7 @@ def process_include_tags(
     if _seen is None:
         _seen = set()
     # Support both <include>path</include> and <include path="path" attrs... />
-    pattern = r'<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>|<include(?P<attrs_self>\s+[^>]*?)\s*/>'
+    pattern = r'<include(?P<attrs>\s[^>]*+)?>(?P<content>.*?)</include>|<include(?P<attrs_self>\s[^>]*?)/>'
 
     def replace_include(match):
         attrs_str = match.group('attrs') or match.group('attrs_self') or ""
@@ -1065,7 +1065,7 @@ def process_include_tags(
     return current_text
 
 def process_pdd_tags(text: str) -> str:
-    pattern = r'<pdd>.*?</pdd>'
+    pattern = r'<pdd>(?:(?!</pdd>)[\s\S])*</pdd>'
     # Replace pdd tags with an empty string first
     processed = re.sub(pattern, '', text, flags=re.DOTALL)
     # If there was a replacement and we're left with a specific test case, handle it specially
@@ -1074,7 +1074,7 @@ def process_pdd_tags(text: str) -> str:
     return processed
 
 def process_shell_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any] = None) -> str:
-    pattern = r'<shell>(.*?)</shell>'
+    pattern = r'<shell>((?:(?!</shell>)[\s\S])*)</shell>'
     def replace_shell(match):
         command = match.group(1).strip()
         if recursive:
@@ -1162,7 +1162,7 @@ def process_shell_tags(text: str, recursive: bool, snapshot_recorder: Optional[A
     return re.sub(pattern, replace_shell_with_spans, text, flags=re.DOTALL)
 
 def process_web_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any] = None) -> str:
-    pattern = r'<web>(.*?)</web>'
+    pattern = r'<web>((?:(?!</web>)[\s\S])*)</web>'
     def replace_web(match):
         url = match.group(1).strip()
         if recursive:
@@ -1306,7 +1306,7 @@ def process_include_many_tags(
     """
     if _seen is None:
         _seen = set()
-    pattern = r'<include-many(?P<attrs>\s+[^>]*?)?>(?P<inner>.*?)</include-many>'
+    pattern = r'<include-many(?P<attrs>\s[^>]*+)?>(?P<inner>.*?)</include-many>'
     def replace_many(match):
         attrs = _parse_attrs(match.group('attrs') or "")
         inner = match.group('inner')
@@ -1394,7 +1394,7 @@ def double_curly(
     text = re.sub(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", _protect_var, text)
 
     # First, protect any existing double curly braces
-    text = re.sub(r'\{\{([^{}]*)\}\}', r'__ALREADY_DOUBLED__\1__END_ALREADY__', text)
+    text = re.sub(r'\{\{([^{}]*+)\}\}', r'__ALREADY_DOUBLED__\1__END_ALREADY__', text)
     
     # Process excluded keys
     for key in exclude_keys:
@@ -1405,10 +1405,10 @@ def double_curly(
     text = text.replace("{", "{{").replace("}", "}}")
     
     # Restore excluded keys
-    text = re.sub(r'__EXCLUDED__(.*?)__END_EXCLUDED__', r'{\1}', text)
+    text = re.sub(r'__EXCLUDED__((?:(?!__END_EXCLUDED__).)*)__END_EXCLUDED__', r'{\1}', text)
     
     # Restore already doubled brackets
-    text = re.sub(r'__ALREADY_DOUBLED__(.*?)__END_ALREADY__', r'{{\1}}', text)
+    text = re.sub(r'__ALREADY_DOUBLED__((?:(?!__END_ALREADY__).)*)__END_ALREADY__', r'{{\1}}', text)
 
     # Restore protected ${IDENT} placeholders as ${{IDENT}}
     def _restore_var(m):
@@ -1427,7 +1427,7 @@ def double_curly(
     text = re.sub(r"__PDD_VAR_(\d+)__", _restore_var, text)
     
     # Special handling for code blocks
-    code_block_pattern = r'```([\w\s]*)\n([\s\S]*?)```'
+    code_block_pattern = r'```([\w \t\r\f\v]*)\n((?:(?!```)[\s\S])*)```'
     
     def process_code_block(match):
         lang = match.group(1).strip()
