@@ -296,6 +296,21 @@ def _existing_param_compatible(old: ParamContract, new: ParamContract) -> bool:
         return False
     if old.has_default and new.has_default and old.default != new.default:
         return False
+    # Annotation comparison is intentionally symmetric: ANY change to a public
+    # parameter's type annotation trips the gate, including a backward-compatible
+    # widening such as ``str`` -> ``str | int``.  This differs from the default
+    # handling above on purpose -- adding a default only changes the calling
+    # convention (a required argument becomes omittable; unambiguous, no
+    # variance), whereas a type annotation is the value contract and its
+    # variance is direction-dependent (widening a parameter is safe, but the
+    # same change to a return type is a regression, and this comparator is also
+    # used for returns and for declared-vs-actual conformance where the prompt
+    # is the source of truth).  Rather than model per-use variance, the gate
+    # conservatively flags every annotation change; an intentional one is
+    # acknowledged with a ``BREAKING-CHANGE: change signature <symbol>`` line in
+    # the prompt (honored by ``_prompt_breaking_change_signature_symbols`` in
+    # the public-surface gate), which is the correct channel for a deliberate
+    # public-API edit in a prompt-driven repo.
     return semantic_types_compatible(old.annotation, new.annotation)
 
 
@@ -448,20 +463,9 @@ def _semantic_from_ast(node: ast.AST, *, raw: str = "") -> Optional[SemanticType
         base_name = _qualified_name(node.value)
         if base_name is None:
             return None
-        special = _special_form_name(base_name)
+        # ``Union[...]`` and ``Optional[...]`` special forms are normalized
+        # earlier by ``_flatten_union``; only ordinary generics reach here.
         items = _slice_items(node.slice)
-        if special == "Optional" and len(items) == 1:
-            inner = _semantic_from_ast(items[0], raw=ast.unparse(items[0]))
-            if inner is None:
-                return None
-            return SemanticType(
-                base=inner.base,
-                args=inner.args,
-                optional=True,
-                raw=raw or ast.unparse(node),
-            )
-        # ``Union[...]`` subscripts are handled earlier by ``_flatten_union``,
-        # so only ``Optional`` and ordinary generics reach this point.
         args = tuple(
             parsed
             for parsed in (
@@ -495,15 +499,22 @@ def _flatten_union(node: ast.AST) -> Optional[list[ast.AST]]:
         left = _flatten_union(node.left) or [node.left]
         right = _flatten_union(node.right) or [node.right]
         return left + right
-    # ``Union[...]`` / ``typing.Union[...]`` subscript form.  Flatten nested
-    # unions (``Union[Union[str, int], bytes]`` == ``Union[str, int, bytes]``)
-    # so a member that is itself a union does not survive as one opaque part.
+    # ``Union[...]`` / ``Optional[...]`` subscript forms (also ``typing.``
+    # prefixed).  Flatten members recursively so every union spelling
+    # normalizes to the same flat member set:
+    #   - nested unions: ``Union[Union[str, int], bytes]`` == ``Union[str, int, bytes]``
+    #   - ``Optional[X]`` == ``Union[X, None]``, so a nested optional member
+    #     hoists its ``None`` to the enclosing union
+    #     (``Union[Optional[str], int]`` == ``Union[str, int, None]``).
     if isinstance(node, ast.Subscript):
         base_name = _qualified_name(node.value)
-        if base_name is not None and _special_form_name(base_name) == "Union":
+        special = _special_form_name(base_name) if base_name is not None else None
+        if special in {"Union", "Optional"}:
             parts: list[ast.AST] = []
             for item in _slice_items(node.slice):
                 parts.extend(_flatten_union(item) or [item])
+            if special == "Optional":
+                parts.append(ast.Constant(value=None))
             return parts
     return None
 
@@ -546,7 +557,7 @@ def _canonical_base(name: str) -> str:
 def _is_none_type(node: ast.AST) -> bool:
     if isinstance(node, ast.Constant) and node.value is None:
         return True
-    if isinstance(node, ast.Name) and node.id == "None":
+    if isinstance(node, ast.Name) and node.id in {"None", "NoneType"}:
         return True
     if isinstance(node, ast.Attribute):
         return _qualified_name(node) in {"types.NoneType", "NoneType"}

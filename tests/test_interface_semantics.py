@@ -28,6 +28,18 @@ from pdd.interface_semantics import (
         ("Optional[Union[str, int]]", "Union[str, int, None]"),
         # A single-member union collapses to that member.
         ("Union[str]", "str"),
+        # A nested optional member hoists its None to the enclosing union:
+        # Union[Optional[str], int] == Union[str, int, None].
+        ("Union[Optional[str], int]", "Union[str, int, None]"),
+        ("Union[Optional[str], int]", "Optional[Union[str, int]]"),
+        ("Optional[str] | int", "str | int | None"),
+        ("typing.Optional[str] | int", "str | None | int"),
+        # Optional[Optional[X]] collapses to Optional[X].
+        ("Optional[Optional[str]]", "Optional[str]"),
+        # NoneType (bare Name and types.-qualified) is the same as None.
+        ("Union[str, NoneType]", "str | None"),
+        ("Union[str, NoneType]", "Optional[str]"),
+        ("Union[str, types.NoneType]", "str | None"),
     ],
 )
 def test_semantic_type_aliases_are_compatible(left, right):
@@ -54,6 +66,8 @@ def test_wide_reordered_union_is_compatible_without_factorial_blowup():
         # caller passing None breaks), so it must NOT be treated as compatible.
         ("Union[str, int, None]", "Union[str, int]"),
         ("str | int | None", "str | int"),
+        # ...even when the None arrives via a nested optional member.
+        ("Union[Optional[str], int]", "Union[str, int]"),
         # Swapping a union member for a different type is still drift.
         ("Union[str, int]", "Union[str, float]"),
     ],
