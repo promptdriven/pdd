@@ -89,6 +89,34 @@ def test_run_checkup_prompt_json_includes_contract_check_under_strict() -> None:
     assert contract_checks == [{"name": "contract", "status": "fail"}]
 
 
+def test_checkup_prompt_directory_e2e_smoke(tmp_path: Path, monkeypatch) -> None:
+    """CI-safe e2e smoke for the wired ``pdd checkup <prompt-dir>`` path."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    for name in ("alpha_python.prompt", "beta_python.prompt"):
+        (prompts_dir / name).write_text(
+            "<pdd-reason>Small deterministic smoke prompt.</pdd-reason>\n"
+            "% Goal\n"
+            "Write a tiny Python helper.\n\n"
+            "% Requirements\n"
+            "- The implementation MUST return an integer.\n",
+            encoding="utf-8",
+        )
+
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        checkup,
+        ["prompts"],
+        obj={"quiet": False},
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Checkup: 2 prompt(s) under prompts/" in result.output
+    assert "Summary:" in result.output
+    assert "Decision: all prompts can continue" in result.output
+
+
 def test_source_set_finding_as_dict_exposes_repair_fields() -> None:
     finding = SourceSetFinding(
         finding_id="contract:foo:0:MISSING_MODAL",

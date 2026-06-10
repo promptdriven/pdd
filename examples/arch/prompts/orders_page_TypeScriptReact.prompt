@@ -1,0 +1,13 @@
+<pdd-dependency>order_api_Python.prompt</pdd-dependency>
+<pdd-dependency>order_components_TypeScriptReact.prompt</pdd-dependency>
+<pdd-reason>Main order listing page with filtering and pagination.</pdd-reason>
+
+% Goal
+Define the order list page prompt fixture used by the architecture include validator.
+
+% Requirements
+- The page MUST fetch order data from the order API.
+- The page MUST use shared order components.
+
+% Deliverable
+- `app/orders/page.tsx`

@@ -413,7 +413,6 @@ def _forward_subcommand_json(
 )
 @click.option(
     "--dry-run",
-    "--preview",
     "dry_run",
     is_flag=True,
     default=False,
@@ -421,6 +420,13 @@ def _forward_subcommand_json(
         "With --apply: preview the changes without writing any files. "
         "--preview is kept as a compatibility alias."
     ),
+)
+@click.option(
+    "--preview",
+    "preview",
+    is_flag=True,
+    default=False,
+    help="Compatibility alias for --dry-run in prompt repair/apply flows.",
 )
 @click.option(
     "--planner",
@@ -512,6 +518,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     interactive: bool,
     apply: bool,
     dry_run: bool,
+    preview: bool,
     planner: Optional[str],
     auto_mode: bool,
 ) -> Optional[Tuple[str, float, str]]:
@@ -563,6 +570,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup drift <DEVUNIT> [OPTIONS]
     """
     ctx.ensure_object(dict)
+    effective_dry_run = dry_run or preview
 
     if apply and not (interactive or auto_mode):
         raise click.UsageError("--apply requires --interactive or --auto.")
@@ -738,6 +746,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             )
             return None
         drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
+        if dry_run and "--dry-run" not in drift_args:
+            drift_args.insert(0, "--dry-run")
         exit_code = drift_cmd.main(
             args=drift_args,
             prog_name="pdd checkup drift",
@@ -823,7 +833,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 project_root=project_root,
                 strict=strict,
                 apply=apply,
-                dry_run=dry_run,
+                dry_run=effective_dry_run,
                 quiet=_quiet,
                 explicit_interactive=interactive,
                 auto=auto_mode,

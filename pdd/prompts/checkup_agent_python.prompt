@@ -43,7 +43,7 @@ R2 - Interactive UX options
 Interactive terminal prompts MUST include Option A, Option B, keep current / skip, custom fix, and rationale/details affordances.
 
 R3 - Risk gating
-High-risk findings MUST NOT be auto-applied; medium-risk findings MUST be saved for review rather than applied automatically.
+The agent MUST NOT auto-apply high-risk findings; medium-risk findings MUST be saved for review rather than applied automatically.
 </contract_rules>
 
 % Deliverables
