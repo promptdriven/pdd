@@ -1,8 +1,10 @@
 # Agentic Checkup Demo — issue #1423
 
 Proves, with **real `python -m pdd …` commands**, that `pdd checkup <prompt>`
-is now an **LLM-agentic, interactive** workflow that plans, runs, and repairs
-across the same six check engines exposed by the direct subcommands.
+is a **simple, fast, safe, human-friendly** agentic workflow that plans, runs,
+groups findings, recommends safe fixes, writes useful artifacts, and prints a
+short, truthful summary — across the same six check engines exposed by the
+direct subcommands.
 
 **Branch:** `demo/interactive-checkup-1423`
 **Implementation branch:** `change/issue-1423`
@@ -13,18 +15,22 @@ across the same six check engines exposed by the direct subcommands.
 
 A human reviewer running this demo from a fresh checkout can verify that:
 
-1. the agentic architecture exists and is wired into the CLI;
-2. `pdd checkup <prompt> --interactive` drives an agentic session;
-3. deterministic planning works **offline** (no LLM, CI-safe);
-4. the LLM planning path is exposed and **falls back gracefully** when no
-   credential or network is available;
-5. `--auto` applies the best repair for every finding without prompts;
-6. typing `a` during an interactive session switches the rest of the session
-   to auto mode;
-7. the unified agentic flow reaches **all six tools** —
-   `lint · contract · coverage · gate · snapshot · drift`;
-8. the **direct subcommands** still work on their own;
-9. it is human-verifiable end-to-end, not just a unit test.
+1. the **simple default command** — `pdd checkup <prompt> --planner deterministic`
+   — runs all checks, groups findings, and prints a concise summary **without a
+   single prompt** (review mode);
+2. repeated findings are **grouped** (10 vague terms → one summary, not ten menus);
+3. tool **skips show a reason** (`coverage: skip — no <contract_rules> to cover`);
+4. fixes are **risk-gated**: low-risk = auto/queue, medium = saved for review,
+   high = manual — the tool **never fabricates** a risky change;
+5. **artifacts** (a report + a patch preview) are written automatically only when
+   there are findings, and their paths are printed in the summary;
+6. the **final summary** distinguishes fixed-manually / fixed-automatically /
+   skipped / remaining and applied / queued / saved-for-review;
+7. `--interactive` asks **one grouped question** with an `[a]` switch to auto;
+   `--apply` is what actually edits files, after which checks are **re-verified**;
+8. the LLM planning path is exposed and **falls back gracefully** offline;
+9. the unified flow reaches **all six tools** and the **direct subcommands**
+   still work on their own.
 
 ---
 
@@ -47,23 +53,38 @@ the direct subcommands cannot diverge.
 ## CLI surface
 
 ```bash
-pdd checkup <prompt> --interactive [--planner deterministic|llm] [--auto]
+# Simple default: review mode — checks, groups, summary, artifacts. No prompts.
+pdd checkup <prompt> --planner deterministic
+
+# Interactive: one grouped question per finding group, with an [a] auto switch.
+pdd checkup <prompt> --interactive --planner deterministic
+
+# Auto: apply low-risk fixes only; save the rest for review.
+pdd checkup <prompt> --planner deterministic --auto
+
+# Actually edit files (then re-verify): add --apply (requires --interactive).
+pdd checkup <prompt> --interactive --planner deterministic --apply
 ```
 
 | Flag | Meaning |
 |---|---|
-| `--interactive` | Enter the agentic per-finding session (requires a TTY unless `--auto`). |
-| `--planner deterministic` | Plan all tools in fixed order, offline (default when `--auto` is used). |
+| *(none but `--planner`)* | **Review mode** (default): run checks, group findings, write artifacts, print a summary. Never prompts, never edits. CI-safe. |
+| `--interactive` | One grouped question per group: `[Y]` queue · `[n]` skip · `[edit]` write your own · `[auto]` finish the rest automatically. Requires a TTY. |
+| `--planner deterministic` | Plan all tools in fixed order, offline (the default planner). |
 | `--planner llm` | Let an LLM prioritise tools; falls back to deterministic on failure. |
-| `--auto` | Apply the best repair option for every finding with **no prompts**. Safe without a TTY (CI / scripted replay). |
+| `--auto` | Apply **low-risk** fixes automatically; medium → saved for review; high → manual. Never makes a risky change. No prompts. |
+| `--apply` | Actually write the low-risk fixes to the prompt, then re-run the affected checks to verify. Requires `--interactive`. |
 
-Interactive per-finding menu:
+**Safety model (repair risk).** Every finding is classified:
 
-```
-[1] primary repair      [2] alternative repair
-[3] write my own        [4] skip
-[a] switch to auto mode for all remaining findings
-```
+| Risk | Examples | Default behaviour |
+|---|---|---|
+| low | mechanical lint fix | auto-applied (with `--apply`) / queued |
+| medium | undefined vague term, coverage/gate/snapshot gaps | **saved for review** (never fabricated) |
+| high | contract/evidence errors | left as a **manual TODO** |
+
+By default **nothing is written** — fixes are queued / saved and a patch preview
+is produced. `--apply` is the only thing that edits files.
 
 Direct subcommands (unchanged):
 
@@ -103,9 +124,9 @@ bash demos/checkup_interactive/run_demo.sh
 ```
 
 ```
-1) Run unified agentic interactive demo (live, needs a terminal)
-2) Run deterministic planner demo (offline, all six tools)
-3) Run auto mode demo
+1) Run live interactive session (grouped, needs a terminal)
+2) Run review-mode demo (the simple default command, offline)
+3) Run auto mode demo (apply low-risk only)
 4) Run LLM planner fallback demo
 5) Run direct subcommand comparison
 6) Run all non-interactive checks
@@ -116,15 +137,26 @@ q) Quit
 ### Non-interactive replay (CI-safe, no TTY required)
 
 ```bash
-bash demos/checkup_interactive/run_demo.sh --all            # 2+3+4+5
-bash demos/checkup_interactive/run_demo.sh --deterministic  # offline planner, all six tools
-bash demos/checkup_interactive/run_demo.sh --auto           # auto-apply every finding
-bash demos/checkup_interactive/run_demo.sh --llm-fallback   # LLM path + graceful fallback
-bash demos/checkup_interactive/run_demo.sh --direct         # six direct subcommands
-bash demos/checkup_interactive/run_demo.sh --cleanup        # remove generated artifacts
+bash demos/checkup_interactive/run_demo.sh --all          # 2+3+4+5
+bash demos/checkup_interactive/run_demo.sh --review       # the simple default command
+bash demos/checkup_interactive/run_demo.sh --auto         # apply low-risk only
+bash demos/checkup_interactive/run_demo.sh --llm-fallback # LLM path + graceful fallback
+bash demos/checkup_interactive/run_demo.sh --direct       # six direct subcommands
+bash demos/checkup_interactive/run_demo.sh --cleanup      # remove generated artifacts
 ```
 
-### Drive the interactive session by hand
+### Drive the simple command by hand
+
+The fast path — checks, grouped findings, summary, artifacts, **no prompts**:
+
+```bash
+python -m pdd checkup \
+  demos/checkup_interactive/prompts/02_vague_clarification.prompt \
+  --planner deterministic
+```
+
+The live interactive session — **one grouped question** for all 10 vague terms,
+with an `[a]` switch to finish the rest automatically:
 
 ```bash
 python -m pdd checkup \
@@ -132,17 +164,13 @@ python -m pdd checkup \
   --interactive --planner deterministic
 ```
 
-Choose `[4]` (skip) for the first vague-term finding, then type `a` on the
-second finding to watch the session finish the rest in auto mode.
+Answer `n` to skip the group, or `auto` to switch the rest to auto mode.
 
-The non-interactive equivalents (no TTY needed):
+Auto mode (no prompts; low-risk applied with `--apply`, the rest saved):
 
 ```bash
 python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt \
-  --interactive --planner deterministic --auto
-
-python -m pdd checkup demos/checkup_interactive/prompts/03_formatting_edge_case.prompt \
-  --interactive --planner llm --auto
+  --planner deterministic --auto
 ```
 
 ---
@@ -181,12 +209,36 @@ python -m pdd checkup demos/checkup_interactive/prompts/03_formatting_edge_case.
 
 ## What success looks like
 
-- `--deterministic` / `--auto` / `--all` end with `Summary: PASS: N  FAIL: 0`.
-- The deterministic run prints `Checking: lint … contract … coverage … gate …
-  snapshot … drift` — proof the agentic flow reaches all six tools.
-- The auto run prints `[auto] …` lines and a summary with `… auto-applied`.
+- `--review` / `--auto` / `--all` end with `Summary: PASS: N  FAIL: 0`.
+- The review run prints a compact `Plan:`, a per-tool `Checks:` block with skip
+  **reasons**, a single **grouped** vague-term summary, an `Artifacts:` block,
+  and a `Findings:` / `Patches:` accounting summary.
+- The auto run shows `Saved for review` and `Fixed automatically: 0` — vague
+  terms are medium-risk and are **not** fabricated.
 - The direct run shows each subcommand's own output and the drift report
   (`Status: stable`).
+
+Example review-mode summary:
+
+```
+Checkup complete: warn
+
+Findings:
+  Total: 10
+  Fixed manually: 0
+  Fixed automatically: 0
+  Skipped by user: 0
+  Remaining: 10
+
+Patches:
+  Applied: 0
+  Queued: 0
+  Saved for review: 10
+
+Artifacts:
+  Patch preview: .pdd/checkup/02_vague_clarification.patch
+  Report: .pdd/checkup/02_vague_clarification.report.md
+```
 
 ### Expected, intentional warnings/failures
 
@@ -205,18 +257,19 @@ These are **demonstrations, not bugs**:
 | Symptom | Fix |
 |---|---|
 | `ImportError: cannot import name 'get_version' from 'pdd'` | Stale editable install: `source .venv/bin/activate && pip install -e .`. |
-| `--interactive requires a TTY` | Add `--auto` for a non-interactive agentic session, or run in a real terminal. |
+| `--interactive requires a TTY` | Drop `--interactive` for non-interactive **review mode**, or run in a real terminal. |
 | LLM planner prints model/auth errors then “falling back to deterministic” | Expected with no API key / no network — the session still completes. Set a credential to exercise real LLM planning. |
 | `command not found: pdd` | Use `python -m pdd …` (the demo already does). |
-| Leftover `.pdd/` or `pdd-core-*.json` under the demo dir | `bash run_demo.sh --cleanup`. |
+| Leftover `.pdd/checkup/`, `.pdd/`, or `pdd-core-*.json` artifacts | `bash run_demo.sh --cleanup`. |
+| Nothing got written to my prompt | By design — only `--apply` (with `--interactive`) edits files; everything else queues / saves for review. |
 
 ---
 
 ## How this verifies the unified flow reaches all six tools
 
-`run_demo.sh --deterministic` runs `pdd checkup <prompt> --interactive
---planner deterministic --auto` and asserts the session output contains a
-`Checking: <tool>` line for each of lint, contract, coverage, gate, snapshot,
-and drift. `tests/commands/test_checkup_interactive_demo.py` additionally drives
-`CheckupAgent` directly (offline, no TTY, no LLM) and asserts six `tool_start`
-events — one per engine.
+`run_demo.sh --review` runs `pdd checkup <prompt> --planner deterministic` and
+asserts the per-tool `Checks:` block names lint, contract, coverage, gate,
+snapshot, and drift (with skip reasons). `tests/commands/test_checkup_interactive_demo.py`
+additionally drives `CheckupAgent` directly (offline, no TTY, no LLM) and asserts
+six `tool_start` events — one per engine — plus the grouped summary, skip
+reasons, accounting, and artifact generation.

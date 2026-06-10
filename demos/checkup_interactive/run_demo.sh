@@ -107,30 +107,32 @@ banner() {
 # 1. Unified agentic interactive demo (HUMAN runs this in a terminal)
 # ---------------------------------------------------------------------------
 demo_agentic_interactive() {
-  banner "1. Unified agentic interactive session (human-driven)"
+  banner "1. Live interactive session (human-driven, grouped + safe)"
   cat <<EOF
 
-This runs a REAL interactive agentic session:
+This runs the REAL agentic session in interactive mode:
 
     python -m pdd checkup $REL/02_vague_clarification.prompt \\
         --interactive --planner deterministic
 
-What you will see and can drive:
-  * "Starting agentic checkup session" + the selected planner's plan
-  * a confirmation prompt:  Proceed with suggested plan? [Y/n/custom]
-  * a per-finding menu for each vague term:
-        [1] primary repair    [2] alternative repair
-        [3] write my own      [4] skip
-        [a] switch to auto mode for all remaining findings
-  * try choosing [4] for the first finding, then type [a] on the second to
-    watch the session finish the rest automatically
-  * a final summary line: "Agentic checkup complete: ..."
+The impatient-user UX:
+  * a compact, described plan
+  * a per-TOOL status block with reasons for skips
+  * ONE grouped question for all 10 vague terms (not ten prompts):
+        Apply recommended safe fix for this group? [Y/n/edit/auto]
+        - Y     queue the recommended fix
+        - n     skip the group
+        - edit  type your own <vocabulary> block once
+        - auto  finish the rest automatically (low-risk only)
+  * a clear final summary (fixed / skipped / remaining, patches, artifacts)
+
+Nothing is written to your prompt unless you also pass --apply.
 
 EOF
   if [ ! -t 0 ]; then
     note "stdin is not a TTY — skipping the live prompt."
-    note "Run this option from a real terminal to drive the menu, or use"
-    note "  --auto / --deterministic for the non-interactive equivalents."
+    note "Run this option from a real terminal, or use the non-interactive"
+    note "  --review / --auto replays below."
     return 0
   fi
   read -r -p "Press Enter to start the live interactive session... " _ || true
@@ -141,38 +143,41 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# 2. Deterministic planner demo (offline, CI-safe)
+# 2. Review mode — the simple default command (offline, no prompts, safe)
 # ---------------------------------------------------------------------------
 demo_deterministic() {
-  banner "2. Deterministic planner (offline, no LLM) — reaches all six tools"
-  subhead "python -m pdd checkup $REL/05_coverage_sensitive.prompt --interactive --planner deterministic --auto"
-  run_pdd checkup "$REL/05_coverage_sensitive.prompt" \
-      --interactive --planner deterministic --auto
+  banner "2. Review mode — 'pdd checkup <prompt> --planner deterministic'"
+  subhead "python -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic"
+  note "No --interactive, no --auto: runs all checks, groups findings, writes"
+  note "artifacts, prints a summary. Never prompts. Never edits the prompt."
+  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic
   echo_clean
-  assert_contains "Starting agentic checkup session"  "agentic session started"
-  assert_contains "Run all checks in standard order"  "deterministic plan rationale shown"
-  assert_contains "Checking: lint"      "tool reached: lint"
-  assert_contains "Checking: contract"  "tool reached: contract"
-  assert_contains "Checking: coverage"  "tool reached: coverage"
-  assert_contains "Checking: gate"      "tool reached: gate"
-  assert_contains "Checking: snapshot"  "tool reached: snapshot"
-  assert_contains "Checking: drift"     "tool reached: drift"
-  assert_contains "Agentic checkup complete" "session completed"
+  assert_contains "Plan:"                       "compact plan shown"
+  # per-tool status block reaches all six tools (with skip reasons)
+  assert_contains "lint"                        "tool: lint"
+  assert_contains "contract"                    "tool: contract"
+  assert_contains "no <contract_rules> to cover" "coverage skip reason"
+  assert_contains "no baseline evidence"        "drift skip reason"
+  assert_contains "undefined vague terms"       "grouped vague-term summary"
+  assert_contains "<vocabulary>"                "recommended group fix"
+  assert_contains "Saved for review"            "safe default: saved, not applied"
+  assert_contains ".pdd/checkup"                "artifacts written"
   [ "$CMD_EXIT" -eq 0 ] && pass "exit code 0" || fail "exit code $CMD_EXIT"
 }
 
 # ---------------------------------------------------------------------------
-# 3. Auto mode demo (no prompts — applies best option for every finding)
+# 3. Auto mode demo (no prompts — applies low-risk only, saves the rest)
 # ---------------------------------------------------------------------------
 demo_auto() {
-  banner "3. Auto mode — best repair applied for every finding, no prompts"
-  subhead "python -m pdd checkup $REL/02_vague_clarification.prompt --interactive --planner deterministic --auto"
-  run_pdd checkup "$REL/02_vague_clarification.prompt" \
-      --interactive --planner deterministic --auto
+  banner "3. Auto mode — apply low-risk only, never fabricate risky fixes"
+  subhead "python -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic --auto"
+  note "Vague-term definitions are medium-risk (need human meaning), so auto"
+  note "mode SAVES them for review instead of inventing definitions."
+  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic --auto
   echo_clean
-  assert_contains "[auto]"            "auto-applied findings shown"
-  assert_contains "auto-applied"      "summary reports auto-applied count"
-  assert_contains "Agentic checkup complete" "session completed"
+  assert_contains "Saved for review"  "medium-risk saved, not fabricated"
+  assert_contains "Fixed automatically: 0" "no risky auto-edits"
+  assert_contains "Checkup complete"  "session completed"
   [ "$CMD_EXIT" -eq 0 ] && pass "exit code 0" || fail "exit code $CMD_EXIT"
 }
 
@@ -186,22 +191,20 @@ demo_llm_fallback() {
   The LLM planner asks a model which tools matter most for this prompt.
   With a working credential it prioritises tools; with NO key / NO network it
   logs a warning and falls back to the deterministic planner instead of
-  crashing. Either way the session completes and reaches all six tools.
+  crashing. Either way the session completes.
 
 EOF
-  subhead "python -m pdd checkup $REL/03_formatting_edge_case.prompt --interactive --planner llm --auto"
-  run_pdd checkup "$REL/03_formatting_edge_case.prompt" \
-      --interactive --planner llm --auto
-  # Keep the model-attempt noise out; show the outcome lines.
-  echo "$CMD_OUT" | grep -iE "LLMPlanner: LLM call failed|falling back|Starting agentic|Checking:|Agentic checkup complete" \
+  subhead "python -m pdd checkup $REL/03_formatting_edge_case.prompt --planner llm"
+  run_pdd checkup "$REL/03_formatting_edge_case.prompt" --planner llm
+  echo "$CMD_OUT" | grep -iE "LLMPlanner: LLM call failed|falling back|Plan:|Checkup complete" \
     | sed 's/^/    /' | head -20
   if echo "$CMD_OUT" | grep -qi "falling back to deterministic"; then
     pass "LLM planner fell back to deterministic (no usable credential)"
   else
     pass "LLM planner produced a plan (a credential was available)"
   fi
-  assert_contains "Starting agentic checkup session" "agentic session started"
-  assert_contains "Agentic checkup complete"         "session completed (no crash)"
+  assert_contains "Plan:"            "plan produced"
+  assert_contains "Checkup complete" "session completed (no crash)"
   [ "$CMD_EXIT" -eq 0 ] && pass "exit code 0" || fail "exit code $CMD_EXIT"
 }
 
@@ -268,7 +271,7 @@ demo_all() {
 demo_cleanup() {
   banner "Cleanup generated demo artifacts"
   local removed=0
-  for d in "$DRIFT_WS/.pdd" "$DEMO_DIR/.pdd"; do
+  for d in "$DRIFT_WS/.pdd" "$DEMO_DIR/.pdd" "$REPO_ROOT/.pdd/checkup"; do
     if [ -e "$d" ]; then rm -rf "$d"; info "removed $d"; removed=1; fi
   done
   # Stray core dumps written next to the demo.
@@ -301,9 +304,9 @@ menu() {
   while true; do
     echo
     echo -e "${BOLD}${CYAN}pdd checkup — agentic workflow demo (issue #1423)${RESET}"
-    echo "  1) Run unified agentic interactive demo (live, needs a terminal)"
-    echo "  2) Run deterministic planner demo (offline, all six tools)"
-    echo "  3) Run auto mode demo"
+    echo "  1) Run live interactive session (grouped, needs a terminal)"
+    echo "  2) Run review-mode demo (the simple default command, offline)"
+    echo "  3) Run auto mode demo (apply low-risk only)"
     echo "  4) Run LLM planner fallback demo"
     echo "  5) Run direct subcommand comparison"
     echo "  6) Run all non-interactive checks"
@@ -332,6 +335,7 @@ main() {
   case "${1:-}" in
     --all)            demo_all; print_summary ;;
     --agentic)        demo_deterministic; demo_auto; print_summary ;;
+    --review)         demo_deterministic; print_summary ;;
     --deterministic)  demo_deterministic; print_summary ;;
     --auto)           demo_auto; print_summary ;;
     --llm-fallback)   demo_llm_fallback; print_summary ;;
