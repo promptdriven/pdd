@@ -12,7 +12,11 @@ import click
 from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
 from ..checkup_prompt_main import build_prompt_source_set_report, run_checkup_prompt
-from ..checkup_target import is_prompt_shaped_target
+from ..checkup_target import (
+    CheckupTargetKind,
+    classify_checkup_target,
+    is_prompt_shaped_target,
+)
 from ..prompt_repair import (
     PromptRepairConfig,
     discover_prompt_paths,
@@ -402,14 +406,17 @@ def _forward_subcommand_json(
     "apply",
     is_flag=True,
     default=False,
-    help="With --interactive: apply selected repairs. Requires --interactive.",
+    help=(
+        "Write the selected low-risk repairs to the prompt, then re-verify. "
+        "Requires --interactive or --auto. Without it, fixes are only queued/saved."
+    ),
 )
 @click.option(
     "--preview",
     "dry_run",
     is_flag=True,
     default=False,
-    help="With --interactive --apply: preview changes without writing any files.",
+    help="With --apply: preview the changes without writing any files.",
 )
 @click.option(
     "--planner",
@@ -428,9 +435,9 @@ def _forward_subcommand_json(
     is_flag=True,
     default=False,
     help=(
-        "With --interactive --planner: apply the best repair option automatically "
-        "for every finding without per-finding prompts. "
-        "In interactive mode the operator can also type 'a' mid-session to switch."
+        "Resolve every finding without per-finding prompts: low-risk fixes are "
+        "queued (or written with --apply); medium-risk are saved for review; "
+        "high-risk are left as manual TODOs. Nothing is written unless --apply."
     ),
 )
 @click.option(
@@ -553,8 +560,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """
     ctx.ensure_object(dict)
 
-    if apply and not interactive:
-        raise click.UsageError("--apply requires --interactive.")
+    if apply and not (interactive or auto_mode):
+        raise click.UsageError("--apply requires --interactive or --auto.")
 
     # --auto runs the agentic session with no per-finding prompts, so it is safe
     # without a terminal (CI / scripted demo replay). Only a genuinely
@@ -752,6 +759,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
         return "validate-arch-includes: ok", 0.0, ""
 
+    target_kind = classify_checkup_target(target, project_root=project_root)
+
     if interactive and target is not None and not is_prompt_shaped_target(
         target,
         project_root=project_root,
@@ -760,9 +769,10 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             "--interactive is only supported for prompt-shaped checkup targets."
         )
 
-    if pr_url is None and target is not None and is_prompt_shaped_target(
-        target,
-        project_root=project_root,
+    if (
+        pr_url is None
+        and target is not None
+        and is_prompt_shaped_target(target, project_root=project_root)
     ):
         _quiet = ctx.obj.get("quiet", False)
         _repair_defaults = load_prompt_repair_defaults(Path.cwd())
@@ -778,11 +788,15 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         # --auto select the interactive and auto variants. The structured path
         # below is kept only for machine output (--json/--explain) and for the
         # LLM prompt-repair loop when it is enabled.
+        _single_prompt_file = target_kind == CheckupTargetKind.PROMPT_FILE
         _agent_requested = (
-            interactive
-            or planner is not None
-            or auto_mode
-            or not (_machine_output or _repair_active)
+            _single_prompt_file
+            and (
+                interactive
+                or planner is not None
+                or auto_mode
+                or not (_machine_output or _repair_active)
+            )
         ) and not _machine_output
         if _agent_requested:
             from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
@@ -818,6 +832,47 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 explicit_interactive=interactive,
                 auto=auto_mode,
                 mode=_mode,
+            )
+
+        # Directory target: run the agentic review over every prompt and print
+        # one aggregate pass/warn/block summary (one gate for the whole set).
+        if (
+            target_kind == CheckupTargetKind.PROMPT_DIRECTORY
+            and not _machine_output
+            and not _repair_active
+        ):
+            if interactive:
+                raise click.UsageError(
+                    "Interactive checkup runs on a single .prompt file. For a "
+                    "directory, omit --interactive (review) or add --auto."
+                )
+            from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
+                MODE_AUTO,
+                MODE_REVIEW,
+                discover_prompt_files,
+                run_checkup_directory,
+            )
+            from ..checkup_planner import make_planner  # pylint: disable=import-outside-toplevel
+
+            _root = (project_root if project_root is not None else Path.cwd()).resolve()
+            _raw_dir = Path(target)
+            if _raw_dir.is_absolute():
+                _dir = _raw_dir
+            else:
+                _rooted_dir = _root / target
+                _dir = _rooted_dir if _rooted_dir.is_dir() else _raw_dir
+            _files = discover_prompt_files(_dir)
+            if not _files:
+                raise click.UsageError(f"No .prompt files found under {target!r}.")
+            return run_checkup_directory(
+                make_planner(planner or "deterministic"),
+                _files,
+                project_root=_root.resolve(),
+                strict=strict,
+                apply=apply,
+                auto=auto_mode,
+                mode=MODE_AUTO if auto_mode else MODE_REVIEW,
+                quiet=_quiet,
             )
 
         import json as _json  # pylint: disable=import-outside-toplevel
