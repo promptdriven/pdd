@@ -222,7 +222,9 @@ def test_cli_interactive_routes_with_tty(tmp_path: Path) -> None:
             runner = CliRunner()
             # Accept the plan (Y), then skip the single finding group (n).
             result = runner.invoke(
-                checkup, [str(prompt_file), "--interactive"], input="Y\nn\n"
+                checkup,
+                [str(prompt_file), "--interactive", "--project-root", str(tmp_path)],
+                input="Y\nn\n",
             )
 
     assert result.exit_code == 0

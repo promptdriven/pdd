@@ -194,11 +194,14 @@ class TerminalCheckupSession(CheckupSession):
     # -- interaction -------------------------------------------------------
 
     def confirm_plan(self, plan: Plan) -> Optional[Plan]:
-        click.echo("\nProceed with this plan? [Y/n/custom]")
+        click.echo("\nProceed with this plan? [Y]es / [n]o / [c]ustom / [q]uit")
         answer = click.prompt("", default="Y", show_default=False).strip().lower()
-        if answer in ("n", "no"):
+        if answer in ("n", "no", "q", "quit"):
             return None
         if answer in ("", "y", "yes"):
+            return plan
+        if answer not in ("c", "custom"):
+            # Unrecognised → safest default is to proceed with the full plan.
             return plan
         raw = click.prompt("Enter tool names (comma-separated)", default=", ".join(plan.tools))
         custom = [t.strip() for t in raw.split(",") if t.strip()]
@@ -210,8 +213,17 @@ class TerminalCheckupSession(CheckupSession):
         return Plan(tools=valid, rationale="Custom tool selection by operator.")
 
     def decide_group(self, group: FindingGroup) -> str:
-        prompt = "Apply recommended safe fix for this group? [Y/n/edit/auto]"
+        # Reflect what "yes" will actually do for this group's risk level, so the
+        # prompt never says "apply" for a medium-risk fix that is only saved.
+        verb = {
+            "low": "Queue recommended fix",
+            "medium": "Save recommended fix for review",
+            "high": "Acknowledge (manual TODO)",
+        }.get(group.risk, "Apply recommended fix")
+        prompt = f"{verb} for this group? [Y]es / [n]o-skip / [e]dit / [a]uto / [q]uit"
         answer = click.prompt(prompt, default="Y", show_default=False).strip().lower()
+        if answer in ("q", "quit"):
+            return "quit"
         if answer in ("a", "auto"):
             return "auto"
         if answer in ("n", "no", "skip"):
@@ -294,15 +306,27 @@ class CheckupAgent:
         explicit_interactive: bool = True,
         auto: bool = False,
         mode: Optional[str] = None,
+        gate: bool = True,
     ) -> tuple[str, float, str]:
-        """Run the full checkup cycle. Returns ``(message, cost, model)``."""
+        """Run the full checkup cycle. Returns ``(message, cost, model)``.
+
+        When ``gate`` is True (default) a blocking result raises ``Exit(2)`` so the
+        command line acts as a gate. Multi-file callers pass ``gate=False`` to
+        collect each file's decision (via the session) and gate once at the end.
+        """
         root = project_root if project_root is not None else Path.cwd()
         prompt_path = Path(target)
         if not prompt_path.is_absolute():
             prompt_path = root / target
-        if not prompt_path.is_file():
+        if not prompt_path.exists():
+            raise click.UsageError(f"Prompt file not found: {target}")
+        if prompt_path.is_dir():
             raise click.UsageError(
-                f"checkup requires a single .prompt file target, got {target!r}."
+                f"Expected a single .prompt file for interactive checkup, got directory: {target}"
+            )
+        if prompt_path.suffix.lower() != ".prompt":
+            raise click.UsageError(
+                f"Expected a single .prompt file for interactive checkup, got: {target}"
             )
 
         if mode is None:
@@ -413,6 +437,14 @@ class CheckupAgent:
             decision = "accept"  # default for review / auto
             if mode == MODE_INTERACTIVE and not _auto:
                 decision = self.session.decide_group(group)
+                if decision == "quit":
+                    # Operator quit: stop processing further groups. Nothing
+                    # touched (no patch is written without --apply); the summary
+                    # below reports what was decided so far.
+                    self.session.on_event(AgentEvent("quit", {}))
+                    if not quiet:
+                        click.echo("\nQuit — remaining findings left untouched.")
+                    break
                 if decision == "auto":
                     _auto = True
                     self.session.on_event(
@@ -525,8 +557,9 @@ class CheckupAgent:
             f"— {decision_text}"
         )
         # Act as a gate: block (non-zero exit) so the next PDD step can be
-        # skipped by callers / CI when the prompt is not ready.
-        if not can_continue:
+        # skipped by callers / CI when the prompt is not ready. Multi-file
+        # callers pass gate=False and gate once after the whole directory.
+        if not can_continue and gate:
             if not quiet:
                 click.echo(f"\n{message}")
             raise click.exceptions.Exit(2)
@@ -659,3 +692,86 @@ def _accounting_dict(acc: CheckupAccounting) -> dict:
         "patches_queued": acc.patches_queued,
         "patches_failed": acc.patches_failed,
     }
+
+
+# ---------------------------------------------------------------------------
+# Directory / multi-file checkup
+# ---------------------------------------------------------------------------
+
+
+def discover_prompt_files(directory: Path) -> list[Path]:
+    """Return sorted ``*.prompt`` files directly under ``directory`` (non-recursive,
+    excluding ``*_LLM.prompt`` scratch files)."""
+    return sorted(
+        p
+        for p in Path(directory).glob("*.prompt")
+        if p.is_file() and not p.name.endswith("_LLM.prompt")
+    )
+
+
+def run_checkup_directory(
+    planner: DeterministicPlanner,
+    files: list[Path],
+    *,
+    project_root: Path,
+    strict: bool = False,
+    apply: bool = False,
+    auto: bool = False,
+    mode: str = MODE_REVIEW,
+    quiet: bool = False,
+) -> tuple[str, float, str]:
+    """Run a non-interactive checkup over many prompt files and summarise.
+
+    Each file is checked (gate=False so individual blocks don't exit early),
+    a one-line decision is printed per file, then an aggregate summary. The
+    command exits 2 if any prompt blocked — one gate for the whole directory.
+    """
+    root = Path(project_root)
+    counts = {"pass": 0, "warn": 0, "fail": 0}
+    any_block = False
+
+    if not quiet:
+        click.echo(f"Checkup: {len(files)} prompt(s) under {_relpath(files[0].parent, root)}/\n")
+
+    for prompt_file in files:
+        session = RecordingCheckupSession()
+        agent = CheckupAgent(planner, session)
+        rel = _relpath(prompt_file, root)
+        agent.run(
+            rel,
+            project_root=root,
+            strict=strict,
+            apply=apply,
+            quiet=True,            # suppress the full per-file dump
+            explicit_interactive=False,
+            auto=auto,
+            mode=mode,
+            gate=False,            # collect, don't exit per file
+        )
+        done = session.events_of_kind("session_done")
+        if not done:
+            continue
+        data = done[-1].data
+        status = data.get("status", "?")
+        decision = data.get("decision", "")
+        blocking = bool(data.get("blocking"))
+        counts[status] = counts.get(status, 0) + 1
+        any_block = any_block or blocking
+        mark = "✗" if blocking else ("!" if status == "warn" else "✓")
+        if not quiet:
+            click.echo(f"  {mark} {prompt_file.name}: {status} — {decision}")
+
+    summary = (
+        f"{counts.get('pass', 0)} pass, {counts.get('warn', 0)} warn, "
+        f"{counts.get('fail', 0)} block over {len(files)} prompt(s)"
+    )
+    if not quiet:
+        click.echo(f"\nSummary: {summary}")
+        if any_block:
+            click.echo("Decision: blocking findings → block (at least one prompt is not ready)")
+        else:
+            click.echo("Decision: all prompts can continue")
+
+    if any_block:
+        raise click.exceptions.Exit(2)
+    return f"Checkup complete: {summary}", 0.0, ""

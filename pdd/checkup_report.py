@@ -312,6 +312,22 @@ def render_report_markdown(
     lines.append("")
     lines.append(f"**Overall status:** {status}")
     lines.append("")
+
+    # 1. Actionable first — what the author should do.
+    lines.append("## What to do")
+    lines.append("")
+    if groups:
+        for g in groups:
+            lines.append(f"**{g.source_check} ({g.size}, risk: {g.risk})**")
+            lines.append("")
+            for line in humanize_group_summary(g):
+                lines.append(line)
+            lines.append("")
+    else:
+        lines.append("No action needed — the source set looks ready to generate from.")
+        lines.append("")
+
+    # 2. The check matrix.
     lines.append("## Checks")
     lines.append("")
     lines.append("| Tool | Status | Notes |")
@@ -323,20 +339,8 @@ def render_report_markdown(
             note = f"{n} finding(s)"
         lines.append(f"| {tr.check_name} | {tr.status} | {note} |")
     lines.append("")
-    if groups:
-        lines.append("## Findings")
-        lines.append("")
-        for g in groups:
-            risk = g.risk
-            lines.append(f"### {g.source_check}: {g.code} ({g.size}, risk: {risk})")
-            lines.append("")
-            for line in humanize_group_summary(g):
-                lines.append(line)
-            lines.append("")
-            lines.append("Finding IDs:")
-            for f in g.findings:
-                lines.append(f"- `{f.finding_id}`")
-            lines.append("")
+
+    # 3. Accounting.
     lines.append("## Summary")
     lines.append("")
     for line in accounting.summary_lines(status):
@@ -345,6 +349,20 @@ def render_report_markdown(
     verb = "applied to the prompt" if applied else "saved for review (not applied)"
     lines.append(f"_Patches were {verb}._")
     lines.append("")
+
+    # 4. Traceability — raw IDs collapsed at the end for tooling, not the reader.
+    if groups:
+        lines.append("## Traceability")
+        lines.append("")
+        lines.append("<details><summary>Finding IDs</summary>")
+        lines.append("")
+        for g in groups:
+            lines.append(f"- {g.source_check}: {g.code} ({g.size})")
+            for f in g.findings:
+                lines.append(f"  - `{f.finding_id}`")
+        lines.append("")
+        lines.append("</details>")
+        lines.append("")
     return "\n".join(lines)
 
 
@@ -388,6 +406,7 @@ def render_patch_preview(
     *,
     target: str,
     groups: Optional[Sequence[FindingGroup]] = None,
+    project_root: Optional[Path] = None,
 ) -> str:
     lines: list[str] = []
     lines.append(f"# Patch preview — {target}")
@@ -402,16 +421,22 @@ def render_patch_preview(
         stub = _vocabulary_stub(groups)
         if stub:
             lines.extend(stub)
-            lines.append("# --- per-finding details (for traceability) ---")
-            lines.append("")
 
+    lines.append("# --- per-finding details (traceability) ---")
+    lines.append("")
     for i, p in enumerate(patches, 1):
-        lines.append(f"## Patch {i}: {getattr(p, 'finding_id', '')}")
-        lines.append(f"# kind: {getattr(p, 'kind', '')}")
-        lines.append(f"# target: {getattr(p, 'target', '')}")
+        tgt = getattr(p, "target", "")
+        if project_root is not None and tgt:
+            try:
+                tgt = Path(tgt).relative_to(project_root)
+            except ValueError:
+                tgt = Path(tgt).name
         anchor = getattr(p, "anchor", {}) or {}
-        if anchor:
-            lines.append(f"# anchor: {anchor}")
+        context = anchor.get("line") if isinstance(anchor, dict) else None
+        lines.append(f"## {i}. {getattr(p, 'finding_id', '')}")
+        lines.append(f"# file: {tgt}")
+        if context:
+            lines.append(f"# at:   {str(context).strip()}")
         lines.append("# recommended action:")
         for rline in str(getattr(p, "replacement", "")).splitlines() or [""]:
             lines.append(f"  {rline}")
@@ -459,7 +484,9 @@ def write_artifacts(
     if patches:
         patch_path = out_dir / f"{stem}.patch"
         patch_path.write_text(
-            render_patch_preview(patches, target=target, groups=groups),
+            render_patch_preview(
+                patches, target=target, groups=groups, project_root=project_root
+            ),
             encoding="utf-8",
         )
         artifacts["patch"] = patch_path

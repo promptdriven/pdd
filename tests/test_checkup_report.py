@@ -338,7 +338,7 @@ class TestArtifacts:
         from pdd.checkup_report import render_patch_preview
 
         text = render_patch_preview([self._patch("a")], target="p")
-        assert "Patch 1" in text
+        assert "## 1. a" in text
         assert "<vocabulary>" not in text  # no stub without vague-term groups
 
 

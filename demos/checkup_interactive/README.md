@@ -15,7 +15,7 @@ direct subcommands.
 
 A human reviewer running this demo from a fresh checkout can verify that:
 
-1. the **simple default command** — `pdd checkup <prompt> --planner deterministic`
+1. the **simple default command** — `pdd checkup <prompt>`
    — runs all checks, groups findings, and prints a concise summary **without a
    single prompt** (review mode);
 2. repeated findings are **grouped** (10 vague terms → one summary, not ten menus);
@@ -57,13 +57,17 @@ the direct subcommands cannot diverge.
 # checks, grouped findings, summary, decision, artifacts. No prompts, no flags.
 pdd checkup <prompt>
 
+# A whole directory: every prompt is checked; one aggregate pass/warn/block
+# summary; exit 2 if any prompt blocks (one gate for the set).
+pdd checkup <directory>/
+
 # Interactive: one grouped question per finding group, with an [a] auto switch.
 pdd checkup <prompt> --interactive
 
-# Auto: apply low-risk fixes only; save the rest for review.
+# Auto: resolve all findings without prompts (low-risk queued, rest saved).
 pdd checkup <prompt> --auto
 
-# Actually edit files (then re-verify): add --apply (requires --interactive).
+# Actually edit files (then re-verify): add --apply (with --interactive or --auto).
 pdd checkup <prompt> --interactive --apply
 
 # Machine output stays on the structured path:
@@ -103,7 +107,7 @@ line and an exit code so it can gate the next PDD step:
 | hard error (e.g. snapshot policy) | `blocking findings → block` | 2 |
 
 ```bash
-if python -m pdd checkup "$PROMPT" --planner deterministic --strict; then
+if python -m pdd checkup "$PROMPT" --strict; then
   python -m pdd generate "$PROMPT"     # prompt is ready → generate code
 else
   echo "blocked — see .pdd/checkup/*.report.md"
@@ -193,7 +197,7 @@ with an `[a]` switch to finish the rest automatically:
 ```bash
 python -m pdd checkup \
   demos/checkup_interactive/prompts/02_vague_clarification.prompt \
-  --interactive --planner deterministic
+  --interactive
 ```
 
 Answer `n` to skip the group, or `auto` to switch the rest to auto mode.
@@ -202,7 +206,7 @@ Auto mode (no prompts; low-risk applied with `--apply`, the rest saved):
 
 ```bash
 python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt \
-  --planner deterministic --auto
+  --auto
 ```
 
 ---
@@ -299,7 +303,7 @@ These are **demonstrations, not bugs**:
 
 ## How this verifies the unified flow reaches all six tools
 
-`run_demo.sh --review` runs `pdd checkup <prompt> --planner deterministic` and
+`run_demo.sh --review` runs `pdd checkup <prompt>` and
 asserts the per-tool `Checks:` block names lint, contract, coverage, gate,
 snapshot, and drift (with skip reasons). `tests/commands/test_checkup_interactive_demo.py`
 additionally drives `CheckupAgent` directly (offline, no TTY, no LLM) and asserts

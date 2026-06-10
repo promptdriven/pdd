@@ -80,6 +80,96 @@ def test_bare_command_is_agentic_by_default(runner: CliRunner, tmp_path) -> None
     assert (tmp_path / ".pdd" / "checkup").exists()        # artifacts
 
 
+def test_prompt_directory_default_uses_aggregate_multi_target_path(
+    runner: CliRunner,
+    tmp_path,
+) -> None:
+    """`pdd checkup prompts/` must not be intercepted by the single-file agent."""
+    result = runner.invoke(
+        checkup,
+        [str(PROMPTS), "--project-root", str(tmp_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code in (0, 1, 2)
+    assert "requires a single .prompt file target" not in result.output
+    assert "Expected a single .prompt file" not in result.output
+    assert "Checkup:" in result.output
+    assert "Summary:" in result.output
+    assert "Decision:" in result.output
+
+
+def test_prompt_directory_auto_uses_aggregate_multi_target_path(
+    runner: CliRunner,
+    tmp_path,
+) -> None:
+    """`--auto` on a directory should not turn a documented target into UsageError."""
+    result = runner.invoke(
+        checkup,
+        [str(PROMPTS), "--auto", "--project-root", str(tmp_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code in (0, 1, 2)
+    assert "requires a single .prompt file target" not in result.output
+    assert "Expected a single .prompt file" not in result.output
+    assert "Checkup:" in result.output
+    assert "Summary:" in result.output
+    assert "Decision:" in result.output
+
+
+def test_devunit_default_uses_structured_path(
+    runner: CliRunner,
+    tmp_path,
+) -> None:
+    """A devunit target advertised by help should remain a valid default target."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "refund_payment_python.prompt").write_text(
+        (PROMPTS / "01_clean_task.prompt").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        checkup,
+        ["refund_payment", "--project-root", str(tmp_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code in (0, 1)
+    assert "requires a single .prompt file target" not in result.output
+    assert "Expected a single .prompt file" not in result.output
+    assert "Prompt:" in result.output
+    assert "Status:" in result.output
+
+
+def test_missing_prompt_file_error_is_specific(runner: CliRunner, tmp_path) -> None:
+    result = runner.invoke(
+        checkup,
+        [str(tmp_path / "typo.prompt")],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 2
+    assert "Prompt file not found" in result.output
+    assert "requires a single .prompt file target" not in result.output
+
+
+def test_empty_prompt_directory_error_is_specific(runner: CliRunner, tmp_path) -> None:
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+
+    result = runner.invoke(
+        checkup,
+        ["prompts", "--project-root", str(tmp_path)],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 2
+    assert "No .prompt files found under" in result.output
+    assert "TARGET must be a GitHub issue URL" not in result.output
+
+
 def test_bare_json_stays_structured(runner: CliRunner, tmp_path) -> None:
     """--json on the bare command keeps the structured (non-agent) output."""
     result = runner.invoke(
@@ -192,10 +282,10 @@ def test_run_demo_strict_gate_passes() -> None:
 
 @pytest.mark.slow
 def test_run_demo_full_workflow_runs_auto_over_every_prompt() -> None:
-    """--workflow runs `checkup <prompt> --planner deterministic --auto` per prompt."""
+    """--workflow runs `checkup <prompt> --auto` per prompt."""
     proc = _bash("--workflow")
     assert proc.returncode == 0, proc.stdout[-2000:]
-    assert "--planner deterministic --auto" in proc.stdout
+    assert "python -m pdd checkup <prompt> --auto" in proc.stdout
     # every demo prompt appears as an auto checkup line
     for prompt in ALL_PROMPTS:
         assert f"checkup {prompt.name} --auto" in proc.stdout

@@ -117,7 +117,7 @@ demo_agentic_interactive() {
 This runs the REAL agentic session in interactive mode:
 
     python -m pdd checkup $REL/02_vague_clarification.prompt \\
-        --interactive --planner deterministic
+        --interactive
 
 The impatient-user UX:
   * a compact, described plan
@@ -141,7 +141,7 @@ EOF
   fi
   read -r -p "Press Enter to start the live interactive session... " _ || true
   ( cd "$REPO_ROOT" && python -m pdd checkup \
-      "$REL/02_vague_clarification.prompt" --interactive --planner deterministic )
+      "$REL/02_vague_clarification.prompt" --interactive )
   echo
   note "Interactive session finished."
 }
@@ -175,10 +175,10 @@ demo_deterministic() {
 # ---------------------------------------------------------------------------
 demo_auto() {
   banner "3. Auto mode — apply low-risk only, never fabricate risky fixes"
-  subhead "python -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic --auto"
+  subhead "python -m pdd checkup $REL/02_vague_clarification.prompt --auto"
   note "Vague-term definitions are medium-risk (need human meaning), so auto"
   note "mode SAVES them for review instead of inventing definitions."
-  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic --auto
+  run_pdd checkup "$REL/02_vague_clarification.prompt" --auto
   echo_clean
   assert_contains "Saved for review"  "medium-risk saved, not fabricated"
   assert_contains "Fixed automatically: 0" "no risky auto-edits"
@@ -280,8 +280,8 @@ demo_strict_gate() {
   banner "Strict gate — pass / warn → continue, strict failure → block"
   note "checkup is a gate before code generation. Exit 0 = continue, 2 = block."
 
-  subhead "PASS  →  python -m pdd checkup $REL/01_clean_task.prompt --planner deterministic"
-  run_pdd checkup "$REL/01_clean_task.prompt" --planner deterministic
+  subhead "PASS  →  python -m pdd checkup $REL/01_clean_task.prompt"
+  run_pdd checkup "$REL/01_clean_task.prompt"
   echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)" | sed 's/^/    /'
   if echo "$CMD_OUT" | grep -q "pass → continue" && [ "$CMD_EXIT" -eq 0 ]; then
     pass "clean prompt: pass → continue (exit 0)"
@@ -289,8 +289,8 @@ demo_strict_gate() {
     fail "clean prompt did not pass/continue (exit $CMD_EXIT)"
   fi
 
-  subhead "WARN  →  python -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic"
-  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic
+  subhead "WARN  →  python -m pdd checkup $REL/02_vague_clarification.prompt"
+  run_pdd checkup "$REL/02_vague_clarification.prompt"
   echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)" | sed 's/^/    /'
   if echo "$CMD_OUT" | grep -q "warn → continue" && [ "$CMD_EXIT" -eq 0 ]; then
     pass "vague prompt: warn → continue (exit 0)"
@@ -298,8 +298,8 @@ demo_strict_gate() {
     fail "vague prompt did not warn/continue (exit $CMD_EXIT)"
   fi
 
-  subhead "STRICT BLOCK  →  python -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic --strict"
-  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic --strict
+  subhead "STRICT BLOCK  →  python -m pdd checkup $REL/02_vague_clarification.prompt --strict"
+  run_pdd checkup "$REL/02_vague_clarification.prompt" --strict
   echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)" | sed 's/^/    /'
   if echo "$CMD_OUT" | grep -q "strict failure → block" && [ "$CMD_EXIT" -eq 2 ]; then
     pass "strict mode: blocking findings → block (exit 2)"
@@ -312,54 +312,31 @@ demo_strict_gate() {
 # Full workflow demo — auto-mode checkup over every prompt in prompts/
 # ---------------------------------------------------------------------------
 demo_full_workflow() {
-  banner "Full workflow — auto checkup over every prompt in prompts/"
+  banner "Full workflow — one command over the whole prompt directory"
   cat <<EOF
 
-  For each prompt the demo runs the one simple command in auto mode:
+  The whole prompt set is checked with the one simple command — no flags,
+  no shell loop:
 
-      python -m pdd checkup <prompt> --planner deterministic --auto
+      python -m pdd checkup $REL/
 
-  Auto mode handles everything: it groups findings, applies low-risk fixes,
-  saves medium-risk fixes for review (never fabricated), writes artifacts, and
-  decides whether the workflow can continue or must block.
+  checkup runs every prompt, groups findings, saves medium-risk fixes for
+  review, writes per-prompt artifacts, and prints one aggregate summary with a
+  per-prompt decision. Exit code is 2 if any prompt blocks (one gate for the set).
 
 EOF
 
-  local total=0 p=0 w=0 b=0
-  for f in "$PROMPTS"/*.prompt; do
-    [ -e "$f" ] || continue
-    total=$((total + 1))
-    local name rel
-    name=$(basename "$f")
-    rel="$REL/$name"
-
-    subhead "checkup $name --auto"
-    run_pdd checkup "$rel" --planner deterministic --auto
-    echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)|Saved for review:|Fixed automatically:" \
-      | sed 's/^/    /'
-
-    if echo "$CMD_OUT" | grep -q "→ block"; then
-      b=$((b + 1))
-      pass "$name → BLOCK (exit $CMD_EXIT) — gate stops the lifecycle here"
-    elif echo "$CMD_OUT" | grep -q "pass → continue"; then
-      p=$((p + 1))
-      pass "$name → PASS, continue (exit $CMD_EXIT)"
-    elif echo "$CMD_OUT" | grep -q "warn → continue"; then
-      w=$((w + 1))
-      pass "$name → WARN, continue (exit $CMD_EXIT)"
-    else
-      fail "$name produced no recognizable decision (exit $CMD_EXIT)"
-    fi
-  done
-
-  echo
-  info "Prompts checked: $total    pass: $p    warn: $w    block: $b"
-  if [ "$total" -ge 1 ]; then
-    pass "auto-mode checkup ran over every prompt in prompts/"
-  else
-    fail "no prompts found under $PROMPTS"
-  fi
-  # Auto mode wrote artifacts under .pdd/checkup for prompts with findings.
+  subhead "python -m pdd checkup $REL/"
+  run_pdd checkup "$REL/"
+  echo_clean
+  assert_contains "01_clean_task.prompt: pass"          "per-prompt decision: pass"
+  assert_contains "02_vague_clarification.prompt: warn" "per-prompt decision: warn"
+  assert_contains "06_snapshot_candidate.prompt: fail"  "per-prompt decision: block"
+  assert_contains "Summary:"                            "aggregate pass/warn/block summary"
+  assert_contains "block over"                          "directory-level gate summary"
+  # One prompt blocks → directory checkup exits 2 (gate stops the pipeline).
+  [ "$CMD_EXIT" -eq 2 ] && pass "directory checkup blocks (exit 2) when a prompt is not ready" \
+    || fail "expected exit 2 from directory checkup, got $CMD_EXIT"
   rm -rf "$REPO_ROOT/.pdd/checkup"
 }
 

@@ -64,20 +64,34 @@
   - For `target == "coverage"`, delegate remaining args to `coverage_cmd.main(...)`, enabling deterministic `pdd checkup coverage`; contract-rule analysis is implied and no `--contracts` flag is required.
   - For `target == "gate"`, delegate remaining args to `gate_cmd.main(...)` with `prog_name="pdd checkup gate"`; do not register a top-level `pdd gate` command.
   - For a non-utility target, reject any remaining unknown arguments.
-- Prompt-target dispatch (before PR/issue mode validation): when `pr_url is None`,
-  `target` is set, and `is_prompt_shaped_target(target, project_root=project_root)`
-  is true, call `run_checkup_prompt(target, explain=..., as_json=..., quiet=...,
-  strict=..., project_root=...)`. When that check fails (`passed is False`) and
-  `prompt_repair != "off"` and `--json` is not set, resolve one or more local
-  `.prompt` paths and for each file: (a) build `pdd.prompt_source_set_report.v1`
-  via `build_prompt_source_set_report(path, target=target, project_root=...,
-  strict=strict)`; (b) skip when `report.status == "pass"`; (c) otherwise call
-  `run_prompt_repair_loop(path, PromptRepairConfig(...), context={
-  "source_set_report": json.dumps(report.as_dict()),
-  "recommended_actions": "\n".join(report.recommended_actions())}, cwd=...,
-  verbose=..., quiet=..., strict=strict)`; then re-run `run_checkup_prompt`.
-  Return the final `(message, cost, model)` tuple and do not call
-  `run_agentic_checkup()`.
+- Prompt-target dispatch (before PR/issue mode validation): classify `target` with
+  `classify_checkup_target(target, project_root=project_root)`. When `pr_url is
+  None`, `target` is set, and `is_prompt_shaped_target(target,
+  project_root=project_root)` is true:
+  - For `CheckupTargetKind.PROMPT_FILE` only, the default human UX is the
+    agentic review path unless `--json`, `--explain`, or active
+    `--prompt-repair` requires the structured path. Instantiate the selected
+    planner (default `deterministic`) and `CheckupAgent`, then run it in review,
+    interactive, or auto mode.
+  - For prompt directories, run the agentic review over every prompt file and
+    print one aggregate pass/warn/block summary. Resolve relative directories
+    against `--project-root` before falling back to cwd; if no prompt files are
+    present, raise `UsageError("No .prompt files found under ...")`.
+  - For devunit targets, keep the structured multi-target path by calling
+    `run_checkup_prompt(target, explain=..., as_json=..., quiet=...,
+    strict=..., project_root=...)`; do not route devunits through
+    `CheckupAgent.run()`, which is intentionally single-file only.
+  - When the structured check fails (`passed is False`) and `prompt_repair !=
+    "off"` and `--json` is not set, resolve one or more local `.prompt` paths and
+    for each file: (a) build `pdd.prompt_source_set_report.v1` via
+    `build_prompt_source_set_report(path, target=target, project_root=...,
+    strict=strict)`; (b) skip when `report.status == "pass"`; (c) otherwise call
+    `run_prompt_repair_loop(path, PromptRepairConfig(...), context={
+    "source_set_report": json.dumps(report.as_dict()),
+    "recommended_actions": "\n".join(report.recommended_actions())}, cwd=...,
+    verbose=..., quiet=..., strict=strict)`; then re-run `run_checkup_prompt`.
+    Return the final `(message, cost, model)` tuple and do not call
+    `run_agentic_checkup()`.
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
   - If `--review-only` is set without `--review-loop`: reject it.

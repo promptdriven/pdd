@@ -24,26 +24,31 @@ Run the whole thing non-interactively:
 bash demos/checkup_interactive/run_demo.sh --workflow
 ```
 
-The `--workflow` demo runs the **one simple command in auto mode over every
-prompt** in `demos/checkup_interactive/prompts/`:
+The `--workflow` demo points the **one simple command at the whole directory** —
+no shell loop, no flags:
 
 ```bash
-for f in demos/checkup_interactive/prompts/*.prompt; do
-  python -m pdd checkup "$f" --planner deterministic --auto
-done
+python -m pdd checkup demos/checkup_interactive/prompts/
 ```
 
-Auto mode handles everything — it groups findings, applies low-risk fixes,
-saves medium-risk fixes for review (never fabricated), writes artifacts, and
-prints a `Decision:` for each prompt. The demo tallies the outcomes, e.g.:
+`checkup` runs every prompt, groups findings, saves medium-risk fixes for review
+(never fabricated), writes per-prompt artifacts, and prints one aggregate
+summary with a per-prompt decision:
 
 ```
-Prompts checked: 7    pass: 3    warn: 3    block: 1
+  ✓ 01_clean_task.prompt: pass — pass → continue
+  ! 02_vague_clarification.prompt: warn — warn → continue with review note
+  ...
+  ✗ 06_snapshot_candidate.prompt: fail — blocking findings → block
+
+Summary: 3 pass, 3 warn, 1 block over 7 prompt(s)
+Decision: blocking findings → block (at least one prompt is not ready)
 ```
 
-`pass`/`warn` continue the lifecycle; `block` (here `06_snapshot_candidate`, a
-hard snapshot-policy error) stops it until the prompt is fixed. The steps below
-explain one prompt end to end.
+Exit code is **2** when any prompt blocks (one gate for the whole set), so CI can
+stop the pipeline. `pass`/`warn` continue the lifecycle; `block` (here
+`06_snapshot_candidate`, a hard snapshot-policy error) stops it until fixed. The
+steps below explain one prompt end to end.
 
 ---
 
@@ -101,14 +106,14 @@ Drive it interactively (one grouped question, with an `[a]` switch to auto):
 
 ```bash
 python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt \
-  --interactive --planner deterministic
+  --interactive
 ```
 
 Apply for real (then checkup **re-verifies** the fix):
 
 ```bash
 python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt \
-  --interactive --planner deterministic --apply
+  --interactive --apply
 ```
 
 Repair risk decides what auto mode may do:
@@ -133,9 +138,9 @@ Repair risk decides what auto mode may do:
 Try all three:
 
 ```bash
-python -m pdd checkup demos/checkup_interactive/prompts/01_clean_task.prompt --planner deterministic            # pass  → continue (exit 0)
-python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt --planner deterministic   # warn  → continue (exit 0)
-python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt --planner deterministic --strict  # block (exit 2)
+python -m pdd checkup demos/checkup_interactive/prompts/01_clean_task.prompt            # pass  → continue (exit 0)
+python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt   # warn  → continue (exit 0)
+python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt --strict  # block (exit 2)
 ```
 
 ## Step 6 — generate or modify code
@@ -156,7 +161,7 @@ the demo — but this is the exact next command in the lifecycle.)
 ## One-liner gate in a script
 
 ```bash
-if python -m pdd checkup "$PROMPT" --planner deterministic --strict; then
+if python -m pdd checkup "$PROMPT" --strict; then
   python -m pdd generate "$PROMPT"     # prompt is ready
 else
   echo "Prompt not ready — see .pdd/checkup/*.report.md"; exit 1
