@@ -7433,21 +7433,64 @@ def _json_bool_or_none(value: str) -> Optional[bool]:
     return None
 
 
-def _review_loop_failure_category(state: ReviewLoopState, passed: bool) -> str:
+# Substrings that mark a finding as a source-of-truth (prompt/architecture) repair
+# rather than a generic code review finding. Issue #2047: NEW modules added by a PR
+# without prompt contracts/architecture entries are flagged by the REVIEWER (not the
+# deterministic guard, which only scans the EXISTING registry), so a category derived
+# purely from the guard would miss them and report a generic ``review_findings_remain``.
+_SOURCE_OF_TRUTH_FINDING_AREAS = frozenset(
+    {"prompt", "architecture", "source-of-truth", "source_of_truth", "companion-scope"}
+)
+_SOURCE_OF_TRUTH_FINDING_MARKERS = (
+    "prompt contract",
+    "prompt-contract",
+    "architecture.json",
+    "architecture entry",
+    "source of truth",
+    "source-of-truth",
+    "owning prompt",
+    "prompt source",
+    "is generated from",
+    "regeneration flow",
+    "regenerate from the prompt",
+)
+
+
+def _finding_is_source_of_truth(finding: ReviewFinding) -> bool:
+    """True when a finding is about the prompt/architecture source of truth."""
+    if (finding.area or "").strip().lower() in _SOURCE_OF_TRUTH_FINDING_AREAS:
+        return True
+    haystack = f"{finding.finding}\n{finding.required_fix}".lower()
+    return any(marker in haystack for marker in _SOURCE_OF_TRUTH_FINDING_MARKERS)
+
+
+def _review_loop_failure_category(
+    state: ReviewLoopState,
+    passed: bool,
+    remaining_findings: Sequence[ReviewFinding] = (),
+) -> str:
     """Classify a review-loop verdict into a stable ``failure_category``.
 
     Returns one of the ``FINAL_GATE_CATEGORY_*`` strings. ``passed`` short-
-    circuits to ``FINAL_GATE_CATEGORY_PASSED``. A source-of-truth blocker
-    (recorded in ``state.source_of_truth`` or detectable from the guard
-    refusal substring in ``state.stop_reason``) wins over budget exhaustion
-    and generic remaining findings so the cloud can route the user to the
-    owning prompt/architecture files. Issue #2047.
+    circuits to ``FINAL_GATE_CATEGORY_PASSED``. A source-of-truth cause wins
+    over budget exhaustion and generic remaining findings so the cloud can
+    route the user to the owning prompt/architecture files. A SoT cause is
+    either a deterministic guard blocker (recorded in ``state.source_of_truth``
+    or the guard refusal substring in ``state.stop_reason``) OR an OPEN reviewer
+    finding about the prompt/architecture source of truth (e.g. a PR adding new
+    modules without their prompt contracts — the #1519 shape, which the guard
+    never sees because the modules are unregistered). Issue #2047.
     """
     if passed:
         return FINAL_GATE_CATEGORY_PASSED
     sot = state.source_of_truth
     if (sot and sot.get("blocked")) or (
         PROMPT_SOURCE_GUARD_REFUSAL_MARKER in (state.stop_reason or "")
+    ):
+        return FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+    if any(
+        finding.status == "open" and _finding_is_source_of_truth(finding)
+        for finding in remaining_findings
     ):
         return FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
     if state.max_rounds_reached or state.max_cost_reached or state.max_duration_reached:
@@ -7487,7 +7530,9 @@ def _render_machine_verdict_block(
         "schema": FINAL_GATE_REPORT_SCHEMA,
         "stage": "review-loop",
         "status": "passed" if passed else "failed",
-        "failure_category": _review_loop_failure_category(state, passed),
+        "failure_category": _review_loop_failure_category(
+            state, passed, remaining_findings
+        ),
         "source_of_truth": state.source_of_truth,
         "reason": state.stop_reason or "Review loop completed.",
         "pr_url": context.pr_url,

@@ -13367,3 +13367,86 @@ class TestGuardBaselineHeadRef:
         )
         assert refusal is not None, "guard must block with pre-fix baseline"
         assert "pdd/foo.py" in refusal or "foo_python.prompt" in refusal
+
+
+class TestReviewLoopFailureCategory2047:
+    """``_review_loop_failure_category`` SoT-finding detection (#2047, the #1519 shape)."""
+
+    def _finding(self, area="api", finding="x", required_fix="y", status="open"):
+        from pdd.checkup_review_loop import ReviewFinding
+
+        return ReviewFinding(
+            severity="blocker",
+            reviewer="codex",
+            area=area,
+            evidence="",
+            finding=finding,
+            required_fix=required_fix,
+            status=status,
+        )
+
+    def test_open_sot_finding_by_text_is_source_of_truth(self):
+        # #1519: a PR adds modules without prompt contracts -> reviewer finding,
+        # NOT a deterministic guard refusal. Must still classify as SoT.
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        finding = self._finding(
+            area="workflow",
+            finding="Six new modules lack prompt contracts.",
+            required_fix="Author the prompt contracts and architecture.json entries.",
+        )
+        cat = _review_loop_failure_category(ReviewLoopState(), False, [finding])
+        assert cat == FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+
+    def test_open_sot_finding_by_area_is_source_of_truth(self):
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        finding = self._finding(area="prompt", finding="prompt drifted", required_fix="fix prompt")
+        assert (
+            _review_loop_failure_category(ReviewLoopState(), False, [finding])
+            == FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+        )
+
+    def test_generic_finding_is_review_findings(self):
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_REVIEW_FINDINGS,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        finding = self._finding(area="api", finding="null deref", required_fix="add guard")
+        assert (
+            _review_loop_failure_category(ReviewLoopState(), False, [finding])
+            == FINAL_GATE_CATEGORY_REVIEW_FINDINGS
+        )
+
+    def test_fixed_sot_finding_does_not_trigger(self):
+        # A resolved SoT finding must not keep classifying as SoT.
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_REVIEW_FINDINGS,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        sot_fixed = self._finding(area="prompt", finding="prompt", required_fix="fix", status="fixed")
+        generic_open = self._finding(area="api", finding="bug", required_fix="fix")
+        cat = _review_loop_failure_category(ReviewLoopState(), False, [sot_fixed, generic_open])
+        assert cat == FINAL_GATE_CATEGORY_REVIEW_FINDINGS
+
+    def test_passed_short_circuits(self):
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_PASSED,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        sot = self._finding(area="prompt")
+        assert _review_loop_failure_category(ReviewLoopState(), True, [sot]) == FINAL_GATE_CATEGORY_PASSED
