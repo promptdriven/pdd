@@ -1,364 +1,174 @@
-"""Runnable example for ``pdd.code_generator_main``.
-
-Demonstrates the public surface of the orchestration module:
-
-* ``code_generator_main`` — primary entry point that turns a ``.prompt`` file
-  into generated source code (returns ``(generated_code, was_incremental,
-  total_cost, model_name)``).
-* ``ArchitectureConformanceError`` — typed ``click.UsageError`` subclass raised
-  when the generated code's exported symbols don't match the interface
-  declared in ``architecture.json``. Carries structured fields
-  (``prompt_name``, ``output_path``, ``architecture_entry``,
-  ``expected_symbols``, ``found_symbols``, ``missing_symbols``,
-  ``repair_directive``) so callers like ``pdd sync`` can build a
-  repair directive and retry generation.
-* ``_verify_architecture_conformance`` — internal helper that performs the
-  architecture conformance check and raises ``ArchitectureConformanceError``
-  on mismatch.
-
-External dependencies (LLM calls, cloud services, git) are mocked so the
-example runs offline in any environment.
 """
+Example demonstrating how to use the code_generator_main module.
+
+This script sets up a mock environment containing a prompt file and then calls
+`code_generator_main` to generate code, simulating both full generation and
+architectural conformance checks.
+"""
+
+from __future__ import annotations
 
 import json
 import os
-import pathlib
-import shutil
 import sys
-from unittest.mock import patch
+import pathlib
+import click
+from typing import Any, Dict
 
-# Ensure the local pdd package is importable regardless of cwd.
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+# Ensure absolute reference for pdd package
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-import click  # noqa: E402  (after sys.path setup)
-
-from pdd.code_generator_main import (  # noqa: E402
-    ArchitectureConformanceError,
-    _verify_architecture_conformance,
+from pdd.code_generator_main import (
     code_generator_main,
+    ArchitectureConformanceError,
+    PublicSurfaceRegressionError,
+    TestChurnError,
 )
 
+# Define output directory relative to this script
+OUTPUT_DIR = pathlib.Path(__file__).resolve().parent / "output"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-# --- Mock generators ---------------------------------------------------------
-# Use **kwargs so the mocks tolerate any keyword forwarding the orchestrator
-# applies (strength, temperature, time, verbose, output_schema, language, ...).
-def mock_local_code_generator(*args, **kwargs):
-    """Stand-in for ``pdd.code_generator.code_generator``.
-
-    Returns ``(generated_code, total_cost, model_name)`` where:
-      * generated_code: str — synthetic Python module text
-      * total_cost: float (USD) — fake cost so the example doesn't show $0
-      * model_name: str — identifier of the (fake) model used
+def setup_mock_files() -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
     """
-    language = kwargs.get("language", "python")
-    return (
-        f"# Mock-generated {language} code\n"
-        "def hello():\n"
-        "    return 'Hello, World!'\n",
-        0.0012,
-        "mock-local-model-v1",
-    )
-
-
-def mock_incremental_code_generator(*args, **kwargs):
-    """Stand-in for ``pdd.incremental_code_generator.incremental_code_generator``.
-
-    Returns ``(updated_code, is_incremental, total_cost, model_name)``.
+    Creates mock prompt, architecture.json, and existing code files inside the output directory
+    to prepare for the code generator execution.
     """
-    existing = kwargs.get("existing_code", "")
-    return (
-        existing + "\n# patched by mock incremental generator\n",
-        True,
-        0.0021,
-        "mock-incremental-model-v1",
-    )
+    # 1. Create architecture.json describing a module and its exported functions
+    arch_file = OUTPUT_DIR / "architecture.json"
+    arch_content = {
+        "modules": [
+            {
+                "filename": "math_helper_Python.prompt",
+                "filepath": str(OUTPUT_DIR / "math_helper.py"),
+                "reason": "Helper module for math operations",
+                "dependencies": [],
+                "tags": ["module", "python"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {
+                                "name": "calculate_factorial",
+                                "signature": "(n: int) -> int"
+                            }
+                        ]
+                    }
+                }
+            }
+        ]
+    }
+    arch_file.write_text(json.dumps(arch_content, indent=2), encoding="utf-8")
 
-
-class MockContext:
-    """Light click.Context stand-in: only ``ctx.obj`` is consulted."""
-
-    def __init__(self, params):
-        self.obj = params or {}
-
-
-def print_section(title):
-    print()
-    print("=" * 72)
-    print(title)
-    print("=" * 72)
-
-
-def example_full_generation_local(workdir):
-    """Demonstrate full local generation when no output file exists yet."""
-    print_section("Example 1 — Full generation (local execution)")
-    prompt_path = workdir / "hello_python.prompt"
-    prompt_path.write_text("Write a Python function that returns 'Hello, World!'.\n")
-    output_path = workdir / "hello.py"
-
-    ctx = MockContext({
-        "local": True,
-        "strength": 0.5,
-        "temperature": 0.0,
-        "time": 0.25,
-        "verbose": False,
-        "force": False,
-        "quiet": True,
-    })
-
-    code, was_incremental, cost, model = code_generator_main(
-        ctx=ctx,
-        prompt_file=str(prompt_path),
-        output=str(output_path),
-        original_prompt_file_path=None,
-        force_incremental_flag=False,
-    )
-
-    print("Generated code (first 80 chars):")
-    print(repr(code[:80]))
-    print(f"was_incremental: {was_incremental}")
-    print(f"total_cost (USD): {cost:.6f}")
-    print(f"model_name: {model}")
-
-
-def example_architecture_conformance_pass(workdir):
-    """Conformance check passes when all declared symbols are exported."""
-    print_section("Example 2 — Architecture conformance check (passes)")
-    arch = [
-        {
-            "filename": "models_Python.prompt",
-            "filepath": "src/models.py",
-            "interface": {
-                "type": "module",
-                "module": {
-                    "functions": [
-                        {"name": "User", "signature": "class User"},
-                        {"name": "make_user", "signature": "def make_user(...)"},
-                    ]
-                },
-            },
-        }
+    # 2. Create math_helper_Python.prompt with pdd-interface tags
+    prompt_file = OUTPUT_DIR / "math_helper_Python.prompt"
+    prompt_content = """---
+name: math_helper_Python
+language: Python
+---
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "calculate_factorial", "signature": "(n: int) -> int"}
     ]
-    arch_path = workdir / "architecture.json"
-    arch_path.write_text(json.dumps(arch))
+  }
+}
+</pdd-interface>
 
-    code = (
-        "class User:\n"
-        "    pass\n"
-        "\n"
-        "def make_user():\n"
-        "    return User()\n"
-    )
-    # No exception => check passed.
-    _verify_architecture_conformance(
-        generated_code=code,
-        prompt_name="models_Python.prompt",
-        arch_path=str(arch_path),
-        language="python",
-        verbose=False,
-        output_path=str(workdir / "src" / "models.py"),
-    )
-    print("Architecture conformance check passed (no exception raised).")
+Generate a python function called calculate_factorial that calculates the factorial of n.
+"""
+    prompt_file.write_text(prompt_content, encoding="utf-8")
 
+    # 3. Create a sibling mock test file to bypass test churn gates if test files are modified
+    test_file = OUTPUT_DIR / "test_math_helper.py"
+    test_file.write_text("""def test_factorial():
+    from math_helper import calculate_factorial
+    assert calculate_factorial(5) == 120
+""", encoding="utf-8")
 
-def example_architecture_conformance_failure(workdir):
-    """Conformance failure raises ArchitectureConformanceError with structured fields."""
-    print_section("Example 3 — Architecture conformance check (fails, structured)")
-    arch = [
-        {
-            "filename": "models_Python.prompt",
-            "filepath": "src/models.py",
-            "interface": {
-                "type": "module",
-                "module": {
-                    "functions": [
-                        {"name": "User", "signature": "class User"},
-                        {"name": "Admin", "signature": "class Admin"},
-                    ]
-                },
-            },
-        }
-    ]
-    arch_path = workdir / "architecture.json"
-    arch_path.write_text(json.dumps(arch))
+    return prompt_file, arch_file, test_file
 
-    code = "class User:\n    pass\n"  # 'Admin' missing
+def main() -> None:
+    print("=== PDD Code Generator Main Orchestrator Example ===\n")
 
+    # Setup mock files for the generator to run against
+    prompt_file, arch_file, test_file = setup_mock_files()
+    output_code_path = OUTPUT_DIR / "math_helper.py"
+
+    print(f"Mock environment setup:")
+    print(f"  Prompt File: {prompt_file.name}")
+    print(f"  Architecture Config: {arch_file.name}")
+    print(f"  Output Code Destination: {output_code_path.name}\n")
+
+    # Initialize a mock Click Context to carry cli parameters
+    # code_generator_main expects this structure to parse cli configuration values
+    ctx = click.Context(click.Command('generate'))
+    ctx.obj = {
+        "local": True,           # Instructs generator to run locally rather than querying the cloud
+        "strength": 0.7,         # LLM reasoning strength (0.0 to 1.0)
+        "temperature": 0.0,      # LLM sampling temperature
+        "time": 0.25,            # LLM thinking budget / timeout scaling
+        "verbose": True,         # Print internal logging and step status
+        "force": True,           # Overwrite output files without prompting
+        "quiet": False           # Do not suppress console panel updates
+    }
+
+    # We need to temporarily point architecture.json parsing to our mock location
+    # code_generator_main defaults to looking at "architecture.json" in current working directory.
+    # For this example, we mock the current working directory or ensure our env is clean.
+    orig_cwd = os.getcwd()
+    os.chdir(str(OUTPUT_DIR))
+
+    print("Executing code_generator_main...")
     try:
-        _verify_architecture_conformance(
-            generated_code=code,
-            prompt_name="models_Python.prompt",
-            arch_path=str(arch_path),
-            language="python",
-            verbose=False,
-            output_path=str(workdir / "src" / "models.py"),
+        # Inputs:
+        #   - ctx: Click Context holding CLI parameter overrides
+        #   - prompt_file: Filepath of the source .prompt template
+        #   - output: Overriding destination filepath (None defaults to front-matter/config paths)
+        #   - original_prompt_file_path: Used for incremental diff comparisons
+        #   - force_incremental_flag: Forces incremental diff update if True
+        #   - env_vars: Optional environment variables to substitute into prompt template placeholders
+        #
+        # Outputs:
+        #   - generated_code: The parsed, generated output string
+        #   - was_incremental: Boolean indicating if a patch was applied instead of full overwrite
+        #   - total_cost: Estimated monetary cost of the LLM generation (in USD)
+        #   - model_name: Name of the LLM model that performed the generation
+        generated_code, was_incremental, total_cost, model_name = code_generator_main(
+            ctx=ctx,
+            prompt_file=prompt_file.name,
+            output=str(output_code_path),
+            original_prompt_file_path=None,
+            force_incremental_flag=False,
+            env_vars={},
+            language="python"
         )
-    except ArchitectureConformanceError as exc:
-        # Confirm subclass relationship — existing call sites that catch
-        # click.UsageError continue to work unchanged.
-        assert isinstance(exc, click.UsageError)
-        print(f"prompt_name:        {exc.prompt_name}")
-        print(f"output_path:        {exc.output_path!r}")
-        print(f"expected_symbols:   {exc.expected_symbols}")
-        print(f"found_symbols:      {exc.found_symbols}")
-        print(f"missing_symbols:    {exc.missing_symbols}")
-        print("repair_directive:")
-        for line in exc.repair_directive.splitlines():
-            print(f"  {line}")
-        # The string message must start with the legacy prefix so existing
-        # log-grep tools keep working.
-        assert str(exc).startswith("Architecture conformance error for models_Python.prompt:")
 
+        print("\n--- Generation Output ---")
+        print(f"Model Used: {model_name}")
+        print(f"Generation Cost: ${total_cost:.6f}")
+        print(f"Incremental Patch Applied: {was_incremental}")
+        print(f"Generated Code Content:\n{generated_code}")
 
-def example_camelcase_violation(workdir):
-    """Declared camelCase Python exports are allowed; undeclared camelCase is rejected.
+    except ArchitectureConformanceError as e:
+        print(f"\n[Conformance Error] Generated code violated the interface contract:")
+        print(f"  Missing symbols: {e.missing_symbols}")
+        print(f"  Repair Directive:")
+        print(e.repair_directive)
+    except PublicSurfaceRegressionError as e:
+        print(f"\n[Regression Error] Public API surface was shrunk without BREAKING-CHANGE:")
+        print(f"  Removed: {e.removed_symbols}")
+        print(f"  Signatures Changed: {e.changed_signatures}")
+    except TestChurnError as e:
+        print(f"\n[Churn Error] Sibling test file was rewritten past the allowed threshold:")
+        print(f"  Churn Ratio: {e.churn_ratio:.2f} (Threshold: {e.threshold:.2f})")
+    finally:
+        # Restore original working directory
+        os.chdir(orig_cwd)
 
-    Declaring a camelCase name in the module interface is the explicit signal
-    that it is intentional public API (e.g. a Firebase Cloud Function export
-    like ``generateCode``); only undeclared/accidental camelCase trips the guard.
-    """
-    print_section("Example 4 — declared camelCase allowed, undeclared camelCase rejected")
-    arch = [
-        {
-            "filename": "utils_Python.prompt",
-            "filepath": "src/utils.py",
-            "interface": {
-                "type": "module",
-                "module": {
-                    "functions": [
-                        # Declared camelCase public API — intentional, must pass.
-                        {"name": "generateCode", "signature": "def generateCode(req)"},
-                        {"name": "process_data", "signature": "def process_data(data)"},
-                    ]
-                },
-            },
-        }
-    ]
-    arch_path = workdir / "architecture.json"
-    arch_path.write_text(json.dumps(arch))
-
-    # Declared camelCase export plus a declared snake_case function: must pass.
-    ok_code = (
-        "def generateCode(req):\n    return req\n\n"
-        "def process_data(data):\n    return data\n"
-    )
-    _verify_architecture_conformance(
-        generated_code=ok_code,
-        prompt_name="utils_Python.prompt",
-        arch_path=str(arch_path),
-        language="python",
-        verbose=False,
-        output_path=str(workdir / "src" / "utils.py"),
-    )
-    print("declared camelCase export 'generateCode' accepted (no conformance error)")
-
-    # An UNDECLARED camelCase export is still rejected as accidental drift.
-    bad_code = ok_code + "\ndef processData(data):\n    return data\n"
-    try:
-        _verify_architecture_conformance(
-            generated_code=bad_code,
-            prompt_name="utils_Python.prompt",
-            arch_path=str(arch_path),
-            language="python",
-            verbose=False,
-            output_path=str(workdir / "src" / "utils.py"),
-        )
-    except ArchitectureConformanceError as exc:
-        # Per spec: missing_symbols carries the offending camelCase exports.
-        print(f"missing_symbols (offending camelCase): {exc.missing_symbols}")
-        assert "processData" in exc.missing_symbols
-        assert "generateCode" not in exc.missing_symbols
-        assert "camelCase" in str(exc)
-    else:
-        raise AssertionError("undeclared camelCase 'processData' should have been rejected")
-
-
-def example_pdd_interface_camelcase(workdir):
-    """A camelCase name declared in the prompt's ``<pdd-interface>`` is allowed even
-    when ``architecture.json`` does not (yet) declare it.
-
-    The prompt is PDD's source of truth, so ``makeWidget`` — declared in the prompt
-    interface but absent from ``architecture.json`` — is intentional public API and
-    must NOT trip the snake_case guard (issue #1446). ``architecture.json`` here
-    declares only the snake_case ``process_data`` so the guard still runs, and
-    ``makeWidget`` is declared description-only (no signature) to show the exemption
-    keys on the declared name alone.
-    """
-    print_section("Example 5 — camelCase declared in the prompt <pdd-interface> allowed")
-    arch = [
-        {
-            "filename": "widgets_Python.prompt",
-            "filepath": "src/widgets.py",
-            "interface": {
-                "type": "module",
-                "module": {
-                    "functions": [
-                        {"name": "process_data", "signature": "def process_data(data)"},
-                    ]
-                },
-            },
-        }
-    ]
-    arch_path = workdir / "architecture.json"
-    arch_path.write_text(json.dumps(arch))
-
-    prompt_content = (
-        '<pdd-interface>{"type":"module","module":{"functions":'
-        '[{"name":"makeWidget","description":"builds a widget"},'
-        '{"name":"process_data","signature":"(data)"}]}}'
-        "</pdd-interface>\n"
-        "% You are an expert Python engineer.\n"
-    )
-    code = (
-        "def process_data(data):\n    return data\n\n"
-        "def makeWidget():\n    return 1\n"
-    )
-    # Must NOT raise: makeWidget is declared in the prompt <pdd-interface>.
-    _verify_architecture_conformance(
-        generated_code=code,
-        prompt_name="widgets_Python.prompt",
-        arch_path=str(arch_path),
-        language="python",
-        verbose=False,
-        output_path=str(workdir / "src" / "widgets.py"),
-        prompt_content=prompt_content,
-    )
-    print("prompt-declared camelCase export 'makeWidget' accepted (no conformance error)")
-
-
-def main():
-    workdir = pathlib.Path("./output/code_generator_main_example_output").resolve()
-    if workdir.exists():
-        shutil.rmtree(workdir)
-    workdir.mkdir(parents=True, exist_ok=True)
-
-    # Patch the orchestrator's external generator dependencies so this script
-    # never makes network calls. Patches go where the names are imported.
-    with patch(
-        "pdd.code_generator_main.local_code_generator_func",
-        side_effect=mock_local_code_generator,
-    ), patch(
-        "pdd.code_generator_main.incremental_code_generator_func",
-        side_effect=mock_incremental_code_generator,
-    ), patch(
-        "pdd.code_generator_main.CloudConfig.get_jwt_token",
-        side_effect=AssertionError("offline example must not request cloud auth"),
-    ), patch.dict(
-        os.environ,
-        {
-            "PDD_CLOUD_ONLY": "0",
-            "PDD_NO_LOCAL_FALLBACK": "0",
-        },
-        clear=False,
-    ):
-        example_full_generation_local(workdir)
-        example_architecture_conformance_pass(workdir)
-        example_architecture_conformance_failure(workdir)
-        example_camelcase_violation(workdir)
-        example_pdd_interface_camelcase(workdir)
-
-    print()
-    print("All examples ran to completion.")
-
+    print("\nExample execution completed successfully.")
 
 if __name__ == "__main__":
     main()
