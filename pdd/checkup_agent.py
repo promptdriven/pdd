@@ -1,34 +1,32 @@
-"""LLM-agentic checkup session orchestration for ``pdd checkup --interactive``.
+"""LLM-agentic checkup session orchestration for ``pdd checkup``.
 
 ``CheckupAgent`` wraps the deterministic ``build_prompt_source_set_report``
 pipeline with a planning layer (``Planner``) and an event/session layer
-(``CheckupSession``) that surfaces tool results and per-finding choices to
-the operator.
-
-Flow
-----
-1. Planner suggests which tools to run and in what order.
-2. Agent asks the operator to confirm / modify the plan (if interactive).
-3. ``build_prompt_source_set_report`` runs all checks in one pass.
-4. For each tool in the confirmed plan, the agent presents its findings via
-   the existing ``ClickInteractiveSession`` / ``FakeInteractiveSession`` protocol.
-5. Approved patches are optionally applied.
+(``CheckupSession``).  It is built for impatient CLI users: one simple command,
+grouped findings, safe defaults, useful artifacts, and a short, truthful summary.
 
 Modes
 -----
-interactive (default)
-    Per-finding menu; operator chooses repair option, custom fix, or skip.
-    During the session the operator can type ``a`` to switch to auto mode for
-    all remaining findings.
+review (default, non-interactive)
+    Runs the checks, groups findings, recommends safe fixes, writes a report and
+    a patch preview, and prints a concise summary.  Never prompts, never edits
+    files.  This is what ``pdd checkup <prompt> --planner deterministic`` does.
+
+interactive
+    Per-group confirmation ([Y]/[n]/[edit]/[a]).  The operator can type ``a`` to
+    switch the rest of the session to auto mode.
 
 auto
-    Agent automatically picks the primary repair option for each finding and
-    prints a summary.  No per-finding prompts.  Triggered by ``--auto`` or by
-    typing ``a`` in interactive mode.
+    Applies only low-risk fixes automatically; medium-risk fixes are saved for
+    review and high-risk fixes are left as manual TODOs.  Never silently makes a
+    risky change.
 
-This module is intentionally free of direct LLM calls — those live in
-``checkup_planner.LLMPlanner``.  Tests can inject a ``DeterministicPlanner``
-and a ``RecordingCheckupSession`` to run end-to-end without network access.
+Safety
+------
+By default nothing is written to the prompt — fixes are queued / saved for
+review and a patch preview is produced.  ``apply=True`` (the ``--apply`` flag)
+is what actually edits files, after which the relevant checks are re-run to
+verify the fix.
 """
 
 from __future__ import annotations
@@ -43,12 +41,10 @@ import click
 from .checkup_interactive_main import (
     ClickInteractiveSession,
     apply_approved_patches,
-    build_repair_options_for_finding,
     filter_interactive_findings,
-    _prompt_menu_choice,
-    _skip_option,
     _custom_option,
     _register_dynamic_option,
+    _skip_option,
 )
 from .checkup_interactive_session import (
     ApprovedPatch,
@@ -61,11 +57,27 @@ from .checkup_prompt_main import (
     SourceSetFinding,
     build_prompt_source_set_report,
 )
+from .checkup_report import (
+    RISK_HIGH,
+    RISK_LOW,
+    RISK_MEDIUM,
+    CheckupAccounting,
+    FindingGroup,
+    descriptive_plan_lines,
+    group_findings,
+    humanize_group_summary,
+    repair_risk_for,
+    write_artifacts,
+)
 from .checkup_tools import ALL_TOOLS, ToolResult
 
 logger = logging.getLogger(__name__)
 
 _SessionType = Union[InteractiveRepairSession, ClickInteractiveSession]
+
+MODE_REVIEW = "review"
+MODE_INTERACTIVE = "interactive"
+MODE_AUTO = "auto"
 
 
 # ---------------------------------------------------------------------------
@@ -82,9 +94,12 @@ class AgentEvent:
     Possible kinds:
       plan_ready      — planner produced a plan
       plan_confirmed  — operator accepted or modified the plan
-      tool_start      — about to present findings for one tool
-      tool_done       — presented all findings for one tool
-      session_done    — all tools processed; patches collected
+      tool_start      — a tool's result is available (status, skip_reason, count)
+      tool_done       — finished presenting a tool's findings
+      group           — a finding group is presented
+      mode_switch     — interactive -> auto transition
+      verifying       — re-running checks after applied fixes
+      session_done    — final accounting + artifacts
     """
     data: dict = field(default_factory=dict)
 
@@ -99,79 +114,130 @@ class CheckupSession:
         """Return the confirmed plan (possibly modified), or None to abort."""
         return plan
 
+    def decide_group(self, group: FindingGroup) -> str:
+        """Return one of: 'accept', 'skip', 'edit', 'auto'. Default: accept."""
+        return "accept"
+
+    def ask_definition(self) -> str:
+        return ""
+
 
 class TerminalCheckupSession(CheckupSession):
-    """Prints plan/tool events to the terminal and lets operators confirm the plan."""
+    """Prints events to the terminal and drives per-group confirmation."""
 
     def __init__(self, *, quiet: bool = False) -> None:
         self.quiet = quiet
         self.events: list[AgentEvent] = []
+        self._checks_header_done = False
+
+    # -- rendering ---------------------------------------------------------
 
     def on_event(self, event: AgentEvent) -> None:
         self.events.append(event)
         if self.quiet:
             return
+        getattr(self, f"_render_{event.kind}", self._render_default)(event.data)
 
-        kind = event.kind
-        data = event.data
+    def _render_default(self, data: dict) -> None:  # noqa: ARG002
+        pass
 
-        if kind == "plan_ready":
-            click.echo("\nStarting agentic checkup session")
-            click.echo(f"Target: {data.get('target', '')}")
-            click.echo(f"Available tools: {', '.join(data.get('available_tools', []))}")
-            click.echo("\nSuggested plan:")
-            for line in data.get("plan_lines", []):
-                click.echo(line)
+    def _render_plan_ready(self, data: dict) -> None:
+        click.echo("\nStarting checkup")
+        click.echo(f"Target: {data.get('target', '')}")
+        click.echo("")
+        for line in data.get("plan_lines", []):
+            click.echo(line)
 
-        elif kind == "plan_confirmed":
-            click.echo(f"\nPlan confirmed: {', '.join(data.get('tools', []))}")
+    def _render_plan_confirmed(self, data: dict) -> None:  # noqa: ARG002
+        click.echo("\nChecks:")
+        self._checks_header_done = True
 
-        elif kind == "tool_start":
-            click.echo(f"\n--- Checking: {data.get('tool', '')} ---")
+    def _render_tool_start(self, data: dict) -> None:
+        if not self._checks_header_done:
+            click.echo("\nChecks:")
+            self._checks_header_done = True
+        tool = data.get("tool", "")
+        status = data.get("status", "")
+        reason = data.get("skip_reason", "")
+        count = data.get("finding_count", 0)
+        if status == "skip" and reason:
+            suffix = f" — {reason}"
+        elif count:
+            suffix = f" — {count} finding(s)"
+        else:
+            suffix = ""
+        click.echo(f"  {tool:<9} {status}{suffix}")
 
-        elif kind == "tool_done":
-            tool = data.get("tool", "")
-            status = data.get("status", "")
-            n = data.get("finding_count", 0)
-            click.echo(f"  {tool}: {status} ({n} finding(s))")
+    def _render_group(self, data: dict) -> None:
+        click.echo("")
+        for line in data.get("summary_lines", []):
+            click.echo(line)
 
-        elif kind == "mode_switch":
-            click.echo(f"\n  [mode] Switched to {data.get('to', '?')} mode.")
+    def _render_mode_switch(self, data: dict) -> None:
+        frm = data.get("from", "interactive")
+        to = data.get("to", "auto")
+        click.echo(f"\nMode changed: {frm} -> {to}")
+        click.echo("Auto-applying low-risk fixes for remaining findings.")
+        click.echo("Risky or ambiguous fixes will be left for review.")
 
-        elif kind == "session_done":
-            total = data.get("total_findings", 0)
-            patches = data.get("patch_count", 0)
-            auto = data.get("auto_applied", 0)
-            auto_part = f", {auto} auto-applied" if auto else ""
-            click.echo(
-                f"\nAgentic checkup complete. {total} finding(s), "
-                f"{patches} patch(es) queued{auto_part}."
-            )
+    def _render_verifying(self, data: dict) -> None:
+        click.echo("\nVerifying fixes...")
+        for line in data.get("lines", []):
+            click.echo(line)
+
+    def _render_session_done(self, data: dict) -> None:
+        click.echo("")
+        for line in data.get("summary_lines", []):
+            click.echo(line)
+
+    # -- interaction -------------------------------------------------------
 
     def confirm_plan(self, plan: Plan) -> Optional[Plan]:
-        click.echo("\nProceed with suggested plan? [Y/n/custom]")
+        click.echo("\nProceed with this plan? [Y/n/custom]")
         answer = click.prompt("", default="Y", show_default=False).strip().lower()
         if answer in ("n", "no"):
             return None
         if answer in ("", "y", "yes"):
             return plan
-        # custom: let operator type tool names comma-separated
         raw = click.prompt("Enter tool names (comma-separated)", default=", ".join(plan.tools))
-        custom_tools = [t.strip() for t in raw.split(",") if t.strip()]
+        custom = [t.strip() for t in raw.split(",") if t.strip()]
         from .checkup_tools import ALL_TOOL_NAMES  # pylint: disable=import-outside-toplevel
-        valid = [t for t in custom_tools if t in ALL_TOOL_NAMES]
+        valid = [t for t in custom if t in ALL_TOOL_NAMES]
         if not valid:
             click.echo("No valid tools selected. Aborting.", err=True)
             return None
         return Plan(tools=valid, rationale="Custom tool selection by operator.")
 
+    def decide_group(self, group: FindingGroup) -> str:
+        prompt = "Apply recommended safe fix for this group? [Y/n/edit/auto]"
+        answer = click.prompt(prompt, default="Y", show_default=False).strip().lower()
+        if answer in ("a", "auto"):
+            return "auto"
+        if answer in ("n", "no", "skip"):
+            return "skip"
+        if answer in ("e", "edit"):
+            return "edit"
+        return "accept"
+
+    def ask_definition(self) -> str:
+        return click.prompt("Enter your definition / replacement", default="", show_default=False)
+
 
 class RecordingCheckupSession(CheckupSession):
-    """Test double: records all events and auto-confirms plans."""
+    """Test double: records events, auto-confirms plans, scriptable group decisions."""
 
-    def __init__(self, *, confirm: bool = True, custom_plan: Optional[Plan] = None) -> None:
+    def __init__(
+        self,
+        *,
+        confirm: bool = True,
+        custom_plan: Optional[Plan] = None,
+        group_decisions: Optional[list[str]] = None,
+        definition: str = "observable criteria",
+    ) -> None:
         self._confirm = confirm
         self._custom_plan = custom_plan
+        self._group_decisions = list(group_decisions or [])
+        self._definition = definition
         self.events: list[AgentEvent] = []
 
     def on_event(self, event: AgentEvent) -> None:
@@ -182,51 +248,16 @@ class RecordingCheckupSession(CheckupSession):
             return None
         return self._custom_plan if self._custom_plan is not None else plan
 
+    def decide_group(self, group: FindingGroup) -> str:
+        if self._group_decisions:
+            return self._group_decisions.pop(0)
+        return "accept"
+
+    def ask_definition(self) -> str:
+        return self._definition
+
     def events_of_kind(self, kind: str) -> list[AgentEvent]:
         return [e for e in self.events if e.kind == kind]
-
-
-# ---------------------------------------------------------------------------
-# Agent menu (extends the standard interactive menu with [a] auto shortcut)
-# ---------------------------------------------------------------------------
-
-
-def _prompt_agent_menu_choice(
-    finding: SourceSetFinding,
-    options: list[RepairOption],
-) -> int:
-    """Per-finding menu for the agentic session.
-
-    Returns 1–4 (same as ``_prompt_menu_choice``) or 5 meaning "switch to auto."
-    """
-    click.echo(f"\n[{finding.finding_id}] {finding.message}")
-    if finding.evidence:
-        from .checkup_interactive_main import _truncate_excerpt  # pylint: disable=import-outside-toplevel
-
-        click.echo(f"  {_truncate_excerpt(finding.evidence)}")
-
-    label_a = options[0].label if options else "Option A"
-    preview_a = options[0].preview if options else "(unavailable)"
-    label_b = options[1].label if len(options) > 1 else "Option B"
-    preview_b = options[1].preview if len(options) > 1 else "(unavailable)"
-
-    click.echo("\nChoose one:")
-    click.echo(f"[1] {label_a} — {preview_a}")
-    click.echo(f"[2] {label_b} — {preview_b}")
-    click.echo("[3] Write my own definition")
-    click.echo("[4] Skip")
-    click.echo("[a] Switch to auto mode (apply best option for all remaining)")
-
-    raw = click.prompt("Choice", default="4", show_default=False).strip().lower()
-    if raw == "a":
-        return 5
-    try:
-        val = int(raw)
-        if 1 <= val <= 4:
-            return val
-    except ValueError:
-        pass
-    return 4  # default: skip
 
 
 # ---------------------------------------------------------------------------
@@ -235,20 +266,7 @@ def _prompt_agent_menu_choice(
 
 
 class CheckupAgent:
-    """Orchestrates a planning → report → interactive-repair cycle.
-
-    Parameters
-    ----------
-    planner:
-        A ``DeterministicPlanner`` or ``LLMPlanner`` that suggests which tools
-        to run and in what order.
-    session:
-        A ``CheckupSession`` that receives events and confirms the plan.
-    repair_session_factory:
-        Optional factory producing an ``InteractiveRepairSession`` for per-finding
-        menus.  Defaults to ``ClickInteractiveSession`` when ``None`` and the
-        ``interactive`` flag is set.
-    """
+    """Plan → check → group → repair → summarize, with safe defaults."""
 
     def __init__(
         self,
@@ -262,8 +280,6 @@ class CheckupAgent:
         self.repair_session_factory = repair_session_factory
 
     # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
 
     def run(
         self,
@@ -276,210 +292,351 @@ class CheckupAgent:
         quiet: bool = False,
         explicit_interactive: bool = True,
         auto: bool = False,
+        mode: Optional[str] = None,
     ) -> tuple[str, float, str]:
-        """Run the full agentic checkup cycle.
-
-        Returns the same ``(message, cost, model)`` tuple as
-        ``run_interactive_checkup`` so it can be used as a drop-in replacement
-        in ``commands/checkup.py``.
-        """
+        """Run the full checkup cycle. Returns ``(message, cost, model)``."""
         root = project_root if project_root is not None else Path.cwd()
         prompt_path = Path(target)
         if not prompt_path.is_absolute():
             prompt_path = root / target
         if not prompt_path.is_file():
             raise click.UsageError(
-                f"--interactive requires a single .prompt file target, got {target!r}."
+                f"checkup requires a single .prompt file target, got {target!r}."
             )
 
+        if mode is None:
+            mode = MODE_AUTO if auto else MODE_INTERACTIVE
         prompt_text = prompt_path.read_text(encoding="utf-8")
         available_tools = list(ALL_TOOLS)
 
         # 1. Plan
         plan = self.planner.suggest(prompt_path, available_tools, prompt_text)
+        descriptions = {name: tool.description for name, tool in ALL_TOOLS.items()}
         self.session.on_event(
             AgentEvent(
                 kind="plan_ready",
                 data={
                     "target": target,
                     "available_tools": available_tools,
-                    "plan_lines": plan.display_lines(),
+                    "plan_lines": descriptive_plan_lines(plan.tools, descriptions),
                     "tools": plan.tools,
                     "rationale": plan.rationale,
                 },
             )
         )
 
-        # 2. Confirm plan
-        # In auto mode the session is fully non-interactive (no prompts at all),
-        # so the suggested plan is accepted as-is rather than asking the operator.
-        if auto:
-            confirmed_plan = plan
-        else:
+        # 2. Confirm plan (only genuine interactive mode asks)
+        if mode == MODE_INTERACTIVE:
             confirmed_plan = self.session.confirm_plan(plan)
+        else:
+            confirmed_plan = plan
         if confirmed_plan is None:
-            msg = "Agentic checkup aborted by operator."
+            msg = "Checkup aborted by operator."
             if not quiet:
                 click.echo(msg)
             return msg, 0.0, ""
-
         self.session.on_event(
             AgentEvent(kind="plan_confirmed", data={"tools": confirmed_plan.tools})
         )
 
-        # 3. Run report (all checks in one pass)
+        # 3. Run all checks in one pass
         report = build_prompt_source_set_report(
-            prompt_path,
-            target=target,
-            project_root=root,
-            strict=strict,
+            prompt_path, target=target, project_root=root, strict=strict
         )
 
-        # 4. Process each tool in confirmed order
-        repair_session: _SessionType
-        if self.repair_session_factory is not None:
-            repair_session = self.repair_session_factory()
-        else:
-            repair_session = ClickInteractiveSession()
+        repair_session: _SessionType = (
+            self.repair_session_factory()
+            if self.repair_session_factory is not None
+            else ClickInteractiveSession()
+        )
         repair_session.seed(report)
 
-        skipped = 0
-        auto_applied = 0
-        choices_by_finding: dict[str, int] = {}
-        total_findings = 0
-        _auto_mode = auto  # may flip to True mid-session via [a] shortcut
+        findings_by_id = {f.finding_id: f for f in report.findings}
 
+        # Emit per-tool status (and collect in-scope findings for grouping).
+        in_scope: list[SourceSetFinding] = []
         for tool_name in confirmed_plan.tools:
             tool = ALL_TOOLS.get(tool_name)
             if tool is None:
                 continue
-
-            tool_result: ToolResult = tool.extract(report)
+            tr: ToolResult = tool.extract(report)
+            tool_findings = [
+                f
+                for f in filter_interactive_findings(report, explicit_interactive=True)
+                if f.source_check == tool_name
+            ]
             self.session.on_event(
                 AgentEvent(
                     kind="tool_start",
-                    data={"tool": tool_name, "status": tool_result.status},
-                )
-            )
-
-            # Filter findings to those in scope for this tool
-            tool_findings = filter_interactive_findings(
-                report,
-                explicit_interactive=explicit_interactive,
-            )
-            tool_findings = [f for f in tool_findings if f.source_check == tool_name]
-
-            for finding in tool_findings:
-                total_findings += 1
-                options = repair_session.present_finding(finding.finding_id)
-
-                if _auto_mode:
-                    # Auto mode: pick the primary repair option without prompting.
-                    if options:
-                        repair_session.record_choice(finding.finding_id, options[0])
-                        choices_by_finding[finding.finding_id] = 1
-                        if not quiet:
-                            click.echo(
-                                f"  [auto] [{finding.finding_id}] {finding.message[:60]}"
-                                f" → {options[0].label}"
-                            )
-                        auto_applied += 1
-                    else:
-                        skip_opt = _skip_option(finding)
-                        _register_dynamic_option(repair_session, finding.finding_id, skip_opt)
-                        repair_session.record_choice(finding.finding_id, skip_opt)
-                        choices_by_finding[finding.finding_id] = 4
-                        skipped += 1
-                    continue
-
-                # Interactive mode: show menu + [a] shortcut.
-                choice = _prompt_agent_menu_choice(finding, options)
-                choices_by_finding[finding.finding_id] = choice if choice != 5 else 1
-
-                if choice == 5:
-                    # Switch to auto for this and all remaining findings.
-                    _auto_mode = True
-                    self.session.on_event(AgentEvent("mode_switch", {"to": "auto"}))
-                    if not quiet:
-                        click.echo("  Switching to auto mode for all remaining findings.")
-                    if options:
-                        repair_session.record_choice(finding.finding_id, options[0])
-                        auto_applied += 1
-                    else:
-                        skip_opt = _skip_option(finding)
-                        _register_dynamic_option(repair_session, finding.finding_id, skip_opt)
-                        repair_session.record_choice(finding.finding_id, skip_opt)
-                        skipped += 1
-                    continue
-
-                if choice == 4:
-                    skip_opt = _skip_option(finding)
-                    _register_dynamic_option(repair_session, finding.finding_id, skip_opt)
-                    repair_session.record_choice(finding.finding_id, skip_opt)
-                    skipped += 1
-                    continue
-
-                if choice == 3:
-                    definition = repair_session.ask("Enter your definition:")
-                    custom_opt = _custom_option(finding, definition)
-                    _register_dynamic_option(repair_session, finding.finding_id, custom_opt)
-                    repair_session.record_choice(finding.finding_id, custom_opt)
-                    continue
-
-                index = choice - 1
-                if 0 <= index < len(options):
-                    repair_session.record_choice(finding.finding_id, options[index])
-                else:
-                    click.echo(
-                        f"  Warning: option {choice} unavailable for [{finding.finding_id}]. Skipping.",
-                        err=True,
-                    )
-                    skipped += 1
-
-            self.session.on_event(
-                AgentEvent(
-                    kind="tool_done",
                     data={
                         "tool": tool_name,
-                        "status": tool_result.status,
+                        "status": tr.status,
+                        "skip_reason": tr.skip_reason,
                         "finding_count": len(tool_findings),
                     },
                 )
             )
+            self.session.on_event(
+                AgentEvent(
+                    kind="tool_done",
+                    data={"tool": tool_name, "status": tr.status,
+                          "finding_count": len(tool_findings)},
+                )
+            )
+            in_scope.extend(tool_findings)
 
-        patches = repair_session.approved_patches()
+        # 4. Group findings and decide per group
+        groups = group_findings(in_scope)
+        acc = CheckupAccounting(total=sum(g.size for g in groups))
+        # disposition per finding_id: "low" (queued low-risk), "manual_low"
+        # (interactively accepted low-risk), "review", "manual_todo", "skip",
+        # "custom" (operator edit).
+        disposition: dict[str, str] = {}
+        _auto = mode == MODE_AUTO
+
+        for group in groups:
+            risk = group.risk
+            self.session.on_event(
+                AgentEvent(
+                    kind="group",
+                    data={
+                        "source_check": group.source_check,
+                        "code": group.code,
+                        "size": group.size,
+                        "risk": risk,
+                        "summary_lines": humanize_group_summary(group),
+                    },
+                )
+            )
+
+            decision = "accept"  # default for review / auto
+            if mode == MODE_INTERACTIVE and not _auto:
+                decision = self.session.decide_group(group)
+                if decision == "auto":
+                    _auto = True
+                    self.session.on_event(
+                        AgentEvent("mode_switch", {"from": "interactive", "to": "auto"})
+                    )
+                    decision = "accept"
+
+            definition = ""
+            if decision == "edit":
+                definition = self.session.ask_definition()
+
+            self._record_group(
+                group=group,
+                risk=risk,
+                decision=decision,
+                interactive=(mode == MODE_INTERACTIVE and not _auto),
+                definition=definition,
+                repair_session=repair_session,
+                disposition=disposition,
+                acc=acc,
+            )
+
+        # 5. Collect patches; segregate by risk
+        all_patches: list[ApprovedPatch] = repair_session.approved_patches()
+        low_risk_patches = [
+            p
+            for p in all_patches
+            if repair_risk_for(findings_by_id.get(p.finding_id)) == RISK_LOW
+        ]
+        # medium-risk approving patches feed the preview but are never applied.
+
+        applied = False
+        verification = None
+        if apply and low_risk_patches:
+            choices = {fid: 1 for fid in disposition}
+            exit_code = apply_approved_patches(
+                low_risk_patches,
+                dry_run=dry_run,
+                quiet=True,
+                project_root=root,
+                original_target=target,
+                strict=strict,
+                choices_by_finding=choices,
+            )
+            if exit_code == 0:
+                applied = True
+                self._tally_applied(disposition, acc, len(low_risk_patches))
+                verification = self._verify(
+                    prompt_path, target, root, strict, groups, quiet
+                )
+            else:
+                acc.patches_failed = len(low_risk_patches)
+        else:
+            # nothing applied — count queued (low-risk) for the summary
+            acc.patches_queued = sum(
+                1 for d in disposition.values() if d in ("low", "manual_low")
+            )
+
+        # 6. Artifacts (only when there is something to write)
+        artifacts = write_artifacts(
+            project_root=root,
+            prompt_path=prompt_path,
+            target=target,
+            status=report.status,
+            tool_results=[ALL_TOOLS[t].extract(report) for t in confirmed_plan.tools if t in ALL_TOOLS],
+            groups=groups,
+            accounting=acc,
+            patches=all_patches,
+            applied=applied,
+        )
+        artifacts_display = {
+            k: _relpath(v, root) for k, v in artifacts.items()
+        }
+
+        # 7. Final summary
         self.session.on_event(
             AgentEvent(
                 kind="session_done",
                 data={
-                    "total_findings": total_findings,
-                    "patch_count": len(patches),
-                    "skipped": skipped,
-                    "auto_applied": auto_applied,
+                    "status": report.status,
+                    "accounting": _accounting_dict(acc),
+                    "artifacts": artifacts_display,
+                    "applied": applied,
+                    "verification": verification,
+                    "summary_lines": acc.summary_lines(report.status, artifacts_display),
+                    # legacy keys kept for older tests / callers
+                    "total_findings": acc.total,
+                    "skipped": acc.skipped_by_user,
+                    "auto_applied": acc.fixed_automatically,
+                    "patch_count": len(all_patches),
                 },
             )
         )
 
-        # 5. Apply patches
-        postflight_exit = 0
-        if apply and patches:
-            postflight_exit = apply_approved_patches(
-                patches,
-                dry_run=dry_run,
-                quiet=quiet,
-                project_root=root,
-                original_target=target,
-                strict=strict,
-                choices_by_finding=choices_by_finding,
-            )
-
-        auto_part = f", {auto_applied} auto-applied" if auto_applied else ""
         message = (
-            f"Agentic checkup complete: {report.status} "
-            f"({total_findings} findings, {skipped} skipped{auto_part})"
+            f"Checkup complete: {report.status} "
+            f"({acc.total} findings, {acc.fixed_automatically} fixed, "
+            f"{acc.skipped_by_user} skipped, {acc.remaining} remaining)"
         )
-        if not quiet:
-            click.echo(f"\n{message}")
-        if postflight_exit:
-            raise click.exceptions.Exit(postflight_exit)
         return message, 0.0, ""
+
+    # ------------------------------------------------------------------
+    # helpers
+    # ------------------------------------------------------------------
+
+    def _record_group(
+        self,
+        *,
+        group: FindingGroup,
+        risk: str,
+        decision: str,
+        interactive: bool,
+        definition: str,
+        repair_session: _SessionType,
+        disposition: dict,
+        acc: CheckupAccounting,
+    ) -> None:
+        """Apply one group decision to every finding in the group."""
+        for finding in group.findings:
+            fid = finding.finding_id
+            options = repair_session.present_finding(fid)
+
+            if decision == "skip":
+                self._record_skip(repair_session, finding)
+                disposition[fid] = "skip"
+                acc.skipped_by_user += 1
+                continue
+
+            if decision == "edit":
+                opt = _custom_option(finding, definition)
+                _register_dynamic_option(repair_session, fid, opt)
+                repair_session.record_choice(fid, opt)
+                disposition[fid] = "custom"
+                acc.fixed_manually += 1
+                continue
+
+            # decision == "accept"
+            if risk == RISK_HIGH:
+                # never auto-touch high-risk; leave as manual TODO
+                self._record_skip(repair_session, finding)
+                disposition[fid] = "manual_todo"
+                acc.manual_todo += 1
+                continue
+
+            if risk == RISK_MEDIUM:
+                # save for review: record the primary option so it appears in the
+                # patch preview, but it will not be applied.
+                if options:
+                    repair_session.record_choice(fid, options[0])
+                disposition[fid] = "review"
+                acc.saved_for_review += 1
+                continue
+
+            # low risk
+            if options:
+                repair_session.record_choice(fid, options[0])
+                disposition[fid] = "manual_low" if interactive else "low"
+            else:
+                self._record_skip(repair_session, finding)
+                disposition[fid] = "skip"
+                acc.skipped_by_user += 1
+
+    @staticmethod
+    def _record_skip(repair_session: _SessionType, finding: SourceSetFinding) -> None:
+        skip_opt = _skip_option(finding)
+        _register_dynamic_option(repair_session, finding.finding_id, skip_opt)
+        repair_session.record_choice(finding.finding_id, skip_opt)
+
+    @staticmethod
+    def _tally_applied(disposition: dict, acc: CheckupAccounting, n_patches: int) -> None:
+        acc.patches_applied = n_patches
+        for d in disposition.values():
+            if d == "low":
+                acc.fixed_automatically += 1
+            elif d == "manual_low":
+                acc.fixed_manually += 1
+
+    def _verify(
+        self,
+        prompt_path: Path,
+        target: str,
+        root: Path,
+        strict: bool,
+        groups: list[FindingGroup],
+        quiet: bool,
+    ) -> dict:
+        """Re-run checks for tools that had findings; report new status."""
+        fresh = build_prompt_source_set_report(
+            prompt_path, target=target, project_root=root, strict=strict
+        )
+        affected = {g.source_check for g in groups}
+        lines: list[str] = []
+        results: dict[str, str] = {}
+        for tool_name in sorted(affected):
+            tr = ALL_TOOLS[tool_name].extract(fresh) if tool_name in ALL_TOOLS else None
+            status = tr.status if tr else "?"
+            results[tool_name] = status
+            note = "resolved" if status in ("pass", "skip") else "still has findings"
+            lines.append(f"  {tool_name}: {status} — {note}")
+        self.session.on_event(AgentEvent("verifying", {"lines": lines, "results": results}))
+        return {"results": results}
+
+
+# ---------------------------------------------------------------------------
+# module helpers
+# ---------------------------------------------------------------------------
+
+
+def _relpath(path: Path, root: Path) -> str:
+    try:
+        return str(Path(path).relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _accounting_dict(acc: CheckupAccounting) -> dict:
+    return {
+        "total": acc.total,
+        "fixed_manually": acc.fixed_manually,
+        "fixed_automatically": acc.fixed_automatically,
+        "skipped_by_user": acc.skipped_by_user,
+        "saved_for_review": acc.saved_for_review,
+        "manual_todo": acc.manual_todo,
+        "remaining": acc.remaining,
+        "patches_applied": acc.patches_applied,
+        "patches_queued": acc.patches_queued,
+        "patches_failed": acc.patches_failed,
+    }

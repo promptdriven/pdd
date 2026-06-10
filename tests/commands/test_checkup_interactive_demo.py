@@ -293,3 +293,78 @@ def test_interactive_json_incompatible(runner: CliRunner) -> None:
         [str(PROMPTS / "01_clean_task.prompt"), "--interactive", "--json"],
     )
     assert result.exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# Review-mode UX (the simple default command) — CLI level
+# ---------------------------------------------------------------------------
+
+
+def test_review_mode_groups_vague_terms_and_is_concise(runner: CliRunner, tmp_path) -> None:
+    """`pdd checkup <vague> --planner deterministic` collapses 10 prompts into one."""
+    result = runner.invoke(
+        checkup,
+        [
+            str(PROMPTS / "02_vague_clarification.prompt"),
+            "--planner",
+            "deterministic",
+            "--project-root",
+            str(tmp_path),
+        ],
+        catch_exceptions=False,
+    )
+    out = result.output
+    # grouped, not ten separate menus
+    assert "undefined vague terms" in out
+    assert "Apply recommended safe fix" not in out  # review mode never prompts
+    # final summary distinguishes categories
+    assert "Total:" in out and "Remaining:" in out
+    assert "Saved for review:" in out
+
+
+def test_review_mode_shows_skip_reasons(runner: CliRunner, tmp_path) -> None:
+    result = runner.invoke(
+        checkup,
+        [
+            str(PROMPTS / "02_vague_clarification.prompt"),
+            "--planner",
+            "deterministic",
+            "--project-root",
+            str(tmp_path),
+        ],
+        catch_exceptions=False,
+    )
+    assert "no <contract_rules> to cover" in result.output  # coverage skip reason
+    assert "no baseline evidence" in result.output  # drift skip reason
+
+
+def test_review_mode_writes_artifacts_under_project_root(runner: CliRunner, tmp_path) -> None:
+    runner.invoke(
+        checkup,
+        [
+            str(PROMPTS / "02_vague_clarification.prompt"),
+            "--planner",
+            "deterministic",
+            "--project-root",
+            str(tmp_path),
+        ],
+        catch_exceptions=False,
+    )
+    out_dir = tmp_path / ".pdd" / "checkup"
+    assert (out_dir / "02_vague_clarification.report.md").is_file()
+    assert (out_dir / "02_vague_clarification.patch").is_file()
+
+
+def test_clean_prompt_writes_no_artifacts(runner: CliRunner, tmp_path) -> None:
+    runner.invoke(
+        checkup,
+        [
+            str(PROMPTS / "01_clean_task.prompt"),
+            "--planner",
+            "deterministic",
+            "--project-root",
+            str(tmp_path),
+        ],
+        catch_exceptions=False,
+    )
+    assert not (tmp_path / ".pdd" / "checkup").exists()

@@ -186,8 +186,18 @@ def _finding_id(engine: str, path: Path, index: int, code: str = "") -> str:
     return f"{engine}:{slug}:{index}:{suffix}"
 
 
-def _record_check(report: PromptSourceSetReport, name: str, *, status: str) -> None:
-    report.checks.append({"name": name, "status": status})
+def _record_check(
+    report: PromptSourceSetReport,
+    name: str,
+    *,
+    status: str,
+    reason: str = "",
+) -> None:
+    """Append one check result. ``reason`` explains skip/note statuses for humans."""
+    entry: dict[str, Any] = {"name": name, "status": status}
+    if reason:
+        entry["reason"] = reason
+    report.checks.append(entry)
 
 
 def build_prompt_source_set_report(
@@ -296,7 +306,12 @@ def build_prompt_source_set_report(
             )
         )
     elif not report.coverage.has_contract_rules:
-        _record_check(report, "coverage", status="skip")
+        _record_check(
+            report,
+            "coverage",
+            status="skip",
+            reason="no <contract_rules> to cover",
+        )
     else:
         coverage_status = "pass"
         for index, rule in enumerate(report.coverage.rules):
@@ -409,8 +424,25 @@ def build_prompt_source_set_report(
                 code="missing_evidence",
             )
         )
+        _record_check(
+            report,
+            "drift",
+            status="skip",
+            reason="no baseline evidence snapshot to compare",
+        )
     else:
-        _record_check(report, "gate", status="skip")
+        _record_check(
+            report,
+            "gate",
+            status="skip",
+            reason="no evidence manifest; not a tracked dev unit",
+        )
+        _record_check(
+            report,
+            "drift",
+            status="skip",
+            reason="no baseline evidence snapshot to compare",
+        )
 
     snapshot_passed, snapshot_message = check_snapshot_policy(prompt_path, root)
     if snapshot_passed:

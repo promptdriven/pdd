@@ -208,6 +208,7 @@ def test_checkup_registers_interactive_flags() -> None:
 
 
 def test_cli_interactive_routes_with_tty(tmp_path: Path) -> None:
+    """--interactive (with a TTY) routes to the agentic session and completes."""
     prompt_file = tmp_path / "test.prompt"
     prompt_file.write_text("prompt content")
     finding = _make_finding("CLI-001")
@@ -215,15 +216,17 @@ def test_cli_interactive_routes_with_tty(tmp_path: Path) -> None:
 
     with patch("pdd.commands.checkup._interactive_tty_available", return_value=True):
         with patch(
-            "pdd.checkup_interactive_main.build_prompt_source_set_report",
+            "pdd.checkup_agent.build_prompt_source_set_report",
             return_value=report,
         ):
-            with patch("pdd.checkup_interactive_main._prompt_menu_choice", return_value=4):
-                runner = CliRunner()
-                result = runner.invoke(checkup, [str(prompt_file), "--interactive"])
+            runner = CliRunner()
+            # Accept the plan (Y), then skip the single finding group (n).
+            result = runner.invoke(
+                checkup, [str(prompt_file), "--interactive"], input="Y\nn\n"
+            )
 
     assert result.exit_code == 0
-    assert "Interactive checkup complete" in result.output
+    assert "Checkup complete" in result.output
 
 
 def test_fake_session_still_usable_via_factory(tmp_path: Path) -> None:

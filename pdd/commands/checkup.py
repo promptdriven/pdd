@@ -764,41 +764,47 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         target,
         project_root=project_root,
     ):
-        if interactive:
-            _quiet = ctx.obj.get("quiet", False)
-            # --auto without --planner implicitly enables the deterministic planner.
-            _effective_planner = planner or ("deterministic" if auto_mode else None)
-            if _effective_planner is not None:
-                from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
-                    CheckupAgent,
-                    TerminalCheckupSession,
-                )
-                from ..checkup_planner import make_planner  # pylint: disable=import-outside-toplevel
+        _quiet = ctx.obj.get("quiet", False)
+        # The agentic UX is engaged by --interactive, --planner, or --auto.
+        # --auto/--interactive without --planner default to the deterministic
+        # planner. JSON/explain stay on the structured path below.
+        _agent_requested = (interactive or planner is not None or auto_mode) and not (
+            as_json or explain
+        )
+        if _agent_requested:
+            from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
+                MODE_AUTO,
+                MODE_INTERACTIVE,
+                MODE_REVIEW,
+                CheckupAgent,
+                TerminalCheckupSession,
+            )
+            from ..checkup_planner import make_planner  # pylint: disable=import-outside-toplevel
 
-                _planner = make_planner(_effective_planner)
-                _agent_session = TerminalCheckupSession(quiet=_quiet)
-                _agent = CheckupAgent(_planner, _agent_session)
-                return _agent.run(
-                    target,
-                    project_root=project_root,
-                    strict=strict,
-                    apply=apply,
-                    dry_run=dry_run,
-                    quiet=_quiet,
-                    explicit_interactive=True,
-                    auto=auto_mode,
-                )
+            _effective_planner = planner or "deterministic"
+            if interactive and auto_mode:
+                _mode = MODE_AUTO
+            elif interactive:
+                _mode = MODE_INTERACTIVE
+            elif auto_mode:
+                _mode = MODE_AUTO
+            else:
+                # --planner without --interactive: safe, non-interactive review.
+                _mode = MODE_REVIEW
 
-            from ..checkup_interactive_main import run_interactive_checkup  # pylint: disable=import-outside-toplevel
-
-            return run_interactive_checkup(
+            _planner = make_planner(_effective_planner)
+            _agent_session = TerminalCheckupSession(quiet=_quiet)
+            _agent = CheckupAgent(_planner, _agent_session)
+            return _agent.run(
                 target,
-                apply=apply,
-                dry_run=dry_run,
                 project_root=project_root,
                 strict=strict,
+                apply=apply,
+                dry_run=dry_run,
                 quiet=_quiet,
-                explicit_interactive=True,
+                explicit_interactive=interactive,
+                auto=auto_mode,
+                mode=_mode,
             )
 
         import json as _json  # pylint: disable=import-outside-toplevel
