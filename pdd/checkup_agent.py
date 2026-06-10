@@ -723,12 +723,18 @@ def _accounting_dict(acc: CheckupAccounting) -> dict:
 
 
 def discover_prompt_files(directory: Path) -> list[Path]:
-    """Return sorted ``*.prompt`` files directly under ``directory`` (non-recursive,
-    excluding ``*_LLM.prompt`` scratch files)."""
+    """Return sorted ``*.prompt`` files under ``directory`` (recursive,
+    excluding ``*_LLM.prompt`` scratch files).
+
+    Discovery is recursive to match how ``classify_checkup_target`` recognises a
+    prompt directory (it rglobs for prompts): targets like ``pdd/prompts`` keep
+    prompts under ``commands/``, ``core/``, ``frontend/`` etc., and the directory
+    gate must cover the whole tree rather than only the top level.
+    """
     return sorted(
         p
-        for p in Path(directory).glob("*.prompt")
-        if p.is_file() and not p.name.endswith("_LLM.prompt")
+        for p in Path(directory).rglob("*.prompt")
+        if p.is_file() and not p.name.lower().endswith("_llm.prompt")
     )
 
 
@@ -739,6 +745,7 @@ def run_checkup_directory(
     project_root: Path,
     strict: bool = False,
     apply: bool = False,
+    dry_run: bool = False,
     auto: bool = False,
     mode: str = MODE_REVIEW,
     quiet: bool = False,
@@ -765,6 +772,7 @@ def run_checkup_directory(
             project_root=root,
             strict=strict,
             apply=apply,
+            dry_run=dry_run,       # honor --dry-run/--preview for the whole set
             quiet=True,            # suppress the full per-file dump
             explicit_interactive=False,
             auto=auto,

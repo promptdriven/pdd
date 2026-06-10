@@ -880,6 +880,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 project_root=_root.resolve(),
                 strict=strict,
                 apply=apply,
+                dry_run=effective_dry_run,
                 auto=auto_mode,
                 mode=MODE_AUTO if auto_mode else MODE_REVIEW,
                 quiet=_quiet,
@@ -917,7 +918,16 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                     else _repair_defaults.max_seconds
                 ),
             )
+            # Resolve a relative target against project_root (not cwd) so a
+            # single-file repair like
+            #   pdd checkup prompts/foo.prompt --project-root /repo --prompt-repair ...
+            # targets only that file instead of falling through to a whole-project
+            # repair sweep when cwd != project_root.
             _target_path = Path(target)
+            if not _target_path.is_absolute():
+                _rooted_target = _root / target
+                if _rooted_target.is_file():
+                    _target_path = _rooted_target
             if _target_path.is_file() and _target_path.suffix == ".prompt":
                 _prompt_paths = [_target_path]
             else:

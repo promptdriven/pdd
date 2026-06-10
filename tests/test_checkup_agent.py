@@ -16,6 +16,8 @@ from pdd.checkup_agent import (
     CheckupAgent,
     RecordingCheckupSession,
     TerminalCheckupSession,
+    discover_prompt_files,
+    run_checkup_directory,
 )
 from pdd.checkup_planner import DeterministicPlanner, LLMPlanner, Plan, make_planner
 from pdd.checkup_prompt_main import PromptSourceSetReport, SourceSetFinding
@@ -819,3 +821,46 @@ class TestAutoMode:
         mock_run.assert_called_once()
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("auto") is True
+
+
+class TestDirectoryDiscoveryAndDryRun:
+    def test_discover_prompt_files_is_recursive(self, tmp_path):
+        """Discovery must recurse so nested prompt subtrees are covered
+        (matches classify_checkup_target's rglob-based directory detection)."""
+        top = tmp_path / "prompts"
+        (top / "commands").mkdir(parents=True)
+        (top / "core").mkdir()
+        (top / "top_python.prompt").write_text("% top\n", encoding="utf-8")
+        (top / "commands" / "checkup_python.prompt").write_text("% c\n", encoding="utf-8")
+        (top / "core" / "cli_python.prompt").write_text("% core\n", encoding="utf-8")
+        # *_LLM.prompt scratch files are excluded.
+        (top / "core" / "scratch_LLM.prompt").write_text("% x\n", encoding="utf-8")
+
+        found = {p.name for p in discover_prompt_files(top)}
+        assert found == {
+            "top_python.prompt",
+            "checkup_python.prompt",
+            "cli_python.prompt",
+        }
+
+    def test_directory_honors_dry_run_for_auto_apply(self, tmp_path):
+        """pdd checkup <dir> --auto --apply --dry-run must forward dry_run to each
+        agent.run so low-risk patches are previewed, not written."""
+        prompt = tmp_path / "style.prompt"
+        prompt.write_text("% Style\nDo something.\n", encoding="utf-8")
+        planner = DeterministicPlanner()
+
+        with patch("pdd.checkup_agent.CheckupAgent.run") as mock_run:
+            mock_run.return_value = ("ok", 0.0, "")
+            run_checkup_directory(
+                planner,
+                [prompt],
+                project_root=tmp_path,
+                apply=True,
+                dry_run=True,
+                auto=True,
+                quiet=True,
+            )
+
+        assert mock_run.call_args.kwargs["dry_run"] is True
+        assert mock_run.call_args.kwargs["apply"] is True

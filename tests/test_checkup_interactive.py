@@ -541,3 +541,76 @@ def test_change_forwards_apply_to_prompt_gate() -> None:
     from pdd.commands.modify import change
 
     assert "apply" in {p.name for p in change.params}
+
+
+def test_single_file_repair_resolves_against_project_root(tmp_path: Path) -> None:
+    """A relative single-file target with --project-root must repair only that file,
+    not fall through to a whole-project sweep when cwd != project_root (#1519)."""
+    import os
+
+    repo = tmp_path / "repo"
+    (repo / "prompts").mkdir(parents=True)
+    target_file = repo / "prompts" / "foo_python.prompt"
+    target_file.write_text("% foo\nDo something vague.\n", encoding="utf-8")
+
+    workdir = tmp_path / "elsewhere"
+    workdir.mkdir()
+
+    report = PromptSourceSetReport(
+        prompt_path=target_file,
+        project_root=repo,
+        target="prompts/foo_python.prompt",
+        findings=[
+            SourceSetFinding(
+                finding_id="lint-1",
+                source_check="lint",
+                severity="warn",
+                file=target_file,
+                code="STYLE_1",
+                message="Style issue",
+                recommended_action="Tidy",
+            )
+        ],
+        checks=[{"name": "lint", "status": "warn"}],
+    )
+
+    repaired_paths = []
+
+    def _fake_repair_loop(pp, cfg, **kwargs):
+        repaired_paths.append(Path(pp))
+        from pdd.prompt_repair import RepairResult
+
+        return RepairResult(success=True, repair_skipped=True, message="done")
+
+    prev_cwd = os.getcwd()
+    os.chdir(workdir)
+    try:
+        with patch(
+            "pdd.commands.checkup.run_checkup_prompt",
+            return_value=(False, "blocked", 0.0, "model", 1),
+        ), patch(
+            "pdd.commands.checkup.build_prompt_source_set_report",
+            return_value=report,
+        ), patch(
+            "pdd.commands.checkup.discover_prompt_paths"
+        ) as mock_discover, patch(
+            "pdd.commands.checkup.run_prompt_repair_loop",
+            side_effect=_fake_repair_loop,
+        ):
+            CliRunner().invoke(
+                checkup,
+                [
+                    "prompts/foo_python.prompt",
+                    "--project-root",
+                    str(repo),
+                    "--prompt-repair",
+                    "best-effort",
+                ],
+                catch_exceptions=False,
+            )
+    finally:
+        os.chdir(prev_cwd)
+
+    # The whole-project sweep must NOT be used; only the resolved single file is repaired.
+    mock_discover.assert_not_called()
+    assert repaired_paths == [target_file]
