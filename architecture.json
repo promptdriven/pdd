@@ -6739,12 +6739,12 @@
           },
           {
             "name": "update_architecture_from_prompt",
-            "signature": "(prompt_filename: str, prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, prompt_content_override: Optional[str] = None) -> Dict[str, Any]",
+            "signature": "(prompt_filename: str, prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, prompt_content_override: Optional[str] = None, stories_dir: Optional[Path] = None, tests_dir: Optional[Path] = None) -> Dict[str, Any]",
             "returns": "Dict with keys: success, updated, changes, error, warnings"
           },
           {
             "name": "sync_all_prompts_to_architecture",
-            "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
+            "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[Set[str]] = None) -> Dict[str, Any]",
             "returns": "Dict with keys: success, updated_count, skipped_count, results, errors, registered"
           },
           {
@@ -6779,7 +6779,7 @@
           },
           {
             "name": "register_untracked_prompts",
-            "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
+            "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[Set[str]] = None) -> Dict[str, Any]",
             "returns": "Dict with keys: registered, skipped, errors"
           },
           {
