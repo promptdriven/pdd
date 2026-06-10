@@ -489,6 +489,94 @@ def test_claude_policy_capability_contract_declared_and_validated():
         validate_claude_policy({"allowedTools": ["Read"], "outputFormat": "json"})
 
 
+def test_run_agentic_task_claude_policy_rejects_when_anthropic_unavailable(
+    mock_cwd, mock_env
+):
+    from pdd.agentic_common import AgenticUnsupportedSemanticsError
+
+    policy = {
+        "allowedTools": "Read",
+        "addDirs": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["google", "openai", "opencode"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["google", "openai", "opencode"],
+    ), patch("pdd.agentic_common._run_with_provider") as mock_provider:
+        with pytest.raises(AgenticUnsupportedSemanticsError, match="requires Anthropic"):
+            run_agentic_task("Audit only", mock_cwd, claude_policy=policy)
+
+    mock_provider.assert_not_called()
+
+
+def test_run_agentic_task_claude_policy_does_not_fallback_to_unsupported_providers(
+    mock_cwd, mock_env
+):
+    policy = {
+        "allowedTools": "Read",
+        "addDirs": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic", "google", "openai", "opencode"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic", "google", "openai", "opencode"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        return_value=(False, "Claude policy run failed", 0.0, None, None),
+    ) as mock_provider:
+        result = run_agentic_task(
+            "Audit only",
+            mock_cwd,
+            max_retries=1,
+            claude_policy=policy,
+        )
+
+    assert not result.success
+    assert [call.args[0] for call in mock_provider.call_args_list] == ["anthropic"]
+
+
+def test_run_agentic_task_interactive_rejects_no_session_policy_before_provider(
+    mock_cwd, mock_env
+):
+    from pdd.agentic_common import AgenticUnsupportedSemanticsError
+
+    mock_env["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    policy = {
+        "allowedTools": "Read",
+        "addDirs": [],
+        "noSessionPersistence": True,
+        "outputFormat": "json",
+    }
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        return_value=(True, "should not run", 0.1, "claude-opus-4-8", None),
+    ) as mock_provider:
+        with pytest.raises(
+            AgenticUnsupportedSemanticsError,
+            match="noSessionPersistence.*interactive",
+        ):
+            run_agentic_task("Audit only", mock_cwd, claude_policy=policy)
+
+    mock_provider.assert_not_called()
+
+
 def test_run_agentic_task_forwards_claude_policy_to_provider(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which
 ):
@@ -594,7 +682,7 @@ def test_build_claude_interactive_command_applies_claude_policy(tmp_path):
         claude_policy={
             "allowedTools": "Read,Glob",
             "addDirs": [str(extra_dir)],
-            "noSessionPersistence": True,
+            "noSessionPersistence": False,
             "outputFormat": "json",
         },
     )
@@ -602,9 +690,32 @@ def test_build_claude_interactive_command_applies_claude_policy(tmp_path):
     assert "--dangerously-skip-permissions" not in cmd
     assert cmd[cmd.index("--allowedTools") + 1] == "Read,Glob,mcp__pdd__pdd_reply"
     assert cmd[cmd.index("--add-dir") + 1] == str(extra_dir)
-    assert "--no-session-persistence" in cmd
+    assert "--no-session-persistence" not in cmd
     assert "--output-format" not in cmd
     assert "return JSON text through pdd_reply" in cmd[-1]
+
+
+def test_build_claude_interactive_command_rejects_no_session_policy(tmp_path):
+    from pdd.agentic_common import AgenticUnsupportedSemanticsError
+
+    with pytest.raises(
+        AgenticUnsupportedSemanticsError,
+        match="noSessionPersistence.*interactive",
+    ):
+        _build_claude_interactive_command(
+            cli_path="/bin/claude",
+            prompt_path=tmp_path / ".agentic_prompt_test.txt",
+            config_path=tmp_path / "mcp_config.json",
+            job_id="job-123",
+            session_id="11111111-2222-4333-8444-555555555555",
+            env={},
+            claude_policy={
+                "allowedTools": "Read,Glob",
+                "addDirs": [],
+                "noSessionPersistence": True,
+                "outputFormat": "json",
+            },
+        )
 
 
 def test_claude_interactive_detects_workspace_trust_prompt():
