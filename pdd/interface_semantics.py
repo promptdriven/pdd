@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import re
 from dataclasses import dataclass
+from itertools import permutations
 from typing import Iterable, Optional
 
 
@@ -107,6 +108,13 @@ def semantic_types_compatible(
     right = actual.without_optional()
     if left.base != right.base:
         return False
+    if left.base == "Union":
+        # Union members are an unordered set: ``Union[str, int]`` and
+        # ``Union[int, str]`` are the same type.  Compare order-insensitively.
+        # ``None`` membership is carried by ``optional`` (checked above), so a
+        # narrowing like ``str | int | None`` -> ``str | int`` is already
+        # rejected by the optional mismatch.
+        return _union_args_compatible(left.args, right.args)
     if not left.args or not right.args:
         return True
     if len(left.args) != len(right.args):
@@ -114,6 +122,28 @@ def semantic_types_compatible(
     return all(
         semantic_types_compatible(left_arg, right_arg)
         for left_arg, right_arg in zip(left.args, right.args)
+    )
+
+
+def _union_args_compatible(
+    left_args: tuple["SemanticType", ...],
+    right_args: tuple["SemanticType", ...],
+) -> bool:
+    """Return True when two union member tuples match as unordered sets.
+
+    Union arity is tiny (2-4 members), so an exact bijection search over
+    permutations is cheap and avoids the stranding a greedy match can hit when
+    the per-member leniency (``list[str]`` ~ ``list``) makes matches
+    non-exclusive.
+    """
+    if len(left_args) != len(right_args):
+        return False
+    return any(
+        all(
+            semantic_types_compatible(left_arg, right_arg)
+            for left_arg, right_arg in zip(left_args, permutation)
+        )
+        for permutation in permutations(right_args)
     )
 
 
@@ -387,7 +417,11 @@ def _semantic_from_ast(node: ast.AST, *, raw: str = "") -> Optional[SemanticType
             return SemanticType(
                 base="Union",
                 args=parsed_parts,
-                optional=False,
+                # Carry ``None`` membership even for 3+-member unions so a
+                # narrowing like ``Union[str, int, None]`` -> ``Union[str, int]``
+                # is not treated as compatible (the 2-member ``Optional`` path
+                # above already did this; this is the multi-member equivalent).
+                optional=len(non_none) != len(union_parts),
                 raw=raw or ast.unparse(node),
             )
         return None

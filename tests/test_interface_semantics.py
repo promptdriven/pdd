@@ -16,6 +16,12 @@ from pdd.interface_semantics import (
         ("Optional[Set[str]]", "Union[Set[str], None]"),
         ("Optional[typing.Set[str]]", "typing.Union[set[str], None]"),
         ("set", "Set[str]"),
+        # Union members are an unordered set: reordering them is not drift.
+        ("Union[str, int]", "Union[int, str]"),
+        ("int | str", "str | int"),
+        ("Union[str, int, bytes]", "bytes | str | int"),
+        # ...including parameterized members reordered, and with aliasing.
+        ("Union[List[str], int]", "Union[int, list[str]]"),
     ],
 )
 def test_semantic_type_aliases_are_compatible(left, right):
@@ -28,6 +34,12 @@ def test_semantic_type_aliases_are_compatible(left, right):
         ("List[str]", "Dict[str, str]"),
         ("Optional[str]", "str"),
         ("mytypes.Set", "Set[str]"),
+        # Dropping ``None`` from a 3+-member union narrows the contract (a
+        # caller passing None breaks), so it must NOT be treated as compatible.
+        ("Union[str, int, None]", "Union[str, int]"),
+        ("str | int | None", "str | int"),
+        # Swapping a union member for a different type is still drift.
+        ("Union[str, int]", "Union[str, float]"),
     ],
 )
 def test_semantic_type_incompatible_changes_fail(left, right):
@@ -62,3 +74,17 @@ def test_adding_a_default_is_not_a_regression(old_entry, new_entry):
 )
 def test_removing_or_changing_a_default_is_a_regression(old_entry, new_entry):
     assert signature_entries_compatible(old_entry, new_entry) is False
+
+
+@pytest.mark.parametrize(
+    ("old_entry", "new_entry", "compatible"),
+    [
+        # Reordering union members in a parameter annotation is not a regression.
+        ("[function] (v: str | int)", "[function] (v: int | str)", True),
+        # Narrowing a parameter's union by dropping None breaks callers that
+        # passed None -> genuine public-surface regression.
+        ("[function] (v: str | int | None)", "[function] (v: str | int)", False),
+    ],
+)
+def test_union_parameter_compatibility(old_entry, new_entry, compatible):
+    assert signature_entries_compatible(old_entry, new_entry) is compatible
