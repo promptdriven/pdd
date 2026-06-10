@@ -125,7 +125,7 @@ To manage large context windows and reduce costs, PDD supports automated context
 Users can enable compression via **global** CLI flags (before the subcommand), `.pddrc` defaults, or command-local flags on `pdd sync` / `pdd fix`:
 
 - **`--compress-examples`**: Automatically applies `mode="interface"` to all example files in the `<include>` graph. This extracts signatures and docstrings, replacing function bodies with `...`.
-- **`--compress-test-context`**: Uses AST-based slicing to include only failing tests and their necessary fixtures from the test context during `pdd fix` or `pdd test`.
+- **`--compress-test-context`**: Rank and select tests under a configurable token budget (`PDD_TEST_TOKEN_BUDGET`, default 2 000 tokens) using import-graph distance, symbol overlap, failure recency, and file recency. Failing tests (from `PDD_FAILING_TESTS` or `.pytest_cache`) are always included first. A `TestPackingManifest` explaining selected and omitted tests is emitted in run telemetry. See [Ranked Test Selection](#ranked-test-selection) below.
 - **`--context-compression {off,test,examples,contracts,all}`**: Enables one or more compression modes for the invocation.
 
 Place global flags before the subcommand, for example `pdd --context-compression test generate prompts/foo_python.prompt`. The `generate` and `preprocess` commands do **not** accept `--context-compression` after the subcommand; `sync` and `fix` may pass the same flags after their subcommand as well.
@@ -141,6 +141,35 @@ If compression fails (e.g., due to AST parsing errors in a dependency), the syst
 ### Reporting
 
 PDD reports active compression modes in the execution summary, lists successfully compressed include targets (path and mode), and records any fallback events (including the file path when slicing or selection fails).
+
+### Ranked Test Selection
+
+When `--context-compression test` (or `--compress-test-context`) is active, PDD selects which test files to include using a token-budget-aware ranking algorithm rather than including all available tests. This prevents context rot from old or unrelated tests crowding out the prompt, dependencies, and grounding examples.
+
+**How it works:**
+
+1. **Failing tests are always included first.** Tests listed in `PDD_FAILING_TESTS` or `.pytest_cache/v/cache/lastfailed` bypass budget accounting and are packed unconditionally. If a failing-test file exceeds the remaining budget, `PytestSlicer` reduces it to only the failing functions and their necessary fixtures.
+2. **Remaining candidates are ranked by a four-signal composite score:**
+   - Import-graph distance to the module under change (weight 0.40) — closer = higher score
+   - Symbol-reference overlap with the module's exported API (weight 0.30)
+   - Failure recency from `.pytest_cache` or `PDD_FAILING_TESTS` (weight 0.20)
+   - File modification recency (weight 0.10)
+3. **Greedy packing under a token budget** — Ranked candidates are packed highest-score-first until `PDD_TEST_TOKEN_BUDGET` (default: 2 000 tokens) is exhausted. A redundancy penalty (AdaGReS-style marginal scoring) is applied so that two test files exercising the same public symbols contribute diminishing value.
+4. **Cross-file deduplication** — Test files with Jaccard similarity above `PDD_TEST_DEDUP_THRESHOLD` (default: 0.8) on their imported symbol sets are deduplicated; only the higher-scoring file is retained.
+5. **A `TestPackingManifest` is emitted** for each invocation, listing every selected test (with file, token count, score, and reason) and every omitted test (with reason: budget exhausted, near-duplicate of a selected file, or unrelated import path). The manifest appears in the compressed-context telemetry alongside other compression events.
+
+**Configuration:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `PDD_TEST_TOKEN_BUDGET` | `2000` | Token cap for test context. Set to `0` to skip test context entirely without error. |
+| `PDD_TEST_RANKING_WEIGHTS` | `{"import_distance":0.4,"symbol_overlap":0.3,"failure_recency":0.2,"file_recency":0.1}` | JSON override for the four ranking weights. |
+| `PDD_TEST_DEDUP_THRESHOLD` | `0.8` | Jaccard similarity threshold above which two test files are considered near-duplicates. |
+
+**Graceful degradation:**
+- If the import graph cannot be built (unparseable module), ranking falls back to recency-only scoring.
+- If `.pytest_cache` is absent, the failure-recency signal is skipped and logged as unavailable.
+- If no test files exist, an empty manifest is returned without error.
 
 ---
 

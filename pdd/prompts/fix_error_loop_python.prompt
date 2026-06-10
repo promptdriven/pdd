@@ -15,6 +15,7 @@
 <pdd-dependency>failure_classification_python.prompt</pdd-dependency>
 <pdd-dependency>fix_focus_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
+<pdd-dependency>test_context_packer_python.prompt</pdd-dependency>
 
 % You are an expert Python Software Engineer. Your goal is to write a robust Python module containing the `fix_error_loop` function and its associated helpers. This module implements an iterative, agentic workflow to fix errors in unit tests and their corresponding code files using an LLM.
 
@@ -53,7 +54,7 @@ The module supports both local and cloud execution modes:
 
 13. **Failure classification & failure-aware retries:** Import from `pdd.failure_classification`: `FailureKind`, `classify_failure`, `extract_failure_signature`, `failure_classification_hint`, `format_signature_hint` (or equivalent names matching `failure_classification_python.prompt`). After each test/verification run that still fails:
     - Classify the captured output with `classify_failure(...)`.
-    - **Compression for Test Context**: If `PDD_COMPRESS_TEST_CONTEXT=1` or global `PDD_CONTEXT_COMPRESSION` includes `test` or `all`, use AST-based slicing to include only failing tests and their necessary fixtures from the test context (failing tests only). To enable downstream `preprocess` and `ContentSelector` calls to identify the relevant tests, `fix_error_loop` MUST set the `PDD_FAILING_TESTS` environment variable to a comma-separated list of the failing test names/IDs before invoking the fix function. This is passed to the LLM as part of the error report or by modifying the included test files in the prompt.
+    - **Compression for Test Context**: If `PDD_COMPRESS_TEST_CONTEXT=1` or global `PDD_CONTEXT_COMPRESSION` includes `test` or `all`, call `TestContextPacker(test_root=...).pack(module_path=code_file, failing_tests=<currently failing test IDs>, budget_tokens=None)` (from `pdd.test_context_packer`). Failing tests MUST be identified and stored in `PDD_FAILING_TESTS` as a comma-separated list of test IDs **before** calling `pack()`, so the packer can place them in the priority-0 lane. Use the returned `context_text` as the test context for local and cloud fix calls instead of the full raw test file. Log the returned `TestPackingManifest` via `compression_reporting` telemetry. `PDD_FAILING_TESTS` must remain set for any downstream `preprocess` or `ContentSelector` calls.
     - **Timeouts before syntax:** classification must treat timeout/flaky patterns (e.g. `"timed out"`) as `timeout_flaky` before classifying as `syntax_import`, so log noise does not mis-route.
     - **Syntax / import (`FailureKind.syntax_import`):** After **at least one** completed fix attempt, if `extract_failure_signature` matches the previous iteration’s signature (unchanged failure pattern), **stop early** and print a **yellow** console hint (via `format_signature_hint` / `failure_classification_hint`) that imports, environment, or missing files may need manual fixes—not more blind LLM iterations.
     - **Timeout / flaky (`FailureKind.timeout_flaky`):** Track **consecutive** iterations without improvement; when **≥ 2**, **stop early** with the timeout/flaky message (isolate tests, increase timeout, manual investigation).
@@ -135,7 +136,7 @@ def fix_error_loop(
             runs up to max_attempts (subject to budget) without those early exits.
         no_local_fallback: When True, cloud failures raise instead of falling back to local LLM.
             Only meaningful when use_cloud=True. Default is False.
-        compress_test_context: When True, use AST-based slicing for failing tests.
+        compress_test_context: When True, rank and select tests under a configurable token budget using TestContextPacker (ranked by import-graph distance, symbol overlap, and recency). Failing tests are always packed first.
         context_compression: Global compression mode override.
         compression_fallback: Strategy for when a file cannot be compressed.
     """
@@ -180,6 +181,9 @@ def fix_error_loop(
 <fix_focus>
     <include optional mode="interface">pdd/fix_focus.py</include>
 </fix_focus>
+<test_context_packer>
+    <include optional mode="interface">pdd/test_context_packer.py</include>
+</test_context_packer>
 
 ### Instructions
 1.  Keep helper responsibilities cohesive (`run_pytest_on_file`, `format_log_for_output`, `_normalize_agentic_result`) and aligned to the requirements/output contract.
