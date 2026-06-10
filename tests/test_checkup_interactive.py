@@ -229,6 +229,61 @@ def test_cli_interactive_routes_with_tty(tmp_path: Path) -> None:
     assert "Checkup complete" in result.output
 
 
+def test_bare_prompt_target_routes_to_agent_review(tmp_path: Path) -> None:
+    """`pdd checkup <prompt>` with no flags uses the agentic review mode."""
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("% t\n")
+    with patch("pdd.commands.checkup._interactive_tty_available", return_value=False), patch(
+        "pdd.checkup_agent.CheckupAgent.run"
+    ) as mock_run:
+        mock_run.return_value = ("done", 0.0, "")
+        result = CliRunner().invoke(checkup, [str(prompt_file)], catch_exceptions=False)
+    mock_run.assert_called_once()
+    assert mock_run.call_args.kwargs.get("mode") == "review"
+    assert result.exit_code == 0
+
+
+def test_json_target_stays_on_structured_path(tmp_path: Path) -> None:
+    """--json keeps machine output on the structured (non-agent) path."""
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("% t\n")
+    with patch("pdd.commands.checkup.run_checkup_prompt") as mock_struct, patch(
+        "pdd.checkup_agent.CheckupAgent.run"
+    ) as mock_agent:
+        mock_struct.return_value = (True, "ok", 0.0, "", 0)
+        CliRunner().invoke(checkup, [str(prompt_file), "--json"], catch_exceptions=False)
+    mock_agent.assert_not_called()
+    mock_struct.assert_called_once()
+
+
+def test_explain_target_stays_on_structured_path(tmp_path: Path) -> None:
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("% t\n")
+    with patch("pdd.commands.checkup.run_checkup_prompt") as mock_struct, patch(
+        "pdd.checkup_agent.CheckupAgent.run"
+    ) as mock_agent:
+        mock_struct.return_value = (True, "ok", 0.0, "", 0)
+        CliRunner().invoke(checkup, [str(prompt_file), "--explain"], catch_exceptions=False)
+    mock_agent.assert_not_called()
+    mock_struct.assert_called_once()
+
+
+def test_active_prompt_repair_stays_on_structured_path(tmp_path: Path) -> None:
+    """When the LLM prompt-repair loop is requested, keep the structured path."""
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("% t\n")
+    with patch("pdd.commands.checkup.run_checkup_prompt") as mock_struct, patch(
+        "pdd.checkup_agent.CheckupAgent.run"
+    ) as mock_agent:
+        mock_struct.return_value = (True, "ok", 0.0, "", 0)
+        CliRunner().invoke(
+            checkup, [str(prompt_file), "--prompt-repair", "best-effort"],
+            catch_exceptions=False,
+        )
+    mock_agent.assert_not_called()
+    mock_struct.assert_called_once()
+
+
 def test_fake_session_still_usable_via_factory(tmp_path: Path) -> None:
     from pdd.checkup_interactive_session import ApprovedPatch
 

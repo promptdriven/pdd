@@ -765,12 +765,25 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         project_root=project_root,
     ):
         _quiet = ctx.obj.get("quiet", False)
-        # The agentic UX is engaged by --interactive, --planner, or --auto.
-        # --auto/--interactive without --planner default to the deterministic
-        # planner. JSON/explain stay on the structured path below.
-        _agent_requested = (interactive or planner is not None or auto_mode) and not (
-            as_json or explain
+        _repair_defaults = load_prompt_repair_defaults(Path.cwd())
+        _effective_repair = (
+            prompt_repair if prompt_repair is not None else _repair_defaults.mode
         )
+        _repair_active = _effective_repair not in (None, "off")
+        _machine_output = as_json or explain
+
+        # The agentic review UX is the DEFAULT for prompt targets — grouped
+        # findings, skip reasons, a pass/warn/block decision, and saved
+        # artifacts — with no extra flags required. --interactive / --planner /
+        # --auto select the interactive and auto variants. The structured path
+        # below is kept only for machine output (--json/--explain) and for the
+        # LLM prompt-repair loop when it is enabled.
+        _agent_requested = (
+            interactive
+            or planner is not None
+            or auto_mode
+            or not (_machine_output or _repair_active)
+        ) and not _machine_output
         if _agent_requested:
             from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
                 MODE_AUTO,
@@ -809,9 +822,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
         import json as _json  # pylint: disable=import-outside-toplevel
 
-        quiet = ctx.obj.get("quiet", False)
-        _repair_defaults = load_prompt_repair_defaults(Path.cwd())
-        _effective_repair = prompt_repair if prompt_repair is not None else _repair_defaults.mode
+        quiet = _quiet
 
         passed, message, cost, model, exit_code = run_checkup_prompt(
             target,
