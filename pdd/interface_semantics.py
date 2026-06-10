@@ -267,6 +267,7 @@ def callable_contracts_compatible(
         if param.kind not in {"vararg", "kwarg"}
     }
     old_has_vararg = any(param.kind == "vararg" for param in old.params)
+    old_has_kwarg = any(param.kind == "kwarg" for param in old.params)
     for new_param in new.params:
         if new_param.kind in {"vararg", "kwarg"}:
             continue
@@ -281,6 +282,13 @@ def callable_contracts_compatible(
         # ``f(1, 2)`` from ``args`` to ``b``.  Keyword-only additions after
         # ``*args`` do not intercept positional slots and remain allowed.
         if old_has_vararg and new_param.positional_capable:
+            return False
+        # The symmetric case for ``**kwargs``: a new keyword-capable parameter
+        # captures a keyword that previously flowed into ``**kwargs`` --
+        # ``def f(**kwargs)`` -> ``def f(a=0, **kwargs)`` rebinds ``f(a=5)`` from
+        # ``kwargs['a']`` to ``a``.  A positional-only addition cannot be passed
+        # by keyword, so it never steals from ``**kwargs`` and stays allowed.
+        if old_has_kwarg and new_param.keyword_capable:
             return False
     return True
 

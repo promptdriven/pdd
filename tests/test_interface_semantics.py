@@ -140,3 +140,24 @@ def test_new_positional_before_varargs_is_a_regression(
     old_entry, new_entry, compatible
 ):
     assert signature_entries_compatible(old_entry, new_entry) is compatible
+
+
+@pytest.mark.parametrize(
+    ("old_entry", "new_entry", "compatible"),
+    [
+        # Symmetric to the *args case: a new keyword-capable parameter captures
+        # a keyword that previously flowed into **kwargs -- f(a=5) used to land
+        # in kwargs['a'], now binds the new parameter -> regression.
+        ("[function] (**kwargs)", "[function] (a=0, **kwargs)", False),
+        ("[function] (**kwargs)", "[function] (*, a=0, **kwargs)", False),
+        # A positional-only parameter cannot be passed by keyword, so it never
+        # steals from **kwargs and stays compatible.
+        ("[function] (**kwargs)", "[function] (a=0, /, **kwargs)", True),
+        # Without **kwargs, adding a defaulted keyword param is a widening.
+        ("[function] (a)", "[function] (a, b=0)", True),
+    ],
+)
+def test_new_keyword_param_with_existing_kwargs_is_a_regression(
+    old_entry, new_entry, compatible
+):
+    assert signature_entries_compatible(old_entry, new_entry) is compatible
