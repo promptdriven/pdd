@@ -34,7 +34,7 @@ from .checkup_review_loop import (
     FINAL_GATE_CATEGORY_PROVIDER_PARSER,
     FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
     FINAL_GATE_REPORT_SCHEMA,
-    PROMPT_SOURCE_GUARD_REFUSAL_MARKER,
+    SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS,
     ReviewLoopConfig,
     ReviewLoopContext,
     clear_final_state,
@@ -360,8 +360,10 @@ def _classify_layer1_failure_category(message: str) -> str:
         or "empty step-7" in text
     ):
         return FINAL_GATE_CATEGORY_PROVIDER_PARSER
-    if PROMPT_SOURCE_GUARD_REFUSAL_MARKER in text or (
-        "source of truth" in text and "prompt" in text
+    if (
+        any(marker in text for marker in SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS)
+        or ("source of truth" in text and "prompt" in text)
+        or ("architecture" in text and "registry" in text)
     ):
         return FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
     if (

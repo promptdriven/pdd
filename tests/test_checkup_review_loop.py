@@ -13465,6 +13465,36 @@ class TestReviewLoopFailureCategory2047:
             == FINAL_GATE_CATEGORY_REVIEW_FINDINGS
         )
 
+    def test_prompt_source_guard_stop_reason_is_source_of_truth(self):
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        state = ReviewLoopState(
+            stop_reason="generated-code-only fix refused: pdd/x.py is generated from ..."
+        )
+        assert (
+            _review_loop_failure_category(state, False) == FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+        )
+
+    def test_architecture_registry_guard_stop_reason_is_source_of_truth(self):
+        # The architecture-registry guard is also a source-of-truth contract,
+        # so its refusal must classify as source_of_truth_repair_needed too.
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        state = ReviewLoopState(
+            stop_reason="architecture.json registry edit refused: removed pair ..."
+        )
+        assert (
+            _review_loop_failure_category(state, False) == FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+        )
+
     def test_fixed_sot_finding_does_not_trigger(self):
         # A resolved SoT finding must not keep classifying as SoT.
         from pdd.checkup_review_loop import (

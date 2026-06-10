@@ -82,9 +82,16 @@ FINAL_GATE_CATEGORY_FULL_SUITE = "full_suite_failed"
 FINAL_GATE_CATEGORY_INCOMPLETE_VERIFICATION = "incomplete_verification"
 FINAL_GATE_CATEGORY_PROVIDER_PARSER = "provider_parser_failure"
 FINAL_GATE_CATEGORY_BUDGET_EXHAUSTED = "budget_exhausted"
-# The deterministic refusal substring emitted by ``_check_prompt_source_guard``;
+# The deterministic refusal substrings emitted by the two source-of-truth guards;
 # used to classify a review-loop stop as a source-of-truth blocker.
 PROMPT_SOURCE_GUARD_REFUSAL_MARKER = "generated-code-only fix refused"
+ARCHITECTURE_REGISTRY_GUARD_REFUSAL_MARKER = "architecture.json registry edit refused"
+# Both guards enforce the prompt/architecture source-of-truth contract, so both
+# refusals classify as source_of_truth_repair_needed.
+SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS = (
+    PROMPT_SOURCE_GUARD_REFUSAL_MARKER,
+    ARCHITECTURE_REGISTRY_GUARD_REFUSAL_MARKER,
+)
 PR_API_CHANGED_FILES_MAX_LINES = 300
 PR_API_CHANGED_FILES_MAX_CHARS = 20000
 # R8: cover every suffix Python can import as a module under ``pdd/``.
@@ -7505,8 +7512,9 @@ def _review_loop_failure_category(
     if passed:
         return FINAL_GATE_CATEGORY_PASSED
     sot = state.source_of_truth
-    if (sot and sot.get("blocked")) or (
-        PROMPT_SOURCE_GUARD_REFUSAL_MARKER in (state.stop_reason or "")
+    stop_reason = state.stop_reason or ""
+    if (sot and sot.get("blocked")) or any(
+        marker in stop_reason for marker in SOURCE_OF_TRUTH_GUARD_REFUSAL_MARKERS
     ):
         return FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
     if any(

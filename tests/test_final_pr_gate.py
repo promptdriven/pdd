@@ -884,6 +884,13 @@ class TestLayer1FailureCategory2047:
         )
         assert _classify_layer1_failure_category(msg) == "source_of_truth_repair_needed"
 
+    def test_architecture_registry_refusal(self) -> None:
+        msg = (
+            "architecture.json registry edit refused: removed pair pdd/x.py "
+            "while code still present. Update the prompt source."
+        )
+        assert _classify_layer1_failure_category(msg) == "source_of_truth_repair_needed"
+
     def test_generic_layer1_fallback(self) -> None:
         assert _classify_layer1_failure_category("something else failed") == "layer1_failed"
 
