@@ -19,6 +19,7 @@ Concepts
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from html import escape
 from pathlib import Path
 from typing import Iterable, Optional, Sequence
 
@@ -261,6 +262,38 @@ class CheckupAccounting:
 # ---------------------------------------------------------------------------
 
 
+_VOCABULARY_DEFINITION_HINTS = {
+    "active": "a session whose expiration time is in the future and whose token has not been revoked",
+    "inactive": "a session whose expiration time has passed or whose token has been revoked",
+    "authorized": "the request identity is authenticated and has the permission required for the requested operation",
+    "unauthorized": "the request identity is missing, unauthenticated, or lacks the permission required for the requested operation",
+    "complete": "all required inputs are present and every required validation step has passed",
+    "duplicate": "a token or identifier value that has already been accepted for a different active session",
+    "graceful": "the function returns the documented failure value without raising an uncaught exception",
+    "gracefully": "the function returns the documented failure value without raising an uncaught exception",
+    "invalid": "the token or session fails signature, expiration, revocation, or required-claim validation",
+    "reasonable": "within the explicit numeric limit or timeout configured by this prompt",
+    "recent": "created or updated within the explicit time window configured by this prompt",
+    "safe": "the operation satisfies all validation, authorization, and data-integrity checks before side effects occur",
+    "unsafe": "the operation fails at least one validation, authorization, or data-integrity check",
+    "successful": "the operation returns its documented success value and records no validation or authorization failure",
+    "trusted": "the source is in the configured allowlist and its identity can be verified",
+    "untrusted": "the source is absent from the configured allowlist or its identity cannot be verified",
+    "valid": "the token or session passes signature, expiration, revocation, and required-claim validation",
+}
+
+
+def _definition_for_term(term: str) -> str:
+    """Return a concrete reviewable vocabulary definition for a vague term."""
+    normalized = term.strip().lower()
+    if normalized in _VOCABULARY_DEFINITION_HINTS:
+        return _VOCABULARY_DEFINITION_HINTS[normalized]
+    return (
+        "the prompt states the exact observable condition, threshold, or "
+        "state transition that makes this term true"
+    )
+
+
 def artifact_dir(project_root: Path) -> Path:
     return Path(project_root) / ".pdd" / "checkup"
 
@@ -316,11 +349,11 @@ def render_report_markdown(
 
 
 def _vocabulary_stub(groups: Sequence[FindingGroup]) -> list[str]:
-    """A concrete, fill-in-the-blank ``<vocabulary>`` block for vague terms.
+    """A concrete, reviewable ``<vocabulary>`` block for vague terms.
 
-    Vague-term repairs are medium-risk: the tool will not invent a meaning, so
-    the preview is an actionable stub the author completes — one entry per
-    distinct undefined term, instead of N identical placeholder lines.
+    Vague-term repairs are medium-risk: the preview should never be silently
+    applied, but it should still give the author a useful first draft instead
+    of emitting placeholder ``TODO`` entries.
     """
     terms: list[str] = []
     seen: set[str] = set()
@@ -336,13 +369,14 @@ def _vocabulary_stub(groups: Sequence[FindingGroup]) -> list[str]:
         return []
     lines = [
         "# Suggested fix — add (or extend) this <vocabulary> block in the prompt",
-        "# and replace each TODO with an observable definition:",
+        "# Review these definitions against the intended domain behavior:",
         "",
         "<vocabulary>",
     ]
     for term in terms:
+        definition = _definition_for_term(term)
         lines.append(
-            f'  <term name="{term}">TODO: define "{term}" with observable criteria</term>'
+            f'  <term name="{escape(term, quote=True)}">{escape(definition)}</term>'
         )
     lines.append("</vocabulary>")
     lines.append("")

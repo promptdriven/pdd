@@ -301,6 +301,39 @@ class TestArtifacts:
         assert "per-finding details" in text
         assert "recommended action:" in text
 
+    def test_patch_preview_uses_concrete_known_vague_term_definitions(self):
+        from pdd.checkup_report import render_patch_preview
+
+        terms = [
+            "active",
+            "valid",
+            "invalid",
+            "unauthorized",
+            "graceful",
+            "successful",
+            "duplicate",
+            "untrusted",
+            "authorized",
+            "trusted",
+        ]
+        fs = [
+            _finding(
+                f"f-{term}",
+                code="VAGUE_TERM_UNDEFINED",
+                msg=f'Vague term "{term}" used',
+            )
+            for term in terms
+        ]
+        groups = group_findings(fs)
+
+        text = render_patch_preview([self._patch("a")], target="p", groups=groups)
+
+        assert "TODO" not in text
+        assert "placeholder" not in text.lower()
+        assert '<term name="valid">the token or session passes signature' in text
+        assert '<term name="trusted">the source is in the configured allowlist' in text
+        assert '<term name="graceful">the function returns the documented failure value' in text
+
     def test_patch_preview_without_groups_still_lists_patches(self):
         from pdd.checkup_report import render_patch_preview
 
