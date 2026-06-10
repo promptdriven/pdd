@@ -151,7 +151,7 @@ def _extract_inline_code_spans(text: str) -> List[Tuple[int, int]]:
     """Return list of (start, end) spans for inline code (backticks)."""
     spans: List[Tuple[int, int]] = []
     try:
-        for m in re.finditer(r"(?<!`)(`+)([^\n]*?)\1", text):
+        for m in re.finditer(r"(?<!`)(`++)([^\n]*?)\1", text):
             spans.append((m.start(), m.end()))
     except Exception:
         pass
@@ -1065,7 +1065,7 @@ def process_include_tags(
     return current_text
 
 def process_pdd_tags(text: str) -> str:
-    pattern = r'<pdd>(?:(?!</pdd>)[\s\S])*</pdd>'
+    pattern = r'<pdd>(?:(?!</pdd>)[\s\S])*+</pdd>'
     # Replace pdd tags with an empty string first
     processed = re.sub(pattern, '', text, flags=re.DOTALL)
     # If there was a replacement and we're left with a specific test case, handle it specially
@@ -1074,7 +1074,7 @@ def process_pdd_tags(text: str) -> str:
     return processed
 
 def process_shell_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any] = None) -> str:
-    pattern = r'<shell>((?:(?!</shell>)[\s\S])*)</shell>'
+    pattern = r'<shell>((?:(?!</shell>)[\s\S])*+)</shell>'
     def replace_shell(match):
         command = match.group(1).strip()
         if recursive:
@@ -1162,7 +1162,7 @@ def process_shell_tags(text: str, recursive: bool, snapshot_recorder: Optional[A
     return re.sub(pattern, replace_shell_with_spans, text, flags=re.DOTALL)
 
 def process_web_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any] = None) -> str:
-    pattern = r'<web>((?:(?!</web>)[\s\S])*)</web>'
+    pattern = r'<web>((?:(?!</web>)[\s\S])*+)</web>'
     def replace_web(match):
         url = match.group(1).strip()
         if recursive:
@@ -1405,10 +1405,10 @@ def double_curly(
     text = text.replace("{", "{{").replace("}", "}}")
     
     # Restore excluded keys
-    text = re.sub(r'__EXCLUDED__((?:(?!__END_EXCLUDED__).)*)__END_EXCLUDED__', r'{\1}', text)
+    text = re.sub(r'__EXCLUDED__((?:(?!__END_EXCLUDED__).)*+)__END_EXCLUDED__', r'{\1}', text)
     
     # Restore already doubled brackets
-    text = re.sub(r'__ALREADY_DOUBLED__((?:(?!__END_ALREADY__).)*)__END_ALREADY__', r'{{\1}}', text)
+    text = re.sub(r'__ALREADY_DOUBLED__((?:(?!__END_ALREADY__).)*+)__END_ALREADY__', r'{{\1}}', text)
 
     # Restore protected ${IDENT} placeholders as ${{IDENT}}
     def _restore_var(m):
