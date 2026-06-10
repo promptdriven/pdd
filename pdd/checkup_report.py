@@ -251,6 +251,10 @@ class CheckupAccounting:
             lines.append(f"  Failed: {self.patches_failed}")
         else:
             lines.append(f"  Saved for review: {self.saved_for_review}")
+            # Surface rejected/failed patches even when nothing applied, so a
+            # rejected apply never looks like a clean "saved for review" run.
+            if self.patches_failed:
+                lines.append(f"  Failed: {self.patches_failed}")
         if artifacts:
             lines.append("")
             lines.append("Artifacts:")

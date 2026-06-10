@@ -43,7 +43,6 @@ from .checkup_interactive_main import (
     apply_approved_patches,
     draft_full_prompt_repair,
     draft_group_replacement,
-    filter_interactive_findings,
     _custom_option,
     _register_dynamic_option,
     _skip_option,
@@ -427,12 +426,14 @@ class CheckupAgent:
             if tool is None:
                 continue
             tr: ToolResult = tool.extract(report)
+            # The agent groups and risk-gates EVERY finding (low → apply/queue,
+            # medium → save, high → manual TODO), so all findings are in scope
+            # regardless of explicit_interactive. The clarification-only filter
+            # belongs to the workflow-gate path (run_interactive_checkup), not
+            # here — filtering here would hide coverage/contract findings from
+            # auto mode and --llm-repair.
             tool_findings = [
-                f
-                for f in filter_interactive_findings(
-                    report, explicit_interactive=explicit_interactive
-                )
-                if f.source_check == tool_name
+                f for f in report.findings if f.source_check == tool_name
             ]
             self.session.on_event(
                 AgentEvent(
