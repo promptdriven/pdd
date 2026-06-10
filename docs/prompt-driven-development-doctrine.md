@@ -251,6 +251,17 @@ Each bug discovered → test added → wall becomes permanent → mold is more p
 
 The system gets **more constrained over time**, not less. Unlike patched codebases that accumulate complexity, PDD codebases accumulate *constraints* while the code itself stays clean (because it's regenerated fresh each time).
 
+### Prompt Capital Appreciates; Code Capital Depreciates
+
+There is a second compounding force, and it is unique to generated software. The "machine" that turns the mold into an object—the LLM compiler—keeps getting better. Each model upgrade is a free improvement to the press.
+
+- **Code capital depreciates.** Hand‑written source is frozen at the skill and context of the moment it was written. It rots: dependencies drift, idioms age, and the only way to improve it is more human labor. Patches accelerate the decay.
+- **Prompt capital appreciates.** Prompts, tests, and grounding are model‑independent intent. Regenerate the same mold against a stronger model and the output improves for free—better idioms, fewer bugs, new language or platform targets—without rewriting the specification.
+
+This is a distinct, defensible advantage, not a restatement of "regenerate, don't patch." A traditional codebase gets *older* every year; a prompt‑sourced codebase gets *younger* every time the compiler improves, because its durable asset is intent rather than implementation. The investment you make in a good prompt today is repaid again on every future model upgrade.
+
+> Traditional source is a depreciating asset you must keep maintaining. A well‑specified mold is an appreciating one—the press improves under it.
+
 ### Bug Workflow as Mold Refinement
 
 In manufacturing, when a molded part has a flaw:
@@ -323,37 +334,27 @@ If you're new to PDD, the key shift is:
 
 The ROI of prompt and test investment compounds over time. Each improvement benefits all future work.
 
-### The Resistance Pattern
+### The Objections Worth Taking Seriously
 
-Both the wood→plastic and code→prompt transitions face similar resistance:
+The wood→plastic analogy is useful precisely because the early skepticism of injection molding was *partly right*: early plastic really was brittle, and some objects really are better carved. The code→prompt transition draws the same family of objections—and several of them are correct under specific conditions. A senior engineer who raises them is doing their job, not defending turf. The right response is not to dismiss the concern but to state the evidence threshold that would resolve it and to name where the paradigm genuinely does not apply.
 
-| Wood → Plastic | Code → Prompt |
-|----------------|---------------|
-| "Mass‑produced items have no soul" | "Generated code has no elegance" |
-| "Can't replace the craftsman's touch" | "Can't replace developer expertise" |
-| "Plastic is for toys, not furniture" | "AI is for boilerplate, not real engineering" |
-| Craftsmen guilds resist | Developer culture resists |
+| Wood → Plastic | Code → Prompt | The legitimate concern underneath |
+|----------------|---------------|-----------------------------------|
+| "Mass‑produced items have no soul" | "Generated code has no elegance" | Readability and idiom matter for code humans still review. |
+| "Can't replace the craftsman's touch" | "Can't replace developer expertise" | Some work is genuinely irreducible to a specification (see weak‑fit categories). |
+| "Plastic is for toys, not furniture" | "AI is for boilerplate, not real engineering" | Generation quality is uneven across domains and must be measured, not assumed. |
 
-This resistance comes from legitimate sources:
-1. **Sunk cost in existing skills** — Years of expertise feel devalued
-2. **Identity tied to the craft** — "I'm a coder" vs "I design specifications"
-3. **Early‑stage quality issues** — Early plastic was cheap; early AI code has flaws
-4. **Misunderstanding the value shift** — Focusing on artifact quality rather than specification power
+Each of these has a concrete resolution condition rather than a rhetorical rebuttal:
 
-The resistance fades as:
-- Generation quality improves (it is improving rapidly)
-- Tooling matures (grounding, test accumulation, verification)
-- Success stories accumulate (teams that adopt see compounding benefits)
-- The economic reality becomes undeniable
+- **"Generated code is hard to review."** Then the evidence threshold is: can a reviewer understand the module from the prompt and example, and do the tests encode the constraints they care about? If not, the prompt and tests are incomplete—fix the mold, don't defend the patch.
+- **"Generation isn't reliable enough here."** Then measure it on *this* code. The honest answer is domain‑specific: PDD claims an advantage only once generation quality crosses a threshold *for the work in question*. For the strong‑fit categories above, the threshold is routinely met today; for the weak‑fit categories, it may not be, and patching is the correct call.
+- **"It will break in ways we can't test."** This is the most important objection, and it is decisive where true. PDD's entire safety argument rests on behavioral invariance under regeneration, which only holds where tests can prove it. If the behavior is genuinely hard to test (timing, hidden coupling, safety‑critical paths without a strong net), then regeneration is unsafe and the doctrine says so—see [When PDD Wins / When Patching Wins](#when-pdd-wins--when-patching-wins).
 
-**Acknowledging Legitimate Concerns**
+**What PDD actually claims (and what it does not)**
 
-Not all resistance is misguided:
-- Generated code does need review (that's what tests and verification are for)
-- Some domains genuinely require human expertise (safety‑critical, novel algorithms)
-- The transition has real costs (learning new workflows, tooling investment)
+PDD does not claim generation is perfect, that expertise is obsolete, or that everything should be regenerated. It claims something narrower and falsifiable: **specification + constraints + regeneration is a better maintenance model than accumulating patches—for work that can be specified and verified, once generation quality crosses a measurable threshold for that work.** Where those conditions fail, hand‑editing wins, and the doctrine treats that as a feature of the boundary, not an exception to be explained away.
 
-PDD doesn't claim generation is perfect—it claims that **specification + constraints + regeneration** is a better maintenance model than **accumulating patches** once generation quality crosses a threshold. For many domains, we're past that threshold.
+The case strengthens over time as generation quality improves, tooling matures (grounding, test accumulation, verification), and teams accumulate measured results rather than anecdotes. The transition also has real costs—learning new workflows, building the test net, tooling investment—and a skeptic is right to weigh them. The argument here is that for a growing share of work the ledger now favors the mold; it is not that the skeptic is behind the times.
 
 ### The Complete Analogy Map
 
@@ -386,32 +387,65 @@ For reference, here's the full mapping between injection molding and PDD:
 
 The prompt encodes intent. The tests preserve behavior. Regeneration sustains integrity. Together, they convert maintenance from an endless patchwork into a compounding system of leverage.
 
+## When PDD Wins / When Patching Wins
+
+PDD is not "regenerate everything." It is a maintenance model that pays off when work is *specifiable and verifiable*, and it loses to a careful hand‑edit when work is neither. Naming that boundary plainly is the honest core of this doctrine: the paradigm earns trust by being explicit about where it does **not** apply.
+
+The discriminating question is rarely "is the LLM smart enough?" It is "can I express this as a frozen interface plus tests that prove the behavior?" Where the answer is yes, regeneration compounds. Where the answer is no, regeneration is a liability and a patch (or a human) is the right tool.
+
+**Strong‑fit work (regenerate by default)**
+
+These categories have clear contracts, are cheap to test, and recur in variants—exactly where the mold's compound returns dominate:
+- **Validation and business rules** — input checks, eligibility logic, policy decisions.
+- **Adapters and API wrappers** — clients, SDK shims, protocol translation.
+- **Data transforms** — parsing, serialization, ETL, schema mapping.
+- **Internal tools and scripts** — one‑purpose utilities with well‑defined I/O.
+- **CRUD and persistence layers** — repetitive, contract‑bounded data access.
+- **Customer / tenant variants** — the same module parameterized many ways (the parameterized‑mold case).
+- **Test generation** — producing the very mold walls that make further regeneration safe.
+- **Policy and compliance enforcement** — rules that must be stated explicitly and checked on every build.
+
+**Weak‑fit work (patch, or use a hybrid human/agent edit)**
+
+These categories resist specification, resist testing, or carry risk that regeneration variance cannot justify. Here, a surgical edit is the correct engineering choice—and saying so is not a retreat from the paradigm:
+- **Tiny hotfixes** — a one‑line correction where building the mold costs more than the fix.
+- **Performance micro‑optimization** — outcomes depend on implementation detail the prompt deliberately abstracts away.
+- **Legacy code with hidden coupling** — behavior depends on undocumented side effects no test currently captures.
+- **Hard‑to‑test behavior** — non‑determinism, timing, or environmental effects that resist behavioral assertions.
+- **Novel algorithms** — work whose correctness is the research, not the specification.
+- **Large architectural ambiguity** — the design is still being discovered; there is no stable interface to freeze yet.
+- **Safety‑critical behavior without strong tests** — where the cost of a silent regeneration drift is unacceptable and the test net cannot yet guarantee invariance.
+
+The boundary is not fixed. As you add tests, freeze interfaces, and accumulate grounding, weak‑fit modules migrate toward strong‑fit—this is the same ratchet described under [The Compound Interest of Molds](#the-compound-interest-of-molds). The discipline is to be honest about which side of the line a given module is on *today*, and to use the right tool for it now. See also [When To Patch](#when-to-patch) for the operational rule and [prompting_guide.md#brownfield-adoption](prompting_guide.md#brownfield-adoption) for migrating existing code across this boundary.
+
 ## The Context Window Advantage
 
 Modern LLMs operate within a fixed context window—a bounded "working memory" that holds everything the model can attend to during generation. How this window is allocated fundamentally affects generation quality.
 
 ### The Agentic Overhead Problem
 
-Interactive agentic tools (Claude Code, Cursor, etc.) must dedicate significant context to operational overhead:
+Interactive agentic tools (Claude Code, Cursor, etc.) must dedicate context to operational overhead—system behavior, tool schemas, integrations, and conversation history—that a batch generation does not carry.
 
-| Overhead Type | Purpose | Typical Cost |
-|---------------|---------|--------------|
-| System prompts | Agent behavior, safety, persona | 2,000–5,000 tokens |
-| Tool definitions | Bash, Read, Edit, Write, etc. | 3,000–8,000 tokens |
-| MCP server configs | External integrations | 1,000–5,000 tokens |
-| Chat history | Conversation continuity | Grows unbounded |
-| Agentic loop instructions | Planning, reflection, error recovery | 1,000–3,000 tokens |
+The table below gives **illustrative order‑of‑magnitude estimates**, not measured figures. They are meant to convey *that* the overhead is structural and non‑trivial, and that some of it (chat history) grows over a session; the exact magnitudes vary widely by tool, configuration, and model, and several change with every product release.
 
-This overhead competes directly with developer-provided context. As the conversation progresses and history accumulates, less of the window remains for the actual task.
+| Overhead Type | Purpose | Illustrative magnitude (estimate) |
+|---------------|---------|-----------------------------------|
+| System prompts | Agent behavior, safety, persona | thousands of tokens |
+| Tool definitions | Bash, Read, Edit, Write, etc. | thousands of tokens |
+| MCP server configs | External integrations | hundreds to thousands of tokens |
+| Chat history | Conversation continuity | grows over the session |
+| Agentic loop instructions | Planning, reflection, error recovery | thousands of tokens |
+
+The conceptual point stands regardless of the precise numbers: this overhead competes with developer‑provided context, and as history accumulates, less of the window remains for the actual task. The specific magnitudes are exactly the kind of thing the [PDD research program](#a-research-program-not-just-an-assertion) intends to measure rather than assert—via matched‑editing and repo‑bloat experiments that compare context allocation between agentic and batch flows on the same tasks.
 
 ### Attention Degradation
 
-LLMs exhibit measurable attention degradation as context grows:
-- **"Lost in the middle"** effects where mid-context information is underweighted
+A separate, well‑documented effect compounds the overhead: model quality can degrade as the *used* portion of the context grows, independent of where the overhead came from. The literature reports patterns such as:
+- **"Lost in the middle"** effects where mid‑context information is underweighted
 - **Reduced coherence** as the model tracks more threads
 - **Increased hallucination** as relevant context gets pushed further from attention
 
-The result: **The more you use an agentic tool in a session, the less effective each subsequent generation becomes.**
+The strength of these effects is model‑ and task‑dependent and is improving as long‑context training matures—so we treat the *direction* of the effect as the durable claim and the *magnitude* as something to measure on our own workloads, not to quote as a fixed number. The practical hypothesis: **the more a session fills its window with overhead and history, the less effective each subsequent generation tends to become.** This, too, is a target of the research program rather than a settled figure.
 
 ### PDD: Full Context for Generation
 
@@ -469,11 +503,23 @@ Similarly, PDD's batch architecture keeps operational complexity outside the con
 
 > When every token serves your intent, generation quality scales with problem complexity rather than degrading against operational overhead.
 
+### A Research Program, Not Just an Assertion
+
+The context‑window argument above is a *hypothesis with a strong mechanism*, not a measured result. The honest posture is to flag exactly which claims are empirical and to commit to measuring them on real workloads rather than quoting figures. The PDD research program is intended to do this through, among others:
+
+- **Matched‑editing experiments** — drive the same set of changes through an agentic flow and through a batch PDD flow, and measure context allocation, generation quality, and cost head‑to‑head on identical tasks.
+- **Repo‑bloat experiments** — measure how overhead and accumulated history scale across a session and a codebase, and how that correlates with generation quality.
+
+Until those results land, the overhead table, the attention‑degradation magnitudes, and the "less effective each subsequent generation" hypothesis should be read as illustrative reasoning, not data. The mechanism is sound and the direction is well‑supported; the magnitudes are what we are measuring. See [prompting_guide.md#verification-the-spine-of-pdd](prompting_guide.md#verification-the-spine-of-pdd) for how the same measure‑don't‑assert discipline applies to per‑module behavioral guarantees.
+
 ## Core Principles
 - **Prompts As Source of Truth:** Versioned prompts define behavior and constraints. Code, examples, tests, infra, and docs are generated artifacts.
-- **Regenerate, Don’t Patch:** Change the prompt, then regenerate affected surfaces. Avoid local edits that drift intent from implementation.
+- **Regenerate, Don’t Patch (for strong‑fit work):** Change the prompt, then regenerate affected surfaces. Avoid local edits that drift intent from implementation. This is the default *where work is specifiable and verifiable*—see [When PDD Wins / When Patching Wins](#when-pdd-wins--when-patching-wins) for the categories where a patch or hybrid edit is the correct choice.
+- **Verification Is the Spine:** PDD's entire advantage rests on verification strength and behavioral invariance under regeneration. A module is regeneration‑safe only when it has the *minimum viable mold*: **(a)** a frozen/declared interface, **(b)** N behavioral tests that pin the required behavior, and **(c)** a negative test for every MUST‑NOT. Without these, regeneration is a gamble, not a guarantee. See [prompting_guide.md#verification-the-spine-of-pdd](prompting_guide.md#verification-the-spine-of-pdd).
+- **Prompt Capital Appreciates:** Prompts, tests, and grounding are model‑independent intent that *gains* value as the LLM compiler improves—regenerate against a stronger model and the output gets better for free. Hand‑written code depreciates. Invest in the mold. See [Prompt Capital Appreciates; Code Capital Depreciates](#prompt-capital-appreciates-code-capital-depreciates).
+- **Complement Agentic Coders, Don’t Compete:** PDD is the governance and build layer for AI coding context, not a rival to interactive agents. The agent edits prompts, tests, and contracts; PDD regenerates and verifies. Don't try to out‑agent them—make their work cheaper, reproducible, and reviewable. See [prompting_guide.md#using-pdd-with-your-coding-agent](prompting_guide.md#using-pdd-with-your-coding-agent).
 - **Synchronization Loop:** Always back‑propagate implementation learnings to prompts. Keep prompts, code, examples, and tests in continuous sync.
-- **Test Accumulation:** Never discard passing tests after regeneration. Grow a regression net that preserves behavior as the system evolves.
+- **Test Accumulation:** Never discard passing tests after regeneration. Grow a regression net that preserves behavior as the system evolves—this is how a module accumulates the mold walls that make it regeneration‑safe (see **Verification Is the Spine**).
 - **Modular Prompt Graph:** Model systems as composable prompt modules linked via minimal usage examples that act as clear interfaces.
 - **Intent First:** Capture goals (e.g., “Black Friday scale,” “HIPAA”), not just resource settings. Generation maps intent → implementation.
 - **Batch‑First Workflow:** Prefer deterministic, scriptable batch generation over interactive patching. Optimize for reproducibility and cost. (This also maximizes context available for generation—see "The Context Window Advantage.")
@@ -552,8 +598,17 @@ Similarly, PDD's batch architecture keeps operational complexity outside the con
 - **Rollbacks:** Prefer regenerating from the prior prompt version over reverting code patches.
 
 ## When To Patch
+
+Regeneration is the default **for strong‑fit work**—work that can be specified and verified. It is not a universal mandate. The full task‑fit boundary lives in [When PDD Wins / When Patching Wins](#when-pdd-wins--when-patching-wins); this section is the operational rule that follows from it.
+
 - **Local, Low‑Risk Hotfixes:** Trivial typos, comments, and non‑behavioral changes may be patched directly—but follow with an `update` to keep prompts in sync.
-- **Everything Else:** Regenerate.
+- **Weak‑Fit Categories:** A surgical patch (or a human/agent hybrid edit) is the correct choice for the weak‑fit cases—tiny hotfixes where building a mold costs more than the fix, performance micro‑optimization, legacy code with hidden coupling, hard‑to‑test behavior, novel algorithms, large architectural ambiguity, and safety‑critical paths without a strong test net. Patch now; where it's worth it, invest in tests and a frozen interface afterward to migrate the module toward regeneration‑safe.
+- **Strong‑Fit Work (Everything Else That's Specifiable):** Regenerate. Validation and business rules, adapters and API wrappers, data transforms, CRUD, internal tools, customer variants, test generation, and policy enforcement all belong here.
+
+The discipline is to identify which side of the boundary a module is on *today* and use the right tool—not to force regeneration where verification can't yet make it safe, and not to keep patching where a mold would compound.
 
 ## North Star
-Prompts encode intent. Tests preserve behavior. Regeneration sustains integrity. Together, they convert maintenance from an endless patchwork into a compounding system of leverage.
+
+The operational north‑star metric is **`verified_behavioral_change_per_unit_cost`**: the number of *hidden‑test‑passing* behavioral changes delivered, divided by the total cost to deliver them—editing, localization, generation, verification, and review combined. Everything in this doctrine is in service of that ratio: tests and frozen interfaces raise the numerator (verified change) and let regeneration drive the denominator (cost) toward zero; prompt capital appreciating means the same numerator gets cheaper on every model upgrade; honoring the task‑fit boundary keeps you from spending mold‑building cost where a patch maximizes the same ratio. Optimize the metric, not the activity.
+
+> Prompts encode intent. Tests preserve behavior. Regeneration sustains integrity. Together, they convert maintenance from an endless patchwork into a compounding system of leverage—measured as verified behavioral change per unit cost.
