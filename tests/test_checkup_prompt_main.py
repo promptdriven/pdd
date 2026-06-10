@@ -8,10 +8,12 @@ import pytest
 from click.testing import CliRunner
 
 from pdd.checkup_prompt_main import (
+    PromptSourceSetReport,
     SourceSetFinding,
     build_prompt_source_set_report,
     run_checkup_prompt,
 )
+from pdd.checkup_interactive_main import filter_interactive_findings
 from pdd.commands.checkup import checkup
 
 
@@ -114,8 +116,73 @@ def test_source_set_finding_flags_vague_terms_for_clarification() -> None:
     )
     assert finding.requires_clarification is True
     assert finding.as_dict()["requires_clarification"] is True
+    assert finding.as_dict()["clarification_reason"]
     # Confidence stays absent unless explicitly provided.
     assert "confidence" not in finding.as_dict()
+
+
+@pytest.mark.parametrize(
+    ("code", "source_check", "rule_id"),
+    [
+        ("DUPLICATE_ID", "contract", "R1"),
+        ("story_only_ambiguous", "coverage", "R2"),
+        ("waiver_not_allowed", "gate", "R3"),
+        ("MALFORMED_WAIVER", "gate", "W1"),
+    ],
+)
+def test_source_set_finding_clarification_reason_for_documented_categories(
+    code: str,
+    source_check: str,
+    rule_id: str,
+) -> None:
+    finding = SourceSetFinding(
+        finding_id=f"{source_check}:foo:0:{code}",
+        source_check=source_check,
+        severity="warn",
+        file=Path("prompts/foo_python.prompt"),
+        code=code,
+        rule_id=rule_id,
+    )
+
+    payload = finding.as_dict()
+    assert payload["requires_clarification"] is True
+    assert payload["clarification_reason"]
+
+
+def test_explicit_interactive_routes_all_clarification_categories() -> None:
+    prompt = Path("prompts/foo_python.prompt")
+    findings = [
+        SourceSetFinding(
+            finding_id=f"f-{index}",
+            source_check=source,
+            severity="warn",
+            file=prompt,
+            code=code,
+        )
+        for index, (source, code) in enumerate(
+            [
+                ("lint", "VAGUE_TERM_UNDEFINED"),
+                ("contract", "DUPLICATE_ID"),
+                ("coverage", "story_only_ambiguous"),
+                ("gate", "waiver_not_allowed"),
+            ]
+        )
+    ]
+    report = PromptSourceSetReport(
+        prompt_path=prompt,
+        project_root=Path("."),
+        target=str(prompt),
+        findings=findings,
+    )
+
+    routed = filter_interactive_findings(report, explicit_interactive=False)
+
+    assert [finding.finding_id for finding in routed] == [
+        "f-0",
+        "f-1",
+        "f-2",
+        "f-3",
+    ]
 
 
 def test_report_json_findings_include_clarification_flag() -> None:
@@ -133,7 +200,9 @@ def test_report_json_findings_include_clarification_flag() -> None:
     ]
     assert vague, "expected vague-term findings in the fixture"
     assert all(finding.as_dict()["requires_clarification"] for finding in vague)
+    assert all(finding.as_dict()["clarification_reason"] for finding in vague)
     assert all("code" in finding.as_dict() for finding in report.findings)
+    assert all("clarification_reason" in finding.as_dict() for finding in report.findings)
 
 
 def test_build_prompt_source_set_report_coverage_anchored_to_project_root(

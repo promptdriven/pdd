@@ -221,6 +221,13 @@ def maybe_run_workflow_prompt_gate(
     if apply and not interactive:
         raise click.UsageError("--apply requires --interactive.")
 
+    gate_mode = resolve_prompt_gate_mode(
+        cli_prompt_checkup=cli_prompt_checkup,
+        no_prompt_checkup=no_prompt_checkup,
+        project_root=project_root,
+    )
+    strict = gate_mode == "strict"
+
     if interactive:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
             raise click.UsageError(
@@ -228,12 +235,6 @@ def maybe_run_workflow_prompt_gate(
             )
         from .checkup_interactive_main import run_interactive_checkup  # pylint: disable=import-outside-toplevel
 
-        gate_mode = resolve_prompt_gate_mode(
-            cli_prompt_checkup=cli_prompt_checkup,
-            no_prompt_checkup=no_prompt_checkup,
-            project_root=project_root,
-        )
-        strict = gate_mode == "strict"
         for prompt_path in prompt_paths:
             try:
                 run_interactive_checkup(
@@ -253,13 +254,23 @@ def maybe_run_workflow_prompt_gate(
                     err=True,
                 )
                 return False, exc.exit_code
+        if strict:
+            should_continue, exit_code = run_automatic_prompt_gate(
+                prompt_paths,
+                mode=gate_mode,
+                project_root=project_root,
+                quiet=quiet,
+                strict=True,
+            )
+            if not should_continue:
+                click.echo(
+                    "Unresolved strict prompt checkup failures remain after "
+                    "interactive repair; blocking downstream steps.",
+                    err=True,
+                )
+                return False, exit_code
         return True, 0
 
-    gate_mode = resolve_prompt_gate_mode(
-        cli_prompt_checkup=cli_prompt_checkup,
-        no_prompt_checkup=no_prompt_checkup,
-        project_root=project_root,
-    )
     return run_automatic_prompt_gate(
         prompt_paths,
         mode=gate_mode,

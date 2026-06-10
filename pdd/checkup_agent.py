@@ -213,24 +213,48 @@ class TerminalCheckupSession(CheckupSession):
         return Plan(tools=valid, rationale="Custom tool selection by operator.")
 
     def decide_group(self, group: FindingGroup) -> str:
-        # Reflect what "yes" will actually do for this group's risk level, so the
-        # prompt never says "apply" for a medium-risk fix that is only saved.
-        verb = {
+        action_a = {
             "low": "Queue recommended fix",
             "medium": "Save recommended fix for review",
             "high": "Acknowledge (manual TODO)",
         }.get(group.risk, "Apply recommended fix")
-        prompt = f"{verb} for this group? [Y]es / [n]o-skip / [e]dit / [a]uto / [q]uit"
-        answer = click.prompt(prompt, default="Y", show_default=False).strip().lower()
-        if answer in ("q", "quit"):
-            return "quit"
-        if answer in ("a", "auto"):
-            return "auto"
-        if answer in ("n", "no", "skip"):
-            return "skip"
-        if answer in ("e", "edit"):
-            return "edit"
-        return "accept"
+        while True:
+            click.echo("\nRepair options:")
+            click.echo(f"[1] Option A: {action_a}")
+            click.echo("[2] Option B: Save an alternative repair proposal")
+            click.echo("[3] Keep current / skip")
+            click.echo("[4] Custom fix")
+            click.echo("[5] View rationale/details")
+            click.echo("[6] Ask a question")
+            click.echo("[a] Auto for remaining groups  [q] Quit")
+            answer = click.prompt("Choice", default="1", show_default=False).strip().lower()
+            if answer in ("q", "quit"):
+                return "quit"
+            if answer in ("a", "auto"):
+                return "auto"
+            if answer in ("", "1", "y", "yes", "option a"):
+                return "accept"
+            if answer in ("2", "b", "option b"):
+                return "accept_alt"
+            if answer in ("3", "n", "no", "skip", "keep"):
+                return "skip"
+            if answer in ("4", "e", "edit", "custom"):
+                return "edit"
+            if answer in ("5", "r", "rationale", "details", "?"):
+                click.echo("\nRationale/details:")
+                for line in humanize_group_summary(group):
+                    click.echo(line)
+                continue
+            if answer in ("6", "ask", "question"):
+                question = click.prompt("Question", default="", show_default=False)
+                if question.strip():
+                    click.echo(
+                        "This deterministic session can show findings, proposals, "
+                        "and rationale, but cannot answer free-form questions without "
+                        "an interactive backend."
+                    )
+                continue
+            click.echo("Choose 1-6, a, or q.")
 
     def ask_definition(self) -> str:
         return click.prompt("Enter your definition / replacement", default="", show_default=False)
@@ -600,7 +624,7 @@ class CheckupAgent:
                 acc.fixed_manually += 1
                 continue
 
-            # decision == "accept"
+            # decision == "accept" / "accept_alt"
             if risk == RISK_HIGH:
                 # never auto-touch high-risk; leave as manual TODO
                 self._record_skip(repair_session, finding)
@@ -612,14 +636,16 @@ class CheckupAgent:
                 # save for review: record the primary option so it appears in the
                 # patch preview, but it will not be applied.
                 if options:
-                    repair_session.record_choice(fid, options[0])
+                    selected = options[1] if decision == "accept_alt" and len(options) > 1 else options[0]
+                    repair_session.record_choice(fid, selected)
                 disposition[fid] = "review"
                 acc.saved_for_review += 1
                 continue
 
             # low risk
             if options:
-                repair_session.record_choice(fid, options[0])
+                selected = options[1] if decision == "accept_alt" and len(options) > 1 else options[0]
+                repair_session.record_choice(fid, selected)
                 disposition[fid] = "manual_low" if interactive else "low"
             else:
                 self._record_skip(repair_session, finding)

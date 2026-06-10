@@ -10024,6 +10024,277 @@
     }
   },
   {
+    "reason": "Deterministic validator and applicator for approved interactive checkup prompt patches.",
+    "description": "Validates ApprovedPatch objects, enforces safe prompt/story target allowlists including pdd/prompts/**/*.prompt, supports dry-run apply logs, creates backups for real writes, runs deterministic postflight checkup, and reports rejected approved patches as non-pass/non-zero outcomes.",
+    "dependencies": [
+      "checkup_interactive_session_python.prompt",
+      "checkup_prompt_main_python.prompt"
+    ],
+    "priority": 242,
+    "filename": "checkup_prompt_apply_python.prompt",
+    "filepath": "pdd/checkup_prompt_apply.py",
+    "tags": [
+      "checkup",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "ApplyFindingRecord",
+            "kind": "dataclass"
+          },
+          {
+            "name": "ApplyRunResult",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "apply_approved_patches",
+            "signature": "(patches: Sequence[ApprovedPatch], *, repo_root: Path, original_target: str, dry_run: bool = False, interactive: bool = True, strict: bool = False, choices_by_finding: Mapping[str, int] | None = None) -> ApplyRunResult",
+            "returns": "ApplyRunResult"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Interactive prompt checkup orchestration for explicit pdd checkup --interactive repair sessions.",
+    "description": "Builds source-set reports, filters findings for explicit or clarification-only interactive repair, presents Option A/Option B/keep current/custom/rationale affordances, records typed repair choices, and delegates approved patch application with truthful rejected-patch output.",
+    "dependencies": [
+      "checkup_interactive_session_python.prompt",
+      "checkup_prompt_apply_python.prompt",
+      "checkup_prompt_main_python.prompt"
+    ],
+    "priority": 243,
+    "filename": "checkup_interactive_main_python.prompt",
+    "filepath": "pdd/checkup_interactive_main.py",
+    "tags": [
+      "checkup",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "ClickInteractiveSession",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "filter_interactive_findings",
+            "signature": "(report: PromptSourceSetReport, *, explicit_interactive: bool) -> list[SourceSetFinding]",
+            "returns": "list[SourceSetFinding]"
+          },
+          {
+            "name": "build_repair_options_for_finding",
+            "signature": "(finding: SourceSetFinding) -> list[RepairOption]",
+            "returns": "list[RepairOption]"
+          },
+          {
+            "name": "run_interactive_checkup",
+            "signature": "(target: str, *, apply: bool = False, dry_run: bool = False, project_root: Optional[Path] = None, strict: bool = False, quiet: bool = False, explicit_interactive: bool = True, session_factory: Optional[Callable[[], InteractiveRepairSession]] = None) -> Optional[tuple[str, float, str]]",
+            "returns": "Optional[tuple[str, float, str]]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Agentic checkup session runner for explicitly requested prompt review, interactive, and auto modes.",
+    "description": "Runs CheckupAgent only after explicit CLI intent, coordinates planner, terminal/session events, risk-gated grouped repair choices, Option A/Option B/keep current/custom/rationale UX, patch application, verification, artifacts, accounting, and blocking decisions.",
+    "dependencies": [
+      "checkup_interactive_main_python.prompt",
+      "checkup_planner_python.prompt",
+      "checkup_report_python.prompt",
+      "checkup_tools_python.prompt",
+      "checkup_prompt_main_python.prompt"
+    ],
+    "priority": 244,
+    "filename": "checkup_agent_python.prompt",
+    "filepath": "pdd/checkup_agent.py",
+    "tags": [
+      "checkup",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "AgentEvent",
+            "kind": "dataclass"
+          },
+          {
+            "name": "CheckupSession",
+            "kind": "class"
+          },
+          {
+            "name": "TerminalCheckupSession",
+            "kind": "class"
+          },
+          {
+            "name": "RecordingCheckupSession",
+            "kind": "class"
+          },
+          {
+            "name": "CheckupAgent",
+            "kind": "class"
+          }
+        ],
+        "constants": [
+          {
+            "name": "MODE_REVIEW",
+            "value": "review"
+          },
+          {
+            "name": "MODE_INTERACTIVE",
+            "value": "interactive"
+          },
+          {
+            "name": "MODE_AUTO",
+            "value": "auto"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Planning strategy abstraction for explicit agentic prompt checkup sessions.",
+    "description": "Defines deterministic and LLM-backed planners plus a planner factory for explicit agentic checkup sessions; deterministic planning is stable and CI-safe.",
+    "dependencies": [
+      "checkup_tools_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "checkup_planner_python.prompt",
+    "filepath": "pdd/checkup_planner.py",
+    "tags": [
+      "checkup",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "Plan",
+            "kind": "dataclass"
+          },
+          {
+            "name": "Planner",
+            "kind": "protocol"
+          },
+          {
+            "name": "DeterministicPlanner",
+            "kind": "class"
+          }
+        ],
+        "functions": [
+          {
+            "name": "make_planner",
+            "signature": "(name: str) -> DeterministicPlanner | LLMPlanner",
+            "returns": "DeterministicPlanner | LLMPlanner"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Grouping, risk classification, accounting, and artifact helpers for agentic prompt checkup sessions.",
+    "description": "Groups source-set findings, classifies deterministic repair risk, renders concise summaries, writes checkup artifacts, and maintains truthful accounting for queued, applied, skipped, saved-for-review, failed, and remaining repairs.",
+    "dependencies": [
+      "checkup_prompt_main_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "checkup_report_python.prompt",
+    "filepath": "pdd/checkup_report.py",
+    "tags": [
+      "checkup",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "FindingGroup",
+            "kind": "dataclass"
+          },
+          {
+            "name": "CheckupAccounting",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "repair_risk_for",
+            "signature": "(finding: SourceSetFinding | None) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "group_findings",
+            "signature": "(findings: Sequence[SourceSetFinding]) -> list[FindingGroup]",
+            "returns": "list[FindingGroup]"
+          },
+          {
+            "name": "decision_for",
+            "signature": "(status: str, *, strict: bool, blocking: bool) -> tuple[str, bool]",
+            "returns": "tuple[str, bool]"
+          },
+          {
+            "name": "write_artifacts",
+            "returns": "dict[str, Path]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Adapter layer from unified prompt source-set reports to named agentic checkup tools.",
+    "description": "Provides read-only tool adapters for lint, contract, coverage, gate, snapshot, and drift results already present in PromptSourceSetReport, including status, skip reason, and tool-scoped findings.",
+    "dependencies": [
+      "checkup_prompt_main_python.prompt"
+    ],
+    "priority": 240,
+    "filename": "checkup_tools_python.prompt",
+    "filepath": "pdd/checkup_tools.py",
+    "tags": [
+      "checkup",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "ToolResult",
+            "kind": "dataclass"
+          },
+          {
+            "name": "CheckupTool",
+            "kind": "protocol"
+          }
+        ],
+        "constants": [
+          {
+            "name": "ALL_TOOLS",
+            "kind": "dict"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Owns the normalized pdd.prompt_source_set_report.v1 report and the deterministic per-engine clarification heuristics that route findings to interactive vs. automated repair.",
     "description": "Single owner of the pdd.prompt_source_set_report.v1 report consumed by `pdd checkup` prompt targets and downstream interactive/non-interactive prompt repair. Orchestrates the deterministic lint, contract, coverage, gate, snapshot, and drift engines, aggregates their results into one PromptSourceSetReport of SourceSetFinding objects, owns as_dict() serialization, and applies code/status-driven heuristics that set requires_clarification and a compact clarification_reason without calling an LLM or mutating source.",
     "dependencies": [

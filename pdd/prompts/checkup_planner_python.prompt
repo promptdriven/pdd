@@ -1,0 +1,32 @@
+<pdd-reason>Planning strategy abstraction for explicit agentic prompt checkup sessions.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {"name": "Plan", "kind": "dataclass"},
+      {"name": "Planner", "kind": "protocol"},
+      {"name": "DeterministicPlanner", "kind": "class"}
+    ],
+    "functions": [
+      {"name": "make_planner", "signature": "(name: str | None) -> Planner", "returns": "Planner"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Write `pdd/checkup_planner.py`.
+
+% Requirements
+- Provide a deterministic planner for CI-safe and test-safe checkup runs.
+- Provide a factory that accepts documented planner names and rejects unknown names through the caller's CLI validation.
+- Do not perform network or provider calls from deterministic planning.
+
+<contract_rules>
+R1 - Deterministic default
+The deterministic planner MUST return a stable tool order for identical inputs.
+</contract_rules>
+
+% Deliverables
+- Code: `pdd/checkup_planner.py`

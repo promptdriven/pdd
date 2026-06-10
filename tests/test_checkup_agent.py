@@ -627,6 +627,29 @@ class TestAutoMode:
         assert acc["fixed_automatically"] == 2
         assert acc["patches_applied"] == 2
 
+    def test_interactive_option_b_records_alternative_patch(self, tmp_path):
+        """Choosing Option B records the alternative repair candidate."""
+        report = _low_risk_report(tmp_path, n=1)
+        session = RecordingCheckupSession(group_decisions=["accept_alt"])
+        planner = DeterministicPlanner()
+
+        with patch(
+            "pdd.checkup_agent.build_prompt_source_set_report", return_value=report
+        ), patch(
+            "pdd.checkup_agent.apply_approved_patches", return_value=0
+        ) as mock_apply:
+            agent = CheckupAgent(planner, session)
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                mode="interactive",
+                apply=True,
+            )
+
+        patches = mock_apply.call_args.args[0]
+        assert patches[0].kind == "append_covers"
+
     def test_low_risk_queued_without_apply(self, tmp_path):
         """Without --apply, low-risk fixes are queued, not applied."""
         report = _low_risk_report(tmp_path, n=2)
