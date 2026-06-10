@@ -21,14 +21,18 @@
 #     bash demos/checkup_interactive/run_demo.sh
 #
 #   Non-interactive replay (CI-safe, no TTY required):
-#     bash demos/checkup_interactive/run_demo.sh --all
-#     bash demos/checkup_interactive/run_demo.sh --agentic
-#     bash demos/checkup_interactive/run_demo.sh --deterministic
-#     bash demos/checkup_interactive/run_demo.sh --auto
-#     bash demos/checkup_interactive/run_demo.sh --llm-fallback
-#     bash demos/checkup_interactive/run_demo.sh --direct
-#     bash demos/checkup_interactive/run_demo.sh --cleanup
+#     bash demos/checkup_interactive/run_demo.sh --all          # every demo below
+#     bash demos/checkup_interactive/run_demo.sh --fast         # simple default command
+#     bash demos/checkup_interactive/run_demo.sh --repair       # LLM/interactive repair
+#     bash demos/checkup_interactive/run_demo.sh --strict-gate  # pass/warn/block decisions
+#     bash demos/checkup_interactive/run_demo.sh --workflow     # PRD→prompt→checkup→code
+#     bash demos/checkup_interactive/run_demo.sh --auto         # apply low-risk only
+#     bash demos/checkup_interactive/run_demo.sh --llm-fallback # LLM planner + fallback
+#     bash demos/checkup_interactive/run_demo.sh --direct       # direct subcommands
+#     bash demos/checkup_interactive/run_demo.sh --cleanup      # remove artifacts
 #     bash demos/checkup_interactive/run_demo.sh --help
+#
+#   See FULL_WORKFLOW.md for the end-to-end lifecycle walkthrough.
 #
 # All commands use `python -m pdd` (never a stale `.venv/bin/pdd`). If you see
 # `ImportError: cannot import name 'get_version'`, your editable install is
@@ -256,11 +260,119 @@ demo_direct() {
 }
 
 # ---------------------------------------------------------------------------
-# 6. All non-interactive checks
+# LLM / interactive repair demo (non-interactive replay = auto + LLM fallback)
+# ---------------------------------------------------------------------------
+demo_repair() {
+  banner "LLM / interactive repair — safe by default"
+  note "Repair proposes a <vocabulary> block for the vague terms. Medium-risk"
+  note "fixes are saved for review (never fabricated); only --apply edits files."
+  demo_auto
+  demo_llm_fallback
+  note "For the live, per-group interactive repair session (with an [a] auto"
+  note "switch), choose menu option 'i' from a real terminal."
+}
+
+# ---------------------------------------------------------------------------
+# Strict gate / blocking demo — pass / warn → continue, strict → block
+# ---------------------------------------------------------------------------
+demo_strict_gate() {
+  banner "Strict gate — pass / warn → continue, strict failure → block"
+  note "checkup is a gate before code generation. Exit 0 = continue, 2 = block."
+
+  subhead "PASS  →  python -m pdd checkup $REL/01_clean_task.prompt --planner deterministic"
+  run_pdd checkup "$REL/01_clean_task.prompt" --planner deterministic
+  echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)" | sed 's/^/    /'
+  if echo "$CMD_OUT" | grep -q "pass → continue" && [ "$CMD_EXIT" -eq 0 ]; then
+    pass "clean prompt: pass → continue (exit 0)"
+  else
+    fail "clean prompt did not pass/continue (exit $CMD_EXIT)"
+  fi
+
+  subhead "WARN  →  python -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic"
+  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic
+  echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)" | sed 's/^/    /'
+  if echo "$CMD_OUT" | grep -q "warn → continue" && [ "$CMD_EXIT" -eq 0 ]; then
+    pass "vague prompt: warn → continue (exit 0)"
+  else
+    fail "vague prompt did not warn/continue (exit $CMD_EXIT)"
+  fi
+
+  subhead "STRICT BLOCK  →  python -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic --strict"
+  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic --strict
+  echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)" | sed 's/^/    /'
+  if echo "$CMD_OUT" | grep -q "strict failure → block" && [ "$CMD_EXIT" -eq 2 ]; then
+    pass "strict mode: blocking findings → block (exit 2)"
+  else
+    fail "strict mode did not block (exit $CMD_EXIT)"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Full PDD lifecycle demo — PRD/issue → prompt → checkup → repair → decision → code
+# ---------------------------------------------------------------------------
+demo_full_workflow() {
+  banner "Full PDD workflow — PRD/issue → prompt → checkup → repair → code"
+  local PROMPT="$REL/02_vague_clarification.prompt"
+
+  subhead "Step 1 — PRD / issue / user request"
+  cat <<'EOF'
+    "Add an auth-check module that validates user sessions and rejects
+     unauthorized or duplicate tokens."  (a real, slightly vague request)
+EOF
+
+  subhead "Step 2 — generate / update the prompt"
+  note "The request becomes a PDD prompt (here: 02_vague_clarification.prompt)."
+  sed -n '1,12p' "$PROMPT" | sed 's/^/    /'
+
+  subhead "Step 3 — automatic prompt checkup (the gate)"
+  echo "    \$ python -m pdd checkup $PROMPT --planner deterministic"
+  run_pdd checkup "$PROMPT" --planner deterministic
+  echo "$CMD_OUT" | grep -E "undefined vague terms|Saved for review|Decision:|→ (continue|block)|Patch preview|Report:" \
+    | sed 's/^/    /' | head -12
+  assert_contains "undefined vague terms" "checkup grouped the vague terms"
+  assert_contains "Decision:"             "checkup printed a lifecycle decision"
+
+  subhead "Step 4 — LLM-assisted / interactive repair"
+  note "Repair adds a <vocabulary> block defining the vague terms. By default it"
+  note "is saved for review (a patch preview), never silently applied:"
+  if [ -f "$REPO_ROOT/.pdd/checkup/02_vague_clarification.patch" ]; then
+    head -8 "$REPO_ROOT/.pdd/checkup/02_vague_clarification.patch" | sed 's/^/      /'
+    pass "repair patch preview was generated"
+  else
+    note "(run step 3 first to generate the patch preview)"
+  fi
+  note "Interactively:  python -m pdd checkup $PROMPT --interactive --planner deterministic"
+  note "Apply for real: add --apply (then checkup re-verifies the fix)."
+
+  subhead "Step 5 — decision: pass / warn → continue, strict → block"
+  if echo "$CMD_OUT" | grep -q "→ continue"; then
+    pass "warn → CONTINUE: the workflow may proceed to code generation"
+  else
+    fail "expected a continue decision in non-strict mode"
+  fi
+  note "In strict mode the same prompt would BLOCK (exit 2) until repaired."
+
+  subhead "Step 6 — generate / modify code"
+  cat <<'EOF'
+    Because the decision is "continue", the next PDD step runs:
+
+      $ python -m pdd generate demos/checkup_interactive/prompts/02_vague_clarification.prompt
+      # → produces pdd/auth_check.py
+
+    (Code generation is not executed here — it needs an LLM — but this is the
+     exact next command in the lifecycle.)
+EOF
+  pass "full lifecycle demonstrated end-to-end"
+}
+
+# ---------------------------------------------------------------------------
+# All non-interactive checks
 # ---------------------------------------------------------------------------
 demo_all() {
   demo_deterministic
   demo_auto
+  demo_strict_gate
+  demo_full_workflow
   demo_llm_fallback
   demo_direct
 }
@@ -304,24 +416,26 @@ menu() {
   while true; do
     echo
     echo -e "${BOLD}${CYAN}pdd checkup — agentic workflow demo (issue #1423)${RESET}"
-    echo "  1) Run live interactive session (grouped, needs a terminal)"
-    echo "  2) Run review-mode demo (the simple default command, offline)"
-    echo "  3) Run auto mode demo (apply low-risk only)"
-    echo "  4) Run LLM planner fallback demo"
-    echo "  5) Run direct subcommand comparison"
-    echo "  6) Run all non-interactive checks"
-    echo "  7) Cleanup generated demo artifacts"
+    echo "  1) Run fast prompt checkup demo (the simple default command)"
+    echo "  2) Run LLM / interactive repair demo"
+    echo "  3) Run strict gate / blocking demo (pass · warn · block)"
+    echo "  4) Run full PRD → prompt → checkup → code workflow demo"
+    echo "  5) Run all checkup demos"
+    echo "  6) Cleanup generated artifacts"
+    echo "  d) Direct subcommand comparison (lint/contract/.../drift)"
+    echo "  i) Live interactive session (grouped, needs a terminal)"
     echo "  q) Quit"
     echo
-    read -r -p "Choose [1-7/q]: " choice || break
+    read -r -p "Choose [1-6/d/i/q]: " choice || break
     case "$choice" in
-      1) demo_agentic_interactive ;;
-      2) demo_deterministic; print_summary || true ;;
-      3) demo_auto; print_summary || true ;;
-      4) demo_llm_fallback; print_summary || true ;;
-      5) demo_direct; print_summary || true ;;
-      6) demo_all; print_summary || true ;;
-      7) demo_cleanup ;;
+      1) demo_deterministic; print_summary || true ;;
+      2) demo_repair; print_summary || true ;;
+      3) demo_strict_gate; print_summary || true ;;
+      4) demo_full_workflow; print_summary || true ;;
+      5) demo_all; print_summary || true ;;
+      6) demo_cleanup ;;
+      d|D) demo_direct; print_summary || true ;;
+      i|I) demo_agentic_interactive ;;
       q|Q) break ;;
       *) note "unknown choice: $choice" ;;
     esac
@@ -334,11 +448,14 @@ menu() {
 main() {
   case "${1:-}" in
     --all)            demo_all; print_summary ;;
-    --agentic)        demo_deterministic; demo_auto; print_summary ;;
+    --fast)           demo_deterministic; print_summary ;;
     --review)         demo_deterministic; print_summary ;;
     --deterministic)  demo_deterministic; print_summary ;;
+    --repair)         demo_repair; print_summary ;;
     --auto)           demo_auto; print_summary ;;
     --llm-fallback)   demo_llm_fallback; print_summary ;;
+    --strict-gate)    demo_strict_gate; print_summary ;;
+    --workflow)       demo_full_workflow; print_summary ;;
     --direct)         demo_direct; print_summary ;;
     --cleanup)        demo_cleanup ;;
     -h|--help)        usage ;;

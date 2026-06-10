@@ -86,6 +86,24 @@ pdd checkup <prompt> --interactive --planner deterministic --apply
 By default **nothing is written** — fixes are queued / saved and a patch preview
 is produced. `--apply` is the only thing that edits files.
 
+**Decision (gate before code generation).** Every run ends with a `Decision:`
+line and an exit code so it can gate the next PDD step:
+
+| Outcome | Decision | Exit code |
+|---|---|---|
+| clean prompt | `pass → continue` | 0 |
+| non-blocking findings | `warn → continue with review note` | 0 |
+| `--strict` with findings | `strict failure → block` | 2 |
+| hard error (e.g. snapshot policy) | `blocking findings → block` | 2 |
+
+```bash
+if python -m pdd checkup "$PROMPT" --planner deterministic --strict; then
+  python -m pdd generate "$PROMPT"     # prompt is ready → generate code
+else
+  echo "blocked — see .pdd/checkup/*.report.md"
+fi
+```
+
 Direct subcommands (unchanged):
 
 ```bash
@@ -124,26 +142,34 @@ bash demos/checkup_interactive/run_demo.sh
 ```
 
 ```
-1) Run live interactive session (grouped, needs a terminal)
-2) Run review-mode demo (the simple default command, offline)
-3) Run auto mode demo (apply low-risk only)
-4) Run LLM planner fallback demo
-5) Run direct subcommand comparison
-6) Run all non-interactive checks
-7) Cleanup generated demo artifacts
+1) Run fast prompt checkup demo (the simple default command)
+2) Run LLM / interactive repair demo
+3) Run strict gate / blocking demo (pass · warn · block)
+4) Run full PRD → prompt → checkup → code workflow demo
+5) Run all checkup demos
+6) Cleanup generated artifacts
+d) Direct subcommand comparison (lint/contract/.../drift)
+i) Live interactive session (grouped, needs a terminal)
 q) Quit
 ```
 
 ### Non-interactive replay (CI-safe, no TTY required)
 
 ```bash
-bash demos/checkup_interactive/run_demo.sh --all          # 2+3+4+5
-bash demos/checkup_interactive/run_demo.sh --review       # the simple default command
+bash demos/checkup_interactive/run_demo.sh --all          # every demo below
+bash demos/checkup_interactive/run_demo.sh --fast         # the simple default command
+bash demos/checkup_interactive/run_demo.sh --repair       # LLM/interactive repair
+bash demos/checkup_interactive/run_demo.sh --strict-gate  # pass / warn / strict block
+bash demos/checkup_interactive/run_demo.sh --workflow     # PRD → prompt → checkup → code
 bash demos/checkup_interactive/run_demo.sh --auto         # apply low-risk only
 bash demos/checkup_interactive/run_demo.sh --llm-fallback # LLM path + graceful fallback
 bash demos/checkup_interactive/run_demo.sh --direct       # six direct subcommands
 bash demos/checkup_interactive/run_demo.sh --cleanup      # remove generated artifacts
 ```
+
+**Full lifecycle walkthrough:** see
+[`FULL_WORKFLOW.md`](FULL_WORKFLOW.md) — PRD/issue → prompt → checkup → repair →
+decision → code, with the exact commands to run.
 
 ### Drive the simple command by hand
 
