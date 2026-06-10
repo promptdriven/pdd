@@ -39,6 +39,116 @@ def _run(runner: CliRunner, args, tmp_path) -> "object":
 
 
 # ---------------------------------------------------------------------------
+# Directory targets
+# ---------------------------------------------------------------------------
+
+
+def test_directory_checkup_summarizes_and_gates(runner: CliRunner, tmp_path) -> None:
+    """`pdd checkup <dir>/` checks every prompt and gives one pass/warn/block summary."""
+    result = runner.invoke(
+        checkup,
+        [str(PROMPTS), "--project-root", str(tmp_path)],
+        catch_exceptions=False,
+    )
+    out = result.output
+    assert "01_clean_task.prompt: pass" in out
+    assert "02_vague_clarification.prompt: warn" in out
+    assert "06_snapshot_candidate.prompt: fail" in out
+    assert "Summary:" in out and "block over" in out
+    # one prompt (06) is a hard block → the directory gate exits 2
+    assert result.exit_code == 2
+
+
+def test_empty_directory_fails_clearly(runner: CliRunner, tmp_path) -> None:
+    empty = tmp_path / "prompts"
+    empty.mkdir()
+    result = runner.invoke(
+        checkup, [str(empty), "--project-root", str(tmp_path)]
+    )
+    assert result.exit_code != 0
+    assert "No .prompt files found" in result.output
+
+
+def test_directory_with_interactive_is_rejected_clearly(runner: CliRunner, tmp_path) -> None:
+    from unittest.mock import patch
+
+    # Assume a TTY so we reach the directory guard (not the TTY guard).
+    with patch("pdd.commands.checkup._interactive_tty_available", return_value=True):
+        result = runner.invoke(
+            checkup,
+            [str(PROMPTS), "--interactive", "--project-root", str(tmp_path)],
+        )
+    assert result.exit_code != 0
+    assert "single .prompt file" in result.output
+
+
+# ---------------------------------------------------------------------------
+# apply gating
+# ---------------------------------------------------------------------------
+
+
+def test_interactive_quit_is_clean(runner: CliRunner, tmp_path) -> None:
+    """Typing q on a group quits the session cleanly, touching nothing."""
+    from unittest.mock import patch
+
+    with patch("pdd.commands.checkup._interactive_tty_available", return_value=True):
+        result = runner.invoke(
+            checkup,
+            [str(PROMPTS / "02_vague_clarification.prompt"), "--interactive",
+             "--project-root", str(tmp_path)],
+            input="Y\nq\n",   # confirm plan, then quit on the first group
+            catch_exceptions=False,
+        )
+    assert "Quit" in result.output
+    assert "Checkup complete" in result.output  # still summarised, not crashed
+
+
+def test_apply_alone_rejected(runner: CliRunner, tmp_path) -> None:
+    result = runner.invoke(
+        checkup,
+        [str(PROMPTS / "02_vague_clarification.prompt"), "--apply",
+         "--project-root", str(tmp_path)],
+    )
+    assert result.exit_code != 0
+    assert "--apply requires --interactive or --auto" in result.output
+
+
+def test_auto_apply_preview_allowed(runner: CliRunner, tmp_path) -> None:
+    """--auto --apply --preview is allowed and writes nothing (medium-risk saved)."""
+    result = runner.invoke(
+        checkup,
+        [str(PROMPTS / "02_vague_clarification.prompt"), "--auto", "--apply", "--preview",
+         "--project-root", str(tmp_path)],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0
+    assert "Checkup complete" in result.output
+
+
+# ---------------------------------------------------------------------------
+# Report / patch are reviewer-friendly (actionable-first, no raw internals)
+# ---------------------------------------------------------------------------
+
+
+def test_report_is_actionable_first(runner: CliRunner, tmp_path) -> None:
+    _run(runner, [str(PROMPTS / "02_vague_clarification.prompt")], tmp_path)
+    text = (tmp_path / ".pdd" / "checkup" / "02_vague_clarification.report.md").read_text()
+    # "What to do" comes before the raw finding-ID traceability section
+    assert "## What to do" in text
+    assert text.index("## What to do") < text.index("## Traceability")
+    assert "<details>" in text  # IDs collapsed
+
+
+def test_patch_uses_relative_paths_and_line_context(runner: CliRunner, tmp_path) -> None:
+    _run(runner, [str(PROMPTS / "02_vague_clarification.prompt")], tmp_path)
+    text = (tmp_path / ".pdd" / "checkup" / "02_vague_clarification.patch").read_text()
+    assert "<vocabulary>" in text                     # actionable stub first
+    assert str(tmp_path) not in text                  # no absolute paths
+    assert "# at:" in text                            # line context, not a python dict
+    assert "anchor: {" not in text
+
+
+# ---------------------------------------------------------------------------
 # Every prompt is runnable
 # ---------------------------------------------------------------------------
 
@@ -281,18 +391,16 @@ def test_run_demo_strict_gate_passes() -> None:
 
 
 @pytest.mark.slow
-def test_run_demo_full_workflow_runs_auto_over_every_prompt() -> None:
-    """--workflow runs `checkup <prompt> --auto` per prompt."""
+def test_run_demo_full_workflow_uses_directory_command() -> None:
+    """--workflow runs the one directory command and shows an aggregate summary."""
     proc = _bash("--workflow")
     assert proc.returncode == 0, proc.stdout[-2000:]
-    assert "python -m pdd checkup <prompt> --auto" in proc.stdout
-    # every demo prompt appears as an auto checkup line
-    for prompt in ALL_PROMPTS:
-        assert f"checkup {prompt.name} --auto" in proc.stdout
-    # a per-prompt lifecycle decision is shown, and the tally is printed
+    # per-prompt decision lines from the directory summary
+    assert "01_clean_task.prompt: pass" in proc.stdout
+    assert "06_snapshot_candidate.prompt: fail" in proc.stdout
     assert "→ continue" in proc.stdout
     assert "→ block" in proc.stdout  # 06_snapshot is a hard block
-    assert "Prompts checked:" in proc.stdout
+    assert "Summary:" in proc.stdout and "block over" in proc.stdout
     assert "FAIL: 0" in proc.stdout
 
 
