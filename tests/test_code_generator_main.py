@@ -5589,6 +5589,62 @@ class TestSyncCompatibilityGates:
         assert excinfo.value.removed_symbols == ["calculate_sha256"]
         assert "- calculate_sha256" in excinfo.value.repair_directive
 
+    def test_public_surface_regression_catches_removed_class_member(self):
+        """Issue #1545 must keep public-API removals strict: dropping a public
+        member like ``AgenticTaskResult.usage`` is a real downstream-breaking
+        change and must still surface. The semantic default comparator only
+        relaxes default-VALUE comparison, never symbol removal."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class AgenticTaskResult:\n"
+            "    def run(self):\n"
+            "        return 1\n"
+            "    def usage(self):\n"
+            "        return {}\n"
+        )
+        after = (
+            "class AgenticTaskResult:\n"
+            "    def run(self):\n"
+            "        return 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "agentic_common_Python.prompt",
+                "pdd/agentic_common.py",
+                "python",
+                "Internal refactor only.",
+            )
+
+        assert "AgenticTaskResult.usage" in excinfo.value.removed_symbols
+
+    def test_public_surface_literal_default_reformat_is_not_a_regression(self):
+        """A default reformatted from ``25000`` to ``25_000`` on a public
+        function is the same value and must NOT be flagged as a signature
+        regression by the public-surface gate (issue #1545 literal
+        normalization, end to end)."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = "def process(handler, limit=25000):\n    return handler\n"
+        after = "def process(handler, limit=25_000):\n    return handler\n"
+
+        # Must not raise: the only change is a cosmetic reformat of an
+        # equivalent literal default.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "update_main_Python.prompt",
+            "pdd/update_main.py",
+            "python",
+            "Reformat the default.",
+        )
+
     def test_public_surface_regression_catches_new_positional_before_varargs(self):
         """Inserting a defaulted positional parameter in front of an existing
         ``*args`` rebinds existing positional calls: ``process(h, 2)`` used to
@@ -8451,6 +8507,195 @@ class TestPddInterfaceSignatureConformance:
             verbose=False,
             prompt_content=prompt_content,
         )
+
+    def _write_custom_arch(self, tmp_path, prompt_filename, func_names):
+        """Write an architecture.json declaring exactly ``func_names``.
+
+        Lets a fixture declare an interface function (e.g.
+        ``_sanitize_comment_body``) other than the default ``update_main`` so
+        the arch symbol-existence check passes before the signature check runs.
+        """
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": f"src/{pathlib.Path(prompt_filename).stem}.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": name, "signature": f"def {name}(...)"}
+                            for name in func_names
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        return str(arch_path)
+
+    def test_module_constant_default_matches_literal_is_not_drift(self, tmp_path):
+        """Issue #1545 regression (the agentic_common failure): the prompt
+        declares ``max_chars: int = 25000`` and the generated code factors that
+        out into a module constant ``_COMMENT_MAX_CHARS = 25000`` used as the
+        default. The two are equivalent for every caller, so conformance MUST
+        NOT report drift — it previously did, comparing ``"25000"`` against the
+        raw string ``"_COMMENT_MAX_CHARS"``.
+        """
+        prompt_filename = "agentic_common_python.prompt"
+        arch_path = self._write_custom_arch(
+            tmp_path, prompt_filename, ["_sanitize_comment_body"]
+        )
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"_sanitize_comment_body",'
+            '"signature":"(body: str, max_chars: int = 25000)"}]}}'
+            "</pdd-interface>\n"
+        )
+        generated_code = (
+            "_COMMENT_MAX_CHARS = 25000\n\n"
+            "def _sanitize_comment_body(body: str, "
+            "max_chars: int = _COMMENT_MAX_CHARS):\n"
+            "    return body[:max_chars]\n"
+        )
+
+        # Must not raise.
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_underscore_separated_int_default_is_not_drift(self, tmp_path):
+        """``25000`` and ``25_000`` are the same int; reformatting the default
+        with a digit-group separator must not churn the conformance gate."""
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, max_chars: int = 25000)"}]}}'
+            "</pdd-interface>\n"
+        )
+        generated_code = "def update_main(ctx, max_chars: int = 25_000):\n    pass\n"
+
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_module_constant_with_different_value_still_raises_drift(self, tmp_path):
+        """A same-module constant that resolves to a DIFFERENT value is a real
+        contract break and must still raise — the semantic comparator only
+        suppresses provably-equivalent defaults, never different ones."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "agentic_common_python.prompt"
+        arch_path = self._write_custom_arch(
+            tmp_path, prompt_filename, ["_sanitize_comment_body"]
+        )
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"_sanitize_comment_body",'
+            '"signature":"(body: str, max_chars: int = 25000)"}]}}'
+            "</pdd-interface>\n"
+        )
+        generated_code = (
+            "_COMMENT_MAX_CHARS = 5000\n\n"
+            "def _sanitize_comment_body(body: str, "
+            "max_chars: int = _COMMENT_MAX_CHARS):\n"
+            "    return body[:max_chars]\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert "_sanitize_comment_body.max_chars" in excinfo.value.missing_symbols
+        assert "default" in excinfo.value.repair_directive
+
+    def test_dynamic_default_is_not_silently_accepted(self, tmp_path):
+        """An unresolvable (dynamic) default must NOT be silently treated as
+        equivalent to the declared literal. The prompt declares ``= 25000``;
+        the generated code computes the default from a module constant bound to
+        a runtime call, which stays UNKNOWN and therefore still raises (fail
+        closed) rather than passing on the assumption it matches."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "agentic_common_python.prompt"
+        arch_path = self._write_custom_arch(
+            tmp_path, prompt_filename, ["_sanitize_comment_body"]
+        )
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"_sanitize_comment_body",'
+            '"signature":"(body: str, max_chars: int = 25000)"}]}}'
+            "</pdd-interface>\n"
+        )
+        generated_code = (
+            "_COMMENT_MAX_CHARS = _load_limit()\n\n"
+            "def _sanitize_comment_body(body: str, "
+            "max_chars: int = _COMMENT_MAX_CHARS):\n"
+            "    return body[:max_chars]\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert "_sanitize_comment_body.max_chars" in excinfo.value.missing_symbols
+
+    def test_missing_declared_function_still_fails(self, tmp_path):
+        """A function declared in <pdd-interface> but absent from the generated
+        code must still hard-fail (issue #1545 must keep missing declared
+        functions like ``extract_step_report`` strict). The arch declares a
+        sibling that DOES exist so this isolates the interface-signature gate's
+        missing-function path."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "agentic_common_python.prompt"
+        arch_path = self._write_custom_arch(
+            tmp_path, prompt_filename, ["_sanitize_comment_body"]
+        )
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"_sanitize_comment_body",'
+            '"signature":"(body: str)"},'
+            '{"name":"extract_step_report",'
+            '"signature":"(report: str)"}]}}'
+            "</pdd-interface>\n"
+        )
+        # Generated code defines _sanitize_comment_body but NOT
+        # extract_step_report.
+        generated_code = "def _sanitize_comment_body(body: str):\n    return body\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert "extract_step_report" in excinfo.value.missing_symbols
 
     def test_annotation_aliases_do_not_raise_conformance_error(self, tmp_path):
         """Equivalent Python annotation spellings must not trip drift."""

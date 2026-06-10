@@ -1,7 +1,10 @@
 import pytest
 
 from pdd.interface_semantics import (
+    DefaultCompatibility,
     annotations_compatible,
+    build_module_default_symbols,
+    compare_default_sources,
     signature_entries_compatible,
 )
 
@@ -161,3 +164,170 @@ def test_new_keyword_param_with_existing_kwargs_is_a_regression(
     old_entry, new_entry, compatible
 ):
     assert signature_entries_compatible(old_entry, new_entry) is compatible
+
+
+# ---------------------------------------------------------------------------
+# Semantic default comparator (issue #1545): default values are compared as
+# normalized literals, not raw source strings, so a literal and an equivalent
+# module constant are the same contract.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("declared", "actual"),
+    [
+        ("25000", "25_000"),  # digit-group separator is the same int
+        ("25000", "25000"),
+        ("None", "None"),
+        ("False", "False"),
+        ("'literal'", '"literal"'),  # quote style is irrelevant
+        ("('a', 'b')", "('a','b')"),  # whitespace is irrelevant
+        ("-1", "-1"),  # unary minus folds
+        ("{1, 2}", "{2, 1}"),  # set membership is order-insensitive
+        ("{'a': 1, 'b': 2}", "{'b': 2, 'a': 1}"),  # dict key order irrelevant
+    ],
+)
+def test_equivalent_defaults_are_compatible(declared, actual):
+    assert (
+        compare_default_sources(declared, actual) is DefaultCompatibility.COMPATIBLE
+    )
+
+
+@pytest.mark.parametrize(
+    ("declared", "actual"),
+    [
+        ("25000", "5000"),  # provably different ints
+        ("1", "True"),  # bool is not the int 1
+        ("25000", "25000.0"),  # int is not the float
+        ("(1, 2)", "[1, 2]"),  # tuple is not the list
+        ("'a'", "'b'"),
+        ("-1", "1"),
+    ],
+)
+def test_provably_different_defaults_are_incompatible(declared, actual):
+    assert (
+        compare_default_sources(declared, actual) is DefaultCompatibility.INCOMPATIBLE
+    )
+
+
+@pytest.mark.parametrize(
+    ("declared", "actual"),
+    [
+        # A bare name has no module context here, so it cannot be resolved.
+        ("25000", "_LIMIT"),
+        ("_LIMIT", "25000"),
+        # Calls / attribute access / dynamic expressions never resolve.
+        ("get_limit()", "compute_limit()"),
+        ("25000", "os.getenv('LIMIT')"),
+        ("SOME_IMPORTED_VALUE", "25000"),
+        ("f'{x}'", "f'{x}'"),  # f-strings are dynamic
+    ],
+)
+def test_unresolvable_defaults_are_unknown(declared, actual):
+    assert compare_default_sources(declared, actual) is DefaultCompatibility.UNKNOWN
+
+
+def test_same_module_constant_resolves_to_its_literal():
+    symbols = build_module_default_symbols("_COMMENT_MAX_CHARS = 25000\n")
+    assert (
+        compare_default_sources("25000", "_COMMENT_MAX_CHARS", symbols)
+        is DefaultCompatibility.COMPATIBLE
+    )
+    assert (
+        compare_default_sources("_COMMENT_MAX_CHARS", "25000", symbols)
+        is DefaultCompatibility.COMPATIBLE
+    )
+
+
+def test_same_module_constant_with_different_value_is_incompatible():
+    symbols = build_module_default_symbols("_COMMENT_MAX_CHARS = 5000\n")
+    assert (
+        compare_default_sources("25000", "_COMMENT_MAX_CHARS", symbols)
+        is DefaultCompatibility.INCOMPATIBLE
+    )
+
+
+@pytest.mark.parametrize(
+    "module_source",
+    [
+        # Reassigned to a different safe value -> not statically knowable.
+        "X = 25000\nX = 5000\n",
+        # Augmented assignment is a second binding.
+        "X = 25000\nX += 1\n",
+        # Conditionally overridden inside a block.
+        "X = 25000\nif FLAG:\n    X = 5000\n",
+        # Bound to an unsafe right-hand side.
+        "X = get_limit()\n",
+        # Tuple-unpacking rebind elsewhere.
+        "X = 25000\nX, Y = load()\n",
+        # A def/class/import that shadows the constant rebinds the name at
+        # runtime even though it creates no ``ast.Name`` Store node — the
+        # running module's ``X`` is the def/class/import object, not 25000.
+        "X = 25000\ndef X():\n    return 1\n",
+        "X = 25000\nclass X:\n    pass\n",
+        "X = 25000\nimport os as X\n",
+        "X = 25000\nfrom mod import X\n",
+        # ...and the reverse textual order is equally untrustworthy.
+        "import os as X\nX = 25000\n",
+        # ``except ... as X`` also rebinds without a Store node.
+        "X = 25000\ntry:\n    pass\nexcept Exception as X:\n    pass\n",
+        # A star import binds an unknowable name set that could shadow X.
+        "X = 25000\nfrom config import *\n",
+    ],
+)
+def test_unsafe_or_ambiguous_module_constants_stay_unresolved(module_source):
+    symbols = build_module_default_symbols(module_source)
+    assert "X" not in symbols
+    # And a default referencing it therefore fails closed (UNKNOWN), never
+    # silently accepted as equivalent to a literal.
+    assert (
+        compare_default_sources("25000", "X", symbols)
+        is DefaultCompatibility.UNKNOWN
+    )
+
+
+def test_module_constant_table_does_not_resolve_name_aliases_transitively():
+    # ``B = A`` must NOT enter the table: the right-hand side is normalized
+    # without name resolution, so an alias chain stays UNKNOWN (fail closed).
+    symbols = build_module_default_symbols("A = 25000\nB = A\n")
+    assert symbols == {"A": ("int", 25000)}
+    assert "B" not in symbols
+
+
+def test_star_import_empties_the_whole_constant_table():
+    # ``from x import *`` binds an unknowable set of names that could shadow
+    # ANY constant, so EVERY constant in the module becomes untrustworthy —
+    # not just same-named ones. The whole table is empty (fail closed).
+    clean = build_module_default_symbols("MAX = 25000\nMIN = 0\n")
+    assert clean == {"MAX": ("int", 25000), "MIN": ("int", 0)}
+    poisoned = build_module_default_symbols(
+        "MAX = 25000\nMIN = 0\nfrom config import *\n"
+    )
+    assert poisoned == {}
+    assert (
+        compare_default_sources("25000", "MAX", poisoned)
+        is DefaultCompatibility.UNKNOWN
+    )
+
+
+def test_public_surface_default_literal_normalization_is_not_a_regression():
+    # The public-surface gate normalizes literals even without module context,
+    # so a digit-separator reformat of a default is not a regression.
+    assert (
+        signature_entries_compatible(
+            "[function] (x=25000)", "[function] (x=25_000)"
+        )
+        is True
+    )
+
+
+def test_public_surface_module_constant_default_is_conservatively_a_change():
+    # Documented scope: the public-surface gate compares snapshot signature
+    # strings with no module context, so a literal -> same-module-constant
+    # refactor of a default stays UNKNOWN and is treated as a change there
+    # (fail closed). Module-constant resolution is exercised only by the
+    # prompt <pdd-interface> conformance gate, which has the generated AST.
+    assert (
+        signature_entries_compatible(
+            "[function] (x=25000)", "[function] (x=_LIMIT)"
+        )
+        is False
+    )

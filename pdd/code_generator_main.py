@@ -45,7 +45,10 @@ from .grounding_provenance import (
 )
 from .compressed_sync_context import compressed_context_is_active, render_for_prompt
 from .interface_semantics import (
+    DefaultCompatibility,
     annotations_compatible,
+    build_module_default_symbols,
+    compare_default_sources,
     signature_entries_compatible,
 )
 
@@ -2741,6 +2744,12 @@ def _verify_pdd_interface_signatures(
     except SyntaxError:
         return  # Can't parse — defer to existing checks/recovery paths.
 
+    # Module-level constants the generated code binds to safe literals, so a
+    # default written as ``max_chars=_COMMENT_MAX_CHARS`` can be resolved back
+    # to the literal it stands for when comparing against the prompt's declared
+    # default. Empty when the code defines no such constants.
+    module_symbols = build_module_default_symbols(generated_code)
+
     missing_params: List[str] = []
     missing_funcs: List[str] = []
     # Signature drift detection:
@@ -2800,7 +2809,19 @@ def _verify_pdd_interface_signatures(
                             "<no default>",
                         )
                     )
-                elif declared_default != actual_default:
+                elif declared_default != actual_default and (
+                    # The sources differ textually, but only a PROVABLY-different
+                    # default is real drift. ``25000`` vs ``25_000`` vs a
+                    # same-module constant ``_LIMIT = 25000`` resolve to the same
+                    # value and must NOT churn the gate. An
+                    # unresolvable default (a call, an imported name) stays
+                    # UNKNOWN and is conservatively reported — same as the prior
+                    # exact-string behavior, so no false negative is introduced.
+                    compare_default_sources(
+                        declared_default, actual_default, symbols=module_symbols
+                    )
+                    is not DefaultCompatibility.COMPATIBLE
+                ):
                     drifted.append(
                         (
                             func_name,

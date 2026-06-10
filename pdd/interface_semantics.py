@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import re
 from dataclasses import dataclass
+from enum import Enum
 from typing import Iterable, Optional
 
 
@@ -302,6 +303,284 @@ def signature_entries_compatible(old_entry: str, new_entry: str) -> Optional[boo
     return callable_contracts_compatible(old_contract, new_contract)
 
 
+class DefaultCompatibility(Enum):
+    """Tri-state verdict for comparing two parameter default expressions.
+
+    ``COMPATIBLE``   — both defaults resolve to the SAME safe literal value
+                       (``25000`` vs ``25_000``, or a module constant
+                       ``_LIMIT = 25000`` standing in for ``25000``); every
+                       caller observes identical behavior.
+    ``INCOMPATIBLE`` — both resolve to safe literals that DIFFER (``25000`` vs
+                       ``5000``); a real contract break.
+    ``UNKNOWN``      — at least one side cannot be resolved to a safe literal
+                       without executing code (a call, an imported name, a
+                       dynamic expression). Conformance callers fail closed on
+                       this, so an unresolvable change is never silently
+                       accepted.
+    """
+
+    COMPATIBLE = "compatible"
+    INCOMPATIBLE = "incompatible"
+    UNKNOWN = "unknown"
+
+
+def compare_default_sources(
+    declared_default: Optional[str],
+    actual_default: Optional[str],
+    symbols: Optional[dict] = None,
+) -> DefaultCompatibility:
+    """Compare two parameter-default source strings semantically.
+
+    ``symbols`` maps module-level constant names to their normalized values
+    (see :func:`build_module_default_symbols`); pass it to resolve a default
+    written as a same-module constant (``max_chars=_COMMENT_MAX_CHARS``) back
+    to the literal it stands for. With no table, only literals normalize and a
+    bare name is ``UNKNOWN``.
+
+    The comparison NEVER executes code, imports a module, or evaluates an
+    arbitrary expression. It only folds safe AST literals, unary ``+``/``-``/
+    ``~`` on numbers, literal containers, and same-module constants bound to
+    those — anything else is ``UNKNOWN`` (fail closed).
+    """
+    table = symbols or {}
+    declared_norm = _normalize_default_source(declared_default, table)
+    actual_norm = _normalize_default_source(actual_default, table)
+    if declared_norm is None or actual_norm is None:
+        return DefaultCompatibility.UNKNOWN
+    if declared_norm == actual_norm:
+        return DefaultCompatibility.COMPATIBLE
+    return DefaultCompatibility.INCOMPATIBLE
+
+
+def build_module_default_symbols(module_source: Optional[str]) -> dict:
+    """Map module-level constant names to normalized safe-literal values.
+
+    A name qualifies ONLY when it is bound exactly once anywhere in the module
+    AND that single binding is a top-level ``X = <literal>`` /
+    ``X: T = <literal>`` assignment to a safe literal/container. Any second
+    binding of the name — reassignment, augmented assignment, a conditional
+    override inside ``if``/``try``/``TYPE_CHECKING``, a tuple-unpacking rebind,
+    or a ``def``/``class``/``import`` that shadows it — disqualifies it, because
+    the value a caller would observe is then not statically knowable. Such
+    names stay out of the table and resolve as ``UNKNOWN`` (fail closed).
+    Counting is whole-module and name-only (no scope analysis), so a
+    function-local variable reusing a constant's name also disqualifies it —
+    conservative, but only ever toward ``UNKNOWN``, never a false match.
+    Name-to-name aliases are not resolved transitively — the right-hand side is
+    normalized with an empty table — so ``B = A`` never enters the table. A
+    ``from x import *`` anywhere in the module empties the whole table, since it
+    binds a statically-unknowable set of names that could shadow any constant.
+
+    Resolution is purely static and assumes the constant is not rebound by
+    dynamic means the analyzer cannot see (``globals()[name] = ...``, ``exec``,
+    ``setattr`` on the module) — consistent with the comparator's contract of
+    never executing code. Such rebinding is not a realistic generated-code
+    shape and no non-executing analyzer can detect it.
+
+    Returns an empty dict when ``module_source`` is absent or unparseable.
+    """
+    if not module_source or not isinstance(module_source, str):
+        return {}
+    try:
+        tree = ast.parse(module_source)
+    except SyntaxError:
+        return {}
+    return _symbols_from_module_ast(tree)
+
+
+def _symbols_from_module_ast(tree: ast.Module) -> dict:
+    if _has_star_import(tree):
+        # ``from x import *`` binds a statically-unknowable set of names at
+        # runtime, any of which could shadow a module constant. We cannot trust
+        # a single value in the module, so the whole table is empty (every
+        # constant resolves as UNKNOWN — fail closed).
+        return {}
+    binding_counts = _count_module_bindings(tree)
+    table: dict[str, tuple] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+            value: Optional[ast.AST] = node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        plain_names = [t.id for t in targets if isinstance(t, ast.Name)]
+        if len(plain_names) != len(targets):
+            # Attribute/subscript/unpacking target — not a simple constant.
+            continue
+        normalized = _normalize_default_node(value, {})
+        if normalized is None:
+            continue
+        for name in plain_names:
+            if binding_counts.get(name, 0) == 1:
+                table[name] = normalized
+    return table
+
+
+def _count_module_bindings(tree: ast.Module) -> dict:
+    """Count how many times each name is bound anywhere in ``tree``.
+
+    A constant is trusted only if its name is bound exactly once (see
+    :func:`build_module_default_symbols`). ``ast.Name`` in ``Store`` context
+    covers assignment / augmented / annotated / ``for`` / ``with`` / walrus /
+    tuple-unpacking targets at any depth, but ``def``/``class``/``import``
+    bind a name WITHOUT a ``Store`` node, so they are counted explicitly —
+    otherwise ``X = 25000`` shadowed by ``import x as X`` would be admitted as
+    ``25000`` even though the running module rebinds ``X`` to the import.
+    ``except ... as X`` and ``match`` capture patterns are the remaining
+    no-``Store`` binding forms and are counted too. Over-counting (e.g. a
+    function-local reuse of the name) only evicts a constant toward ``UNKNOWN``;
+    it can never produce a false match.
+    """
+    counts: dict[str, int] = {}
+
+    def _bump(name: Optional[str]) -> None:
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+
+    for sub in ast.walk(tree):
+        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+            _bump(sub.id)
+        elif isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _bump(sub.name)
+        elif isinstance(sub, ast.Import):
+            for alias in sub.names:
+                _bump(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(sub, ast.ImportFrom):
+            for alias in sub.names:
+                if alias.name != "*":
+                    _bump(alias.asname or alias.name)
+        elif isinstance(sub, ast.ExceptHandler):
+            _bump(sub.name)  # ``except E as X`` (``name`` is None for bare except)
+        elif isinstance(sub, (ast.MatchAs, ast.MatchStar)):
+            _bump(sub.name)  # ``case ... as X`` / ``case [*X]`` (None for ``_``)
+        elif isinstance(sub, ast.MatchMapping):
+            _bump(sub.rest)  # ``case {**X}``
+    return counts
+
+
+def _has_star_import(tree: ast.Module) -> bool:
+    """Return True if the module contains any ``from x import *``."""
+    return any(
+        isinstance(sub, ast.ImportFrom)
+        and any(alias.name == "*" for alias in sub.names)
+        for sub in ast.walk(tree)
+    )
+
+
+def _normalize_default_source(
+    source: Optional[str],
+    symbols: dict,
+) -> Optional[tuple]:
+    """Parse a default source string and normalize it, or ``None`` if unsafe."""
+    if not source or not isinstance(source, str):
+        return None
+    try:
+        node = ast.parse(source.strip(), mode="eval").body
+    except SyntaxError:
+        return None
+    return _normalize_default_node(node, symbols)
+
+
+def _normalize_default_node(
+    node: ast.AST,
+    symbols: dict,
+) -> Optional[tuple]:
+    """Fold a default expression AST into a hashable, type-tagged value.
+
+    Returns ``None`` for anything that cannot be resolved without executing
+    code. The leading type tag keeps equality both value- AND type-exact so
+    ``("int", 1)`` != ``("bool", True)`` and ``("int", 25000)`` !=
+    ``("float", 25000.0)``.
+    """
+    if isinstance(node, ast.Constant):
+        return _tag_constant(node.value)
+    if isinstance(node, ast.UnaryOp):
+        operand = _normalize_default_node(node.operand, symbols)
+        if operand is None or len(operand) != 2:
+            return None
+        tag, value = operand
+        if isinstance(node.op, ast.USub) and tag in {"int", "float", "complex"}:
+            return (tag, -value)
+        if isinstance(node.op, ast.UAdd) and tag in {"int", "float", "complex"}:
+            return (tag, +value)
+        if isinstance(node.op, ast.Invert) and tag == "int":
+            return ("int", ~value)
+        return None
+    if isinstance(node, ast.Name):
+        return symbols.get(node.id)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        items = _normalize_sequence(node.elts, symbols)
+        if items is None:
+            return None
+        return ("tuple" if isinstance(node, ast.Tuple) else "list", items)
+    if isinstance(node, ast.Set):
+        items = _normalize_sequence(node.elts, symbols)
+        if items is None:
+            return None
+        # Order-insensitive: ``{1, 2}`` and ``{2, 1}`` are the same default.
+        return ("set", frozenset(items))
+    if isinstance(node, ast.Dict):
+        return _normalize_dict(node, symbols)
+    return None
+
+
+def _tag_constant(value: object) -> Optional[tuple]:
+    if value is None:
+        return ("none",)
+    if value is Ellipsis:
+        return ("ellipsis",)
+    # ``bool`` MUST precede ``int``: ``bool`` is an ``int`` subclass, but
+    # ``True`` and ``1`` are different defaults that must not compare equal.
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, int):
+        return ("int", value)
+    if isinstance(value, float):
+        return ("float", value)
+    if isinstance(value, complex):
+        return ("complex", value)
+    if isinstance(value, str):
+        return ("str", value)
+    if isinstance(value, bytes):
+        return ("bytes", value)
+    return None
+
+
+def _normalize_sequence(
+    elts: Iterable[ast.AST],
+    symbols: dict,
+) -> Optional[tuple]:
+    out = []
+    for elt in elts:
+        if isinstance(elt, ast.Starred):
+            return None  # ``[*spread, 1]`` — not statically resolvable.
+        norm = _normalize_default_node(elt, symbols)
+        if norm is None:
+            return None
+        out.append(norm)
+    return tuple(out)
+
+
+def _normalize_dict(node: ast.Dict, symbols: dict) -> Optional[tuple]:
+    items: dict = {}
+    for key_node, value_node in zip(node.keys, node.values):
+        if key_node is None:
+            return None  # ``{**other}`` unpacking — not statically resolvable.
+        key = _normalize_default_node(key_node, symbols)
+        value = _normalize_default_node(value_node, symbols)
+        if key is None or value is None:
+            return None
+        # Last value wins for identically-normalized keys. Keys that differ by
+        # type (``1`` vs ``1.0``) stay distinct here rather than collapsing as a
+        # live dict would — that can only make two dicts compare unequal, i.e.
+        # fail closed toward reporting drift, never a false match.
+        items[key] = value
+    return ("dict", frozenset(items.items()))
+
+
 def _existing_param_compatible(old: ParamContract, new: ParamContract) -> bool:
     if old.name != new.name:
         return False
@@ -311,7 +590,21 @@ def _existing_param_compatible(old: ParamContract, new: ParamContract) -> bool:
     # signature had IS a regression: callers that omitted the argument break.
     if old.has_default and not new.has_default:
         return False
-    if old.has_default and new.has_default and old.default != new.default:
+    if (
+        old.has_default
+        and new.has_default
+        and old.default != new.default
+        # Only a PROVABLY-different default is a regression. ``25000`` vs
+        # ``25_000`` (or any pair the shared comparator proves equivalent)
+        # preserves every call form, so it is not. No module symbol table is
+        # threaded here: the public-surface gate compares snapshot signature
+        # strings without module context, so this path is literal-normalization
+        # only — a default written as a same-module constant stays UNKNOWN and
+        # is conservatively treated as a change (fail closed, unchanged from the
+        # historical exact-string behavior).
+        and compare_default_sources(old.default, new.default)
+        is not DefaultCompatibility.COMPATIBLE
+    ):
         return False
     # Annotation comparison is intentionally symmetric: ANY change to a public
     # parameter's type annotation trips the gate, including a backward-compatible
