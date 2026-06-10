@@ -53,27 +53,33 @@ the direct subcommands cannot diverge.
 ## CLI surface
 
 ```bash
-# Simple default: review mode — checks, groups, summary, artifacts. No prompts.
-pdd checkup <prompt> --planner deterministic
+# Simple default — the bare command IS the agentic review:
+# checks, grouped findings, summary, decision, artifacts. No prompts, no flags.
+pdd checkup <prompt>
 
 # Interactive: one grouped question per finding group, with an [a] auto switch.
-pdd checkup <prompt> --interactive --planner deterministic
+pdd checkup <prompt> --interactive
 
 # Auto: apply low-risk fixes only; save the rest for review.
-pdd checkup <prompt> --planner deterministic --auto
+pdd checkup <prompt> --auto
 
 # Actually edit files (then re-verify): add --apply (requires --interactive).
-pdd checkup <prompt> --interactive --planner deterministic --apply
+pdd checkup <prompt> --interactive --apply
+
+# Machine output stays on the structured path:
+pdd checkup <prompt> --json
+pdd checkup <prompt> --explain
 ```
 
 | Flag | Meaning |
 |---|---|
-| *(none but `--planner`)* | **Review mode** (default): run checks, group findings, write artifacts, print a summary. Never prompts, never edits. CI-safe. |
+| *(no flags)* | **Agentic review** (default): run checks, group findings, write artifacts, print a summary + decision. Never prompts, never edits. CI-safe, no LLM. |
 | `--interactive` | One grouped question per group: `[Y]` queue · `[n]` skip · `[edit]` write your own · `[auto]` finish the rest automatically. Requires a TTY. |
-| `--planner deterministic` | Plan all tools in fixed order, offline (the default planner). |
+| `--planner deterministic` | Default planner — all tools in fixed order, offline. (Implied by the bare command.) |
 | `--planner llm` | Let an LLM prioritise tools; falls back to deterministic on failure. |
 | `--auto` | Apply **low-risk** fixes automatically; medium → saved for review; high → manual. Never makes a risky change. No prompts. |
 | `--apply` | Actually write the low-risk fixes to the prompt, then re-run the affected checks to verify. Requires `--interactive`. |
+| `--json` / `--explain` | Machine-readable / read-only structured output (stays on the non-agent path). |
 
 **Safety model (repair risk).** Every finding is classified:
 
@@ -173,12 +179,12 @@ decision → code, with the exact commands to run.
 
 ### Drive the simple command by hand
 
-The fast path — checks, grouped findings, summary, artifacts, **no prompts**:
+The fast path — the bare command, agentic review by default (checks, grouped
+findings, summary, decision, artifacts, **no prompts, no flags**):
 
 ```bash
 python -m pdd checkup \
-  demos/checkup_interactive/prompts/02_vague_clarification.prompt \
-  --planner deterministic
+  demos/checkup_interactive/prompts/02_vague_clarification.prompt
 ```
 
 The live interactive session — **one grouped question** for all 10 vague terms,

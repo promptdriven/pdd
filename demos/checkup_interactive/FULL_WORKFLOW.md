@@ -64,11 +64,11 @@ The request becomes a PDD prompt. For this demo it is
 ## Step 3 — automatic prompt checkup (the gate)
 
 ```bash
-python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt \
-  --planner deterministic
+python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt
 ```
 
-This is the **simple default command** — no extra flags. It:
+This is the **simple default command** — the bare command is the agentic
+review, no flags required. It:
 
 - runs all six checks (lint, contract, coverage, gate, snapshot, drift);
 - **groups** the 10 undefined terms into one summary (not ten prompts);

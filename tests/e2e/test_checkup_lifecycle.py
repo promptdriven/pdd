@@ -66,6 +66,35 @@ def test_every_prompt_runs_and_decides(runner: CliRunner, prompt: Path, tmp_path
 # ---------------------------------------------------------------------------
 
 
+def test_bare_command_is_agentic_by_default(runner: CliRunner, tmp_path) -> None:
+    """`pdd checkup <prompt>` with NO flags is the agentic review (grouped + decision)."""
+    result = runner.invoke(
+        checkup,
+        [str(PROMPTS / "02_vague_clarification.prompt"), "--project-root", str(tmp_path)],
+        catch_exceptions=False,
+    )
+    assert result.exit_code == 0
+    assert "Plan:" in result.output
+    assert "undefined vague terms" in result.output       # grouped
+    assert "Decision:" in result.output                   # gate
+    assert (tmp_path / ".pdd" / "checkup").exists()        # artifacts
+
+
+def test_bare_json_stays_structured(runner: CliRunner, tmp_path) -> None:
+    """--json on the bare command keeps the structured (non-agent) output."""
+    result = runner.invoke(
+        checkup,
+        [str(PROMPTS / "02_vague_clarification.prompt"), "--json",
+         "--project-root", str(tmp_path)],
+        catch_exceptions=False,
+    )
+    import json as _json
+
+    data = _json.loads(result.output)
+    assert data["status"] == "warn"
+    assert "Decision:" not in result.output  # not the agent path
+
+
 def test_clean_prompt_passes_and_continues(runner: CliRunner, tmp_path) -> None:
     result = _run(runner, [str(PROMPTS / "01_clean_task.prompt")], tmp_path)
     assert result.exit_code == 0

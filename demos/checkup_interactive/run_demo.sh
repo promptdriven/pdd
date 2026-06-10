@@ -147,14 +147,15 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
-# 2. Review mode — the simple default command (offline, no prompts, safe)
+# 2. The simple default command — agentic review, no flags required
 # ---------------------------------------------------------------------------
 demo_deterministic() {
-  banner "2. Review mode — 'pdd checkup <prompt> --planner deterministic'"
-  subhead "python -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic"
-  note "No --interactive, no --auto: runs all checks, groups findings, writes"
-  note "artifacts, prints a summary. Never prompts. Never edits the prompt."
-  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic
+  banner "2. The simple default command — 'pdd checkup <prompt>' (agentic)"
+  subhead "python -m pdd checkup $REL/02_vague_clarification.prompt"
+  note "No flags needed: the bare command is the agentic review. It runs all"
+  note "checks, groups findings, writes artifacts, prints a summary + decision."
+  note "Never prompts. Never edits the prompt. (--json/--explain stay structured.)"
+  run_pdd checkup "$REL/02_vague_clarification.prompt"
   echo_clean
   assert_contains "Plan:"                       "compact plan shown"
   # per-tool status block reaches all six tools (with skip reasons)
