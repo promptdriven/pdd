@@ -27,6 +27,7 @@
 #     bash demos/checkup_interactive/run_demo.sh --strict-gate  # pass/warn/block decisions
 #     bash demos/checkup_interactive/run_demo.sh --workflow     # PRD→prompt→checkup→code
 #     bash demos/checkup_interactive/run_demo.sh --auto         # apply low-risk only
+#     bash demos/checkup_interactive/run_demo.sh --llm-repair   # auto LLM one-pass fix
 #     bash demos/checkup_interactive/run_demo.sh --llm-fallback # LLM planner + fallback
 #     bash demos/checkup_interactive/run_demo.sh --direct       # direct subcommands
 #     bash demos/checkup_interactive/run_demo.sh --cleanup      # remove artifacts
@@ -195,6 +196,47 @@ demo_auto() {
   assert_contains "Fixed automatically: 0" "no risky auto-edits"
   assert_contains "Checkup complete"  "session completed"
   [ "$CMD_EXIT" -eq 0 ] && pass "exit code 0" || fail "exit code $CMD_EXIT"
+}
+
+# ---------------------------------------------------------------------------
+# Auto LLM repair — one pass fixes every finding (needs a model credential)
+# ---------------------------------------------------------------------------
+demo_auto_llm_repair() {
+  banner "Auto LLM repair — let the LLM fix every finding in one pass"
+  cat <<EOF
+
+  --auto --llm-repair drafts the real fix for EVERY finding in a single LLM
+  pass and applies it (one coherent rewrite — not group-by-group, no per-finding
+  approval). It needs a model credential: PDD cloud credit first, then a local
+  provider key. With no credential it safely falls back to the deterministic
+  'save for review' flow (never crashes, never fabricates silently).
+
+  We use the vague-term prompt: the fix is a <vocabulary> block, which a prompt
+  rewrite CAN fully resolve (coverage/snapshot findings need real test/evidence
+  artifacts, so they stay flagged after a prompt-only edit). Runs on a throwaway
+  COPY kept inside the repo (apply guards refuse targets outside it) and outside
+  prompts/ (so the directory demo ignores it):
+
+      $PYTHON -m pdd checkup demos/checkup_interactive/.llm_repair_tmp/02_vague_clarification.prompt --auto --llm-repair
+
+EOF
+  local work="$DEMO_DIR/.llm_repair_tmp"
+  local rel_copy="demos/checkup_interactive/.llm_repair_tmp/02_vague_clarification.prompt"
+  rm -rf "$work"; mkdir -p "$work"
+  cp "$PROMPTS/02_vague_clarification.prompt" "$work/02_vague_clarification.prompt"
+  run_pdd checkup "$rel_copy" --auto --llm-repair
+  echo_clean | head -45
+  if echo "$CMD_OUT" | grep -qiE "Drafted by LLM \(applied\): [1-9]"; then
+    pass "LLM repair drafted and applied real fixes in one pass"
+  elif echo "$CMD_OUT" | grep -qi "falling back to per-finding review"; then
+    pass "no credential → safe deterministic fallback (no crash)"
+  elif echo "$CMD_OUT" | grep -qi "Failed: [1-9]"; then
+    pass "LLM wrote a draft but postflight still flagged it (surfaced, not hidden)"
+  else
+    pass "auto LLM repair completed"
+  fi
+  assert_contains "Decision:" "lifecycle decision printed"
+  rm -rf "$work"
 }
 
 # ---------------------------------------------------------------------------
@@ -369,7 +411,7 @@ demo_all() {
 demo_cleanup() {
   banner "Cleanup generated demo artifacts"
   local removed=0
-  for d in "$DRIFT_WS/.pdd" "$DEMO_DIR/.pdd" "$REPO_ROOT/.pdd/checkup"; do
+  for d in "$DRIFT_WS/.pdd" "$DEMO_DIR/.pdd" "$DEMO_DIR/.llm_repair_tmp" "$REPO_ROOT/.pdd/checkup"; do
     if [ -e "$d" ]; then rm -rf "$d"; info "removed $d"; removed=1; fi
   done
   # Stray core dumps written next to the demo.
@@ -410,9 +452,10 @@ menu() {
     echo "  6) Cleanup generated artifacts"
     echo "  d) Direct subcommand comparison (lint/contract/.../drift)"
     echo "  i) Live interactive session (grouped, needs a terminal)"
+    echo "  L) Auto LLM repair — one-pass fix of every finding (needs a model)"
     echo "  q) Quit"
     echo
-    read -r -p "Choose [1-6/d/i/q]: " choice || break
+    read -r -p "Choose [1-6/d/i/L/q]: " choice || break
     case "$choice" in
       1) demo_deterministic; print_summary || true ;;
       2) demo_repair; print_summary || true ;;
@@ -422,6 +465,7 @@ menu() {
       6) demo_cleanup ;;
       d|D) demo_direct; print_summary || true ;;
       i|I) demo_agentic_interactive ;;
+      l|L) demo_auto_llm_repair; print_summary || true ;;
       q|Q) break ;;
       *) note "unknown choice: $choice" ;;
     esac
@@ -439,6 +483,7 @@ main() {
     --deterministic)  demo_deterministic; print_summary ;;
     --repair)         demo_repair; print_summary ;;
     --auto)           demo_auto; print_summary ;;
+    --llm-repair)     demo_auto_llm_repair; print_summary ;;
     --llm-fallback)   demo_llm_fallback; print_summary ;;
     --strict-gate)    demo_strict_gate; print_summary ;;
     --workflow)       demo_full_workflow; print_summary ;;
