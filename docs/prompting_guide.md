@@ -7,7 +7,19 @@ prompt suite, includes, examples, tests, architecture metadata, and `.pddrc`
 configuration form the source; `pdd sync` compiles that source into conventional
 code artifacts.
 
-References: pdd/docs/whitepaper.md, pdd/docs/prompt-driven-development-doctrine.md, README.md (repo structure, conventions), [Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents), [Anthropic Prompt Engineering Overview](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview).
+References: `pdd/docs/whitepaper.md`, [prompt-driven-development-doctrine.md](prompt-driven-development-doctrine.md), `README.md` (repo structure, conventions), [Effective Context Engineering](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents), [Anthropic Prompt Engineering Overview](https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering/overview).
+
+---
+
+## The North‑Star Metric
+
+Every recommendation in this guide ladders up to a single metric:
+
+> **`verified_behavioral_change_per_unit_cost`** = (hidden‑test‑passing behavior changes) ÷ (edit + localization + generation + verification + review cost)
+
+Read the numerator carefully: it counts **verified** behavior changes — changes that pass *hidden* tests, not just the visible ones a model can overfit to. The denominator is the *total* cost of making that change land: finding the right place, writing/editing the prompt, generating, verifying, and reviewing.
+
+This metric, not "code volume" or "smallest possible prompt," is the thing to optimize. A terse prompt that produces plausible-but-unverified code scores *badly*: zero verified change over real cost. Contracts, grounding, tests, and review all exist to push this ratio up. The word that does the heavy lifting is **verified** — see the [Verification](#verification-the-spine-of-pdd) chapter, which is the spine of everything here.
 
 ---
 
@@ -16,14 +28,18 @@ References: pdd/docs/whitepaper.md, pdd/docs/prompt-driven-development-doctrine.
 If you are new to Prompt-Driven Development (PDD), follow this recipe:
 
 1.  **Think "One Prompt = One Module":** Don't try to generate the whole app at once. Focus on one file (e.g., `user_service.py`).
-2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies, Instructions.
-3.  **Explicitly Include Context:** Use `<include>path/to/file</include>` to give the model *only* what it needs (e.g., a shared preamble or a dependency interface). This is a **PDD directive**, not just XML.
+2.  **Use a Template:** Start with a clear structure: Role, Requirements, Dependencies, Instructions. (See the [Reusable Prompt Skeleton](#reusable-prompt-skeleton).)
+3.  **Explicitly Include Context:** Use `<include>path/to/file</include>` to give the model *only* what it needs (e.g., a shared preamble or a dependency interface). This is a **PDD directive**, not just XML. (See [Directives & Context](#prompt-syntax-essentials).)
 4.  **Regenerate, Don't Patch:** Change behavior by changing the prompt and regenerating. If generated code fails to satisfy a correct prompt/test, use `pdd bug` / `pdd fix`. If the intended behavior is missing or wrong in the prompt, update the prompt first.
-5.  **Verify:** Run the generated code/tests.
+5.  **Verify:** Run the generated code/tests. Without verification, regeneration just produces plausible wrong code faster — see [Verification](#verification-the-spine-of-pdd).
 
 *Tip: Treat your prompt like source code. It is the single source of truth.*
 
 Successful fixes can contribute to grounding, but the prompt remains the source of truth. If the fix changes intent, back-propagate that intent into the prompt.
+
+**Already using a coding agent (Claude Code / Cursor / Codex / Copilot)?** The friendliest on-ramp is the [Using PDD With Your Coding Agent](#using-pdd-with-your-coding-agent) chapter — keep your agent's fast loop and add PDD as the verified build layer.
+
+**Working in an existing codebase?** See [Brownfield Adoption](#brownfield-adoption) for the incremental, one-module-at-a-time recipe.
 
 *For the conceptual foundation of why this works, see [The Mold Paradigm](prompt-driven-development-doctrine.md#the-mold-paradigm) in the doctrine.*
 
@@ -37,30 +53,65 @@ Successful fixes can contribute to grounding, but the prompt remains the source 
 - **Source of Truth:** The definitive record. In PDD, the **Prompt** is the source of truth; the code is just a temporary artifact generated from it.
 - **PDD Program:** A versioned prompt suite plus its includes, examples, tests, architecture metadata, and configuration.
 - **Compilation:** Running `pdd sync` or related commands to regenerate conventional code artifacts from PDD source and validate them.
-- **Grounding (Few-Shot History):** The process where the PDD system can use successful past pairs of (Prompt, Code) as "few-shot" examples during generation. This helps regenerated code follow established style and logic, reducing the chance of a completely different implementation.
+- **Grounding (Few-Shot History):** The process where the PDD system can use successful past pairs of (Prompt, Code) as "few-shot" examples during generation. This helps regenerated code follow established style and logic, reducing the chance of a completely different implementation. (See [Grounding & Critical Modules](#automated-grounding-pdd-cloud).)
 - **Drift:** When the generated code slowly diverges from the prompt's intent over time, or when manual edits to code make it inconsistent with the prompt.
+- **Mold / Mold Walls:** The constraints (frozen interface, behavioral tests, negative tests for MUST NOT rules) that make a module regeneration-safe. The model fills the mold; the walls determine the shape. (See [Verification](#verification-the-spine-of-pdd).)
 
 ---
 
 ## Why PDD Prompts (Not Patches)
 
 - Prompts are the source of truth; code is a generated artifact. Update the prompt and regenerate instead of patching code piecemeal.
-- Regeneration preserves conceptual integrity and reduces long‑term maintenance cost (see pdd/docs/whitepaper.md).
+- Regeneration preserves conceptual integrity and reduces long‑term maintenance cost (see `pdd/docs/whitepaper.md`).
 - Prompts consolidate intent, constraints, dependencies, and examples into one place so the model can use them during generation.
 - Tests accumulate across regenerations and act as a regression net; prompts and tests stay in sync.
 
-Contrast with interactive patching (Claude Code, Cursor): prompts are ephemeral instructions for local diffs. They are great for short, local fixes, but tend to drift from original intent as context is implicit and often lost. In PDD, prompts are versioned, explicit, and designed for batch, reproducible generation.
+**Prompt capital appreciates; code capital depreciates.** The LLM "compiler" improves over time, so prompt-sourced code gets *better for free* on each model upgrade — regenerate the same prompt against a stronger model and get a better implementation. Traditional source code does not appreciate this way; it ages.
+
+Contrast with interactive patching (Claude Code, Cursor): prompts are ephemeral instructions for local diffs. They are great for short, local fixes, but tend to drift from original intent as context is implicit and often lost. In PDD, prompts are versioned, explicit, and designed for batch, reproducible generation. The two approaches are **complements** — see [Using PDD With Your Coding Agent](#using-pdd-with-your-coding-agent).
 
 For a deeper exploration of why this paradigm shift matters—and an analogy to manufacturing's wood‑to‑plastic transition—see [The Mold Paradigm](prompt-driven-development-doctrine.md#the-mold-paradigm) in the doctrine.
+
+---
+
+<a name="honest-task-fit-boundary"></a>
+## Honest Task‑Fit Boundary
+
+PDD is **not** "regenerate everything." It is a tool for behavior you will verify and regenerate repeatedly. Stating its limits honestly is what makes it trustworthy.
+
+**Strong-fit — capture these as PDD modules:**
+
+- Validation and business rules
+- Adapters / API wrappers
+- Data transforms
+- Internal tools and scripts
+- CRUD endpoints and services
+- Customer-specific variants of a common pattern
+- Test generation
+- Policy enforcement
+
+These are observable, testable in isolation, and have knowable interfaces — exactly what a regeneration-safe mold needs.
+
+**Weak-fit — patch directly or keep as conventional code (for now):**
+
+- Tiny hotfixes
+- Performance micro-optimizations
+- Legacy code with hidden coupling
+- Hard-to-test behavior
+- Novel algorithms
+- Large architectural ambiguity
+- Safety-critical code without a strong existing test suite
+
+Weak-fit code isn't permanently off-limits — promote it to a PDD module once it has seams and tests and the contract becomes knowable. The discipline: **convert what's worth verifying repeatedly; leave the rest.** The [Brownfield Adoption](#brownfield-adoption) chapter applies this boundary to picking first modules; [Hybrid Agent Workflow](#using-pdd-with-your-coding-agent) applies it to choosing between PDD and your agent.
 
 ---
 
 ## The PDD Mental Model
 
 - One prompt typically maps to one code file or narrowly scoped module.
-- You explicitly curate the context to place in the model’s window (don’t “dump the repo”).
+- You explicitly curate the context to place in the model's window (don't "dump the repo").
 - Change behavior by editing the prompt; re‑generate the file; run crash/verify/test/fix; then update the prompt with learnings.
-- Keep the “dev unit” synchronized: prompt + generated code + minimal runnable example + tests.
+- Keep the "dev unit" synchronized: prompt + generated code + minimal runnable example + tests.
 
 Key principles: everything is explicit, prompts are the programming language, and you regenerate rather than patch.
 
@@ -82,177 +133,357 @@ Notes:
 - The prompt defines intent. Code, example, and tests are generated artifacts.
 - Regenerate rather than patch; keep tests accumulating over time.
 
----
+The durable PDD chain:
 
-<a name="automated-grounding"></a>
-## Automated Grounding (PDD Cloud)
-
-Unlike standard LLM interactions where every request is a blank slate, PDD Cloud uses **Automated Grounding** to reduce implementation drift.
-
-### How It Works
-
-When you run `pdd generate`, the system:
-1. Embeds your prompt into a vector
-2. Searches for similar prompts in the cloud database (cosine similarity)
-3. Auto-injects the closest (prompt, code) pair as a few-shot example
-
-**This is automatic.** You don't configure it. As you edit your prompt:
-- The embedding changes
-- Different examples may be retrieved
-- Generation naturally adapts to your prompt's content
-
-On first generation: Similar existing modules in your project may provide grounding.
-On re-generation: Your prior successful generation is typically the closest match.
-
-### Why This Matters for Prompt Writing
-
-- **Your prompt wording affects grounding.** Similar prompts retrieve similar examples.
-- **Implementation patterns can be handled automatically in Cloud workflows.** Grounding can provide structural consistency from similar modules (class vs functional, helper patterns, etc.).
-- **Prompts can be minimal in Cloud workflows.** Focus on requirements; Cloud grounding handles many implementation patterns when enough relevant history exists.
-
-*Note: This is distinct from "Examples as Interfaces" (which teach how to **use** a dependency). Grounding teaches the model how to **write** the current module.*
-
-> **Local users (no cloud):** Without grounding, prompts must be more detailed—include structural guidance and explicit examples via `<include>`. Use a shared preamble for coding style. The minimal prompt guidance in this document assumes cloud access.
-
----
-
-## Automated Context Compression
-
-To manage large context windows and reduce costs, PDD supports automated context compression. This feature reduces the token count of dependencies while maintaining their behavioral contract.
-
-### How It Works
-
-Users can enable compression via **global** CLI flags (before the subcommand), `.pddrc` defaults, or command-local flags on `pdd sync` / `pdd fix`:
-
-- **`--compress-examples`**: Automatically applies `mode="interface"` to all example files in the `<include>` graph. This extracts signatures and docstrings, replacing function bodies with `...`.
-- **`--compress-test-context`**: Uses AST-based slicing to include only failing tests and their necessary fixtures from the test context during `pdd fix` or `pdd test`.
-- **`--context-compression {off,test,examples,contracts,all}`**: Enables one or more compression modes for the invocation.
-
-Place global flags before the subcommand, for example `pdd --context-compression test generate prompts/foo_python.prompt`. The `generate` and `preprocess` commands do **not** accept `--context-compression` after the subcommand; `sync` and `fix` may pass the same flags after their subcommand as well.
-
-### The "Mold Walls" Concept
-
-Compressed context acts as a "mold" that constrains the generated code. By sending only the interface of a dependency, you define the boundaries (the "mold walls") without cluttering the context with implementation details. This ensures the generated code respects the dependency's contract while staying within token budgets.
-
-### Fallback Behavior
-
-If compression fails (e.g., due to AST parsing errors in a dependency), the system defaults to full file inclusion to ensure correctness. This behavior can be controlled with the `--compression-fallback {full,error}` flag.
-
-### Reporting
-
-PDD reports active compression modes in the execution summary, lists successfully compressed include targets (path and mode), and records any fallback events (including the file path when slicing or selection fails).
-
----
-
-## Grounding Overrides: Pin & Exclude (PDD Cloud)
-
-For users with PDD Cloud access, you can override automatic grounding using XML tags:
-
-**`<pin>module_name</pin>`** — Force a specific example to always be included
-- Use case: Ensure a critical module always follows a "golden" pattern
-- Use case: Bootstrap a new module with a specific style
-
-**`<exclude>module_name</exclude>`** — Block a specific example(s) from being retrieved
-- Use case: Escape an old pattern that's pulling generation in the wrong direction
-- Use case: Intentionally break from established patterns for a redesign
-
-These tags are processed by the preprocessor (like `<include>`) and removed before the LLM sees the prompt.
-
-**Most prompts don't need these.** Automatic grounding works well for:
-- Standard modules with similar existing examples
-- Re-generations of established modules
-- Modules following common project patterns
-
-### When to Pin, Exclude, or Review for Critical Modules
-
-For high-risk modules — typically `auth`, `payments`, and `compliance` — the
-automatic top-similarity example is not enough evidence on its own. For these,
-explicitly choose **at least one** of:
-
-- **`<pin>module_name</pin>`** — pin a vetted "golden" example so regeneration
-  cannot silently drift to a different prior implementation.
-- **`<exclude>old_module</exclude>`** — block any superseded or known-bad
-  implementation from being retrieved.
-- **`pdd ... --review-examples`** — interactively approve each `<pin>` tag in the
-  prompt **before** cloud/local generation runs. `generation.grounding.reviewed`
-  is `true` only when every cloud `examplesUsed` entry was pre-approved via a
-  matching `<pin>` (module/slug/id). Cloud-selected examples that were not
-  pinned and pre-approved are still recorded in the manifest but leave
-  `reviewed` false.
-
-These decisions land in the evidence manifest (`generation.grounding`, see
-`docs/evidence_manifest.md`), so reviewers can audit exactly which examples
-shaped a critical module's generation.
-
-To enforce this in CI, declare a policy in `.pdd/grounding_policy.yaml`:
-
-```yaml
-grounding:
-  require_review_for_critical_modules: true
-  require_pinned_examples_for:
-    - auth
-    - payments
-    - compliance
+```text
+Prompt = source of truth
+Contract rules = durable obligations
+User stories = prompt-level acceptance tests
+Generated tests = executable evidence
+Accumulated tests = mold walls
+Generated code = disposable artifact
 ```
 
-See `docs/grounding_policy.md` for the full schema and behavior, including how
-local / no-cloud runs are reported (`mode: unavailable`) instead of failing.
+That discipline converts maintenance from an endless patchwork into a compounding system of leverage.
 
 ---
 
-## Anatomy of a Good PDD Prompt
+---
 
-A well-designed prompt contains **only what can't be handled elsewhere**. With Cloud grounding or explicit examples plus accumulated tests, prompts can stay focused.
+## Using PDD With Your Coding Agent
 
-### Required Sections for Simple Modules
+**New to PDD? Start here.** If you already use an interactive coding agent — Claude Code, Cursor, Codex, GitHub Copilot — you already have most of what you need. This chapter shows how to add PDD as a *governance and build layer* on top of your agent, without giving up the fast, exploratory loop you like.
 
-1. **Role and scope** (1-2 sentences): What this module does
-2. **Requirements** (5-10 items): Functional and non-functional specs
-3. **Dependencies** (via `<include>`): Only external or critical interfaces
+The one-sentence version: **your agent edits the intent (prompts, contract rules, tests); PDD turns that intent into verified code, reproducibly.** You keep the conversation; PDD gives it a source of truth and a build button.
 
-### Required Sections for Non-Trivial Modules
+---
 
-Use more structure when the module has external side effects, security risk, cross-module behavior, state transitions, or business-critical rules:
+## PDD and Agents Are Complements, Not Competitors
 
-1. **Role and scope**: One or two sentences describing what this module does.
-2. **Responsibility**: What this module owns.
-3. **Non-responsibilities**: What this module explicitly does not own.
-4. **Vocabulary**: Definitions for domain terms that could be ambiguous.
-5. **Contract rules**: Stable, numbered MUST/MUST NOT/MAY/DOES NOT rules.
-6. **Inputs and outputs**: Types, shapes, accepted values, validation rules, and error conditions.
-7. **Dependencies**: Use `<include>` for external APIs, critical interfaces, schemas, examples, or documentation.
-8. **Deliverables**: Only when non-obvious.
+A common misconception is that PDD competes with agentic coders. It does not. They operate at different layers:
 
-For trivial modules, you may combine Responsibility, Vocabulary, and Contract Rules into a concise Requirements section. Do not bloat prompts with every edge case. Use user stories and accumulated tests for examples and regressions.
+| | Interactive agent (Claude Code / Cursor / Codex / Copilot) | PDD |
+|---|---|---|
+| **Best at** | Exploring, proposing, local edits, fast feedback | Reproducible regeneration + verification of a scoped module |
+| **Acts as** | The **editor** of intent (prompts, contracts, tests) | The **build step** that compiles intent into verified code |
+| **Output** | Diffs, ideas, drafts | A regenerated module + passing tests + an evidence manifest |
+| **Memory** | Ephemeral chat context | Versioned prompt suite + accumulated tests |
 
-### Optional Sections
+The agent is great at the part that is hard to specify in advance: *figuring out what to build.* PDD is great at the part agents are bad at: *making the result durable, reproducible, and verified.* Use both. The agent can even write your PDD prompts and tests for you — that is the intended workflow.
 
-- **Instructions**: Only if default behavior needs overriding
-- **Deliverables**: Only if non-obvious
-- **Coverage**: Useful for non-trivial modules with named contract rules
+> This is the practical face of "complement, don't compete." For the conceptual contrast (source of truth, drift, scope), see [PDD vs Interactive Agentic Coders](#pdd-vs-interactive-agentic-coders-claude-code-cursor).
 
-### What NOT to Include
+---
 
-- **Coding style** (naming, formatting, imports) → Handled by shared preamble
-- **Implementation patterns** (class structure, helpers) → Usually handled by Cloud grounding; local users may need explicit examples via `<include>`
-- **Every edge case** → Handled by accumulated tests
-- **Implementation steps** → Let the LLM decide (unless critical)
+## The Hybrid Loop
 
-### Target Size: Prompt-to-Code Ratio
+```mermaid
+flowchart LR
+  A["Agent explores & proposes<br/>(chat, drafts, local edits)"] --> B["You capture intent:<br/>prompt + contract rules + tests"]
+  B --> C["PDD regenerates the module<br/>(pdd generate / pdd sync)"]
+  C --> D["Tests / verify gate<br/>(pdd verify, test runner)"]
+  D -->|pass| E["Manifest captures<br/>what went into the call"]
+  D -->|fail| B
+  E --> A
+```
 
-Aim for **10-30%** of your expected code size:
+Step by step:
 
-| Ratio | Meaning |
-|-------|---------|
-| **< 10%** | Too vague—missing contracts, error handling, or key constraints |
-| **10-30%** | Just right—requirements and contracts without implementation details |
-| **> 50%** | Too detailed—prompt is doing preamble's, examples', or grounding's job |
+1. **Agent explores & proposes.** Use your agent the way you already do — ask it to investigate, sketch an approach, draft an implementation, try things interactively. This is the cheap, creative phase. Nothing here is the source of truth yet.
+2. **You capture intent as durable artifacts.** Once you know what you want, *promote* it out of the chat into PDD source: a module **prompt** (role, requirements, contract rules), **user stories** for product-level behavior, and **tests**. Your agent can write all three — ask it to "turn what we just built into a PDD prompt with contract rules and tests." (Authoring details: [Contracts](#natural-language-contracts).)
+3. **PDD regenerates the module.** Run `pdd generate` (or `pdd sync`) so the code is produced *from the prompt*, not hand-carried out of the chat. Now the prompt — not the diff — is the source of truth.
+4. **Tests / verify gate.** Run the tests and `pdd verify`. This is the [verification spine](#verification-the-spine-of-pdd): regeneration is only trustworthy because the gate is. If it fails, go back to step 2 and refine the prompt/tests (let the agent help).
+5. **Manifest captures the call.** PDD records what went into the generation — prompt, included context, grounding examples used, and results — in the evidence manifest (`../evidence_manifest.md`). This is the audit trail the chat never gave you.
 
-If your prompt exceeds 30%, ask: Am I specifying things that the preamble, Cloud grounding, examples, or tests should handle?
+The loop closes: the manifest and passing tests feed back to the agent as context for the next exploration. Each turn leaves behind durable, versioned, verified artifacts instead of an ephemeral chat history.
 
-**Note:** Executable tests are generated from the module prompt plus generated code or example code, with `context/test.prompt` providing project-wide test guidance. Well-written requirements are inherently testable, so most module prompts do not need a separate Testing section.
+---
 
-See pdd/pdd/templates/generic/generate_prompt.prompt for a concrete scaffold.
+## Worked Example: A Coupon Validation Helper
+
+Suppose you're adding coupon support to a checkout flow.
+
+### 1. Explore with the agent
+
+You open Claude Code (or Cursor / Codex / Copilot) and say:
+
+> "I need to validate coupon codes at checkout. Let's figure out the rules — expired coupons, already-redeemed coupons, minimum-cart-total coupons — and sketch a `validate_coupon` function."
+
+The agent proposes a `validate_coupon(code, cart, now)` function, talks through edge cases, and writes a draft. You iterate in chat until the behavior feels right. **This draft is disposable** — it lives in the conversation, not in your repo's source of truth.
+
+### 2. Capture intent as PDD source
+
+Now you ask the agent to promote it:
+
+> "Turn this into a PDD module prompt for `prompts/validate_coupon_python.prompt`. Add numbered contract rules for the MUST/MUST NOT behavior, and write executable tests including negative tests for the forbidden cases."
+
+The agent produces a prompt like:
+
+```text
+% You are an expert Python engineer. Implement `validate_coupon`.
+
+<include>context/project_preamble.prompt</include>
+
+<responsibility>
+Validates a coupon code against a cart at a point in time and returns a result.
+</responsibility>
+
+<non_responsibilities>
+- Does not apply the discount to the cart.
+- Does not record redemption.
+</non_responsibilities>
+
+<vocabulary>
+- Redeemable: a coupon that is active, not expired, not already redeemed, and whose minimum cart total is met.
+</vocabulary>
+
+<contract_rules>
+R1 - Expiry
+For every coupon, the system MUST reject the coupon when `now` is at or after its expiry.
+
+R2 - Single use
+For every single-use coupon already marked redeemed, the system MUST reject the coupon.
+
+R3 - Minimum cart total
+For every coupon with a minimum cart total, the system MUST reject the coupon when the cart total is below that minimum.
+
+R4 - No side effects
+The system MUST NOT mutate the cart, MUST NOT mark the coupon redeemed, and MUST NOT emit any event.
+</contract_rules>
+
+<pdd-interface>
+{"type":"module","module":{"functions":[
+  {"name":"validate_coupon","signature":"(code, cart, now) -> CouponResult","returns":"CouponResult"}]}}
+</pdd-interface>
+```
+
+…and tests, including a **negative test for R4** that fails if the cart is mutated or a redemption event is emitted. (Why the negative test matters: [Verification → minimum viable mold](#abc).)
+
+### 3. Regenerate from the prompt
+
+```bash
+pdd generate prompts/validate_coupon_python.prompt
+pdd test prompts/validate_coupon_python.prompt src/validate_coupon.py
+```
+
+The code now comes *from the prompt*. If you later change a rule (say, coupons become multi-use up to a cap), you edit R2 in the prompt and regenerate — you don't hand-patch the code.
+
+### 4. Gate it
+
+```bash
+pytest tests/test_validate_coupon.py
+pdd verify   # where configured
+```
+
+Green means the regenerated module satisfies every contract rule, including the forbidden-side-effects rule. Red means refine the prompt or tests (back to step 2 — bring the agent in).
+
+### 5. The manifest
+
+PDD records the generation — prompt, includes, any grounding examples used, results — in the evidence manifest. When a teammate asks "why does this module look the way it does?", the answer is the prompt + manifest, not a lost chat transcript.
+
+---
+
+## Who Owns What
+
+A simple division of labor keeps the hybrid workflow clean:
+
+- **The agent owns exploration and drafting.** Let it be fast, speculative, and chatty.
+- **The prompt owns intent.** Once a behavior is decided, it lives in the prompt as requirements and contract rules — never only in the chat.
+- **Tests own correctness.** They are the gate that makes regeneration safe and the [ratchet](#tests-as-generation-context) that prevents regression.
+- **PDD owns the build.** `pdd generate` / `pdd sync` produce the code reproducibly; the manifest records how.
+
+When you find yourself hand-editing generated code in the chat to fix behavior, that's the signal to **back-propagate** the change into the prompt or a test (see [When to Update the Prompt](#when-to-update-the-prompt-and-when-not-to)). The chat is where you discover intent; the prompt is where intent lives.
+
+---
+
+## Pick the Right Tool for the Task
+
+PDD is not for everything, and neither is your agent. Use the [task-fit boundary](#honest-task-fit-boundary) on the landing page:
+
+- **Reach for PDD** (capture as a module) for validation/business rules, adapters and API wrappers, data transforms, internal tools, CRUD, customer variants, test generation, and policy enforcement — anything you'll regenerate and must keep correct.
+- **Stay in the agent / patch directly** for tiny hotfixes, perf micro-optimizations, hard-to-test behavior, novel algorithms, and large architectural ambiguity where the contract isn't yet knowable. (Then, if it stabilizes, promote it to a PDD module.)
+
+The honest rule: promote to PDD when a behavior is worth verifying repeatedly. Until then, the agent's fast loop is the right tool.
+
+---
+
+---
+
+## Verification: The Spine of PDD
+
+Everything in PDD rests on one assumption: **you can verify, cheaply and repeatably, that a regenerated module still does what it must.** If that assumption is false, regeneration is not an advantage — it is a liability. Without strong verification, multi-shot regeneration just produces *plausible wrong code faster.*
+
+This is why verification is the organizing principle of the whole guide. Contracts ([Contracts](#natural-language-contracts)) declare what must hold; grounding ([Grounding & Critical Modules](#automated-grounding-pdd-cloud)) keeps structure stable; directives ([Directives & Context](#prompt-syntax-essentials)) control what the model sees. But verification is what turns "a model wrote some code" into "a behavior change we trust." It is the term in the denominator-and-numerator of the north-star metric, `verified_behavioral_change_per_unit_cost`: the word *verified* is load-bearing.
+
+---
+
+## Why Verification Is the Spine
+
+PDD's entire advantage is that you can throw away code and regenerate it. That only works if you have something that does not get thrown away and that tells you whether the new code is correct. That something is your verification suite: accumulated tests, user stories, contract rules with negative tests, and (optionally) property and mutation checks.
+
+Two failure modes make this concrete:
+
+- **Strong prompt, weak verification.** The model produces code that looks right, passes the one happy-path test you wrote, and silently violates a security or idempotency rule. Each regeneration is a fresh roll of the dice. You ship faster *and* regress faster.
+- **Modest prompt, strong verification.** Even a terse prompt regenerates safely, because the tests catch any drift and the model sees the failing tests as behavioral context on the next pass. The walls do the work.
+
+The takeaway: invest in verification *before* you invest in clever prompting. A module without verification is not a PDD module; it is a one-time generation.
+
+---
+
+## The Minimum Viable Mold
+
+A module is **regeneration-safe** only when it has all three of the following. Below this bar, do not rely on repeated regeneration — treat the code as hand-owned until you can build the mold.
+
+<a name="abc"></a>
+
+**(a) A frozen / declared interface.**
+The public surface — function signatures, return types, error types, route shapes — is written down and stable. Declare it in the prompt (`<pdd-interface>`, an Inputs/Outputs section) and, where it matters, pin it with `mode="interface"` includes of dependencies. Callers depend on this surface; regeneration must not silently change it. (See [Directives & Context](#architecture-metadata-tags).)
+
+**(b) N behavioral tests.**
+At least one executable test per requirement / contract rule, asserting *observable behavior* (return values, state transitions, emitted events, calls made) — not private helper names or exact message strings. "N" scales with risk: a CRUD helper might need a handful; an `auth` or `payments` module needs many, covering each lifecycle stage. These tests accumulate and persist across regenerations.
+
+<a name="a-negative-test-for-every-must-not"></a>
+**(c) A negative test for every MUST NOT rule.**
+Every `MUST NOT` in the contract — every forbidden side effect, leak, or premature external call — needs a test that *fails if the forbidden thing happens.* Positive tests prove the module does the right thing; negative tests prove it does not do the wrong thing. A `MUST NOT` with no negative test is an unverified claim.
+
+A module that has (a) + (b) + (c) can be regenerated freely: the interface constrains the shape, the behavioral tests constrain the behavior, and the negative tests constrain the failure space. That is the mold.
+
+---
+
+## The Mold-Walls Concept
+
+Think of the generated code as molten material poured into a mold. The model fills the cavity; the **walls** determine the final shape. Weak walls → the material spreads wherever it wants (plausible, unconstrained, drifting code). Strong walls → every pour comes out the same usable shape.
+
+The walls are made of:
+
+| Wall | Supplied by | Constrains |
+|------|-------------|-----------|
+| **Interface wall** | `<pdd-interface>`, `mode="interface"` includes, declared I/O | The public shape callers depend on |
+| **Behavior wall** | Accumulated executable tests (seen as generation context, enforced by the runner) | What the code must *do* |
+| **Forbidden wall** | Negative tests for MUST NOT rules | What the code must *never* do |
+| **Pattern wall** | Cloud grounding / pinned examples | Structural consistency (how it's written) |
+
+Compression supplies *one* wall cheaply — sending only a dependency's interface, not its body, is a token-efficient way to define the interface wall (see [Compressed Context as a "Mold Wall"](#compressed-context-as-a-mold-wall)). But interface compression alone is not verification. The behavior and forbidden walls come from tests.
+
+> **The conflict-resolution rule:** tests take precedence over grounding and examples. If a test demands a behavior, generation must satisfy it and the runner enforces it. Grounding shapes *how* code is written; tests decide *whether* it is correct. (See [Three Pillars](#the-three-pillars-of-pdd-generation).)
+
+---
+
+## Tests as Specification and Generation Context
+
+In PDD, tests play two roles at once. They are the *specification* of behavior at the example level, and they are *generation context* fed back into the model.
+
+### Tests as Generation Context
+
+A key PDD feature: existing tests are automatically included as context when generating code. This means:
+
+- The LLM sees the test file as behavioral context
+- Generated code is expected to preserve those behaviors
+- The test runner provides the actual enforcement
+- New tests accumulate over time, progressively guiding and checking future generations
+- This creates a **"ratchet effect"** — each bug fix adds a test, preventing regression
+
+This is distinct from test *generation*. Executable tests are generated via `pdd test PROMPT_FILE CODE_OR_EXAMPLE_FILE`, which uses the module prompt, generated code or example code, and `context/test.prompt` for project-wide guidance. Story mode also uses `pdd test`, but it generates or updates Markdown stories and prompt links rather than executable test files. Executable tests accumulate over time via `--merge` as bugs are found. Requirements in the module prompt implicitly define what to test — each requirement should correspond to at least one test case.
+
+```mermaid
+flowchart LR
+  subgraph Assets
+    P[Module Prompt] --> G[pdd generate]
+    T[Existing Tests] --> G
+    G --> C[Generated Code]
+  end
+
+  subgraph Accumulation
+    BUG[Bug Found] --> NT[New Test Written]
+    NT --> T
+  end
+```
+
+### Tests vs. Stories vs. Contract Rules
+
+These three layers verify at different altitudes — author them in [Contracts](#natural-language-contracts), enforce them here:
+
+- **Contract rules** state general obligations (MUST / MUST NOT). Durable, prompt-level.
+- **User stories** are example-level acceptance tests, often cross-module, written from the user's perspective. They list which rules they `Cover`.
+- **Executable tests** are concrete, fast, run on every change. They are the enforcement layer.
+
+Stories are also the natural home for **negative cases**: every MUST NOT rule should be backed by a negative story and, eventually, a negative test. (See [Negative Stories](#negative-stories).)
+
+---
+
+## Contract Evidence Levels as Wall Strength
+
+The four contract evidence levels are a direct measure of how strong a rule's wall is. Use them to grade each high-risk rule.
+
+| Level | Wall strength | Verified by |
+|-------|---------------|-------------|
+| **1. Prompt-only** | Weakest — claim only | The rule is visible to model and reviewer; nothing enforces it |
+| **2. Story-backed** | Documented example | A user story describes the expected behavior |
+| **3. Test-backed** | Enforced | An executable test fails if the rule is violated |
+| **4. Policy-backed** | Enforced + automated gate | Static analysis / CI / custom review checks the rule on every change |
+
+**Production rule:** high-risk MUST / MUST NOT behavior must not ship at level 1. Either reach level 3+ or record an explicit, expiring [waiver](#contract-coverage-matrix). A waiver is an honest IOU; a silent prompt-only rule is a latent regression.
+
+---
+
+## Hidden vs. Public Tests
+
+Not all verification should live where the model can read it.
+
+- **Public tests** are included as generation context. The model sees them and writes code to satisfy them. This is the ratchet — most of your accumulated tests are public.
+- **Hidden tests** are *not* shown to the model during generation; they only run in the verification gate (CI, `pdd verify`, the test runner). They measure whether the model produced genuinely correct behavior or merely **overfit to the visible tests.**
+
+Why keep some tests hidden? Because a model that sees a test can write the narrowest code that passes that exact assertion. Hidden tests detect this overfitting: if public tests pass but hidden tests fail, the generated code learned the test, not the behavior. For high-risk modules, hold back a portion of behavioral and negative tests as a hidden gate.
+
+> The north-star metric counts **hidden-test-passing behavior changes**, precisely because passing visible tests can be gamed by overfitting. Hidden tests are how you keep the metric honest.
+
+---
+
+## Strengthening the Walls: Mutation and Property Testing
+
+Once you have basic behavioral and negative tests, two techniques make the walls harder to slip past.
+
+### Mutation testing
+
+Mutation testing deliberately introduces small faults ("mutants") into the code and checks whether your tests catch them. A surviving mutant means a behavior your tests do not actually constrain — a gap in the wall. Mutation testing answers "how good are my tests?" rather than "does my code pass?" It is especially valuable in PDD because regeneration is itself a source of "mutations": if a real mutant survives, a future regeneration could introduce the same fault undetected.
+
+### Property-based testing
+
+Property-based tests assert *invariants* over a large, generated space of inputs rather than a handful of hand-picked cases. They map naturally onto contract rules:
+
+- An idempotency rule (R4-style) → property: "applying the operation twice equals applying it once."
+- A validation invariant → property: "for all inputs in this class, the result is a `ValidationResult` and never throws."
+- A monotonic-balance rule → property: "remaining refundable amount never goes negative across any sequence of valid refunds."
+
+Properties widen the behavior wall from "these specific cases" to "this whole class of cases," which is exactly the kind of constraint that survives regeneration well.
+
+Use these to *strengthen* walls, not as a prerequisite. A module with solid behavioral + negative tests is already regeneration-safe; mutation and property testing raise the ceiling for critical modules.
+
+---
+
+## The Regeneration-Safe Checklist
+
+Before you rely on repeated regeneration of a module, confirm:
+
+- [ ] **(a) Interface declared and frozen** — signatures, return types, error types, route shapes are written down and stable.
+- [ ] **(b) N behavioral tests** — at least one per requirement / contract rule, asserting observable behavior, scaled to risk.
+- [ ] **(c) Negative test per MUST NOT** — every forbidden side effect, leak, or premature call has a test that fails if it happens.
+- [ ] High-risk rules are at evidence **level 3+** or have an explicit, expiring waiver.
+- [ ] Tests assert **behavior**, not private helper names or exact message strings (prefer `pytest.raises(ExcType, match=r"keyword1|keyword2")`).
+- [ ] Tests **accumulate** — `--merge` / append, never overwrite the test file.
+- [ ] For critical modules: a portion of tests are **hidden** from generation context.
+- [ ] **Drift check** passes — regenerating without changing the prompt still passes all tests (see [Workflow & Review](#regenerate-verify-test-update)).
+- [ ] `pdd verify` and `pdd detect --stories` pass where applicable.
+
+If a module cannot pass (a)/(b)/(c), it is not yet a regeneration-safe PDD module. Build the mold first — or, for an existing codebase, follow the [Brownfield Adoption](#brownfield-adoption) recipe to build it incrementally around current behavior.
+
+---
+
+---
+
+This chapter covers how to write the *intent* half of a PDD prompt: the contract rules, vocabulary, capabilities, user stories, and requirements that survive regeneration. Contracts are what make a module a regeneration-safe **mold** rather than a one-off generation — see [Verification](#the-minimum-viable-mold) for how contracts + tests form the mold walls.
+
+Everything here ladders up to the north-star metric: `verified_behavioral_change_per_unit_cost`. A contract rule only earns its keep when it is observable and testable; a rule no test can check is documentation, not a contract.
 
 ---
 
@@ -420,9 +651,67 @@ Tests:
 - **Unchecked:** No story, test, policy check, or waiver exists yet.
 - **Waived:** The rule is intentionally unchecked, with reason, approver, expiry, and follow-up.
 
-Most modules do not need every evidence level. Production-critical modules should not rely on prompt-only contracts for high-risk behavior.
+Most modules do not need every evidence level. Production-critical modules should not rely on prompt-only contracts for high-risk behavior. The evidence ladder above is the same one [Verification](#contract-evidence-levels-as-wall-strength) uses to grade how strong a mold's walls are.
 
-### Reusable Prompt Skeleton
+---
+
+## Anatomy of a Good PDD Prompt
+
+A well-designed prompt contains **only what can't be handled elsewhere**. With Cloud grounding or explicit examples plus accumulated tests, prompts can stay focused.
+
+### Required Sections for Simple Modules
+
+1. **Role and scope** (1-2 sentences): What this module does
+2. **Requirements** (5-10 items): Functional and non-functional specs
+3. **Dependencies** (via `<include>`): Only external or critical interfaces
+
+### Required Sections for Non-Trivial Modules
+
+Use more structure when the module has external side effects, security risk, cross-module behavior, state transitions, or business-critical rules:
+
+1. **Role and scope**: One or two sentences describing what this module does.
+2. **Responsibility**: What this module owns.
+3. **Non-responsibilities**: What this module explicitly does not own.
+4. **Vocabulary**: Definitions for domain terms that could be ambiguous.
+5. **Contract rules**: Stable, numbered MUST/MUST NOT/MAY/DOES NOT rules.
+6. **Inputs and outputs**: Types, shapes, accepted values, validation rules, and error conditions.
+7. **Dependencies**: Use `<include>` for external APIs, critical interfaces, schemas, examples, or documentation.
+8. **Deliverables**: Only when non-obvious.
+
+For trivial modules, you may combine Responsibility, Vocabulary, and Contract Rules into a concise Requirements section. Do not bloat prompts with every edge case. Use user stories and accumulated tests for examples and regressions.
+
+### Optional Sections
+
+- **Instructions**: Only if default behavior needs overriding
+- **Deliverables**: Only if non-obvious
+- **Coverage**: Useful for non-trivial modules with named contract rules
+
+### What NOT to Include
+
+- **Coding style** (naming, formatting, imports) → Handled by shared preamble
+- **Implementation patterns** (class structure, helpers) → Usually handled by Cloud grounding; local users may need explicit examples via `<include>`
+- **Every edge case** → Handled by accumulated tests
+- **Implementation steps** → Let the LLM decide (unless critical)
+
+### Target Size: Prompt-to-Code Ratio
+
+Aim for **10-30%** of your expected code size:
+
+| Ratio | Meaning |
+|-------|---------|
+| **< 10%** | Too vague—missing contracts, error handling, or key constraints |
+| **10-30%** | Just right—requirements and contracts without implementation details |
+| **> 50%** | Too detailed—prompt is doing preamble's, examples', or grounding's job |
+
+If your prompt exceeds 30%, ask: Am I specifying things that the preamble, Cloud grounding, examples, or tests should handle?
+
+**Note:** Executable tests are generated from the module prompt plus generated code or example code, with `context/test.prompt` providing project-wide test guidance. Well-written requirements are inherently testable, so most module prompts do not need a separate Testing section.
+
+See `pdd/pdd/templates/generic/generate_prompt.prompt` for a concrete scaffold.
+
+---
+
+## Reusable Prompt Skeleton
 
 ```xml
 % Role:
@@ -528,7 +817,7 @@ Executable tests are generated separately by `pdd test prompts/refund_payment_py
 </deliverables>
 ```
 
-Use `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` only for architecture metadata; they sync with `architecture.json`. Do **not** put contracts inside `<pdd>...</pdd>` comments because `<pdd>` content is removed before the model sees it. Use ordinary semantic tags such as `<contract_rules>`, `<vocabulary>`, `<capabilities>`, `<waivers>`, and `<coverage>`.
+Use `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` only for architecture metadata; they sync with `architecture.json` (see [Directives & Context](#architecture-metadata-tags)). Do **not** put contracts inside `<pdd>...</pdd>` comments because `<pdd>` content is removed before the model sees it. Use ordinary semantic tags such as `<contract_rules>`, `<vocabulary>`, `<capabilities>`, `<waivers>`, and `<coverage>`.
 
 ---
 
@@ -709,6 +998,8 @@ Positive stories describe what should happen. Negative stories describe what mus
 
 Use negative stories for security requirements, invalid inputs, authorization failures, idempotency, forbidden side effects, privacy/data leakage, and provider failure behavior.
 
+Every MUST NOT contract rule should ultimately be backed by a negative test — see [Verification](#a-negative-test-for-every-must-not).
+
 Example:
 
 ```md
@@ -811,11 +1102,167 @@ W1:
 
 ---
 
+## Writing Effective Requirements
+
+Requirements are the core of your prompt. Everything else should be handled by the shared preamble, Cloud grounding when available, explicit examples for local workflows, and accumulated tests.
+
+### Structure (aim for 5-10 items)
+
+1. **Primary function**: What does this module do? (one sentence)
+2. **Input contract**: Types, validation rules, what's accepted
+3. **Output contract**: Types, error conditions, return values
+4. **Key invariants**: What must always be true
+5. **Performance constraints**: If any (latency, memory, complexity)
+6. **Security constraints**: If any (input sanitization, auth requirements)
+
+### Each Requirement Should Be
+
+- **Testable**: If you can't write a test for it, it's too vague
+- **Behavioral**: Describe WHAT, not HOW
+- **Unique**: Don't duplicate what preamble, grounding, explicit examples, or tests provide
+
+### Example: Before/After
+
+**Too detailed:**
+```
+1. Create a UserValidator class with validate() method
+2. Use snake_case for all methods          ← belongs in preamble
+3. Import typing at the top                ← belongs in preamble
+4. Add docstrings to all public methods    ← belongs in preamble
+5. Handle null by returning ValidationError
+6. Handle empty string by returning ValidationError
+7. Handle whitespace-only by returning ValidationError
+```
+
+**Just right** (requirements only):
+```
+1. Function: validate_user(input) → ValidationResult
+2. Input: Any type (untrusted user input)
+3. Output: ValidationResult with is_valid bool and errors list
+4. Invalid inputs: null, empty, whitespace-only, malformed
+5. Performance: O(n) in input length
+6. Security: No eval/exec, treat input as untrusted
+```
+
+Style conventions (2-4) belong in a shared preamble. Edge cases (5-7) can be collapsed into a single requirement.
+
+**Requirements as Test Specifications:** Each requirement implies at least one test case. If you can't test a requirement, it's too vague.
+
+### Bad / Better / Best Contract Examples
+
+Example 1:
+
+```md
+Bad:
+Make refunds safe.
+
+Better:
+The system MUST reject over-refunds.
+
+Best:
+R2 - Remaining balance
+For every refund request, the system MUST reject the request when the requested amount is greater than the remaining refundable amount.
+Remaining refundable amount means captured amount minus successful refunds minus pending refunds.
+The provider MUST NOT be called for rejected requests.
+```
+
+Example 2:
+
+```md
+Bad:
+Handle provider errors gracefully.
+
+Better:
+Return ProviderRefundError when the provider fails.
+
+Best:
+R7 - Provider failure behavior
+When the provider rejects a refund, the system MUST return ProviderRefundError, MUST preserve the original payment state, MUST write one failed-refund audit event, and MUST NOT expose provider secrets in logs or returned errors.
+```
+
+Example 3:
+
+```md
+Bad:
+Support duplicate requests.
+
+Better:
+Duplicate requests should be idempotent.
+
+Best:
+R4 - Idempotency
+For every duplicate request with the same payment ID and idempotency key, the system MUST NOT create more than one provider refund and MUST NOT write more than one successful-refund audit event.
+```
+
+---
+
+## Prompt Abstraction Level
+
+![Goldilocks Prompt](goldilocks_prompt.jpeg)
+
+Write prompts at the level of *architecture, contract, and intent*, not line-by-line *implementation details*.
+
+### Heuristics: Are You at the Right Level?
+
+| Indicator | Too Detailed (> 30%) | Too Vague (< 10%) |
+|-----------|----------------------|-------------------|
+| **Content** | Specifying variable names, loop structures | Missing error handling strategy |
+| **Style** | Dictating indentation, imports | No input/output types |
+| **Result** | Prompt harder to maintain than code | Every generation is wildly different |
+
+### If Your Prompt Is Too Long
+
+Ask yourself:
+- **Am I specifying coding style?** → Remove it (preamble handles this)
+- **Am I specifying implementation patterns?** → Remove them when Cloud grounding or explicit examples already provide the pattern
+- **Am I listing every edge case?** → Remove them (tests handle this)
+- **Is the module too big?** → Split into multiple prompts
+
+### Examples
+
+- **Too Vague:** "Create a user page." (Model guesses everything; unrepeatable)
+- **Too Detailed:** "Create a class User with a private field _id. In the constructor, set _id. Write a getter..." (Prompt is harder to maintain than code)
+- **Just Right:** "Implement a UserProfile component that displays user details and handles the 'update' action via the API. It must handle loading/error states and match the existing design system."
+
+**Rule of Thumb:** Focus on **Interfaces**, **Invariants**, and **Outcomes**. Let the preamble handle coding style; let Cloud grounding or explicit examples handle implementation patterns.
+
+---
+
+## Positive and Negative Constraints
+
+Use positive constraints for normal desired behavior:
+
+- Initialize all variables before use.
+- Return `ValidationResult` for invalid input.
+
+Use `MUST NOT` for forbidden behavior, especially security, privacy, and side effects:
+
+- MUST NOT log bearer tokens.
+- MUST NOT call the payment provider before validation succeeds.
+- MUST NOT mutate customer profile records.
+
+When possible, pair a negative rule with the allowed alternative:
+
+- MUST NOT log raw provider secrets.
+- Instead, log only redacted provider error codes and correlation IDs.
+
+Every `MUST NOT` should eventually graduate to a negative test. See the [regeneration-safe checklist](#the-regeneration-safe-checklist) in the Verification chapter.
+
+---
+
+---
+
+A PDD prompt is a *source file* that the preprocessor expands before the model ever sees it. This chapter covers the directive syntax (`<include>`, `<shell>`, `<web>`, `<pdd>`), architecture metadata tags, selective includes, semantic query, automated compression, dependency management, and how to position context so the model actually uses it.
+
+The goal is always the north-star metric: maximize `verified_behavioral_change_per_unit_cost`. Curating context is how you keep generation cost (and confusion) down without losing the information the model needs to satisfy the contract.
+
+---
+
 ## Prompt Syntax Essentials
 
 These patterns are used across prompts in this repo:
 
-- Preamble and role: start with a concise, authoritative description of the task and audience (e.g., “You are an expert Python engineer…”).
+- Preamble and role: start with a concise, authoritative description of the task and audience (e.g., "You are an expert Python engineer…").
 - Includes for context: bring only what the model needs.
   - Single include: `<include>path/to/file</include>`. **Note:** This is a PDD directive, not standard XML. The PDD tool replaces this tag with the actual file content *before* the LLM sees it. (Handles both text and images). Use `<include optional>path/to/file</include>` to treat missing files as empty string (while still logging a warning).
   - Multiple: `<include-many>path1, path2, …</include-many>`
@@ -1084,7 +1531,7 @@ latest `.pdd/evidence/devunits/<module-slug>.latest.json` manifest (slug from
 `infer_module_identity`, with path segments normalized like `frontend-page`). Fields include
 `rules`, `critical`, `stories`, `capabilities`, `coverage_status`, `evidence_status`,
 `waived`, `unchecked`, and optional `rules_detail`. Legacy prompts without contract
-sections are left unchanged.
+sections are left unchanged. (For how these contract sections are authored, see [Contracts](#natural-language-contracts).)
 
 ### Example: Complete Prompt with Metadata Tags
 
@@ -1092,22 +1539,7 @@ See `docs/examples/prompt_with_metadata.prompt` for a full example showing all t
 
 ---
 
-## Advanced Tips
-
-### Shared Preamble for Consistency
-
-Use a shared include (e.g., `<include>context/project_preamble.prompt</include>`) at the top of every prompt. You should create this file in your project's `context/` directory to define your "Constitution": consistent coding style (e.g., indentation, naming conventions), preferred linting rules, and forbidden libraries. This ensures all generated code speaks the same language without cluttering individual prompts.
-
-### Automatic Update Propagation via Includes
-
-A key benefit of `<include>` directives is **automatic propagation**: when the included file changes, all prompts that reference it automatically reflect those changes on the next generation—without editing the prompts themselves.
-
-Use this pattern when:
-- **Authoritative documentation exists elsewhere** (e.g., a README that defines environment variables, API contracts, or configuration options). Include it rather than duplicating the content.
-- **Shared constraints evolve** (e.g., coding standards, security policies). A single edit to the preamble file updates all prompts.
-- **Interface definitions change** (e.g., a dependency's example file). Prompts consuming that example stay current.
-
-### Selective Includes
+## Selective Includes
 
 Use `select=` to include only specific parts of a file instead of the whole thing:
 
@@ -1178,29 +1610,116 @@ For large documents where structural selectors aren't enough, use `query=` for L
 
 Results are cached in `.pdd/extracts/` and auto-refreshed when the source file changes. Run `pdd extracts prune` to garbage-collect orphaned cache entries.
 
-### Positive and Negative Constraints
+---
 
-Use positive constraints for normal desired behavior:
+## Automated Context Compression
 
-- Initialize all variables before use.
-- Return `ValidationResult` for invalid input.
+To manage large context windows and reduce costs, PDD supports automated context compression. This feature reduces the token count of dependencies while maintaining their behavioral contract.
 
-Use `MUST NOT` for forbidden behavior, especially security, privacy, and side effects:
+### How It Works
 
-- MUST NOT log bearer tokens.
-- MUST NOT call the payment provider before validation succeeds.
-- MUST NOT mutate customer profile records.
+Users can enable compression via **global** CLI flags (before the subcommand), `.pddrc` defaults, or command-local flags on `pdd sync` / `pdd fix`:
 
-When possible, pair a negative rule with the allowed alternative:
+- **`--compress-examples`**: Automatically applies `mode="interface"` to all example files in the `<include>` graph. This extracts signatures and docstrings, replacing function bodies with `...`.
+- **`--compress-test-context`**: Uses AST-based slicing to include only failing tests and their necessary fixtures from the test context during `pdd fix` or `pdd test`.
+- **`--context-compression {off,test,examples,contracts,all}`**: Enables one or more compression modes for the invocation.
 
-- MUST NOT log raw provider secrets.
-- Instead, log only redacted provider error codes and correlation IDs.
+Place global flags before the subcommand, for example `pdd --context-compression test generate prompts/foo_python.prompt`. The `generate` and `preprocess` commands do **not** accept `--context-compression` after the subcommand; `sync` and `fix` may pass the same flags after their subcommand as well.
 
-### Positioning Critical Instructions (Hierarchy of Attention)
+### Compressed Context as a "Mold Wall"
+
+Compressed context acts as a "mold" that constrains the generated code. By sending only the interface of a dependency, you define the boundaries (the "mold walls") without cluttering the context with implementation details. This ensures the generated code respects the dependency's contract while staying within token budgets.
+
+> The mold-walls metaphor is the organizing idea of PDD. Compression supplies *one* wall (the dependency's interface); contracts and accumulated tests supply the rest. See [Verification](#the-mold-walls-concept) for the full picture.
+
+### Fallback Behavior
+
+If compression fails (e.g., due to AST parsing errors in a dependency), the system defaults to full file inclusion to ensure correctness. This behavior can be controlled with the `--compression-fallback {full,error}` flag.
+
+### Reporting
+
+PDD reports active compression modes in the execution summary, lists successfully compressed include targets (path and mode), and records any fallback events (including the file path when slicing or selection fails).
+
+---
+
+## Dependencies
+
+### When to Use `<include>`
+
+Include dependencies explicitly when:
+- **External libraries** not in your grounding history
+- **Critical interfaces** that must be exact
+- **New modules** with no similar examples in Cloud grounding
+
+```xml
+<billing_service>
+  <include>context/billing_service_example.py</include>
+</billing_service>
+```
+
+### When to Rely on Grounding
+
+If you've successfully generated code that uses a dependency before and PDD Cloud grounding is available, grounding often suffices—the usage pattern is already in the cloud database. (See [Grounding & Critical Modules](#automated-grounding-pdd-cloud) for how automated grounding works and when to override it.)
+
+**Prefer explicit `<include>` for:** External APIs, critical contracts, cross-team interfaces
+**Rely on grounding for:** Internal modules with established patterns when Cloud grounding is available
+
+### Documentation as Dependencies
+
+In addition to code examples, prompts can include documentation files (schema docs, API references, PRD sections) as dependencies. This prevents prompts from becoming "islands" that duplicate shared information.
+
+Use `pdd auto-deps` to automatically discover both code and documentation dependencies. The command will:
+- Find relevant `.md`, `.txt`, and `.rst` files alongside code examples
+- Insert `<include>` directives for discovered documents
+- Remove redundant inline content that duplicates what the included documents provide
+
+**Prefer `<include>` over inline duplication:**
+- Good: `<include>docs/api_schema.md</include>` (single source of truth, auto-updates)
+- Bad: Copy-pasting the schema content directly into the prompt (creates drift)
+
+### Token Efficiency
+
+Real source code is heavy. A 500-line module might have a 50-line usage example. By including only the example, you save ~90% of tokens. Use `pdd auto-deps` to automatically populate relevant examples and documentation references.
+
+```mermaid
+flowchart LR
+  subgraph Module_B
+    PB[Prompt B] --> GB[Generate] --> CB[Code B]
+    CB --> EB[Example B]
+  end
+
+  subgraph Module_A
+    PA[Prompt A] --> GA[Generate] --> CA[Code A]
+    PA --> EB
+  end
+
+  EB --> CA
+```
+
+### Automatic Update Propagation via Includes
+
+A key benefit of `<include>` directives is **automatic propagation**: when the included file changes, all prompts that reference it automatically reflect those changes on the next generation—without editing the prompts themselves.
+
+Use this pattern when:
+- **Authoritative documentation exists elsewhere** (e.g., a README that defines environment variables, API contracts, or configuration options). Include it rather than duplicating the content.
+- **Shared constraints evolve** (e.g., coding standards, security policies). A single edit to the preamble file updates all prompts.
+- **Interface definitions change** (e.g., a dependency's example file). Prompts consuming that example stay current.
+
+### Shared Preamble for Consistency
+
+Use a shared include (e.g., `<include>context/project_preamble.prompt</include>`) at the top of every prompt. You should create this file in your project's `context/` directory to define your "Constitution": consistent coding style (e.g., indentation, naming conventions), preferred linting rules, and forbidden libraries. This ensures all generated code speaks the same language without cluttering individual prompts.
+
+---
+
+## Hierarchy of Attention
+
+### Positioning Critical Instructions
 
 LLMs exhibit "middle-loss" – they pay more attention to the **beginning** (role, preamble) and the **end** (steps, deliverables) of the prompt context. If a critical constraint (e.g., security, output format) is ignored, ensure it's placed in your shared preamble, explicitly reiterated in the final "Instructions" or "Steps" section, or even pre-filled in the expected output format if applicable.
 
-### Command-Specific Context Files
+---
+
+## Command-Specific Context Files
 
 Some PDD commands (e.g., `pdd test`, `pdd example`) can automatically include project-specific context files like `context/test.prompt` or `context/example.prompt` during their internal preprocessing. Use these to provide instructions tailored to your project, such as preferred testing frameworks or specific import statements, without modifying the main prompt.
 
@@ -1249,261 +1768,99 @@ When generating tests from a PDD prompt:
 
 ---
 
-## Why PDD Scales to Large Codebases
+---
 
-- Explicit, curated context: use minimal examples and targeted includes instead of dumping source, reducing tokens and confusion.
-- Modular dev units: one prompt per file/module constrains scope, enabling independent regeneration and parallel work.
-- Batch, reproducible flow: eliminate long chat histories; regeneration avoids patch accumulation and incoherent diffs.
-- Accumulating tests: protect behavior across wide regenerations and refactors; failures localize issues quickly.
-- Single source of truth: prompts unify intent and dependencies, improving cross‑team coordination and reducing drift.
-- Automated Grounding: By feeding successful past generations back into the context, the system can stabilize code over time and make regeneration more reliable for complex modules.
+Grounding is how PDD keeps regenerated code structurally consistent with what came before. This chapter covers automated grounding (Cloud), the `<pin>` / `<exclude>` overrides, the review-and-policy controls for high-risk modules, an auth-heavy domain pattern, and how prompt + grounding + tests divide the labor.
 
-### Tests as Generation Context
-
-A key PDD feature: existing tests are automatically included as context when generating code. This means:
-
-- The LLM sees the test file as behavioral context
-- Generated code is expected to preserve those behaviors
-- The test runner provides the actual enforcement
-- New tests accumulate over time, progressively guiding and checking future generations
-- This creates a "ratchet effect" - each bug fix adds a test, preventing regression
-
-This is distinct from test *generation*. Executable tests are generated via `pdd test PROMPT_FILE CODE_OR_EXAMPLE_FILE`, which uses the module prompt, generated code or example code, and `context/test.prompt` for project-wide guidance. Story mode also uses `pdd test`, but it generates or updates Markdown stories and prompt links rather than executable test files. Executable tests accumulate over time via `--merge` as bugs are found. Requirements in the module prompt implicitly define what to test—each requirement should correspond to at least one test case.
-
-```mermaid
-flowchart LR
-  subgraph Assets
-    P[Module Prompt] --> G[pdd generate]
-    T[Existing Tests] --> G
-    G --> C[Generated Code]
-  end
-
-  subgraph Accumulation
-    BUG[Bug Found] --> NT[New Test Written]
-    NT --> T
-  end
-```
+Grounding directly serves the north-star metric: it lowers generation cost and reduces drift, so more of your spend goes to *verified behavioral change* rather than re-litigating structure on every run. But grounding is not verification — for critical modules, pair it with the controls below and with the [minimum viable mold](#the-minimum-viable-mold).
 
 ---
 
-Patch vs PDD at Scale (diagram):
+<a name="automated-grounding"></a>
+## Automated Grounding (PDD Cloud)
 
-```mermaid
-flowchart LR
-  subgraph Patching
-    C0[Codebase] --> P0[Chat prompt]
-    P0 --> D0[Local diff]
-    D0 --> C0
-  end
+Unlike standard LLM interactions where every request is a blank slate, PDD Cloud uses **Automated Grounding** to reduce implementation drift.
 
-  subgraph PDD
-    PG[Prompts graph] --> GZ[Batch regenerate]
-    GZ --> CM[Code modules]
-    CM --> XT[Examples and Tests]
-    XT --> UP[Update prompts]
-    UP --> PG
-  end
-```
+### How It Works
 
----
+When you run `pdd generate`, the system:
+1. Embeds your prompt into a vector
+2. Searches for similar prompts in the cloud database (cosine similarity)
+3. Auto-injects the closest (prompt, code) pair as a few-shot example
 
-## The Three Pillars of PDD Generation
+**This is automatic.** You don't configure it. As you edit your prompt:
+- The embedding changes
+- Different examples may be retrieved
+- Generation naturally adapts to your prompt's content
 
-Understanding how prompts, Cloud grounding, examples, and tests work together is key to writing minimal, effective prompts.
+On first generation: Similar existing modules in your project may provide grounding.
+On re-generation: Your prior successful generation is typically the closest match.
 
-| Pillar | What It Provides | Maintained By |
-|--------|-----------------|---------------|
-| **Prompt** | Requirements and constraints (WHAT) | Developer (explicit) |
-| **Cloud Grounding / Examples** | Implementation patterns (HOW) | System grounding when available; explicit examples via `<include>` otherwise |
-| **Tests** | Behavioral correctness | Accumulated over time |
+### Why This Matters for Prompt Writing
 
-### How They Interact
+- **Your prompt wording affects grounding.** Similar prompts retrieve similar examples.
+- **Implementation patterns can be handled automatically in Cloud workflows.** Grounding can provide structural consistency from similar modules (class vs functional, helper patterns, etc.).
+- **Prompts can be minimal in Cloud workflows.** Focus on requirements; Cloud grounding handles many implementation patterns when enough relevant history exists.
 
-- **Prompt** defines WHAT → "validate user input, return errors"
-- **Cloud Grounding / Examples** define HOW → class structure, helper patterns, and dependency usage patterns
-- **Tests** define CORRECTNESS → edge cases discovered through bugs
+*Note: This is distinct from "Examples as Interfaces" (which teach how to **use** a dependency, covered in [Directives & Context](#interfaces-for-contracts-examples-for-usage)). Grounding teaches the model how to **write** the current module.*
 
-### Conflict Resolution
-
-- **Tests take precedence over grounding/examples**: If a test requires new behavior, generation should satisfy it and the test runner enforces it
-- **Explicit requirements override grounding/examples**: If prompt says "use functional style", that overrides OOP examples in grounding
-- **Cloud grounding / explicit examples fill gaps**: They can guide patterns not specified in the prompt or checked by tests
-
-### Why Prompts Can Be Minimal
-
-You don't need to specify:
-- **Coding style** → preamble provides it
-- **Implementation patterns** → Cloud grounding or explicit examples provide them
-- **Edge cases** → tests encode them
-
-You only specify:
-- What the module does
-- What contracts it must satisfy
-- What constraints apply
+> **Local users (no cloud):** Without grounding, prompts must be more detailed—include structural guidance and explicit examples via `<include>`. Use a shared preamble for coding style. The minimal prompt guidance in this guide assumes cloud access.
 
 ---
 
-## Example (Minimal, Python)
+## Grounding Overrides: Pin & Exclude (PDD Cloud)
 
-This simplified example illustrates a minimal functional prompt:
+For users with PDD Cloud access, you can override automatic grounding using XML tags:
 
-```text
-% You are an expert Python engineer. Your goal is to write a function `get_extension` that returns the file extension for a given language.
+**`<pin>module_name</pin>`** — Force a specific example to always be included
+- Use case: Ensure a critical module always follows a "golden" pattern
+- Use case: Bootstrap a new module with a specific style
 
-<include>context/python_preamble.prompt</include>
+**`<exclude>module_name</exclude>`** — Block a specific example(s) from being retrieved
+- Use case: Escape an old pattern that's pulling generation in the wrong direction
+- Use case: Intentionally break from established patterns for a redesign
 
-% Inputs/Outputs
-  Input: language (str), like "Python" or "Makefile".
-  Output: str file extension (e.g., ".py"), or "" if unknown.
+These tags are processed by the preprocessor (like `<include>`) and removed before the LLM sees the prompt.
 
-% Data
-  The CSV at $PDD_PATH/data/language_format.csv contains: language,comment,extension,run_command,run_test_command,outputs
+**Most prompts don't need these.** Automatic grounding works well for:
+- Standard modules with similar existing examples
+- Re-generations of established modules
+- Modules following common project patterns
 
-% Steps
-  1) Load env var PDD_PATH and read the CSV
-  2) Normalize language case
-  3) Lookup extension
-  4) Return "" if not found or invalid
+### When to Pin, Exclude, or Review for Critical Modules
+
+For high-risk modules — typically `auth`, `payments`, and `compliance` — the
+automatic top-similarity example is not enough evidence on its own. For these,
+explicitly choose **at least one** of:
+
+- **`<pin>module_name</pin>`** — pin a vetted "golden" example so regeneration
+  cannot silently drift to a different prior implementation.
+- **`<exclude>old_module</exclude>`** — block any superseded or known-bad
+  implementation from being retrieved.
+- **`pdd ... --review-examples`** — interactively approve each `<pin>` tag in the
+  prompt **before** cloud/local generation runs. `generation.grounding.reviewed`
+  is `true` only when every cloud `examplesUsed` entry was pre-approved via a
+  matching `<pin>` (module/slug/id). Cloud-selected examples that were not
+  pinned and pre-approved are still recorded in the manifest but leave
+  `reviewed` false.
+
+These decisions land in the evidence manifest (`generation.grounding`, see
+`../evidence_manifest.md`), so reviewers can audit exactly which examples
+shaped a critical module's generation.
+
+To enforce this in CI, declare a policy in `.pdd/grounding_policy.yaml`:
+
+```yaml
+grounding:
+  require_review_for_critical_modules: true
+  require_pinned_examples_for:
+    - auth
+    - payments
+    - compliance
 ```
 
-This style:
-- Declares role and outcome
-- Specifies IO, data sources, and steps
-- Uses an `<include>` to pull a shared preamble
-
----
-
-## Scoping & Modularity
-
-- One prompt → one file/module. If a prompt gets too large or brittle, split it into smaller prompts that compose via explicit interfaces.
-- Treat examples as interfaces: create a minimal runnable example demonstrating how the module is meant to be used.
-- Avoid “mega‑prompts” that try to implement an entire subsystem. Use the PDD graph of prompts instead. For how prompts compose via examples, see “Dependencies & Composability (Token‑Efficient Examples)”.
-
----
-
-## Writing Effective Requirements
-
-Requirements are the core of your prompt. Everything else should be handled by the shared preamble, Cloud grounding when available, explicit examples for local workflows, and accumulated tests.
-
-### Structure (aim for 5-10 items)
-
-1. **Primary function**: What does this module do? (one sentence)
-2. **Input contract**: Types, validation rules, what's accepted
-3. **Output contract**: Types, error conditions, return values
-4. **Key invariants**: What must always be true
-5. **Performance constraints**: If any (latency, memory, complexity)
-6. **Security constraints**: If any (input sanitization, auth requirements)
-
-### Each Requirement Should Be
-
-- **Testable**: If you can't write a test for it, it's too vague
-- **Behavioral**: Describe WHAT, not HOW
-- **Unique**: Don't duplicate what preamble, grounding, explicit examples, or tests provide
-
-### Example: Before/After
-
-**Too detailed:**
-```
-1. Create a UserValidator class with validate() method
-2. Use snake_case for all methods          ← belongs in preamble
-3. Import typing at the top                ← belongs in preamble
-4. Add docstrings to all public methods    ← belongs in preamble
-5. Handle null by returning ValidationError
-6. Handle empty string by returning ValidationError
-7. Handle whitespace-only by returning ValidationError
-```
-
-**Just right** (requirements only):
-```
-1. Function: validate_user(input) → ValidationResult
-2. Input: Any type (untrusted user input)
-3. Output: ValidationResult with is_valid bool and errors list
-4. Invalid inputs: null, empty, whitespace-only, malformed
-5. Performance: O(n) in input length
-6. Security: No eval/exec, treat input as untrusted
-```
-
-Style conventions (2-4) belong in a shared preamble. Edge cases (5-7) can be collapsed into a single requirement.
-
-**Requirements as Test Specifications:** Each requirement implies at least one test case. If you can't test a requirement, it's too vague.
-
-### Bad / Better / Best Contract Examples
-
-Example 1:
-
-```md
-Bad:
-Make refunds safe.
-
-Better:
-The system MUST reject over-refunds.
-
-Best:
-R2 - Remaining balance
-For every refund request, the system MUST reject the request when the requested amount is greater than the remaining refundable amount.
-Remaining refundable amount means captured amount minus successful refunds minus pending refunds.
-The provider MUST NOT be called for rejected requests.
-```
-
-Example 2:
-
-```md
-Bad:
-Handle provider errors gracefully.
-
-Better:
-Return ProviderRefundError when the provider fails.
-
-Best:
-R7 - Provider failure behavior
-When the provider rejects a refund, the system MUST return ProviderRefundError, MUST preserve the original payment state, MUST write one failed-refund audit event, and MUST NOT expose provider secrets in logs or returned errors.
-```
-
-Example 3:
-
-```md
-Bad:
-Support duplicate requests.
-
-Better:
-Duplicate requests should be idempotent.
-
-Best:
-R4 - Idempotency
-For every duplicate request with the same payment ID and idempotency key, the system MUST NOT create more than one provider refund and MUST NOT write more than one successful-refund audit event.
-```
-
----
-
-## Prompt Abstraction Level
-
-![Goldilocks Prompt](goldilocks_prompt.jpeg)
-
-Write prompts at the level of *architecture, contract, and intent*, not line-by-line *implementation details*.
-
-### Heuristics: Are You at the Right Level?
-
-| Indicator | Too Detailed (> 30%) | Too Vague (< 10%) |
-|-----------|----------------------|-------------------|
-| **Content** | Specifying variable names, loop structures | Missing error handling strategy |
-| **Style** | Dictating indentation, imports | No input/output types |
-| **Result** | Prompt harder to maintain than code | Every generation is wildly different |
-
-### If Your Prompt Is Too Long
-
-Ask yourself:
-- **Am I specifying coding style?** → Remove it (preamble handles this)
-- **Am I specifying implementation patterns?** → Remove them when Cloud grounding or explicit examples already provide the pattern
-- **Am I listing every edge case?** → Remove them (tests handle this)
-- **Is the module too big?** → Split into multiple prompts
-
-### Examples
-
-- **Too Vague:** "Create a user page." (Model guesses everything; unrepeatable)
-- **Too Detailed:** "Create a class User with a private field _id. In the constructor, set _id. Write a getter..." (Prompt is harder to maintain than code)
-- **Just Right:** "Implement a UserProfile component that displays user details and handles the 'update' action via the API. It must handle loading/error states and match the existing design system."
-
-**Rule of Thumb:** Focus on **Interfaces**, **Invariants**, and **Outcomes**. Let the preamble handle coding style; let Cloud grounding or explicit examples handle implementation patterns.
+See `../grounding_policy.md` for the full schema and behavior, including how
+local / no-cloud runs are reported (`mode: unavailable`) instead of failing.
 
 ---
 
@@ -1550,69 +1907,89 @@ When using `pdd generate <issue>` with a PRD that mentions auth:
 - Business modules depend on auth modules, not the reverse
 - Completeness validation can check for full token lifecycle coverage in workflows that enable it
 
+Auth is also a canonical example of a module that needs the strongest mold walls (dependency-injected provider, negative tests for every leak path, pinned grounding). Pair this section with the [regeneration-safe checklist](#the-regeneration-safe-checklist).
+
 ---
 
-## Dependencies
+## The Three Pillars of PDD Generation
 
-### When to Use `<include>`
+Understanding how prompts, Cloud grounding, examples, and tests work together is key to writing minimal, effective prompts.
 
-Include dependencies explicitly when:
-- **External libraries** not in your grounding history
-- **Critical interfaces** that must be exact
-- **New modules** with no similar examples in Cloud grounding
+| Pillar | What It Provides | Maintained By |
+|--------|-----------------|---------------|
+| **Prompt** | Requirements and constraints (WHAT) | Developer (explicit) |
+| **Cloud Grounding / Examples** | Implementation patterns (HOW) | System grounding when available; explicit examples via `<include>` otherwise |
+| **Tests** | Behavioral correctness | Accumulated over time |
 
-```xml
-<billing_service>
-  <include>context/billing_service_example.py</include>
-</billing_service>
+### How They Interact
+
+- **Prompt** defines WHAT → "validate user input, return errors"
+- **Cloud Grounding / Examples** define HOW → class structure, helper patterns, and dependency usage patterns
+- **Tests** define CORRECTNESS → edge cases discovered through bugs
+
+### Conflict Resolution
+
+- **Tests take precedence over grounding/examples**: If a test requires new behavior, generation should satisfy it and the test runner enforces it
+- **Explicit requirements override grounding/examples**: If prompt says "use functional style", that overrides OOP examples in grounding
+- **Cloud grounding / explicit examples fill gaps**: They can guide patterns not specified in the prompt or checked by tests
+
+### Why Prompts Can Be Minimal
+
+You don't need to specify:
+- **Coding style** → preamble provides it
+- **Implementation patterns** → Cloud grounding or explicit examples provide them
+- **Edge cases** → tests encode them
+
+You only specify:
+- What the module does
+- What contracts it must satisfy
+- What constraints apply
+
+---
+
+---
+
+## Example (Minimal, Python)
+
+This simplified example illustrates a minimal functional prompt:
+
+```text
+% You are an expert Python engineer. Your goal is to write a function `get_extension` that returns the file extension for a given language.
+
+<include>context/python_preamble.prompt</include>
+
+% Inputs/Outputs
+  Input: language (str), like "Python" or "Makefile".
+  Output: str file extension (e.g., ".py"), or "" if unknown.
+
+% Data
+  The CSV at $PDD_PATH/data/language_format.csv contains: language,comment,extension,run_command,run_test_command,outputs
+
+% Steps
+  1) Load env var PDD_PATH and read the CSV
+  2) Normalize language case
+  3) Lookup extension
+  4) Return "" if not found or invalid
 ```
 
-### When to Rely on Grounding
+This style:
+- Declares role and outcome
+- Specifies IO, data sources, and steps
+- Uses an `<include>` to pull a shared preamble
 
-If you've successfully generated code that uses a dependency before and PDD Cloud grounding is available, grounding often suffices—the usage pattern is already in the cloud database.
+---
 
-**Prefer explicit `<include>` for:** External APIs, critical contracts, cross-team interfaces
-**Rely on grounding for:** Internal modules with established patterns when Cloud grounding is available
+This chapter covers the day-to-day loop: regenerate → verify → test → update, the features-vs-bugs cheatsheet, when (and when not) to change the prompt, how PDD differs from interactive agentic coders, and the review checklist + PR evidence summary you use to merge a prompt change.
 
-### Documentation as Dependencies
-
-In addition to code examples, prompts can include documentation files (schema docs, API references, PRD sections) as dependencies. This prevents prompts from becoming "islands" that duplicate shared information.
-
-Use `pdd auto-deps` to automatically discover both code and documentation dependencies. The command will:
-- Find relevant `.md`, `.txt`, and `.rst` files alongside code examples
-- Insert `<include>` directives for discovered documents
-- Remove redundant inline content that duplicates what the included documents provide
-
-**Prefer `<include>` over inline duplication:**
-- Good: `<include>docs/api_schema.md</include>` (single source of truth, auto-updates)
-- Bad: Copy-pasting the schema content directly into the prompt (creates drift)
-
-### Token Efficiency
-
-Real source code is heavy. A 500-line module might have a 50-line usage example. By including only the example, you save ~90% of tokens. Use `pdd auto-deps` to automatically populate relevant examples and documentation references.
-
-```mermaid
-flowchart LR
-  subgraph Module_B
-    PB[Prompt B] --> GB[Generate] --> CB[Code B]
-    CB --> EB[Example B]
-  end
-
-  subgraph Module_A
-    PA[Prompt A] --> GA[Generate] --> CA[Code A]
-    PA --> EB
-  end
-
-  EB --> CA
-```
+Every step here is in service of the north-star metric, `verified_behavioral_change_per_unit_cost`: keep code and examples disposable, keep prompts and tests as appreciating assets, and only spend prompt edits on genuine intent changes.
 
 ---
 
 ## Regenerate, Verify, Test, Update
 
-**Crucial Prerequisite:** Before regenerating an established module, ensure you have **high test coverage** for its current functionality. Because PDD overwrites the code file entirely, your test suite is the critical safety net that prevents regression of existing features while you iterate on new ones. For new modules, create the prompt, generate code and examples, then generate or write the first executable tests before relying on repeated regeneration.
+**Crucial Prerequisite:** Before regenerating an established module, ensure you have **high test coverage** for its current functionality. Because PDD overwrites the code file entirely, your test suite is the critical safety net that prevents regression of existing features while you iterate on new ones. For new modules, create the prompt, generate code and examples, then generate or write the first executable tests before relying on repeated regeneration. (This is the "minimum viable mold" — see [Verification](#the-minimum-viable-mold).)
 
-The PDD workflow (see pdd/docs/whitepaper.md):
+The PDD workflow (see `../whitepaper.md`):
 
 1) **Generate:** Fully regenerate (overwrite) the code module and its example.
 2) **Crash → Verify:** Run the example. Fix immediate runtime errors.
@@ -1766,6 +2143,8 @@ Unchecked or waived:
 
 ## PDD vs Interactive Agentic Coders (Claude Code, Cursor)
 
+> PDD and agentic coders are **complements**, not competitors. The friendly on-ramp for using both together is the [Hybrid Agent Workflow](#using-pdd-with-your-coding-agent) chapter; this section is the conceptual contrast.
+
 - Source of truth:
   - PDD: the prompt is primary and versioned; code is regenerated output
   - Interactive: the code is primary; prompts are ephemeral patch instructions
@@ -1779,11 +2158,9 @@ Unchecked or waived:
   - PDD: update prompts after fixes; tests accumulate and protect behavior
   - Interactive: prompt history rarely persists; documentation often drifts
 
-When to use which: Use PDD for substantive new modules, refactors, and anything requiring long‑term maintainability and repeatability. Use interactive patching for trivial hotfixes; follow up by updating the PDD prompt so the source of truth remains synchronized.
+When to use which: Use PDD for substantive new modules, refactors, and anything requiring long‑term maintainability and repeatability. Use interactive patching for trivial hotfixes; follow up by updating the PDD prompt so the source of truth remains synchronized. For a fuller, honest accounting of where PDD fits and where it doesn't, see the [task-fit boundary](#honest-task-fit-boundary) on the landing page.
 
----
-
-## Patch vs PDD: Concrete Examples
+### Patch vs PDD: Concrete Examples
 
 Patch‑style prompt (interactive agent):
 
@@ -1837,6 +2214,44 @@ Key differences:
 
 ---
 
+## Scoping & Modularity
+
+- One prompt → one file/module. If a prompt gets too large or brittle, split it into smaller prompts that compose via explicit interfaces.
+- Treat examples as interfaces: create a minimal runnable example demonstrating how the module is meant to be used.
+- Avoid "mega‑prompts" that try to implement an entire subsystem. Use the PDD graph of prompts instead. For how prompts compose via examples, see [Dependencies](#dependencies) in the Directives & Context chapter.
+
+---
+
+## Why PDD Scales to Large Codebases
+
+- Explicit, curated context: use minimal examples and targeted includes instead of dumping source, reducing tokens and confusion.
+- Modular dev units: one prompt per file/module constrains scope, enabling independent regeneration and parallel work.
+- Batch, reproducible flow: eliminate long chat histories; regeneration avoids patch accumulation and incoherent diffs.
+- Accumulating tests: protect behavior across wide regenerations and refactors; failures localize issues quickly.
+- Single source of truth: prompts unify intent and dependencies, improving cross‑team coordination and reducing drift.
+- Automated Grounding: By feeding successful past generations back into the context, the system can stabilize code over time and make regeneration more reliable for complex modules.
+
+Patch vs PDD at Scale (diagram):
+
+```mermaid
+flowchart LR
+  subgraph Patching
+    C0[Codebase] --> P0[Chat prompt]
+    P0 --> D0[Local diff]
+    D0 --> C0
+  end
+
+  subgraph PDD
+    PG[Prompts graph] --> GZ[Batch regenerate]
+    GZ --> CM[Code modules]
+    CM --> XT[Examples and Tests]
+    XT --> UP[Update prompts]
+    UP --> PG
+  end
+```
+
+---
+
 ## Checklist: Before You Run `pdd generate`
 
 ### Must Have
@@ -1868,7 +2283,7 @@ Key differences:
 - Too much context: prune includes; prefer targeted examples over entire files.
 - Vague requirements: convert to explicit contracts, budgets, and behaviors.
 - Mega‑prompts: split into smaller prompts (one per file/module) and compose.
-- Prompt outweighs the code: if the prompt is larger than the generated file, it’s usually over‑specifying control flow. Aim for prompts to be a fraction of the target code size; keep them at the interface/behavior level and let the model fill in routine implementation.
+- Prompt outweighs the code: if the prompt is larger than the generated file, it's usually over‑specifying control flow. Aim for prompts to be a fraction of the target code size; keep them at the interface/behavior level and let the model fill in routine implementation.
 - Patching code directly: make the change in the prompt and regenerate; then back-propagate any learnings into the prompt.
 - Throwing away tests: keep and expand; they are your long‑term leverage.
 
@@ -1898,3 +2313,131 @@ Generated code = disposable artifact
 ```
 
 That discipline is what converts maintenance from an endless patchwork into a compounding system of leverage.
+
+---
+
+---
+
+## Brownfield Adoption
+
+The realistic starting point for most teams is **not** a green field. It's an existing 50K–500K-line codebase that already works, already has customers, and already has parts nobody fully understands. You do not rewrite it as prompts in a weekend, and you should not try. PDD adoption in a brownfield codebase is **incremental**: you convert one well-chosen module at a time, building the verification mold *around current behavior* before you ever change anything.
+
+This chapter is the recipe. It is conservative on purpose: the north-star metric is `verified_behavioral_change_per_unit_cost`, and in a brownfield codebase the biggest cost is *accidentally changing behavior you didn't mean to.* The recipe front-loads verification so regeneration can't silently break what already works.
+
+---
+
+## Pick Good First Modules (The Honest Task-Fit Boundary)
+
+Not every module is a good first PDD candidate. Choosing badly is the most common reason brownfield adoption stalls. Use this boundary:
+
+**Strong-fit — convert these first:**
+
+- Validation and business rules
+- Adapters / API wrappers
+- Data transforms
+- Internal tools and scripts
+- CRUD endpoints and services
+- Customer-specific variants of a common pattern
+- Test generation
+- Policy enforcement
+
+These share three properties: their behavior is **observable**, they are **testable in isolation**, and their interface is **knowable**. That is exactly what a regeneration-safe mold needs (see [Verification → minimum viable mold](#the-minimum-viable-mold)).
+
+**Weak-fit — leave these alone for now:**
+
+- Tiny hotfixes (just patch them; the overhead isn't worth it)
+- Performance micro-optimizations (hard to specify as intent; easy to regress)
+- Legacy code with hidden coupling (behavior depends on undocumented global state)
+- Hard-to-test behavior (UI timing, real network/clock dependence without seams)
+- Novel algorithms (the contract isn't yet knowable)
+- Large architectural ambiguity (you don't yet know what "correct" means)
+- Safety-critical code **without** an existing strong test suite
+
+Weak-fit modules aren't permanently off-limits — but convert them only after you've added seams and characterization tests, and ideally after you've practiced on strong-fit modules first.
+
+**A useful first pick:** a *high-churn* strong-fit module. High churn means it changes often, so the payoff from a regenerable, verified version is highest, and the team already has context on it.
+
+---
+
+## The Recipe
+
+### 1. Pick a high-churn module
+
+Look at your VCS history for the strong-fit files that change most often. High churn = high regeneration payoff and fresh team knowledge. Scope to a single file/module — one prompt, one module (see [Scoping & Modularity](#scoping--modularity)).
+
+### 2. Write characterization tests around current behavior — first
+
+Before touching the prompt, **pin down what the code does today.** Characterization tests (a.k.a. "golden master" tests) capture *current* observable behavior — not necessarily *correct* behavior. Their job is to make any behavioral change visible.
+
+- Cover the happy paths the module is actually used for.
+- Cover the edge cases you can find: empty inputs, nulls, boundary values, error paths.
+- Add **negative** assertions for any side effect the module must not have (no extra writes, no leaked secrets, no premature external calls) — these become your forbidden-wall tests.
+- Assert **observable behavior** (return values, state changes, calls made), not private helper names or exact message strings.
+
+Your coding agent is excellent at this: point Claude Code / Cursor / Codex / Copilot at the file and ask it to write characterization tests that capture current behavior, including edge and error cases. This is the safety net for everything that follows. (Why first? Because without it, regeneration is the [plausible-wrong-code-faster](#why-verification-is-the-spine) failure mode.)
+
+```bash
+# Establish the baseline: these must pass against the existing code, untouched.
+pytest tests/test_legacy_module.py
+```
+
+### 3. Reverse-derive a prompt from the existing code
+
+Now write a module prompt that *describes* what the code does, at the level of intent — role, requirements, contract rules, interface — not line-by-line implementation.
+
+- Where PDD tooling exists, use it as a starting draft, then review and tighten by hand. (For example, `pdd auto-deps` can discover the module's code and documentation dependencies and insert `<include>` directives; see [Dependencies](#dependencies).)
+- Otherwise, derive the prompt manually — or have your coding agent draft it: "read this module and write a PDD prompt with numbered contract rules and a declared interface that would regenerate equivalent behavior." This is the hybrid loop applied to existing code (see [Hybrid Agent Workflow](#using-pdd-with-your-coding-agent)).
+- Freeze the interface in `<pdd-interface>` / an Inputs–Outputs section so regeneration cannot change the public surface callers depend on.
+- Turn the must-not behaviors from step 2 into explicit `MUST NOT` contract rules. (Authoring details: [Contracts](#natural-language-contracts).)
+
+The goal of this step is a prompt that is faithful to current intent — not aspirational. Save improvements for *after* the module is stable under regeneration.
+
+### 4. Drift-check: regenerate and diff behaviorally
+
+This is the crux. Regenerate the module from your new prompt and check it against the existing implementation **behaviorally** — the characterization tests must still pass.
+
+```bash
+pdd generate prompts/legacy_module_python.prompt
+pdd test prompts/legacy_module_python.prompt src/legacy_module.py   # accumulate tests
+pytest tests/test_legacy_module.py                                   # the gate
+```
+
+Interpreting the result:
+
+- **All characterization tests pass** → your prompt captures the module's behavior. The diff in *source* may look large (different structure, different helpers) — that's fine. What matters is that *behavior* is unchanged. Proceed.
+- **Some tests fail** → either (a) the prompt is missing a requirement/rule the old code embodied (tighten the prompt), or (b) you've discovered an undocumented behavior worth deciding about explicitly. Capture the decision as a contract rule or a test; don't paper over it.
+- **Tests pass but you're nervous about high-risk paths** → hold back a portion of tests as a [hidden gate](#hidden-vs-public-tests) and/or add property and mutation testing to confirm the walls are real, not overfit.
+
+Repeat regenerate → diff until regeneration is **stable**: the same prompt produces behavior that passes every characterization test, run after run (this is the same drift check as in the [day-to-day loop](#regenerate-verify-test-update)).
+
+### 5. Promote to a PDD module
+
+Once regeneration is stable, the module is a real PDD module. From here on:
+
+- The **prompt is the source of truth.** Change behavior by editing the prompt and regenerating — stop hand-patching the code.
+- Tests **accumulate** (`--merge` / append). Every future bug fix starts with a failing test (see [Workflow & Review → features vs. bugs](#workflow-cheatsheet-features-vs-bugs)).
+- For high-risk modules (`auth`, `payments`, `compliance`), add the grounding and review controls from [Grounding & Critical Modules](#automated-grounding-pdd-cloud) so regeneration can't drift to a different prior implementation.
+- Now — and only now — make the improvements you deferred in step 3, one behavioral change at a time, each gated by the test suite.
+
+Then pick the next high-churn strong-fit module and repeat. Adoption compounds: each converted module makes the next one easier, and Cloud grounding gets stronger as your prompt/code history grows.
+
+---
+
+## What Success Looks Like
+
+You are not "done" when the whole codebase is prompts. You are succeeding when:
+
+- Your **highest-churn, highest-risk** modules are regeneration-safe (interface + behavioral tests + negative tests).
+- Behavior changes to those modules go *through the prompt*, with the test suite as the gate.
+- Code capital is depreciating gracefully — the generated code is disposable — while **prompt capital appreciates**: each model upgrade can regenerate better code from the same prompts, for free.
+- The parts that are genuinely weak-fit are honestly left as conventional code, patched directly, until they earn a mold.
+
+That last point is the discipline that keeps adoption credible: **convert what's worth verifying repeatedly; leave the rest.**
+
+---
+
+---
+
+## Final Notes
+
+Think of prompts as your programming language. Keep them concise, explicit, and modular. Regenerate instead of patching, verify behavior with accumulating tests, and continuously back‑propagate implementation learnings into your prompts. Optimize for `verified_behavioral_change_per_unit_cost` — not the smallest prompt, and not the most code.

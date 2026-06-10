@@ -23,6 +23,119 @@ from rich.console import Console
 _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
+ClaudePolicy = Dict[str, Any]
+
+
+class AgenticUnsupportedSemanticsError(ValueError):
+    """Raised when a requested agentic policy cannot be enforced by PDD."""
+
+
+def get_agentic_capabilities() -> Dict[str, Any]:
+    """Return machine-checkable agentic capability contracts for callers."""
+    return {
+        "claude_policy": {
+            "schema_version": 1,
+            "fields": {
+                "allowedTools": ["string", "null"],
+                "addDirs": "list[string]",
+                "noSessionPersistence": {
+                    "standard": "boolean",
+                    "interactive": False,
+                },
+                "outputFormat": ["json"],
+            },
+            "modes": {
+                "standard": {"noSessionPersistence": True},
+                "interactive": {
+                    "noSessionPersistence": False,
+                    "usageSource": "persisted_session_transcript",
+                },
+            },
+        }
+    }
+
+
+def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudePolicy:
+    """Validate and normalize the Claude CLI policy contract PDD enforces."""
+    if not isinstance(policy, dict):
+        raise AgenticUnsupportedSemanticsError("claude_policy must be an object")
+
+    allowed_keys = {
+        "allowedTools",
+        "addDirs",
+        "noSessionPersistence",
+        "outputFormat",
+    }
+    unknown = sorted(set(policy) - allowed_keys)
+    if unknown:
+        raise AgenticUnsupportedSemanticsError(
+            f"claude_policy contains unsupported keys: {', '.join(unknown)}"
+        )
+
+    allowed_tools = policy.get("allowedTools")
+    if allowed_tools is not None and not isinstance(allowed_tools, str):
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.allowedTools must be a string or null"
+        )
+    if isinstance(allowed_tools, str) and not allowed_tools.strip():
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.allowedTools must not be an empty string; use null for no tools"
+        )
+
+    add_dirs = policy.get("addDirs", [])
+    if not isinstance(add_dirs, list) or not all(isinstance(p, str) for p in add_dirs):
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.addDirs must be a list of strings"
+        )
+
+    no_session = policy.get("noSessionPersistence", False)
+    if not isinstance(no_session, bool):
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.noSessionPersistence must be a boolean"
+        )
+    if interactive and no_session:
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.noSessionPersistence is unsupported in interactive "
+            "Claude mode because Claude Code marks the flag as print-mode-only "
+            "and PDD interactive billing uses the persisted session transcript"
+        )
+
+    output_format = policy.get("outputFormat", "json")
+    if output_format != "json":
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.outputFormat must be json"
+        )
+
+    return {
+        "allowedTools": allowed_tools,
+        "addDirs": list(add_dirs),
+        "noSessionPersistence": no_session,
+        "outputFormat": "json",
+    }
+
+
+def _append_claude_policy_args(cmd: List[str], claude_policy: ClaudePolicy) -> None:
+    """Append Claude CLI args that enforce the validated policy."""
+    allowed_tools = claude_policy["allowedTools"]
+    if allowed_tools is None:
+        cmd.extend(["--tools", ""])
+    else:
+        cmd.extend(["--allowedTools", allowed_tools])
+    for add_dir in claude_policy["addDirs"]:
+        cmd.extend(["--add-dir", add_dir])
+    if claude_policy["noSessionPersistence"]:
+        cmd.append("--no-session-persistence")
+
+
+def _interactive_allowed_tools(allowed_tools: Optional[str]) -> Optional[str]:
+    """Add PDD's reply MCP tool while preserving caller tool restrictions."""
+    reply_tool = "mcp__pdd__pdd_reply"
+    if allowed_tools is None:
+        return reply_tool
+    tools = [tool.strip() for tool in allowed_tools.split(",") if tool.strip()]
+    if reply_tool not in tools:
+        tools.append(reply_tool)
+    return ",".join(tools)
 
 
 def _load_model_data(*args, **kwargs):
@@ -2424,6 +2537,7 @@ def run_agentic_task(
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
     steers: Optional[List[SteerEntry]] = None,
+    claude_policy: Optional[ClaudePolicy] = None,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -2444,12 +2558,24 @@ def run_agentic_task(
             ``PDD_REASONING_EFFORT`` env var for argv injection. ``None``
             means "fall back to env" so unplumbed call sites keep working.
         steers: Optional list of mid-run steering entries to inject into the instruction.
+        claude_policy: Optional validated Claude CLI policy contract. When
+            present, Anthropic runs must enforce these tool/session/output
+            semantics instead of PDD's broad default permission mode.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
         Four-value unpacking remains supported for legacy callers; structured
         consumers can read ``result.usage`` or ``result[4]``.
     """
+    normalized_claude_policy = (
+        validate_claude_policy(
+            claude_policy,
+            interactive=_claude_code_interactive_enabled(os.environ),
+        )
+        if claude_policy is not None
+        else None
+    )
+
     # get_agent_provider_preference() must be called first: for
     # PDD_AGENTIC_PROVIDER=antigravity it sets PDD_GOOGLE_CLI=agy as a side
     # effect, which get_available_agents() then reads to evaluate auth correctly.
@@ -2458,6 +2584,13 @@ def run_agentic_task(
 
     # Filter agents based on preference order
     candidates = [p for p in provider_pref if p in agents]
+    if normalized_claude_policy is not None:
+        if "anthropic" not in candidates:
+            raise AgenticUnsupportedSemanticsError(
+                "claude_policy requires Anthropic/Claude execution; no Anthropic "
+                "agent is available to enforce the requested policy"
+            )
+        candidates = ["anthropic"]
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
@@ -2564,6 +2697,7 @@ def run_agentic_task(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
                     reasoning_time=reasoning_time,
+                    claude_policy=normalized_claude_policy,
                 )
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
@@ -3282,15 +3416,29 @@ def _build_claude_interactive_command(
     session_id: str,
     env: Dict[str, str],
     use_playwright: bool = False,
+    claude_policy: Optional[ClaudePolicy] = None,
 ) -> List[str]:
     """Build the Claude Code interactive command without ``-p`` / JSON mode."""
+    normalized_policy = (
+        validate_claude_policy(claude_policy, interactive=True)
+        if claude_policy is not None
+        else None
+    )
     cmd = [
         cli_path,
         "--session-id", session_id,
         "--mcp-config", str(config_path),
         "--strict-mcp-config",
     ]
-    if use_playwright:
+    if normalized_policy is not None:
+        interactive_policy = {
+            **normalized_policy,
+            "allowedTools": _interactive_allowed_tools(
+                normalized_policy["allowedTools"]
+            ),
+        }
+        _append_claude_policy_args(cmd, interactive_policy)
+    elif use_playwright:
         cmd.extend([
             "--allowedTools",
             "Bash,Read,Write,mcp__pdd__pdd_reply",
@@ -3302,10 +3450,26 @@ def _build_claude_interactive_command(
     if claude_model:
         cmd.extend(["--model", claude_model])
 
+    if normalized_policy is not None and normalized_policy["allowedTools"] is None:
+        try:
+            instruction_text = prompt_path.read_text(encoding="utf-8")
+        except OSError:
+            instruction_text = f"Read the file {prompt_path.name} for your full instructions."
+        instruction_prefix = f"Execute these instructions:\n\n{instruction_text}\n\n"
+    else:
+        instruction_prefix = (
+            f"Read the file {prompt_path.name} for your full instructions and execute them. "
+        )
+    json_instruction = (
+        "The caller requires JSON output; return JSON text through pdd_reply. "
+        if normalized_policy is not None
+        else ""
+    )
     cmd.append(
-        f"Read the file {prompt_path.name} for your full instructions and execute them. "
+        instruction_prefix +
         f"When finished, call the MCP tool pdd_reply with job_id={job_id!r}, "
         "success=true or false, and text set to the final response for PDD. "
+        f"{json_instruction}"
         "Do not stop until pdd_reply succeeds."
     )
     return cmd
@@ -3910,6 +4074,7 @@ def _run_claude_interactive_with_mcp(
     timeout: float,
     env: Dict[str, str],
     use_playwright: bool = False,
+    claude_policy: Optional[ClaudePolicy] = None,
 ) -> _ProviderRunResult:
     """Run Claude Code interactively and collect its result through MCP."""
     if os.name != "posix":
@@ -3943,6 +4108,7 @@ def _run_claude_interactive_with_mcp(
             session_id=session_id,
             env=env,
             use_playwright=use_playwright,
+            claude_policy=claude_policy,
         )
         success, text, cost, model = _run_interactive_pty_until_reply(
             cmd,
@@ -3979,6 +4145,7 @@ def _run_with_provider(
     label: str = "",
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
+    claude_policy: Optional[ClaudePolicy] = None,
 ) -> Tuple[bool, str, float, Optional[str]]:
     """
     Internal helper to run a specific provider's CLI.
@@ -4083,12 +4250,18 @@ def _run_with_provider(
                 timeout=timeout,
                 env=env,
                 use_playwright=use_playwright,
+                claude_policy=claude_policy,
             )
 
         # Use -p - to pipe prompt as direct user message via stdin.
         # This prevents Claude from interpreting file-discovered instructions
         # as "automated bot workflow" and refusing to execute.
-        if use_playwright:
+        if claude_policy is not None:
+            normalized_policy = validate_claude_policy(claude_policy)
+            cmd = [cli_path, "-p", "-"]
+            _append_claude_policy_args(cmd, normalized_policy)
+            cmd.extend(["--output-format", "json"])
+        elif use_playwright:
             # Playwright mode: constrained tool access with cost ceiling
             cmd = [
                 cli_path,
