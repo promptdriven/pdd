@@ -1386,7 +1386,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 **`<pdd-interface>`**
 - **Purpose**: JSON describing the module's public API (functions, commands, pages)
 - **Maps to**: `architecture.json["interface"]`
-- **Format**: Valid JSON matching one of four interface types (see below)
+- **Format**: Valid JSON matching one of the supported interface types (see below)
 - **Example**:
   ```xml
   <pdd-interface>
@@ -1414,7 +1414,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 
 ### Interface Types
 
-The `<pdd-interface>` tag supports four interface types, matching the architecture.json schema:
+The `<pdd-interface>` tag supports the architecture.json interface types:
 
 **Module Interface** (Python modules with functions):
 ```json
@@ -1464,6 +1464,14 @@ The `<pdd-interface>` tag supports four interface types, matching the architectu
 }
 ```
 
+**Entrypoint Interface** (framework/runtime-discovered files with no named exports):
+```json
+{
+  "type": "entrypoint",
+  "entrypoint": {}
+}
+```
+
 ### Sync Workflow
 
 1. **Add/edit tags** in your prompt files using the format above
@@ -1494,8 +1502,8 @@ Validation is **lenient**:
 
 **Validate interface JSON before committing**
 - Use a JSON validator to check syntax
-- Ensure `type` field matches one of: `module`, `cli`, `command`, `frontend`
-- Include required nested keys (`functions`, `commands`, or `pages`)
+- Ensure `type` field matches a supported architecture interface type, such as `module`, `cli`, `command`, `frontend`, `page`, `component`, or `entrypoint`
+- Include the required nested keys for that type where applicable (`functions`, `commands`, `pages`, etc.)
 
 **Run "Sync All" after bulk prompt updates**
 - If you've edited multiple prompts, sync all at once

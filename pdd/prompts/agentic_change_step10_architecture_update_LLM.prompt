@@ -48,7 +48,15 @@ You are working on step 10 of 13 in an agentic change workflow. Previous step im
       - Infer from % Requirements section
       - For Python modules: extract function names, signatures, return types
       - For CLI modules: extract command names and descriptions
-      - Use interface type: module | cli | command | frontend
+      - Use the interface type that matches the module — one of the supported
+        architecture.json interface types:
+        module | cli | command | frontend | page | component | api | graphql |
+        job | message | config | entrypoint.
+        Pick the most specific fit (e.g. `api` for an HTTP endpoint module,
+        `page`/`component` for UI, `job` for a scheduled task, `message` for a
+        queue consumer/producer, `config` for settings); use `entrypoint` for
+        framework/runtime-discovered entry files that expose no named exports,
+        e.g. `main.py`, `app/layout.tsx`, `middleware.ts`.
       - Format as valid JSON
    d. Generate `<pdd-dependency>` tags:
       - Extract from `<include>` directives in the prompt

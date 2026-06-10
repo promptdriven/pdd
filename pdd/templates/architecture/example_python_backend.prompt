@@ -149,12 +149,8 @@ This is the OPPOSITE of Next.js where `home_page` → `app/page.tsx` (no derivat
     "filepath": "backend/main.py",
     "tags": ["entrypoint", "app"],
     "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
-          {"name": "app", "signature": "app = FastAPI()", "returns": "FastAPI application instance"}
-        ]
-      }
+      "type": "entrypoint",
+      "entrypoint": {}
     }
   }
 ]

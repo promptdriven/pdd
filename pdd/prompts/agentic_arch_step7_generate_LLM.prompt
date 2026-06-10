@@ -162,6 +162,7 @@ Generate a complete, valid architecture.json following these rules:
    - page: route, params, dataSources
    - component: props, emits, context
    - config: keys with name, type, source
+   - entrypoint: object for framework/runtime-discovered entry files with no named exports
    - cli, job, message, graphql as appropriate
 
 % Output
