@@ -1644,7 +1644,7 @@ pdd generate \
 - Core keys (every item):
   - `reason`, `description`, `dependencies`, `priority`, `filename`, optional `tags`.
 - Interface object (typed, include only what applies):
-  - `type`: `component` | `page` | `module` | `api` | `graphql` | `cli` | `job` | `message` | `config`
+  - `type`: `component` | `page` | `module` | `api` | `graphql` | `cli` | `job` | `message` | `config` | `entrypoint`
   - `component`: `props[]`, optional `emits[]`, `context[]`
   - `page`: `route`, optional `params[]`, `layout`, and `dataSources[]` where each entry is an object with required `kind` (e.g., `api`, `query`) and `source` (URL or identifier), plus optional `method`, `description`, `auth`, `inputs[]`, `outputs[]`, `refreshInterval`, `notes`
   - `module`: `functions[]` with `name`, `signature`, optional `returns`, `errors`, `sideEffects`
@@ -1654,6 +1654,7 @@ pdd generate \
   - `job`: `trigger` (cron/event), optional `inputs[]`, `outputs[]`, `retryPolicy`
   - `message`: `topics[]` with `name`, `direction` (`publish`|`subscribe`), optional `schema`, `qos`
   - `config`: `keys[]` with `name`, `type`, optional `default`, `required`, `source` (`env`|`file`|`secret`)
+  - `entrypoint`: empty object `{}` for framework/runtime-discovered entry files that expose no named exports (e.g. `main.py`, `app/layout.tsx`)
   - Optional: `version`, `stability` (`experimental`|`stable`)
 
 Examples:

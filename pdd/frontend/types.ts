@@ -91,7 +91,7 @@ export interface MockPrompt {
 
 // Architecture types for PRD-driven project building
 export interface ArchitectureInterface {
-  type: 'page' | 'component' | 'module' | 'api' | 'graphql' | 'cli' | 'job' | 'message' | 'config';
+  type: 'page' | 'component' | 'module' | 'api' | 'graphql' | 'cli' | 'job' | 'message' | 'config' | 'entrypoint';
   page?: {
     route: string;
     params?: { name: string; type: string; description?: string }[];
@@ -130,6 +130,7 @@ export interface ArchitectureInterface {
   config?: {
     keys: { name: string; type: string; default?: any; required?: boolean; source: 'env' | 'file' | 'secret' }[];
   };
+  entrypoint?: Record<string, never>;
 }
 
 /** Per-module contract/evidence summary from architecture sync (issue #830). */

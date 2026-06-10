@@ -1270,6 +1270,19 @@ def test_validate_interface_structure_cli_valid():
     assert result['valid'] is True
 
 
+def test_validate_interface_structure_entrypoint_valid():
+    """Test validation of valid entrypoint interface."""
+    interface = {
+        "type": "entrypoint",
+        "entrypoint": {},
+    }
+
+    result = validate_interface_structure(interface)
+
+    assert result['valid'] is True
+    assert result['errors'] == []
+
+
 def test_validate_interface_structure_invalid_type():
     """Test validation detects invalid type."""
     interface = {
