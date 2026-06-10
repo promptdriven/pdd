@@ -122,15 +122,21 @@ This runs the REAL agentic session in interactive mode:
 The impatient-user UX:
   * a compact, described plan
   * a per-TOOL status block with reasons for skips
-  * ONE grouped question for all 10 vague terms (not ten prompts):
-        Apply recommended safe fix for this group? [Y/n/edit/auto]
-        - Y     queue the recommended fix
+  * ONE grouped question for all 10 vague terms (not ten prompts). The verb
+    matches the risk — vague terms are medium-risk, so it asks to SAVE, not
+    apply:
+        Save recommended fix for review for this group?
+            [Y]es / [n]o-skip / [e]dit / [a]uto / [q]uit
+        - Y     accept (queue/save the recommended fix)
         - n     skip the group
         - edit  type your own <vocabulary> block once
         - auto  finish the rest automatically (low-risk only)
-  * a clear final summary (fixed / skipped / remaining, patches, artifacts)
+        - q     quit — remaining findings left untouched
+  * a clear final summary (fixed / skipped / remaining, patches, artifacts,
+    and a pass/warn/block Decision)
 
-Nothing is written to your prompt unless you also pass --apply.
+Nothing is written to your prompt unless you also pass --apply
+(which works with --interactive or --auto).
 
 EOF
   if [ ! -t 0 ]; then
@@ -394,7 +400,7 @@ menu() {
     echo "  1) Run fast prompt checkup demo (the simple default command)"
     echo "  2) Run LLM / interactive repair demo"
     echo "  3) Run strict gate / blocking demo (pass · warn · block)"
-    echo "  4) Run full PRD → prompt → checkup → code workflow demo"
+    echo "  4) Run full workflow demo (one command over the whole directory)"
     echo "  5) Run all checkup demos"
     echo "  6) Cleanup generated artifacts"
     echo "  d) Direct subcommand comparison (lint/contract/.../drift)"
