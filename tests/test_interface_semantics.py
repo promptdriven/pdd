@@ -22,9 +22,25 @@ from pdd.interface_semantics import (
         ("Union[str, int, bytes]", "bytes | str | int"),
         # ...including parameterized members reordered, and with aliasing.
         ("Union[List[str], int]", "Union[int, list[str]]"),
+        # Nested unions flatten: Union[Union[str, int], bytes] == the flat set.
+        ("Union[Union[str, int], bytes]", "bytes | int | str"),
+        # Optional wrapping a union is the same as a union that includes None.
+        ("Optional[Union[str, int]]", "Union[str, int, None]"),
+        # A single-member union collapses to that member.
+        ("Union[str]", "str"),
     ],
 )
 def test_semantic_type_aliases_are_compatible(left, right):
+    assert annotations_compatible(left, right)
+
+
+def test_wide_reordered_union_is_compatible_without_factorial_blowup():
+    # A reordered 12-member union: a permutation-based matcher would explore
+    # 12! (~minutes) and trip the CI timeout, so this passing instantly is the
+    # regression guard for the bipartite matcher. The timeout IS the assertion.
+    members = [f"T{index}" for index in range(12)]
+    left = "Union[" + ", ".join(members) + "]"
+    right = "Union[" + ", ".join(reversed(members)) + "]"
     assert annotations_compatible(left, right)
 
 

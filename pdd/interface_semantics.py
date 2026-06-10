@@ -10,7 +10,6 @@ from __future__ import annotations
 import ast
 import re
 from dataclasses import dataclass
-from itertools import permutations
 from typing import Iterable, Optional
 
 
@@ -131,20 +130,36 @@ def _union_args_compatible(
 ) -> bool:
     """Return True when two union member tuples match as unordered sets.
 
-    Union arity is tiny (2-4 members), so an exact bijection search over
-    permutations is cheap and avoids the stranding a greedy match can hit when
-    the per-member leniency (``list[str]`` ~ ``list``) makes matches
-    non-exclusive.
+    Each left member must pair with a distinct compatible right member.  We
+    find a perfect bipartite matching via augmenting paths (Kuhn's algorithm,
+    polynomial) rather than trying every permutation (factorial — a wide union
+    like ``Union[T0, ..., T11]`` would otherwise take minutes and look hung).
+    A plain greedy match is not enough: the per-member leniency
+    (``list[str]`` ~ ``list``) makes edges non-exclusive, so a greedy pick can
+    strand a later member that had only one valid partner.
     """
     if len(left_args) != len(right_args):
         return False
-    return any(
-        all(
-            semantic_types_compatible(left_arg, right_arg)
-            for left_arg, right_arg in zip(left_args, permutation)
-        )
-        for permutation in permutations(right_args)
-    )
+    size = len(left_args)
+    right_to_left = [-1] * size
+
+    def _augment(left_index: int, seen: list[bool]) -> bool:
+        for right_index in range(size):
+            if seen[right_index]:
+                continue
+            if not semantic_types_compatible(
+                left_args[left_index], right_args[right_index]
+            ):
+                continue
+            seen[right_index] = True
+            if right_to_left[right_index] == -1 or _augment(
+                right_to_left[right_index], seen
+            ):
+                right_to_left[right_index] = left_index
+                return True
+        return False
+
+    return all(_augment(left_index, [False] * size) for left_index in range(size))
 
 
 def annotations_compatible(
@@ -395,14 +410,17 @@ def _semantic_from_ast(node: ast.AST, *, raw: str = "") -> Optional[SemanticType
     union_parts = _flatten_union(node)
     if union_parts is not None:
         non_none = [part for part in union_parts if not _is_none_type(part)]
-        if len(non_none) == 1 and len(non_none) != len(union_parts):
+        if len(non_none) == 1:
+            # A single non-None member collapses to that member (``Union[str]``
+            # -> ``str``); ``optional`` records whether ``None`` was also a
+            # member (the ``Optional[X]`` / ``X | None`` case).
             inner = _semantic_from_ast(non_none[0], raw=ast.unparse(non_none[0]))
             if inner is None:
                 return None
             return SemanticType(
                 base=inner.base,
                 args=inner.args,
-                optional=True,
+                optional=inner.optional or len(non_none) != len(union_parts),
                 raw=raw or ast.unparse(node),
             )
         parsed_parts = tuple(
@@ -442,18 +460,8 @@ def _semantic_from_ast(node: ast.AST, *, raw: str = "") -> Optional[SemanticType
                 optional=True,
                 raw=raw or ast.unparse(node),
             )
-        if special == "Union":
-            return _semantic_from_ast(
-                ast.BinOp(
-                    left=items[0],
-                    op=ast.BitOr(),
-                    right=_union_ast_from_items(items[1:]),
-                )
-                if len(items) > 1
-                else items[0],
-                raw=raw or ast.unparse(node),
-            )
-
+        # ``Union[...]`` subscripts are handled earlier by ``_flatten_union``,
+        # so only ``Optional`` and ordinary generics reach this point.
         args = tuple(
             parsed
             for parsed in (
@@ -482,20 +490,22 @@ def _semantic_from_ast(node: ast.AST, *, raw: str = "") -> Optional[SemanticType
 
 
 def _flatten_union(node: ast.AST) -> Optional[list[ast.AST]]:
+    # PEP 604 ``X | Y`` form.
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
         left = _flatten_union(node.left) or [node.left]
         right = _flatten_union(node.right) or [node.right]
         return left + right
+    # ``Union[...]`` / ``typing.Union[...]`` subscript form.  Flatten nested
+    # unions (``Union[Union[str, int], bytes]`` == ``Union[str, int, bytes]``)
+    # so a member that is itself a union does not survive as one opaque part.
+    if isinstance(node, ast.Subscript):
+        base_name = _qualified_name(node.value)
+        if base_name is not None and _special_form_name(base_name) == "Union":
+            parts: list[ast.AST] = []
+            for item in _slice_items(node.slice):
+                parts.extend(_flatten_union(item) or [item])
+            return parts
     return None
-
-
-def _union_ast_from_items(items: list[ast.AST]) -> ast.AST:
-    if not items:
-        return ast.Name(id="None", ctx=ast.Load())
-    node = items[0]
-    for item in items[1:]:
-        node = ast.BinOp(left=node, op=ast.BitOr(), right=item)
-    return node
 
 
 def _slice_items(node: ast.AST) -> list[ast.AST]:
