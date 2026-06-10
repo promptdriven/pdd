@@ -179,6 +179,53 @@ def _parse_cost_from_csv(csv_path: str) -> float:
         return 0.0
 
 
+def _parse_estimate_cost_from_stdout(stdout: str) -> Optional[float]:
+    """Extract the total estimated cost from a child ``--estimate`` sync's stdout.
+
+    Estimate-mode children make no billable call, so they write no cost CSV;
+    the estimated total is emitted on stdout instead. Prefer the machine-readable
+    ``--estimate-json`` payload (a single JSON object with an ``estimated_cost``/
+    ``total_cost`` field), falling back to the human ``Total estimated cost: $X``
+    line. Returns the cost as a float, or ``None`` when the total is unknown or
+    no estimate could be parsed (so callers can distinguish "0 cost" from
+    "cost not available").
+    """
+    if not stdout:
+        return None
+
+    # Preferred: a JSON estimate summary line (pdd --estimate-json sync ...).
+    for line in stdout.splitlines():
+        stripped = line.strip()
+        if not (stripped.startswith("{") and stripped.endswith("}")):
+            continue
+        try:
+            payload = json.loads(stripped)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(payload, dict) or payload.get("estimate") is not True:
+            continue
+        value = payload.get("estimated_cost", payload.get("total_cost"))
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+
+    # Fallback: the human-readable total line.
+    match = re.search(
+        r"Total estimated cost:\s*\$?\s*([0-9]+(?:\.[0-9]+)?)",
+        stdout,
+        re.IGNORECASE,
+    )
+    if match:
+        try:
+            return float(match.group(1))
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def _format_duration(start: Optional[float], end: Optional[float]) -> str:
     """Format a duration from start/end timestamps."""
     if start is None or end is None:
@@ -1837,29 +1884,43 @@ class AsyncSyncRunner:
     def _run_estimate(self) -> Tuple[bool, str, float]:
         """Side-effect-free estimate run for agentic sync.
 
-        Each module is dispatched as a child ``pdd --estimate sync`` dry-run
-        (see ``_build_command``/``_build_env``), so no provider calls, generated
-        files, or ``--output-cost`` rows are produced. The agentic runner itself
-        must not persist ``.pdd/agentic_sync_state.json`` or post/update GitHub
-        comments either, because no real progress has occurred. The reported
-        total cost is always 0.0 since estimate mode makes no billable call.
+        Each module is dispatched as a child ``pdd --estimate --estimate-json
+        sync`` dry-run (see ``_build_command``/``_build_env``), so no provider
+        calls, generated files, or ``--output-cost`` rows are produced. The
+        agentic runner itself must not persist ``.pdd/agentic_sync_state.json``
+        or post/update GitHub comments either, because no real progress has
+        occurred.
+
+        Although no billable call is made, the whole point of this command is
+        cost estimation: the per-module estimated costs reported by the children
+        are aggregated and returned (added to ``initial_cost``) so programmatic
+        callers and summaries see the projected total rather than a meaningless
+        0.0.
         """
         results: List[Tuple[str, bool]] = []
         all_success = True
+        estimated_total = 0.0
         for basename in self.basenames:
+            cost = 0.0
             try:
-                success, _cost, _error = self._sync_one_module(basename)
+                success, cost, _error = self._sync_one_module(basename)
             except Exception:
                 success = False
+                cost = 0.0
             all_success = all_success and bool(success)
+            estimated_total += float(cost or 0.0)
             results.append((basename, bool(success)))
 
         succeeded = [b for b, ok in results if ok]
         failed = [b for b, ok in results if not ok]
-        summary = f"Estimate complete for {len(succeeded)} module(s): {succeeded}."
+        total_cost = round(self.initial_cost + estimated_total, 6)
+        summary = (
+            f"Estimate complete for {len(succeeded)} module(s): {succeeded}. "
+            f"Estimated cost: ${total_cost:.6f}."
+        )
         if failed:
             summary += f" Estimate gaps: {failed}."
-        return all_success, summary, 0.0
+        return all_success, summary, total_cost
 
     def _run_inner(self) -> Tuple[bool, str, float]:
         """Inner run loop, separated so signal handlers wrap it."""
@@ -1998,9 +2059,14 @@ class AsyncSyncRunner:
         if temperature is not None:
             cmd.extend(["--temperature", str(temperature)])
         # --estimate is a global flag and must precede the `sync` subcommand so
-        # the child runs a side-effect-free dry-run cost preview.
+        # the child runs a side-effect-free dry-run cost preview. --estimate-json
+        # makes the child emit a machine-readable estimate summary on stdout so
+        # the parent can aggregate the real per-module estimated cost (the child
+        # writes no cost CSV in estimate mode). --estimate-json implies
+        # --estimate; both are passed for an explicit, stable command contract.
         if self.sync_options.get("estimate"):
             cmd.append("--estimate")
+            cmd.append("--estimate-json")
         cmd.append("sync")
 
         # Module-specific flags
@@ -2577,6 +2643,14 @@ class AsyncSyncRunner:
 
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)
+
+        # Estimate-mode children write no cost CSV (no billable call); the
+        # estimated total is reported on stdout. Recover it so the agentic
+        # runner can return a real aggregate cost instead of 0.0.
+        if self.sync_options.get("estimate"):
+            estimated_cost = _parse_estimate_cost_from_stdout(stdout)
+            if estimated_cost is not None:
+                cost = estimated_cost
 
         success = exit_code == 0
         if success:

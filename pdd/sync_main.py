@@ -716,8 +716,18 @@ def _run_sync_estimate(
             float(r.get("estimated_cost", r.get("total_cost", 0.0)) or 0.0)
             for r in first_records
         )
-        # One-round assumption: project each downstream step at the exact
-        # first-step cost, clearly labelled approximate.
+        # Downstream sync steps (verify, test, fix, update) consume prompts built
+        # from generated code, generated tests, run logs, and failure output that
+        # do not exist until the run actually happens. Their token counts — and
+        # therefore their cost — are not knowable from a side-effect-free preview,
+        # so they are reported as unpriced rather than fabricated. Earlier
+        # revisions copied the generate step's cost onto every downstream step
+        # while recording 0 input/output tokens; that was both internally
+        # inconsistent (cost without tokens) and frequently wrong (fix/test
+        # prompts are typically larger than the first generate). The generate
+        # cost is still surfaced per-row as ``reference_cost`` so a reader has a
+        # same-order anchor, but it is NOT summed into the reported total (the
+        # CLI aggregator omits unpriced rows and labels the result a lower bound).
         for step in _SYNC_ESTIMATE_DOWNSTREAM_STEPS:
             records.append({
                 "estimate": True,
@@ -726,32 +736,38 @@ def _run_sync_estimate(
                 "approximate": True,
                 "model": model_name,
                 "pricing_model": model_name,
-                "input_tokens": 0,
-                "predicted_output_tokens": 0,
+                "input_tokens": None,
+                "predicted_output_tokens": None,
                 "input_rate_per_million": None,
                 "output_rate_per_million": None,
                 "input_cost": None,
                 "output_cost": None,
-                "estimated_cost": first_cost if first_known else None,
-                "total_cost": first_cost if first_known else None,
-                "cost_known": bool(first_known),
-                "unknown_cost": not bool(first_known),
+                "estimated_cost": None,
+                "total_cost": None,
+                "reference_cost": first_cost if first_known else None,
+                "cost_known": False,
+                "unknown_cost": True,
                 "currency": "USD",
                 "context_limit": None,
                 "context_usage_percent": None,
                 "provider_call_made": False,
                 "call_type": "completion",
-                "note": "approximate: depends on generated output (one-round assumption)",
+                "note": (
+                    "not estimable without execution: prompt depends on generated "
+                    "code/tests/logs; generate cost shown as a same-order reference"
+                ),
             })
         if not quiet:
             console.print(
-                "[dim]Sync estimate: step 1 (generate) is exact; downstream "
-                "steps are approximate (one-round assumption, they depend on "
-                "generated output).[/dim]"
+                "[dim]Sync estimate: step 1 (generate) is exact; the verify/test/"
+                "fix/update steps depend on generated output and are not estimable "
+                "without execution (reported as unpriced). The total is a lower "
+                "bound covering the generate step only.[/dim]"
             )
         summary = (
             f"Sync estimate for '{basename}': 1 exact step (generate) + "
-            f"{len(_SYNC_ESTIMATE_DOWNSTREAM_STEPS)} approximate downstream steps. "
+            f"{len(_SYNC_ESTIMATE_DOWNSTREAM_STEPS)} downstream steps not estimable "
+            "without execution (unpriced). Total is a generate-only lower bound. "
             "No provider calls, file writes, or cost-log rows performed."
         )
     else:

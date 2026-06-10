@@ -480,6 +480,10 @@ from pdd.server.token_counter import (
     get_context_limit,
 )
 try:
+    from pdd.server.token_counter import get_max_output_tokens as _get_max_output_tokens
+except ImportError:  # Older checkout without the output-cap helper.
+    _get_max_output_tokens = None  # type: ignore[assignment]
+try:
     from pdd.server.token_counter import estimate_completion_cost as _estimate_completion_cost
 except ImportError:  # Prerequisite sub-issue may not be present in this checkout.
     _estimate_completion_cost = None  # type: ignore[assignment]
@@ -1592,13 +1596,51 @@ def _build_estimate_payload(
     attempted_models: List[str],
     call_type: str,
 ) -> Dict[str, Any]:
-    """Build the provider-free estimate payload for one concrete LLM request."""
+    """Build the provider-free estimate payload for one concrete LLM request.
+
+    Output tokens cannot be known without running the request, so they are a
+    heuristic: ``input_tokens * ratio`` (a per-command ratio) bounded by the
+    model's real maximum completion budget when litellm exposes one. The bound
+    keeps the prediction request/model-aware rather than letting a large prompt
+    project an impossible output. The result is still a *rough preview*, which
+    the payload labels via ``output_estimation`` and ``estimate_basis`` so the
+    renderer and any programmatic consumer treat it as approximate, not exact.
+
+    Context-window usage is reported against ``input + predicted_output`` (the
+    real constraint — completions are generated into the same window), with the
+    input-only figure retained separately for transparency.
+    """
     _ = model_info
     input_tokens = int(count_tokens_for_messages(messages_for_count, model=model_name) or 0)
     ratio = _estimate_output_ratio(command_name)
-    predicted_output_tokens = max(1, int(round(input_tokens * ratio)))
-    context_usage_percent = (
+    raw_predicted_output_tokens = max(1, int(round(input_tokens * ratio)))
+
+    # Bound the heuristic by what the model can actually emit, so the prediction
+    # is at least an upper bound the provider would honor rather than an
+    # unbounded ratio of the input size.
+    max_output_tokens: Optional[int] = None
+    if _get_max_output_tokens is not None:
+        try:
+            max_output_tokens = _get_max_output_tokens(model_name)
+        except Exception:
+            max_output_tokens = None
+    if max_output_tokens and max_output_tokens > 0:
+        predicted_output_tokens = min(raw_predicted_output_tokens, max_output_tokens)
+        output_capped = predicted_output_tokens < raw_predicted_output_tokens
+    else:
+        predicted_output_tokens = raw_predicted_output_tokens
+        output_capped = False
+
+    # Context usage reflects the real constraint: prompt plus the completion
+    # budget both consume the model's context window. Keep the input-only figure
+    # for callers that want to distinguish the two.
+    input_context_usage_percent = (
         round((input_tokens / context_limit) * 100, 2)
+        if context_limit
+        else None
+    )
+    context_usage_percent = (
+        round(((input_tokens + predicted_output_tokens) / context_limit) * 100, 2)
         if context_limit
         else None
     )
@@ -1634,6 +1676,11 @@ def _build_estimate_payload(
         "input_tokens": input_tokens,
         "predicted_output_tokens": predicted_output_tokens,
         "output_ratio": ratio,
+        # Output tokens are a heuristic, not a measured value. Surface the basis
+        # so consumers do not mistake the projected cost for an exact figure.
+        "output_estimation": "heuristic_ratio_capped" if output_capped else "heuristic_ratio",
+        "output_token_cap": max_output_tokens,
+        "estimate_basis": "approximate",
         "input_rate_per_million": input_rate if cost_known else None,
         "output_rate_per_million": output_rate if cost_known else None,
         "input_cost": round(float(input_cost), 6) if input_cost is not None else None,
@@ -1644,7 +1691,9 @@ def _build_estimate_payload(
         "cost_known": cost_known,
         "currency": "USD",
         "context_limit": context_limit,
+        # Reported against input + predicted output (the real window constraint).
         "context_usage_percent": context_usage_percent,
+        "input_context_usage_percent": input_context_usage_percent,
         "call_type": call_type,
         "provider_call_made": False,
         "attempted_models": list(attempted_models),

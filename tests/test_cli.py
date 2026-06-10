@@ -285,6 +285,49 @@ def test_cli_estimate_json_generate_outputs_machine_payload(tmp_path):
     assert "Generate demo code" not in result.output
 
 
+def test_cli_estimate_mode_does_not_leak_into_next_invocation(tmp_path, monkeypatch):
+    """Regression: an --estimate run must not make later in-process runs sticky.
+
+    estimate_mode is derived from PDD_ESTIMATE, and estimate mode sets that env
+    var (so library-level llm_invoke and `pdd` subprocesses inherit the intent).
+    If the value outlived the invocation, the *next* CLI run in the same process
+    (e.g. successive CliRunner.invoke calls across the test suite) would silently
+    run in estimate mode. The callback snapshots and restores the var on context
+    close, so it must be absent afterwards while an externally exported value is
+    preserved.
+    """
+    import pdd.cli  # noqa: F401 - registers commands on the core CLI
+    from pdd.core.cli import cli as real_cli
+    from pdd.llm_invoke import EstimateOnlyResult
+
+    prompt = tmp_path / "demo_python.prompt"
+    prompt.write_text("% Generate demo code\n", encoding="utf-8")
+
+    monkeypatch.delenv("PDD_ESTIMATE", raising=False)
+    monkeypatch.delenv("PDD_ESTIMATE_JSON", raising=False)
+
+    with patch(
+        "pdd.commands.generate.code_generator_main",
+        side_effect=EstimateOnlyResult(_estimate_payload()),
+    ):
+        result = CliRunner().invoke(
+            real_cli,
+            ["--estimate", "--no-core-dump", "generate", str(prompt)],
+        )
+
+    assert result.exit_code == 0, result.output
+    # The internally-set env vars must not survive the invocation.
+    assert "PDD_ESTIMATE" not in os.environ
+    assert "PDD_ESTIMATE_JSON" not in os.environ
+
+    # An externally exported PDD_ESTIMATE=1 must survive (restored to its prior
+    # value), so the documented "export PDD_ESTIMATE=1" workflow keeps working.
+    monkeypatch.setenv("PDD_ESTIMATE", "1")
+    result2 = CliRunner().invoke(real_cli, ["--no-core-dump", "--list-contexts"])
+    assert result2.exit_code == 0, result2.output
+    assert os.environ.get("PDD_ESTIMATE") == "1"
+
+
 def test_cli_estimate_test_story_generation_rejected_without_writes(tmp_path):
     import pdd.cli  # noqa: F401 - registers commands on the core CLI
     from pdd.core.cli import cli as real_cli

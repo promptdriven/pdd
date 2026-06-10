@@ -147,12 +147,29 @@ def _collect_estimate_records(
     return records
 
 
+def _record_cost_known(record: Dict[str, Any]) -> bool:
+    """Whether a single estimate record carries a usable, priced cost."""
+    return bool(record.get("cost_known", False)) and not record.get("unknown_cost")
+
+
 def _estimate_total_cost(records: List[Dict[str, Any]]) -> Optional[float]:
-    """Return aggregate estimate cost, or None when any record has unknown pricing."""
-    if not records or any(record.get("unknown_cost") or not record.get("cost_known", False) for record in records):
+    """Return the aggregate of the *priced* estimate records.
+
+    Sums only records with a known cost and ignores unknown ones, so a command
+    whose steps are a mix of exact and not-estimable-without-execution (e.g.
+    ``sync``: an exact generate step plus downstream steps that depend on
+    generated output) still reports a meaningful number — a lower bound — rather
+    than collapsing the whole total to "unknown". Returns None only when no
+    record is priced at all. Callers should consult ``is_lower_bound`` in the
+    summary to learn whether unpriced steps were omitted.
+    """
+    if not records:
+        return None
+    priced = [record for record in records if _record_cost_known(record)]
+    if not priced:
         return None
     return round(
-        sum(float(record.get("estimated_cost", record.get("total_cost", 0.0)) or 0.0) for record in records),
+        sum(float(record.get("estimated_cost", record.get("total_cost", 0.0)) or 0.0) for record in priced),
         6,
     )
 
@@ -162,7 +179,9 @@ def _build_estimate_summary(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_input = sum(int(record.get("input_tokens", 0) or 0) for record in records)
     total_predicted = sum(int(record.get("predicted_output_tokens", 0) or 0) for record in records)
     total_cost = _estimate_total_cost(records)
-    unknown_cost = total_cost is None
+    any_unknown = any(not _record_cost_known(record) for record in records)
+    # The total is a lower bound when it sums some, but not all, priced steps.
+    is_lower_bound = total_cost is not None and any_unknown
     return {
         "estimate": True,
         "records": records,
@@ -170,7 +189,10 @@ def _build_estimate_summary(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "predicted_output_tokens": total_predicted,
         "estimated_cost": total_cost,
         "total_cost": total_cost,
-        "unknown_cost": unknown_cost,
+        # unknown_cost stays True whenever any step is unpriced, even if the
+        # priced steps still produce a (lower-bound) number.
+        "unknown_cost": total_cost is None or any_unknown,
+        "is_lower_bound": is_lower_bound,
         "currency": records[0].get("currency", "USD") if records else "USD",
     }
 
@@ -214,8 +236,8 @@ def _render_estimate_output(ctx: click.Context, records: List[Dict[str, Any]]) -
             " | ".join([
                 str(record.get("command") or "unknown"),
                 str(record.get("model") or "unknown"),
-                str(record.get("input_tokens", 0)),
-                str(record.get("predicted_output_tokens", 0)),
+                _fmt_estimate_value(record.get("input_tokens")),
+                _fmt_estimate_value(record.get("predicted_output_tokens")),
                 _fmt_estimate_value(record.get("input_rate_per_million")),
                 _fmt_estimate_value(record.get("output_rate_per_million")),
                 _fmt_estimate_value(
@@ -228,7 +250,15 @@ def _render_estimate_output(ctx: click.Context, records: List[Dict[str, Any]]) -
 
     total = summary["estimated_cost"]
     total_display = _fmt_estimate_value(total, money=True)
-    click.echo(f"Total estimated cost: {total_display}")
+    if summary.get("is_lower_bound"):
+        # Some steps could not be priced without execution; the printed total is
+        # a floor, not the full projected cost.
+        click.echo(
+            f"Total estimated cost: ≥ {total_display} "
+            "(lower bound; some steps not estimable without execution)"
+        )
+    else:
+        click.echo(f"Total estimated cost: {total_display}")
     click.echo("Provider call made: false")
     click.echo("Command output files written: false")
     click.echo("Cost CSV row written: false")
@@ -608,6 +638,34 @@ def cli(
     ctx.obj["estimate_json"] = bool(estimate_json)
     ctx.obj["estimate_results"] = []
     ctx.obj["estimate_records"] = ctx.obj["estimate_results"]
+    # Estimate mode mutates process-wide env vars so the intent reaches the
+    # library-level llm_invoke (which reads PDD_ESTIMATE when no Click context is
+    # available) and any `pdd` subprocesses spawned during the command. Those
+    # mutations must NOT outlive the invocation: estimate_mode is itself derived
+    # from PDD_ESTIMATE just above, so a value left behind would make the *next*
+    # in-process CLI run silently sticky in estimate mode. This is exactly what
+    # breaks under repeated CliRunner.invoke calls in the test suite (an earlier
+    # estimate test poisons later generate/fix/change/update/report tests).
+    # Snapshot the pre-invocation values and restore them when this context tears
+    # down, so an externally exported PDD_ESTIMATE=1 still survives while a value
+    # we set internally does not.
+    _estimate_env_keys = (
+        "PDD_ESTIMATE",
+        "PDD_ESTIMATE_JSON",
+        "PDD_LLM_ATTRIBUTION_PROCESS_LOG",
+        "PDD_LLM_ATTRIBUTION_STDOUT",
+    )
+    _estimate_env_snapshot = {key: os.environ.get(key) for key in _estimate_env_keys}
+
+    def _restore_estimate_env(_snapshot=_estimate_env_snapshot):
+        for key, prev in _snapshot.items():
+            if prev is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prev
+
+    ctx.call_on_close(_restore_estimate_env)
+
     if estimate_mode:
         os.environ["PDD_ESTIMATE"] = "1"
         os.environ["PDD_LLM_ATTRIBUTION_PROCESS_LOG"] = "0"

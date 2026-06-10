@@ -287,6 +287,45 @@ def get_context_limit(model: str) -> Optional[int]:
         return None
 
 
+def get_max_output_tokens(model: str) -> Optional[int]:
+    """
+    Get the maximum completion (output) token budget for a model via litellm.
+
+    Returns None for unknown models or when litellm has no completion cap for
+    the model. Shares the same defensive timeout/exception handling as
+    :func:`get_context_limit` so a stuck provider-detection path returns None
+    rather than wedging the CLI.
+
+    This is used by the cost estimator to bound a predicted output-token count
+    at what the model can actually emit, instead of trusting an unbounded
+    ``input_tokens * ratio`` heuristic.
+
+    Args:
+        model: Model name.
+
+    Returns:
+        Maximum output tokens, or None if unknown to litellm, the lookup times
+        out, or the call raises.
+    """
+    try:
+        info = _call_litellm_with_timeout(litellm.get_model_info, model)
+        if not info:
+            return None
+        value = info.get("max_output_tokens")
+        if value is None:
+            return None
+        value = int(value)
+        return value if value > 0 else None
+    except Exception as exc:  # includes TimeoutError from our wrapper
+        logger.warning(
+            "get_max_output_tokens: litellm.get_model_info failed for %s (%s); "
+            "skipping output-token cap",
+            model,
+            exc,
+        )
+        return None
+
+
 class ModelPricing(NamedTuple):
     """Per-million-token input and output pricing for a model."""
 

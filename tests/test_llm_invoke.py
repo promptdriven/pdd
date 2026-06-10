@@ -561,7 +561,14 @@ def test_llm_invoke_estimate_only_skips_provider_call(mock_load_models, mock_set
     assert payload["predicted_output_tokens"] == 50
     assert payload["estimated_cost"] == 0.0004
     assert payload["unknown_cost"] is False
-    assert payload["context_usage_percent"] == 10.0
+    # Context usage reflects input + predicted output (the real window
+    # constraint): (100 + 50) / 1000 = 15.0%. The input-only figure is retained
+    # separately for transparency.
+    assert payload["context_usage_percent"] == 15.0
+    assert payload["input_context_usage_percent"] == 10.0
+    # Output tokens are explicitly labelled as a heuristic projection.
+    assert payload["output_estimation"] == "heuristic_ratio"
+    assert payload["estimate_basis"] == "approximate"
 
 
 def test_llm_invoke_estimate_only_rejects_batch_before_provider_call():
