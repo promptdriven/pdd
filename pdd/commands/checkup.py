@@ -451,6 +451,18 @@ def _forward_subcommand_json(
     ),
 )
 @click.option(
+    "--llm-repair",
+    "llm_repair",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --auto: let the LLM draft the real fix for each finding group and "
+        "apply it automatically (no per-finding approval). Costs model calls and "
+        "writes to the prompt files; honors --dry-run/--preview. Without a model "
+        "(offline / no key) each group safely falls back to 'save for review'."
+    ),
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -521,6 +533,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     preview: bool,
     planner: Optional[str],
     auto_mode: bool,
+    llm_repair: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     pdd checkup = verifier namespace
@@ -574,6 +587,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     if apply and not (interactive or auto_mode):
         raise click.UsageError("--apply requires --interactive or --auto.")
+
+    if llm_repair and not auto_mode:
+        raise click.UsageError(
+            "--llm-repair requires --auto (interactive mode already offers the "
+            "per-finding 'let the LLM draft this fix' option)."
+        )
 
     # --auto runs the agentic session with no per-finding prompts, so it is safe
     # without a terminal (CI / scripted demo replay). Only a genuinely
@@ -842,6 +861,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 explicit_interactive=interactive,
                 auto=auto_mode,
                 mode=_mode,
+                llm_repair=llm_repair,
             )
 
         # Directory target: run the agentic review over every prompt and print
@@ -884,6 +904,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 auto=auto_mode,
                 mode=MODE_AUTO if auto_mode else MODE_REVIEW,
                 quiet=_quiet,
+                llm_repair=llm_repair,
             )
 
         import json as _json  # pylint: disable=import-outside-toplevel
