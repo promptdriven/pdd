@@ -872,6 +872,87 @@ class TestDirectoryDiscoveryAndDryRun:
 # ---------------------------------------------------------------------------
 
 
+class TestAutoLLMRepair:
+    """--auto --llm-repair: one full-prompt rewrite, applied once."""
+
+    def _full(self, new_text, cost=0.05, model="fake/model"):
+        def drafter_full(groups, *, prompt_text):
+            return new_text, cost, model
+        return drafter_full
+
+    def test_auto_llm_repair_rewrites_whole_prompt_once(self, tmp_path):
+        report = _medium_report(tmp_path, n=3)
+        session = RecordingCheckupSession()
+        agent = CheckupAgent(
+            DeterministicPlanner(),
+            session,
+            repair_drafter_full=self._full("% Vague\n<vocabulary>fixed</vocabulary>\n"),
+        )
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            msg, cost, model = agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                auto=True,
+                llm_repair=True,
+            )
+
+        # Whole file replaced by the single rewrite; all 3 findings resolved.
+        assert report.prompt_path.read_text(encoding="utf-8") == "% Vague\n<vocabulary>fixed</vocabulary>\n"
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 3
+        assert acc["patches_applied"] == 1  # one full_rewrite patch, not one per finding
+        assert acc["remaining"] == 0
+        assert cost == pytest.approx(0.05)  # exactly one model call
+
+    def test_auto_llm_repair_offline_falls_back_to_deterministic(self, tmp_path):
+        report = _medium_report(tmp_path, n=3)
+        original = report.prompt_path.read_text(encoding="utf-8")
+        session = RecordingCheckupSession()
+        agent = CheckupAgent(
+            DeterministicPlanner(),
+            session,
+            repair_drafter_full=self._full(None, cost=0.0, model=""),
+        )
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                auto=True,
+                llm_repair=True,
+            )
+
+        assert report.prompt_path.read_text(encoding="utf-8") == original  # nothing written
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 0
+        assert acc["saved_for_review"] == 3  # deterministic per-group fallback
+
+    def test_auto_llm_repair_dry_run_writes_nothing(self, tmp_path):
+        report = _medium_report(tmp_path, n=2)
+        original = report.prompt_path.read_text(encoding="utf-8")
+        session = RecordingCheckupSession()
+        agent = CheckupAgent(
+            DeterministicPlanner(),
+            session,
+            repair_drafter_full=self._full("% rewritten\n"),
+        )
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                auto=True,
+                llm_repair=True,
+                dry_run=True,
+            )
+
+        assert report.prompt_path.read_text(encoding="utf-8") == original
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 0
+        assert acc["patches_queued"] >= 1
+
+
 class TestLLMDraftOption:
     def _drafter(self, snippet, cost=0.01, model="fake/model"):
         # Mirror the real drafter, which prepends a clear "LLM draft" marker.

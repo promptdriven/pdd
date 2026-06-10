@@ -22,6 +22,9 @@ ALLOWED_PATCH_KINDS = frozenset(
         "waiver",
         "story_template",
         "append_covers",
+        # Whole-file replacement produced by a single LLM repair pass
+        # (`--auto --llm-repair`): patch.replacement is the complete new prompt.
+        "full_rewrite",
     }
 )
 
@@ -136,6 +139,12 @@ def _validate_patch(patch: ApprovedPatch, repo_root: Path) -> Path:
 def _apply_patch_content(path: Path, patch: ApprovedPatch) -> str:
     """Return updated file contents for one validated patch."""
     original = path.read_text(encoding="utf-8")
+    if patch.kind == "full_rewrite":
+        # The replacement IS the complete new file (single LLM repair pass).
+        new_text = patch.replacement or ""
+        if new_text and not new_text.endswith("\n"):
+            new_text += "\n"
+        return new_text
     if patch.kind == "append_covers":
         suffix = "" if original.endswith("\n") or not original else "\n"
         replacement = patch.replacement

@@ -203,8 +203,17 @@ def test_click_interactive_session_records_candidate_choice() -> None:
 
 def test_checkup_registers_interactive_flags() -> None:
     param_names = {param.name for param in checkup.params}
-    missing = {"interactive", "apply", "dry_run"} - param_names
+    missing = {"interactive", "apply", "dry_run", "auto_mode", "llm_repair"} - param_names
     assert not missing, f"Missing params: {missing}"
+
+
+def test_llm_repair_requires_auto(tmp_path: Path) -> None:
+    """--llm-repair without --auto is a usage error (interactive uses the [5] option)."""
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("% t\n")
+    result = CliRunner().invoke(checkup, [str(prompt_file), "--llm-repair"])
+    assert result.exit_code != 0
+    assert "--llm-repair requires --auto" in result.output
 
 
 def test_cli_interactive_routes_with_tty(tmp_path: Path) -> None:
@@ -233,7 +242,12 @@ def test_cli_interactive_routes_with_tty(tmp_path: Path) -> None:
     assert "Option B" in result.output
     assert "Keep current / skip" in result.output
     assert "Custom fix" in result.output
-    assert "View rationale/details" in result.output
+    # Rationale/details are shown inline above the menu, not behind a separate
+    # "view" option; the LLM-draft option is offered directly.
+    assert "View rationale/details" not in result.output
+    assert "Let the LLM draft this fix now" in result.output
+    # The group summary (the rationale) is printed inline before the menu.
+    assert "Repair options:" in result.output
 
 
 def test_bare_prompt_target_stays_on_structured_path(tmp_path: Path) -> None:

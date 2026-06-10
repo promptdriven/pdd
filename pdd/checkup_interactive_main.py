@@ -159,6 +159,67 @@ def draft_group_replacement(
     return f"{_DRAFT_LABEL}\n{snippet}", cost, model
 
 
+def _full_repair_instruction(groups, prompt_text: str) -> str:
+    """Build a single instruction that fixes every finding group at once."""
+    findings_block = []
+    for idx, group in enumerate(groups, 1):
+        terms = list(getattr(group, "terms", lambda: [])())
+        recommended = getattr(group, "recommended_action", "") or "Address the finding."
+        detail = f"vague terms: {', '.join(terms)}" if terms else recommended
+        findings_block.append(f"  {idx}. [{getattr(group, 'source_check', '?')}] {detail}")
+    return (
+        "You are repairing a PDD prompt (a natural-language specification). "
+        "Rewrite the WHOLE prompt so that ALL of the findings below are resolved "
+        "in one coherent edit. Preserve the existing intent, structure, and any "
+        "content unrelated to the findings; add <vocabulary>/<covers>/contract "
+        "fixes as needed. Return ONLY the complete repaired prompt — no "
+        "explanation, no markdown code fences.\n\n"
+        "Findings to resolve:\n" + "\n".join(findings_block) + "\n\n"
+        "Current prompt:\n" + prompt_text
+    )
+
+
+def draft_full_prompt_repair(
+    groups,
+    *,
+    prompt_text: str,
+    llm: Optional[Callable[..., dict]] = None,
+) -> tuple[Optional[str], float, str]:
+    """Use one LLM call to rewrite the whole prompt, fixing every finding group.
+
+    Returns ``(new_prompt_text, cost, model)``. ``new_prompt_text`` is ``None``
+    when no model is available (offline / no key / parse error) so callers fall
+    back to the deterministic per-group flow. Used by ``--auto --llm-repair`` so
+    all fixes land in a single coherent pass, not one group at a time.
+    """
+    if not groups:
+        return None, 0.0, ""
+    if llm is None:
+        try:
+            from .llm_invoke import llm_invoke as llm  # pylint: disable=import-outside-toplevel
+        except Exception as exc:  # pragma: no cover - import guard
+            logger.warning("LLM full repair unavailable (import failed): %s", exc)
+            return None, 0.0, ""
+    try:
+        response = llm(
+            messages=[
+                {"role": "user", "content": _full_repair_instruction(groups, prompt_text)}
+            ],
+            temperature=0.0,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("LLM full repair failed: %s", exc)
+        return None, 0.0, ""
+    if not isinstance(response, dict):
+        return None, 0.0, ""
+    cost = float(response.get("cost") or 0.0)
+    model = str(response.get("model_name") or "")
+    new_text = _clean_snippet(response.get("result") or "")
+    if not new_text:
+        return None, cost, model
+    return new_text, cost, model
+
+
 def build_repair_options_for_finding(
     finding: SourceSetFinding,
     *,

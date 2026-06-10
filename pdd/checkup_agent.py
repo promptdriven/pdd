@@ -41,6 +41,7 @@ import click
 from .checkup_interactive_main import (
     ClickInteractiveSession,
     apply_approved_patches,
+    draft_full_prompt_repair,
     draft_group_replacement,
     filter_interactive_findings,
     _custom_option,
@@ -223,15 +224,15 @@ class TerminalCheckupSession(CheckupSession):
             "medium": "Save recommended fix for review",
             "high": "Acknowledge (manual TODO)",
         }.get(group.risk, "Apply recommended fix")
+        # The rationale/details are already printed inline above (the group
+        # summary), so the menu stays short — no separate "view details" step.
         while True:
             click.echo("\nRepair options:")
             click.echo(f"[1] Option A: {action_a}")
             click.echo("[2] Option B: Save an alternative repair proposal")
             click.echo("[3] Keep current / skip")
             click.echo("[4] Custom fix")
-            click.echo("[5] View rationale/details")
-            click.echo("[6] Ask a question")
-            click.echo("[7] Let the LLM draft this fix now (costs a model call)")
+            click.echo("[5] Let the LLM draft this fix now (costs a model call)")
             click.echo("[a] Auto for remaining groups  [q] Quit")
             answer = click.prompt("Choice", default="1", show_default=False).strip().lower()
             if answer in ("q", "quit"):
@@ -246,23 +247,9 @@ class TerminalCheckupSession(CheckupSession):
                 return "skip"
             if answer in ("4", "e", "edit", "custom"):
                 return "edit"
-            if answer in ("5", "r", "rationale", "details", "?"):
-                click.echo("\nRationale/details:")
-                for line in humanize_group_summary(group):
-                    click.echo(line)
-                continue
-            if answer in ("6", "ask", "question"):
-                question = click.prompt("Question", default="", show_default=False)
-                if question.strip():
-                    click.echo(
-                        "This deterministic session can show findings, proposals, "
-                        "and rationale, but cannot answer free-form questions without "
-                        "an interactive backend."
-                    )
-                continue
-            if answer in ("7", "l", "llm", "draft"):
+            if answer in ("5", "l", "llm", "draft"):
                 return "llm"
-            click.echo("Choose 1-7, a, or q.")
+            click.echo("Choose 1-5, a, or q.")
 
     def ask_definition(self) -> str:
         return click.prompt("Enter your definition / replacement", default="", show_default=False)
@@ -335,12 +322,16 @@ class CheckupAgent:
         *,
         repair_session_factory: Optional[Callable[[], _SessionType]] = None,
         repair_drafter: Optional[Callable[..., tuple]] = None,
+        repair_drafter_full: Optional[Callable[..., tuple]] = None,
     ) -> None:
         self.planner = planner
         self.session = session
         self.repair_session_factory = repair_session_factory
         # Injectable so tests (and offline runs) never hit a real model.
+        # ``repair_drafter`` drafts one group (interactive [5]); ``repair_drafter_full``
+        # rewrites the whole prompt in one pass (--auto --llm-repair).
         self.repair_drafter = repair_drafter or draft_group_replacement
+        self.repair_drafter_full = repair_drafter_full or draft_full_prompt_repair
 
     # ------------------------------------------------------------------
 
@@ -357,6 +348,7 @@ class CheckupAgent:
         auto: bool = False,
         mode: Optional[str] = None,
         gate: bool = True,
+        llm_repair: bool = False,
     ) -> tuple[str, float, str]:
         """Run the full checkup cycle. Returns ``(message, cost, model)``.
 
@@ -477,7 +469,58 @@ class CheckupAgent:
         total_cost = 0.0
         last_model = ""
 
+        # --auto --llm-repair: a single LLM pass rewrites the whole prompt so
+        # ALL findings are fixed at once (not one group at a time), applied once.
+        auto_llm_done = False
+        if _auto and llm_repair and groups:
+            for group in groups:
+                self.session.on_event(
+                    AgentEvent(
+                        kind="group",
+                        data={
+                            "source_check": group.source_check,
+                            "code": group.code,
+                            "size": group.size,
+                            "risk": group.risk,
+                            "summary_lines": humanize_group_summary(group),
+                        },
+                    )
+                )
+            new_text, cost_inc, model_inc = self.repair_drafter_full(
+                groups, prompt_text=prompt_text
+            )
+            total_cost += cost_inc
+            if model_inc:
+                last_model = model_inc
+            if new_text:
+                rep_file = groups[0].findings[0].file
+                src = rep_file if rep_file.is_absolute() else Path(root) / rep_file
+                try:
+                    target_path = src.resolve().relative_to(Path(root).resolve())
+                except ValueError:
+                    target_path = rep_file
+                llm_patches.append(
+                    ApprovedPatch(
+                        kind="full_rewrite",
+                        target=target_path,
+                        anchor={"finding_id": "checkup:full"},
+                        replacement=new_text,
+                        finding_id="checkup:full",
+                    )
+                )
+                for g in groups:
+                    for f in g.findings:
+                        disposition[f.finding_id] = "llm"
+                auto_llm_done = True
+            elif not quiet:
+                click.echo(
+                    "\nLLM repair unavailable (no credential / offline / out of credits) "
+                    "— falling back to per-finding review."
+                )
+
         for group in groups:
+            if auto_llm_done:
+                break  # every finding was handled by the single full rewrite
             risk = group.risk
             self.session.on_event(
                 AgentEvent(
@@ -510,6 +553,8 @@ class CheckupAgent:
                     )
                     decision = "accept"
 
+            # Interactive [5] drafts one group via the LLM, approved per group.
+            # (--auto --llm-repair is handled in one pass above the loop.)
             if decision == "llm":
                 cost_inc, model_inc, handled = self._draft_group(
                     group=group,
@@ -693,12 +738,14 @@ class CheckupAgent:
         root: Path,
         disposition: dict,
         llm_patches: list,
+        auto_confirm: bool = False,
     ) -> tuple[float, str, bool]:
         """Draft an LLM fix for one group, confirm it, and queue it for apply.
 
         Returns ``(cost, model, handled)``. ``handled`` is False when no draft is
         available (offline / no key) or the operator declines, so the caller
-        falls back to the deterministic save-for-review path.
+        falls back to the deterministic save-for-review path. ``auto_confirm``
+        skips the per-group approval (used by ``--auto --llm-repair``).
         """
         snippet, cost, model = self.repair_drafter(group, prompt_text=prompt_text)
         if not snippet:
@@ -712,7 +759,7 @@ class CheckupAgent:
                 )
             return cost, model, False
 
-        confirmed = self.session.confirm_draft(group, snippet)
+        confirmed = True if auto_confirm else self.session.confirm_draft(group, snippet)
         self.session.on_event(
             AgentEvent(
                 "llm_draft",
@@ -901,6 +948,7 @@ def run_checkup_directory(
     auto: bool = False,
     mode: str = MODE_REVIEW,
     quiet: bool = False,
+    llm_repair: bool = False,
 ) -> tuple[str, float, str]:
     """Run a non-interactive checkup over many prompt files and summarise.
 
@@ -930,6 +978,7 @@ def run_checkup_directory(
             auto=auto,
             mode=mode,
             gate=False,            # collect, don't exit per file
+            llm_repair=llm_repair,
         )
         done = session.events_of_kind("session_done")
         if not done:
