@@ -50,27 +50,60 @@ def filter_interactive_findings(
     return [finding for finding in report.findings if finding.requires_clarification]
 
 
-def build_repair_options_for_finding(finding: SourceSetFinding) -> list[RepairOption]:
+def _repair_annotation(finding: SourceSetFinding, action: str) -> str:
+    """Return a deterministic, clearly-delimited edit for ``action``.
+
+    The recommended action is human guidance, not a structured edit. Writing it
+    verbatim into a ``.prompt`` file would corrupt the prompt by injecting prose
+    that reads like an instruction. Instead we insert an inert, clearly-labelled
+    checkup annotation that records what needs doing without changing the prompt's
+    own semantics, leaving the actual rewrite to the operator.
+    """
+    code = finding.code or finding.source_check or "checkup"
+    note = " ".join(str(action).split()) or "Apply suggested repair"
+    return f"<!-- pdd-checkup TODO ({code}): {note} -->"
+
+
+def build_repair_options_for_finding(
+    finding: SourceSetFinding,
+    *,
+    project_root: Optional[Path] = None,
+    fallback_target: Optional[Path] = None,
+) -> list[RepairOption]:
     """Build up to two repair candidates from one structured finding."""
     primary_action = finding.recommended_action or "Apply suggested repair"
     primary_preview = _truncate_excerpt(finding.evidence or finding.message)
+    primary_replacement = _repair_annotation(finding, primary_action)
     alternate_label = "Alternative repair"
     alternate_preview = _truncate_excerpt(finding.message)
+    alternate_replacement = _repair_annotation(finding, finding.message)
     primary_kind = _PRIMARY_KIND_BY_SOURCE.get(finding.source_check, "vocab_definition")
     alternate_kind = (
         "story_template"
         if finding.file.suffix.lower() == ".md"
         else "append_covers"
     )
+    target = finding.file
+    source_path = finding.file
+    if project_root is not None and not source_path.is_absolute():
+        source_path = project_root / source_path
+    if fallback_target is not None and not source_path.exists():
+        source_path = fallback_target
+        target = fallback_target
+    if project_root is not None:
+        try:
+            target = source_path.resolve().relative_to(project_root.resolve())
+        except ValueError:
+            target = source_path
     return [
         RepairOption(
             label=primary_action,
             preview=primary_preview,
             patch=ApprovedPatch(
                 kind=primary_kind,
-                target=finding.file,
+                target=target,
                 anchor={"finding_id": finding.finding_id, "line": finding.line},
-                replacement=primary_action,
+                replacement=primary_replacement,
                 finding_id=finding.finding_id,
             ),
         ),
@@ -79,9 +112,9 @@ def build_repair_options_for_finding(finding: SourceSetFinding) -> list[RepairOp
             preview=alternate_preview,
             patch=ApprovedPatch(
                 kind=alternate_kind,
-                target=finding.file,
+                target=target,
                 anchor={"finding_id": finding.finding_id, "line": finding.line},
-                replacement=alternate_preview,
+                replacement=alternate_replacement,
                 finding_id=finding.finding_id,
             ),
         ),
@@ -101,7 +134,11 @@ class ClickInteractiveSession:
         """Index repair options from a structured source-set report."""
         self.report = report
         self._options_by_finding = {
-            finding.finding_id: build_repair_options_for_finding(finding)
+            finding.finding_id: build_repair_options_for_finding(
+                finding,
+                project_root=report.project_root,
+                fallback_target=report.prompt_path,
+            )
             for finding in report.findings
         }
 
@@ -168,18 +205,6 @@ def _custom_option(finding: SourceSetFinding, definition: str) -> RepairOption:
             finding_id=finding.finding_id,
         ),
     )
-
-
-def _append_presented_option(
-    session: ClickInteractiveSession,
-    finding_id: str,
-    option: RepairOption,
-) -> None:
-    presented = session.presented_options.get(finding_id)
-    if presented is None:
-        raise ValueError(f"finding {finding_id!r} was not presented")
-    if option not in presented:
-        session.presented_options[finding_id] = list(presented) + [option]
 
 
 def _register_dynamic_option(
@@ -252,6 +277,13 @@ def apply_approved_patches(
             click.echo(f"Apply log: {result.log_path}")
         if result.backup_root is not None:
             click.echo(f"Backups: {result.backup_root}")
+        for record in result.findings:
+            if record.status == "rejected":
+                reason = f": {record.reason}" if record.reason else ""
+                click.echo(
+                    f"Rejected approved patch for {record.target_path}{reason}",
+                    err=True,
+                )
         click.echo(f"Postflight: {result.postflight_status}")
     return result.exit_code
 

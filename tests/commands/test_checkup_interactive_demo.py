@@ -111,7 +111,8 @@ def _script_text() -> str:
 
 def test_run_script_uses_python_m_pdd_not_stale_binary() -> None:
     text = _script_text()
-    assert "python -m pdd" in text, "Demo must invoke `python -m pdd`"
+    assert '"$PYTHON" -m pdd' in text, "Demo must invoke the selected Python with `-m pdd`"
+    assert ".venv/bin/python" in text, "Demo should prefer the repo virtualenv when present"
     # No bare `pdd ` CLI invocations that would hit a stale .venv/bin/pdd.
     bare = re.findall(r"(?m)^\s*pdd\s+checkup", text)
     assert not bare, f"Found bare `pdd checkup` invocations (use python -m pdd): {bare}"

@@ -44,6 +44,7 @@ def _maybe_run_prompt_gate(
     quiet: bool,
     dry_run: bool = False,
     interactive: bool = False,
+    apply: bool = False,
 ) -> tuple[bool, int]:
     """Run the prompt gate; return ``(should_continue, exit_code)``."""
     if dry_run and not interactive:
@@ -56,6 +57,7 @@ def _maybe_run_prompt_gate(
         project_root=root,
         quiet=quiet,
         interactive=interactive,
+        apply=apply,
         dry_run=dry_run,
     )
 
@@ -69,6 +71,7 @@ def _enforce_prompt_gate_or_exit(
     quiet: bool,
     dry_run: bool = False,
     interactive: bool = False,
+    apply: bool = False,
 ) -> None:
     """Raise ``click.Exit`` when strict prompt checkup blocks downstream work."""
     should_continue, exit_code = _maybe_run_prompt_gate(
@@ -78,6 +81,7 @@ def _enforce_prompt_gate_or_exit(
         project_root=project_root,
         quiet=quiet,
         dry_run=dry_run,
+        apply=apply,
         interactive=interactive,
     )
     if not should_continue:
@@ -193,6 +197,13 @@ class GenerateCommand(click.Command):
     default=False,
     help="With --prompt-checkup: run interactive per-finding repair on changed prompts.",
 )
+@click.option(
+    "--apply",
+    "apply",
+    is_flag=True,
+    default=False,
+    help="With --interactive: write approved low-risk repairs to the prompt files.",
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -219,6 +230,7 @@ def generate(
     prompt_checkup: Optional[str],
     no_prompt_checkup: bool,
     interactive: bool,
+    apply: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -363,6 +375,7 @@ def generate(
                     quiet=quiet,
                     dry_run=dry_run,
                     interactive=interactive,
+                    apply=apply,
                 )
             return (message, cost, model) if success else None
 
@@ -411,6 +424,7 @@ def generate(
                     project_root=project_root,
                     quiet=quiet,
                     interactive=interactive,
+                    apply=apply,
                 )
             return (message, cost, model) if success else None
 

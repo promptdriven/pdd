@@ -176,18 +176,22 @@ def test_every_prompt_runs_and_decides(runner: CliRunner, prompt: Path, tmp_path
 # ---------------------------------------------------------------------------
 
 
-def test_bare_command_is_agentic_by_default(runner: CliRunner, tmp_path) -> None:
-    """`pdd checkup <prompt>` with NO flags is the agentic review (grouped + decision)."""
+def test_bare_command_uses_structured_non_interactive_path(
+    runner: CliRunner,
+    tmp_path,
+) -> None:
+    """`pdd checkup <prompt>` stays on the structured path unless repair is explicit."""
     result = runner.invoke(
         checkup,
         [str(PROMPTS / "02_vague_clarification.prompt"), "--project-root", str(tmp_path)],
         catch_exceptions=False,
     )
-    assert result.exit_code == 0
-    assert "Plan:" in result.output
-    assert "undefined vague terms" in result.output       # grouped
-    assert "Decision:" in result.output                   # gate
-    assert (tmp_path / ".pdd" / "checkup").exists()        # artifacts
+    assert result.exit_code == 1
+    assert "Prompt:" in result.output
+    assert "Status: WARN" in result.output
+    assert "Plan:" not in result.output
+    assert "Decision:" not in result.output
+    assert "requires a TTY" not in result.output
 
 
 def test_prompt_directory_default_uses_aggregate_multi_target_path(
@@ -261,7 +265,7 @@ def test_missing_prompt_file_error_is_specific(runner: CliRunner, tmp_path) -> N
     )
 
     assert result.exit_code == 2
-    assert "Prompt file not found" in result.output
+    assert "Could not resolve prompt target" in result.output
     assert "requires a single .prompt file target" not in result.output
 
 

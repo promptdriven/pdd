@@ -62,7 +62,7 @@ This is a TEXT-ONLY step. Do NOT run bash commands or create files on disk. You 
    - **Filename**: Follow PDD convention `<base>_<LangOrFramework>.prompt`
    - **Filepath**: Use framework-appropriate path from Step 3 research
    - **Dependencies**: List modules this new module depends on
-   - **Interface type**: api/module/page/component/config
+   - **Interface type**: api/module/page/component/config/entrypoint (use `entrypoint` for framework/runtime-discovered entry files with no named exports, e.g. `main.py`, `app/layout.tsx`, `middleware.ts`)
    - **Description**: What this module implements
 
    **For wiring gaps specifically, apply these fix templates:**
@@ -104,7 +104,7 @@ Output the COMPLETE corrected module design in the SAME FORMAT as the original S
 
 ### Interface Sketches
 #### [module_name]
-- Type: [api/module/page/component/config]
+- Type: [api/module/page/component/config/entrypoint]
 - Key functions/endpoints: [list]
 ... (ALL modules, both original and newly added)
 

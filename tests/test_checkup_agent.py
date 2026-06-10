@@ -16,6 +16,8 @@ from pdd.checkup_agent import (
     CheckupAgent,
     RecordingCheckupSession,
     TerminalCheckupSession,
+    discover_prompt_files,
+    run_checkup_directory,
 )
 from pdd.checkup_planner import DeterministicPlanner, LLMPlanner, Plan, make_planner
 from pdd.checkup_prompt_main import PromptSourceSetReport, SourceSetFinding
@@ -209,6 +211,17 @@ class TestLLMPlanner:
         prompt_file = tmp_path / "x.prompt"
         prompt_file.write_text("% Test\n", encoding="utf-8")
         planner = LLMPlanner(_call=self._make_fake_call([]))
+        plan = planner.suggest(prompt_file, list(ALL_TOOL_NAMES), "text")
+        assert set(plan.tools) == set(ALL_TOOL_NAMES)
+
+    def test_falls_back_on_invalid_tool_name(self, tmp_path):
+        """A hallucinated tool name must degrade to the deterministic plan,
+        not crash with ValueError from Plan.__post_init__."""
+        prompt_file = tmp_path / "x.prompt"
+        prompt_file.write_text("% Test\n", encoding="utf-8")
+        planner = LLMPlanner(
+            _call=self._make_fake_call(["lint", "not_a_real_tool"])
+        )
         plan = planner.suggest(prompt_file, list(ALL_TOOL_NAMES), "text")
         assert set(plan.tools) == set(ALL_TOOL_NAMES)
 
@@ -627,6 +640,60 @@ class TestAutoMode:
         assert acc["fixed_automatically"] == 2
         assert acc["patches_applied"] == 2
 
+    def test_auto_apply_dry_run_counts_low_risk_as_queued(self, tmp_path):
+        """Preview validates low-risk patches but must not report applied fixes."""
+        report = _low_risk_report(tmp_path, n=2)
+        session = RecordingCheckupSession()
+        planner = DeterministicPlanner()
+
+        with patch(
+            "pdd.checkup_agent.build_prompt_source_set_report", return_value=report
+        ), patch(
+            "pdd.checkup_agent.apply_approved_patches", return_value=0
+        ) as mock_apply:
+            agent = CheckupAgent(planner, session)
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                auto=True,
+                apply=True,
+                dry_run=True,
+            )
+
+        mock_apply.assert_called_once()
+        assert mock_apply.call_args.kwargs["dry_run"] is True
+        done = session.events_of_kind("session_done")[0].data
+        acc = done["accounting"]
+        assert done["applied"] is False
+        assert done["verification"] is None
+        assert acc["fixed_automatically"] == 0
+        assert acc["patches_applied"] == 0
+        assert acc["patches_queued"] == 2
+
+    def test_interactive_option_b_records_alternative_patch(self, tmp_path):
+        """Choosing Option B records the alternative repair candidate."""
+        report = _low_risk_report(tmp_path, n=1)
+        session = RecordingCheckupSession(group_decisions=["accept_alt"])
+        planner = DeterministicPlanner()
+
+        with patch(
+            "pdd.checkup_agent.build_prompt_source_set_report", return_value=report
+        ), patch(
+            "pdd.checkup_agent.apply_approved_patches", return_value=0
+        ) as mock_apply:
+            agent = CheckupAgent(planner, session)
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                mode="interactive",
+                apply=True,
+            )
+
+        patches = mock_apply.call_args.args[0]
+        assert patches[0].kind == "append_covers"
+
     def test_low_risk_queued_without_apply(self, tmp_path):
         """Without --apply, low-risk fixes are queued, not applied."""
         report = _low_risk_report(tmp_path, n=2)
@@ -642,6 +709,55 @@ class TestAutoMode:
         acc = session.events_of_kind("session_done")[0].data["accounting"]
         assert acc["patches_queued"] == 2
         assert acc["patches_applied"] == 0
+
+    def test_non_explicit_interactive_scopes_to_clarification_only(self, tmp_path):
+        """run(explicit_interactive=False) must honor the flag and only bring
+        clarification-required findings into scope (not hardcode True)."""
+        prompt_file = tmp_path / "mixed.prompt"
+        prompt_file.write_text("% Mixed\nDo something.\n", encoding="utf-8")
+        findings = [
+            SourceSetFinding(
+                finding_id="lint-style-1",
+                source_check="lint",
+                severity="warn",
+                file=prompt_file,
+                line="2",
+                message="Style issue",
+                code="STYLE_1",  # not clarification
+            ),
+            SourceSetFinding(
+                finding_id="lint-vague-1",
+                source_check="lint",
+                severity="warn",
+                file=prompt_file,
+                line="2",
+                message='Vague term "thing" used',
+                code="VAGUE_TERM_UNDEFINED",  # requires_clarification
+            ),
+        ]
+        report = PromptSourceSetReport(
+            prompt_path=prompt_file,
+            project_root=tmp_path,
+            target=str(prompt_file),
+            findings=findings,
+            checks=[{"name": "lint", "status": "warn"}],
+        )
+        session = RecordingCheckupSession()
+        planner = DeterministicPlanner()
+
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent = CheckupAgent(planner, session)
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                auto=True,
+                explicit_interactive=False,
+            )
+
+        # Only the clarification finding is in scope; the STYLE_1 finding is not.
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["total"] == 1
 
     def test_switch_to_auto_mid_session(self, tmp_path):
         """Choosing 'auto' on a group switches the rest of the session to auto."""
@@ -705,3 +821,46 @@ class TestAutoMode:
         mock_run.assert_called_once()
         kwargs = mock_run.call_args.kwargs
         assert kwargs.get("auto") is True
+
+
+class TestDirectoryDiscoveryAndDryRun:
+    def test_discover_prompt_files_is_recursive(self, tmp_path):
+        """Discovery must recurse so nested prompt subtrees are covered
+        (matches classify_checkup_target's rglob-based directory detection)."""
+        top = tmp_path / "prompts"
+        (top / "commands").mkdir(parents=True)
+        (top / "core").mkdir()
+        (top / "top_python.prompt").write_text("% top\n", encoding="utf-8")
+        (top / "commands" / "checkup_python.prompt").write_text("% c\n", encoding="utf-8")
+        (top / "core" / "cli_python.prompt").write_text("% core\n", encoding="utf-8")
+        # *_LLM.prompt scratch files are excluded.
+        (top / "core" / "scratch_LLM.prompt").write_text("% x\n", encoding="utf-8")
+
+        found = {p.name for p in discover_prompt_files(top)}
+        assert found == {
+            "top_python.prompt",
+            "checkup_python.prompt",
+            "cli_python.prompt",
+        }
+
+    def test_directory_honors_dry_run_for_auto_apply(self, tmp_path):
+        """pdd checkup <dir> --auto --apply --dry-run must forward dry_run to each
+        agent.run so low-risk patches are previewed, not written."""
+        prompt = tmp_path / "style.prompt"
+        prompt.write_text("% Style\nDo something.\n", encoding="utf-8")
+        planner = DeterministicPlanner()
+
+        with patch("pdd.checkup_agent.CheckupAgent.run") as mock_run:
+            mock_run.return_value = ("ok", 0.0, "")
+            run_checkup_directory(
+                planner,
+                [prompt],
+                project_root=tmp_path,
+                apply=True,
+                dry_run=True,
+                auto=True,
+                quiet=True,
+            )
+
+        assert mock_run.call_args.kwargs["dry_run"] is True
+        assert mock_run.call_args.kwargs["apply"] is True

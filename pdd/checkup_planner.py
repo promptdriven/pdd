@@ -177,10 +177,20 @@ class LLMPlanner:
         # Append any missing tools at the end so nothing is silently skipped.
         seen = set(tools)
         extras = [t for t in _DEFAULT_TOOL_ORDER if t in available_tools and t not in seen]
-        return Plan(
-            tools=tools + extras,
-            rationale=raw.get("rationale", ""),
-        )
+        # Plan() validates tool names and raises on hallucinated/unknown tools;
+        # keep that inside the fallback guard so a bad LLM response degrades to
+        # the deterministic plan instead of crashing the checkup.
+        try:
+            return Plan(
+                tools=tools + extras,
+                rationale=raw.get("rationale", ""),
+            )
+        except ValueError as exc:
+            logger.warning(
+                "LLMPlanner: LLM proposed an invalid plan (%s); falling back to deterministic.",
+                exc,
+            )
+            return self._fallback.suggest(prompt_path, available_tools, prompt_text)
 
 
 PLANNERS: dict[str, type] = {

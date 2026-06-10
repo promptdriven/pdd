@@ -523,6 +523,7 @@ def change_main(
                 project_root=resolve_prompt_gate_project_root(saved_prompt_paths),
                 quiet=quiet,
                 interactive=ctx.obj.get("interactive", False),
+                apply=ctx.obj.get("apply", False),
             )
             if not should_continue:
                 msg = prompt_gate_block_message(gate_exit)

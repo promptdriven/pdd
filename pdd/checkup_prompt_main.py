@@ -13,6 +13,7 @@ from .context_snapshot_policy import check_snapshot_policy
 from .contract_check import check_prompt
 from .coverage_contracts import (
     STATUS_FAILED,
+    STATUS_STORY_ONLY,
     STATUS_UNCHECKED,
     CoverageResult,
     build_coverage,
@@ -28,13 +29,52 @@ logger = logging.getLogger(__name__)
 REPORT_SCHEMA = "pdd.prompt_source_set_report.v1"
 
 
-_CLARIFICATION_CODE_MARKERS = ("VAGUE",)
+# Codes that genuinely need a human to supply *intent* before any repair.
+# These are matched as substrings, so each entry must be specific enough not to
+# capture mechanically-fixable structural defects. In particular do NOT use bare
+# "UNKNOWN"/"MALFORMED"/"AMBIGUOUS": they would swallow auto-repairable codes
+# like UNKNOWN_COVERAGE_REF, UNKNOWN_STORY_REF, and MALFORMED_ID, which are
+# fixable by editing the prompt and must stay in the automated repair path.
+_CLARIFICATION_CODE_MARKERS = (
+    "VAGUE",
+    "DUPLICATE_ID",
+    "STORY_ONLY_AMBIGUOUS",
+    "MALFORMED_WAIVER",
+    "WAIVER_NOT_ALLOWED",
+)
 
 
-def _finding_requires_clarification(code: str) -> bool:
-    """Vague-term findings need semantic clarification before automated repair."""
+def _finding_requires_clarification(code: str, source_check: str = "") -> bool:
+    """Return whether a finding must be routed through human clarification."""
     upper = code.upper()
+    if source_check == "gate" and "WAIVER" in upper:
+        return True
     return any(marker in upper for marker in _CLARIFICATION_CODE_MARKERS)
+
+
+def _clarification_reason_for(
+    *,
+    code: str,
+    source_check: str,
+    rule_id: str = "",
+    message: str = "",
+) -> str:
+    """Derive a compact deterministic reason for a clarification-required finding."""
+    upper = code.upper()
+    rule_suffix = f" ({rule_id})" if rule_id else ""
+    if "VAGUE" in upper:
+        return "Term is undefined and may be interpreted inconsistently."
+    if "DUPLICATE_ID" in upper:
+        return f"Duplicate IDs require choosing the intended canonical contract{rule_suffix}."
+    if "STORY_ONLY_AMBIGUOUS" in upper:
+        return f"Coverage cannot be assigned deterministically to one story{rule_suffix}."
+    if source_check == "gate" or "WAIVER" in upper:
+        return f"Policy intent is unclear and requires human decision{rule_suffix}."
+    if any(marker in upper for marker in ("UNKNOWN", "MALFORMED", "AMBIGUOUS")):
+        return f"Ambiguous source-set metadata requires human decision{rule_suffix}."
+    if message:
+        return "Finding requires human clarification before automated repair."
+    return ""
 
 
 @dataclass
@@ -54,15 +94,22 @@ class SourceSetFinding:
     rule_id: str = ""
     # Repair hints consumed by the non-interactive repair orchestrator (#1422).
     requires_clarification: bool = False
+    clarification_reason: str = ""
     confidence: Optional[float] = None
 
     def __post_init__(self) -> None:
-        # Vague-term findings (lint/contract) cannot be fixed mechanically; flag
-        # them so repair routes them through clarification rather than auto-apply.
         if not self.requires_clarification and _finding_requires_clarification(
-            self.code
+            self.code,
+            self.source_check,
         ):
             self.requires_clarification = True
+        if self.requires_clarification and not self.clarification_reason:
+            self.clarification_reason = _clarification_reason_for(
+                code=self.code,
+                source_check=self.source_check,
+                rule_id=self.rule_id,
+                message=self.message,
+            )
 
     @property
     def is_error(self) -> bool:
@@ -82,6 +129,7 @@ class SourceSetFinding:
             "code": self.code,
             "rule_id": self.rule_id,
             "requires_clarification": self.requires_clarification,
+            "clarification_reason": self.clarification_reason,
         }
         if self.confidence is not None:
             payload["confidence"] = self.confidence
@@ -337,6 +385,30 @@ def build_prompt_source_set_report(
                         recommended_action="Add story/test coverage or a waiver.",
                         fix_command=f"pdd checkup coverage {prompt_path}",
                         code=rule.status,
+                        rule_id=rule.rule_id,
+                    )
+                )
+            elif rule.status == STATUS_STORY_ONLY and len(rule.stories) > 1:
+                if coverage_status == "pass":
+                    coverage_status = "warn"
+                report.findings.append(
+                    SourceSetFinding(
+                        finding_id=_finding_id(
+                            "coverage", prompt_path, index, "story_only_ambiguous"
+                        ),
+                        source_check="coverage",
+                        severity="warn",
+                        file=prompt_path,
+                        message=(
+                            f"Rule {rule.rule_id}: story-only coverage matched "
+                            f"{len(rule.stories)} stories"
+                        ),
+                        evidence=", ".join(rule.stories),
+                        recommended_action=(
+                            "Clarify which story is canonical or add deterministic test coverage."
+                        ),
+                        fix_command=f"pdd checkup coverage {prompt_path}",
+                        code="story_only_ambiguous",
                         rule_id=rule.rule_id,
                     )
                 )

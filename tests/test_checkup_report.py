@@ -279,6 +279,24 @@ class TestArtifacts:
         assert arts == {}
         assert not (tmp_path / ".pdd" / "checkup").exists()
 
+    def test_patch_preview_keeps_repo_relative_directory_context(self, tmp_path):
+        """A repo-relative patch target must keep its directory in the preview, not
+        collapse to the basename (#1519 render_patch_preview path bug)."""
+        from pdd.checkup_interactive_session import ApprovedPatch
+        from pdd.checkup_report import render_patch_preview
+
+        patch_obj = ApprovedPatch(
+            kind="vocab_definition",
+            target=Path("prompts/sub/foo.prompt"),  # already repo-relative
+            anchor={"finding_id": "x", "line": 3},
+            replacement="<!-- pdd-checkup TODO (X): note -->",
+            finding_id="x",
+        )
+        text = render_patch_preview([patch_obj], target="p", groups=[], project_root=tmp_path)
+        assert "# file: prompts/sub/foo.prompt" in text
+        # the directory must not have been stripped down to just the basename
+        assert "# file: foo.prompt" not in text
+
     def test_patch_preview_renders_vocabulary_stub(self):
         from pdd.checkup_report import render_patch_preview
 

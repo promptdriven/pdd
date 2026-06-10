@@ -1,3 +1,5 @@
+<pdd-dependency>pipeline_Python.prompt</pdd-dependency>
+
 You are an expert Python developer specializing in FastAPI and backend architecture. Your task is to implement the `backend_api` module (`src/backend/api.py`) for the PDD Prompt Linter. This module serves as a thin HTTP interface over the core application logic.
 
 Requirements

@@ -3,7 +3,7 @@
 #
 # Human-verifiable demo for the LLM-agentic `pdd checkup` workflow (issue #1423).
 #
-# It proves, with REAL `python -m pdd ...` commands, that:
+# It proves, with REAL `${PYTHON:-python} -m pdd ...` commands, that:
 #   * `pdd checkup <prompt> --interactive` drives an agentic session
 #   * `--planner deterministic` plans offline (CI-safe, no LLM)
 #   * `--planner llm` is exposed and falls back gracefully with no network/key
@@ -22,7 +22,7 @@
 #
 #   Non-interactive replay (CI-safe, no TTY required):
 #     bash demos/checkup_interactive/run_demo.sh --all          # every demo below
-#     bash demos/checkup_interactive/run_demo.sh --fast         # simple default command
+#     bash demos/checkup_interactive/run_demo.sh --fast         # deterministic review command
 #     bash demos/checkup_interactive/run_demo.sh --repair       # LLM/interactive repair
 #     bash demos/checkup_interactive/run_demo.sh --strict-gate  # pass/warn/block decisions
 #     bash demos/checkup_interactive/run_demo.sh --workflow     # PRD→prompt→checkup→code
@@ -34,13 +34,18 @@
 #
 #   See FULL_WORKFLOW.md for the end-to-end lifecycle walkthrough.
 #
-# All commands use `python -m pdd` (never a stale `.venv/bin/pdd`). If you see
+# All commands use `${PYTHON:-python} -m pdd` (never a stale `.venv/bin/pdd`). If you see
 # `ImportError: cannot import name 'get_version'`, your editable install is
 # stale — fix it with:  source .venv/bin/activate && pip install -e .
 
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ -z "${PYTHON:-}" && -x "$REPO_ROOT/.venv/bin/python" ]]; then
+  PYTHON="$REPO_ROOT/.venv/bin/python"
+else
+  PYTHON="${PYTHON:-python}"
+fi
 DEMO_DIR="$REPO_ROOT/demos/checkup_interactive"
 PROMPTS="$DEMO_DIR/prompts"
 DRIFT_WS="$DEMO_DIR/drift_workspace"
@@ -78,9 +83,9 @@ info()    { echo "  $1"; }
 # Core helpers — every real CLI call goes through here
 # ---------------------------------------------------------------------------
 
-# Run `python -m pdd ...` from REPO_ROOT, capture combined output + exit code.
+# Run `${PYTHON:-python} -m pdd ...` from REPO_ROOT, capture combined output + exit code.
 run_pdd() {
-  CMD_OUT=$(cd "$REPO_ROOT" && python -m pdd "$@" 2>&1) && CMD_EXIT=0 || CMD_EXIT=$?
+  CMD_OUT=$(cd "$REPO_ROOT" && "$PYTHON" -m pdd "$@" 2>&1) && CMD_EXIT=0 || CMD_EXIT=$?
 }
 
 # Print captured output indented, stripping the noisy cost/snapshot footer.
@@ -116,7 +121,7 @@ demo_agentic_interactive() {
 
 This runs the REAL agentic session in interactive mode:
 
-    python -m pdd checkup $REL/02_vague_clarification.prompt \\
+    $PYTHON -m pdd checkup $REL/02_vague_clarification.prompt \\
         --interactive
 
 The impatient-user UX:
@@ -146,22 +151,22 @@ EOF
     return 0
   fi
   read -r -p "Press Enter to start the live interactive session... " _ || true
-  ( cd "$REPO_ROOT" && python -m pdd checkup \
+  ( cd "$REPO_ROOT" && "$PYTHON" -m pdd checkup \
       "$REL/02_vague_clarification.prompt" --interactive )
   echo
   note "Interactive session finished."
 }
 
 # ---------------------------------------------------------------------------
-# 2. The simple default command — agentic review, no flags required
+# 2. Deterministic review command — grouped review, no TTY required
 # ---------------------------------------------------------------------------
 demo_deterministic() {
-  banner "2. The simple default command — 'pdd checkup <prompt>' (agentic)"
-  subhead "python -m pdd checkup $REL/02_vague_clarification.prompt"
-  note "No flags needed: the bare command is the agentic review. It runs all"
-  note "checks, groups findings, writes artifacts, prints a summary + decision."
-  note "Never prompts. Never edits the prompt. (--json/--explain stay structured.)"
-  run_pdd checkup "$REL/02_vague_clarification.prompt"
+  banner "2. Deterministic review — grouped checkup without a TTY"
+  subhead "$PYTHON -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic"
+  note "The explicit deterministic planner runs all checks, groups findings,"
+  note "writes artifacts, and prints a summary + decision. It never prompts."
+  note "The bare command remains the structured non-interactive checkup path."
+  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic
   echo_clean
   assert_contains "Plan:"                       "compact plan shown"
   # per-tool status block reaches all six tools (with skip reasons)
@@ -181,7 +186,7 @@ demo_deterministic() {
 # ---------------------------------------------------------------------------
 demo_auto() {
   banner "3. Auto mode — apply low-risk only, never fabricate risky fixes"
-  subhead "python -m pdd checkup $REL/02_vague_clarification.prompt --auto"
+  subhead "$PYTHON -m pdd checkup $REL/02_vague_clarification.prompt --auto"
   note "Vague-term definitions are medium-risk (need human meaning), so auto"
   note "mode SAVES them for review instead of inventing definitions."
   run_pdd checkup "$REL/02_vague_clarification.prompt" --auto
@@ -205,7 +210,7 @@ demo_llm_fallback() {
   crashing. Either way the session completes.
 
 EOF
-  subhead "python -m pdd checkup $REL/03_formatting_edge_case.prompt --planner llm"
+  subhead "$PYTHON -m pdd checkup $REL/03_formatting_edge_case.prompt --planner llm"
   run_pdd checkup "$REL/03_formatting_edge_case.prompt" --planner llm
   echo "$CMD_OUT" | grep -iE "LLMPlanner: LLM call failed|falling back|Plan:|Checkup complete" \
     | sed 's/^/    /' | head -20
@@ -225,36 +230,36 @@ EOF
 demo_direct() {
   banner "5. Direct subcommands — the same six engines on their own"
 
-  subhead "lint  →  python -m pdd checkup lint $REL/02_vague_clarification.prompt"
+  subhead "lint  →  $PYTHON -m pdd checkup lint $REL/02_vague_clarification.prompt"
   run_pdd checkup lint "$REL/02_vague_clarification.prompt"
   echo_clean | head -6
   assert_contains "warning(s)" "lint ran"
 
-  subhead "contract check  →  python -m pdd checkup contract check $REL/04_contract_sensitive.prompt"
+  subhead "contract check  →  $PYTHON -m pdd checkup contract check $REL/04_contract_sensitive.prompt"
   run_pdd checkup contract check "$REL/04_contract_sensitive.prompt"
   echo_clean | head -6
   assert_contains "warning(s)" "contract check ran"
 
-  subhead "coverage  →  python -m pdd checkup coverage $REL/05_coverage_sensitive.prompt"
+  subhead "coverage  →  $PYTHON -m pdd checkup coverage $REL/05_coverage_sensitive.prompt"
   run_pdd checkup coverage "$REL/05_coverage_sensitive.prompt"
   echo_clean | head -12
   assert_contains "rules" "coverage ran"
 
-  subhead "gate  →  python -m pdd checkup gate $REL/01_clean_task.prompt"
+  subhead "gate  →  $PYTHON -m pdd checkup gate $REL/01_clean_task.prompt"
   run_pdd checkup gate "$REL/01_clean_task.prompt"
   echo_clean | head -6
   [ "$CMD_EXIT" -eq 0 ] && pass "gate ran (exit 0)" || fail "gate exit $CMD_EXIT"
 
-  subhead "snapshot  →  python -m pdd checkup snapshot $REL/06_snapshot_candidate.prompt"
+  subhead "snapshot  →  $PYTHON -m pdd checkup snapshot $REL/06_snapshot_candidate.prompt"
   run_pdd checkup snapshot "$REL/06_snapshot_candidate.prompt"
   echo_clean | head -6
   assert_contains "snapshot" "snapshot ran"
 
-  subhead "drift  →  (cd drift_workspace) python -m pdd checkup drift drift_candidate --dry-run"
+  subhead "drift  →  (cd drift_workspace) $PYTHON -m pdd checkup drift drift_candidate --dry-run"
   note "drift resolves a dev unit from a project root, so it runs inside"
   note "drift_workspace/ with the repo root on PYTHONPATH (real baseline, no LLM)."
   DRIFT_OUT=$(cd "$DRIFT_WS" && PYTHONPATH="$REPO_ROOT:${PYTHONPATH:-}" \
-      python -m pdd checkup drift drift_candidate --dry-run 2>&1) && DRIFT_EXIT=0 || DRIFT_EXIT=$?
+      "$PYTHON" -m pdd checkup drift drift_candidate --dry-run 2>&1) && DRIFT_EXIT=0 || DRIFT_EXIT=$?
   echo "$DRIFT_OUT" | grep -vE \
     "Checking for updates|core_dumps|Debug snapshot|attach when reporting|Command Execution Summary|Context compression|Total Estimated Cost|^-{5,}|^$" \
     | sed 's/^/    /' | head -14
@@ -286,8 +291,8 @@ demo_strict_gate() {
   banner "Strict gate — pass / warn → continue, strict failure → block"
   note "checkup is a gate before code generation. Exit 0 = continue, 2 = block."
 
-  subhead "PASS  →  python -m pdd checkup $REL/01_clean_task.prompt"
-  run_pdd checkup "$REL/01_clean_task.prompt"
+  subhead "PASS  →  $PYTHON -m pdd checkup $REL/01_clean_task.prompt --planner deterministic"
+  run_pdd checkup "$REL/01_clean_task.prompt" --planner deterministic
   echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)" | sed 's/^/    /'
   if echo "$CMD_OUT" | grep -q "pass → continue" && [ "$CMD_EXIT" -eq 0 ]; then
     pass "clean prompt: pass → continue (exit 0)"
@@ -295,8 +300,8 @@ demo_strict_gate() {
     fail "clean prompt did not pass/continue (exit $CMD_EXIT)"
   fi
 
-  subhead "WARN  →  python -m pdd checkup $REL/02_vague_clarification.prompt"
-  run_pdd checkup "$REL/02_vague_clarification.prompt"
+  subhead "WARN  →  $PYTHON -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic"
+  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic
   echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)" | sed 's/^/    /'
   if echo "$CMD_OUT" | grep -q "warn → continue" && [ "$CMD_EXIT" -eq 0 ]; then
     pass "vague prompt: warn → continue (exit 0)"
@@ -304,8 +309,8 @@ demo_strict_gate() {
     fail "vague prompt did not warn/continue (exit $CMD_EXIT)"
   fi
 
-  subhead "STRICT BLOCK  →  python -m pdd checkup $REL/02_vague_clarification.prompt --strict"
-  run_pdd checkup "$REL/02_vague_clarification.prompt" --strict
+  subhead "STRICT BLOCK  →  $PYTHON -m pdd checkup $REL/02_vague_clarification.prompt --planner deterministic --strict"
+  run_pdd checkup "$REL/02_vague_clarification.prompt" --planner deterministic --strict
   echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)" | sed 's/^/    /'
   if echo "$CMD_OUT" | grep -q "strict failure → block" && [ "$CMD_EXIT" -eq 2 ]; then
     pass "strict mode: blocking findings → block (exit 2)"
@@ -324,7 +329,7 @@ demo_full_workflow() {
   The whole prompt set is checked with the one simple command — no flags,
   no shell loop:
 
-      python -m pdd checkup $REL/
+      $PYTHON -m pdd checkup $REL/
 
   checkup runs every prompt, groups findings, saves medium-risk fixes for
   review, writes per-prompt artifacts, and prints one aggregate summary with a
@@ -332,7 +337,7 @@ demo_full_workflow() {
 
 EOF
 
-  subhead "python -m pdd checkup $REL/"
+  subhead "$PYTHON -m pdd checkup $REL/"
   run_pdd checkup "$REL/"
   echo_clean
   assert_contains "01_clean_task.prompt: pass"          "per-prompt decision: pass"
@@ -397,7 +402,7 @@ menu() {
   while true; do
     echo
     echo -e "${BOLD}${CYAN}pdd checkup — agentic workflow demo (issue #1423)${RESET}"
-    echo "  1) Run fast prompt checkup demo (the simple default command)"
+    echo "  1) Run fast prompt checkup demo (deterministic planner)"
     echo "  2) Run LLM / interactive repair demo"
     echo "  3) Run strict gate / blocking demo (pass · warn · block)"
     echo "  4) Run full workflow demo (one command over the whole directory)"

@@ -1,7 +1,7 @@
 # Interactive Checkup Demo — issue #1423
 
 Human-verifiable test scenarios for the interactive checkup stack added in
-`change/issue-1423`. Exercises `--interactive`, `--apply`, `--preview`, and
+`change/issue-1423`. Exercises `--interactive`, `--apply`, `--dry-run`, and
 `--explain` across three diverse prompts.
 
 ## Prerequisites
@@ -106,7 +106,7 @@ Error: --interactive requires a TTY (stdin and stdout must be a terminal).
 Run this from a real terminal (not a pipe or CI shell):
 
 ```bash
-pdd checkup demo/prompts/fix_main_python.prompt --interactive --apply --preview
+pdd checkup demo/prompts/fix_main_python.prompt --interactive --apply --dry-run
 ```
 
 **What to verify:**
@@ -152,14 +152,14 @@ Pass criteria: `requires_clarification` key is present on every finding object.
 ### C2 — Interactive mode surfaces `requires_clarification` findings first (manual, requires TTY)
 
 ```bash
-pdd checkup demo/prompts/agentic_change_python.prompt --interactive --apply --preview
+pdd checkup demo/prompts/agentic_change_python.prompt --interactive --apply --dry-run
 ```
 
 **What to verify:**
 - Any finding with `"requires_clarification": true` appears at the **top** of the
   menu list before regular findings
 - Findings are labelled with their `id` and `message`
-- The `--preview` flag prevents any file writes even if repairs are approved
+- The `--dry-run` flag prevents any file writes even if repairs are approved
 
 ---
 
@@ -171,6 +171,6 @@ pdd checkup demo/prompts/agentic_change_python.prompt --interactive --apply --pr
 | A2 | automated | exit 2, stderr contains "requires a TTY" |
 | A3 | automated | exit 0, stdout contains "No findings" |
 | B1 | automated | exit 2, stderr contains "requires a TTY" |
-| B2 | manual TTY | menus appear, no files written after --preview |
+| B2 | manual TTY | menus appear, no files written after --dry-run |
 | C1 | automated | JSON contains `requires_clarification` key in findings |
 | C2 | manual TTY | clarification findings ordered first; no files written |

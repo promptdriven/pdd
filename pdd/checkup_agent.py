@@ -32,7 +32,7 @@ verify the fix.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Union
 
@@ -213,24 +213,48 @@ class TerminalCheckupSession(CheckupSession):
         return Plan(tools=valid, rationale="Custom tool selection by operator.")
 
     def decide_group(self, group: FindingGroup) -> str:
-        # Reflect what "yes" will actually do for this group's risk level, so the
-        # prompt never says "apply" for a medium-risk fix that is only saved.
-        verb = {
+        action_a = {
             "low": "Queue recommended fix",
             "medium": "Save recommended fix for review",
             "high": "Acknowledge (manual TODO)",
         }.get(group.risk, "Apply recommended fix")
-        prompt = f"{verb} for this group? [Y]es / [n]o-skip / [e]dit / [a]uto / [q]uit"
-        answer = click.prompt(prompt, default="Y", show_default=False).strip().lower()
-        if answer in ("q", "quit"):
-            return "quit"
-        if answer in ("a", "auto"):
-            return "auto"
-        if answer in ("n", "no", "skip"):
-            return "skip"
-        if answer in ("e", "edit"):
-            return "edit"
-        return "accept"
+        while True:
+            click.echo("\nRepair options:")
+            click.echo(f"[1] Option A: {action_a}")
+            click.echo("[2] Option B: Save an alternative repair proposal")
+            click.echo("[3] Keep current / skip")
+            click.echo("[4] Custom fix")
+            click.echo("[5] View rationale/details")
+            click.echo("[6] Ask a question")
+            click.echo("[a] Auto for remaining groups  [q] Quit")
+            answer = click.prompt("Choice", default="1", show_default=False).strip().lower()
+            if answer in ("q", "quit"):
+                return "quit"
+            if answer in ("a", "auto"):
+                return "auto"
+            if answer in ("", "1", "y", "yes", "option a"):
+                return "accept"
+            if answer in ("2", "b", "option b"):
+                return "accept_alt"
+            if answer in ("3", "n", "no", "skip", "keep"):
+                return "skip"
+            if answer in ("4", "e", "edit", "custom"):
+                return "edit"
+            if answer in ("5", "r", "rationale", "details", "?"):
+                click.echo("\nRationale/details:")
+                for line in humanize_group_summary(group):
+                    click.echo(line)
+                continue
+            if answer in ("6", "ask", "question"):
+                question = click.prompt("Question", default="", show_default=False)
+                if question.strip():
+                    click.echo(
+                        "This deterministic session can show findings, proposals, "
+                        "and rationale, but cannot answer free-form questions without "
+                        "an interactive backend."
+                    )
+                continue
+            click.echo("Choose 1-6, a, or q.")
 
     def ask_definition(self) -> str:
         return click.prompt("Enter your definition / replacement", default="", show_default=False)
@@ -387,7 +411,9 @@ class CheckupAgent:
             tr: ToolResult = tool.extract(report)
             tool_findings = [
                 f
-                for f in filter_interactive_findings(report, explicit_interactive=True)
+                for f in filter_interactive_findings(
+                    report, explicit_interactive=explicit_interactive
+                )
                 if f.source_check == tool_name
             ]
             self.session.on_event(
@@ -490,11 +516,14 @@ class CheckupAgent:
                 choices_by_finding=choices,
             )
             if exit_code == 0:
-                applied = True
-                self._tally_applied(disposition, acc, len(low_risk_patches))
-                verification = self._verify(
-                    prompt_path, target, root, strict, groups, quiet
-                )
+                if dry_run:
+                    acc.patches_queued = len(low_risk_patches)
+                else:
+                    applied = True
+                    self._tally_applied(disposition, acc, len(low_risk_patches))
+                    verification = self._verify(
+                        prompt_path, target, root, strict, groups, quiet
+                    )
             else:
                 acc.patches_failed = len(low_risk_patches)
         else:
@@ -600,7 +629,7 @@ class CheckupAgent:
                 acc.fixed_manually += 1
                 continue
 
-            # decision == "accept"
+            # decision == "accept" / "accept_alt"
             if risk == RISK_HIGH:
                 # never auto-touch high-risk; leave as manual TODO
                 self._record_skip(repair_session, finding)
@@ -612,14 +641,16 @@ class CheckupAgent:
                 # save for review: record the primary option so it appears in the
                 # patch preview, but it will not be applied.
                 if options:
-                    repair_session.record_choice(fid, options[0])
+                    selected = options[1] if decision == "accept_alt" and len(options) > 1 else options[0]
+                    repair_session.record_choice(fid, selected)
                 disposition[fid] = "review"
                 acc.saved_for_review += 1
                 continue
 
             # low risk
             if options:
-                repair_session.record_choice(fid, options[0])
+                selected = options[1] if decision == "accept_alt" and len(options) > 1 else options[0]
+                repair_session.record_choice(fid, selected)
                 disposition[fid] = "manual_low" if interactive else "low"
             else:
                 self._record_skip(repair_session, finding)
@@ -680,18 +711,10 @@ def _relpath(path: Path, root: Path) -> str:
 
 
 def _accounting_dict(acc: CheckupAccounting) -> dict:
-    return {
-        "total": acc.total,
-        "fixed_manually": acc.fixed_manually,
-        "fixed_automatically": acc.fixed_automatically,
-        "skipped_by_user": acc.skipped_by_user,
-        "saved_for_review": acc.saved_for_review,
-        "manual_todo": acc.manual_todo,
-        "remaining": acc.remaining,
-        "patches_applied": acc.patches_applied,
-        "patches_queued": acc.patches_queued,
-        "patches_failed": acc.patches_failed,
-    }
+    # asdict() covers every dataclass field automatically so newly added
+    # accounting fields are never silently dropped from the event payload;
+    # ``remaining`` is a derived property and must be added explicitly.
+    return {**asdict(acc), "remaining": acc.remaining}
 
 
 # ---------------------------------------------------------------------------
@@ -700,12 +723,18 @@ def _accounting_dict(acc: CheckupAccounting) -> dict:
 
 
 def discover_prompt_files(directory: Path) -> list[Path]:
-    """Return sorted ``*.prompt`` files directly under ``directory`` (non-recursive,
-    excluding ``*_LLM.prompt`` scratch files)."""
+    """Return sorted ``*.prompt`` files under ``directory`` (recursive,
+    excluding ``*_LLM.prompt`` scratch files).
+
+    Discovery is recursive to match how ``classify_checkup_target`` recognises a
+    prompt directory (it rglobs for prompts): targets like ``pdd/prompts`` keep
+    prompts under ``commands/``, ``core/``, ``frontend/`` etc., and the directory
+    gate must cover the whole tree rather than only the top level.
+    """
     return sorted(
         p
-        for p in Path(directory).glob("*.prompt")
-        if p.is_file() and not p.name.endswith("_LLM.prompt")
+        for p in Path(directory).rglob("*.prompt")
+        if p.is_file() and not p.name.lower().endswith("_llm.prompt")
     )
 
 
@@ -716,6 +745,7 @@ def run_checkup_directory(
     project_root: Path,
     strict: bool = False,
     apply: bool = False,
+    dry_run: bool = False,
     auto: bool = False,
     mode: str = MODE_REVIEW,
     quiet: bool = False,
@@ -742,6 +772,7 @@ def run_checkup_directory(
             project_root=root,
             strict=strict,
             apply=apply,
+            dry_run=dry_run,       # honor --dry-run/--preview for the whole set
             quiet=True,            # suppress the full per-file dump
             explicit_interactive=False,
             auto=auto,

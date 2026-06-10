@@ -229,20 +229,53 @@ def test_cli_interactive_routes_with_tty(tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert "Checkup complete" in result.output
+    assert "Option A" in result.output
+    assert "Option B" in result.output
+    assert "Keep current / skip" in result.output
+    assert "Custom fix" in result.output
+    assert "View rationale/details" in result.output
 
 
-def test_bare_prompt_target_routes_to_agent_review(tmp_path: Path) -> None:
-    """`pdd checkup <prompt>` with no flags uses the agentic review mode."""
+def test_bare_prompt_target_stays_on_structured_path(tmp_path: Path) -> None:
+    """`pdd checkup <prompt>` with no flags keeps the structured non-interactive path."""
     prompt_file = tmp_path / "test.prompt"
     prompt_file.write_text("% t\n")
-    with patch("pdd.commands.checkup._interactive_tty_available", return_value=False), patch(
+    with patch("pdd.commands.checkup.run_checkup_prompt") as mock_struct, patch(
         "pdd.checkup_agent.CheckupAgent.run"
-    ) as mock_run:
-        mock_run.return_value = ("done", 0.0, "")
+    ) as mock_agent:
+        mock_struct.return_value = (True, "ok", 0.0, "", 0)
         result = CliRunner().invoke(checkup, [str(prompt_file)], catch_exceptions=False)
-    mock_run.assert_called_once()
-    assert mock_run.call_args.kwargs.get("mode") == "review"
+    mock_agent.assert_not_called()
+    mock_struct.assert_called_once()
     assert result.exit_code == 0
+
+
+def test_cli_accepts_dry_run_alias_for_apply(tmp_path: Path) -> None:
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("% t\n")
+    with patch("pdd.checkup_agent.CheckupAgent.run") as mock_run:
+        mock_run.return_value = ("done", 0.0, "")
+        result = CliRunner().invoke(
+            checkup,
+            ["--auto", "--apply", "--dry-run", str(prompt_file)],
+            catch_exceptions=False,
+        )
+    assert result.exit_code == 0
+    assert mock_run.call_args.kwargs["dry_run"] is True
+
+
+def test_cli_keeps_preview_alias_for_apply(tmp_path: Path) -> None:
+    prompt_file = tmp_path / "test.prompt"
+    prompt_file.write_text("% t\n")
+    with patch("pdd.checkup_agent.CheckupAgent.run") as mock_run:
+        mock_run.return_value = ("done", 0.0, "")
+        result = CliRunner().invoke(
+            checkup,
+            ["--auto", "--apply", "--preview", str(prompt_file)],
+            catch_exceptions=False,
+        )
+    assert result.exit_code == 0
+    assert mock_run.call_args.kwargs["dry_run"] is True
 
 
 def test_json_target_stays_on_structured_path(tmp_path: Path) -> None:
@@ -463,3 +496,121 @@ def test_out_of_bounds_option_choice_emits_warning_and_skips(
     assert result is not None
     message, _, _ = result
     assert "skipped" in message
+
+
+def test_repair_patch_replacement_is_annotation_not_raw_prose(tmp_path: Path) -> None:
+    """Applied patch content must be a clearly-delimited checkup annotation, not the
+    raw recommended_action prose that would corrupt the prompt (#1519 prose-injection)."""
+    from pdd.checkup_interactive_main import build_repair_options_for_finding
+
+    finding = SourceSetFinding(
+        finding_id="lint:test:2:STYLE_1",
+        source_check="lint",
+        severity="warn",
+        file=Path("prompts/test.prompt"),
+        line="2",
+        message="Style issue",
+        recommended_action="Tidy wording",
+        code="STYLE_1",
+    )
+    options = build_repair_options_for_finding(finding, project_root=tmp_path)
+
+    primary_replacement = options[0].patch.replacement
+    # The human guidance is preserved as the menu label / preview...
+    assert options[0].label == "Tidy wording"
+    # ...but the *applied* content is an inert, labelled annotation, never bare prose.
+    assert primary_replacement != "Tidy wording"
+    assert primary_replacement.startswith("<!--")
+    assert primary_replacement.endswith("-->")
+    assert "STYLE_1" in primary_replacement
+
+
+def test_generate_forwards_apply_to_prompt_gate() -> None:
+    """`pdd generate --apply` must reach the workflow gate (choices were silently
+    discarded before because apply was never forwarded) (#1519 apply-not-forwarded)."""
+    from pdd.commands.generate import generate, _maybe_run_prompt_gate
+    import inspect
+
+    assert "apply" in {p.name for p in generate.params}
+    # The shared gate helper must accept and forward apply.
+    assert "apply" in inspect.signature(_maybe_run_prompt_gate).parameters
+
+
+def test_change_forwards_apply_to_prompt_gate() -> None:
+    """`pdd change --apply` must expose the flag for the workflow gate."""
+    from pdd.commands.modify import change
+
+    assert "apply" in {p.name for p in change.params}
+
+
+def test_single_file_repair_resolves_against_project_root(tmp_path: Path) -> None:
+    """A relative single-file target with --project-root must repair only that file,
+    not fall through to a whole-project sweep when cwd != project_root (#1519)."""
+    import os
+
+    repo = tmp_path / "repo"
+    (repo / "prompts").mkdir(parents=True)
+    target_file = repo / "prompts" / "foo_python.prompt"
+    target_file.write_text("% foo\nDo something vague.\n", encoding="utf-8")
+
+    workdir = tmp_path / "elsewhere"
+    workdir.mkdir()
+
+    report = PromptSourceSetReport(
+        prompt_path=target_file,
+        project_root=repo,
+        target="prompts/foo_python.prompt",
+        findings=[
+            SourceSetFinding(
+                finding_id="lint-1",
+                source_check="lint",
+                severity="warn",
+                file=target_file,
+                code="STYLE_1",
+                message="Style issue",
+                recommended_action="Tidy",
+            )
+        ],
+        checks=[{"name": "lint", "status": "warn"}],
+    )
+
+    repaired_paths = []
+
+    def _fake_repair_loop(pp, cfg, **kwargs):
+        repaired_paths.append(Path(pp))
+        from pdd.prompt_repair import RepairResult
+
+        return RepairResult(success=True, repair_skipped=True, message="done")
+
+    prev_cwd = os.getcwd()
+    os.chdir(workdir)
+    try:
+        with patch(
+            "pdd.commands.checkup.run_checkup_prompt",
+            return_value=(False, "blocked", 0.0, "model", 1),
+        ), patch(
+            "pdd.commands.checkup.build_prompt_source_set_report",
+            return_value=report,
+        ), patch(
+            "pdd.commands.checkup.discover_prompt_paths"
+        ) as mock_discover, patch(
+            "pdd.commands.checkup.run_prompt_repair_loop",
+            side_effect=_fake_repair_loop,
+        ):
+            CliRunner().invoke(
+                checkup,
+                [
+                    "prompts/foo_python.prompt",
+                    "--project-root",
+                    str(repo),
+                    "--prompt-repair",
+                    "best-effort",
+                ],
+                catch_exceptions=False,
+            )
+    finally:
+        os.chdir(prev_cwd)
+
+    # The whole-project sweep must NOT be used; only the resolved single file is repaired.
+    mock_discover.assert_not_called()
+    assert repaired_paths == [target_file]

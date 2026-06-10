@@ -165,7 +165,7 @@ Your comment should follow this format:
 
 ### Interface Sketches
 #### [module_name]
-- Type: [api/module/page/component/config]
+- Type: [api/module/page/component/config/entrypoint]
 - Key functions/endpoints: [list]
 
 ### Integration Points (Entry Point Wiring)
