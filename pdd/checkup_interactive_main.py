@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Callable, Optional, Union
 
 import click
+
+logger = logging.getLogger(__name__)
 
 from .checkup_interactive_session import (
     ApprovedPatch,
@@ -62,6 +65,98 @@ def _repair_annotation(finding: SourceSetFinding, action: str) -> str:
     code = finding.code or finding.source_check or "checkup"
     note = " ".join(str(action).split()) or "Apply suggested repair"
     return f"<!-- pdd-checkup TODO ({code}): {note} -->"
+
+
+_DRAFT_LABEL = "<!-- LLM draft (pdd checkup) — review before keeping -->"
+
+
+def _draft_instruction(group, prompt_text: str) -> str:
+    """Build a focused, snippet-only instruction for one finding group."""
+    terms = list(getattr(group, "terms", lambda: [])())
+    recommended = getattr(group, "recommended_action", "") or "Address the finding."
+    context = _truncate_excerpt(prompt_text, max_len=2000)
+    header = (
+        "You are repairing a PDD prompt (a natural-language specification). "
+        "Return ONLY the exact text snippet to insert into the prompt file — no "
+        "explanation, no markdown code fences, no preamble.\n\n"
+        f"Prompt under repair:\n{context}\n\n"
+    )
+    if terms:
+        body = (
+            "Produce a <vocabulary> block that gives each of these vague terms a "
+            "single, observable, testable definition grounded in the prompt above:\n"
+            f"  {', '.join(terms)}\n"
+            "Use exactly this shape:\n"
+            "<vocabulary>\n"
+            '  <term name="NAME">the exact observable condition that makes it true</term>\n'
+            "  ...\n"
+            "</vocabulary>"
+        )
+    elif getattr(group, "source_check", "") == "coverage":
+        body = (
+            "Produce the minimal <covers> reference(s) or a justified <waiver> "
+            f"snippet that resolves: {recommended}"
+        )
+    elif getattr(group, "source_check", "") == "contract":
+        body = (
+            "Produce the corrected <contract_rules> snippet that resolves: "
+            f"{recommended}"
+        )
+    else:
+        body = f"Produce the snippet that resolves: {recommended}"
+    return header + body
+
+
+def _clean_snippet(text: str) -> str:
+    """Strip accidental code fences/preamble from an LLM snippet."""
+    snippet = str(text).strip()
+    if snippet.startswith("```"):
+        lines = [
+            line for line in snippet.splitlines() if not line.strip().startswith("```")
+        ]
+        snippet = "\n".join(lines).strip()
+    return snippet
+
+
+def draft_group_replacement(
+    group,
+    *,
+    prompt_text: str,
+    llm: Optional[Callable[..., dict]] = None,
+) -> tuple[Optional[str], float, str]:
+    """Use an LLM to draft a real, insertable fix for one finding group.
+
+    Returns ``(snippet, cost, model)``. ``snippet`` is ``None`` when no model is
+    available (offline / no key / parse error) so callers fall back to the
+    deterministic 'save for review' path and the demo never breaks. The snippet
+    is prefixed with a clear ``LLM draft`` marker so a reviewer can tell it apart
+    from human-authored prompt text.
+    """
+    if llm is None:
+        try:
+            from .llm_invoke import llm_invoke as llm  # pylint: disable=import-outside-toplevel
+        except Exception as exc:  # pragma: no cover - import guard
+            logger.warning("LLM draft unavailable (import failed): %s", exc)
+            return None, 0.0, ""
+    try:
+        # Use ``messages`` (not ``prompt``) so the prompt-under-repair is passed
+        # verbatim and never run through llm_invoke's Jinja templating, which
+        # would choke on braces/placeholders in real prompt files.
+        response = llm(
+            messages=[{"role": "user", "content": _draft_instruction(group, prompt_text)}],
+            temperature=0.0,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("LLM draft failed for %s: %s", getattr(group, "code", "?"), exc)
+        return None, 0.0, ""
+    if not isinstance(response, dict):
+        return None, 0.0, ""
+    cost = float(response.get("cost") or 0.0)
+    model = str(response.get("model_name") or "")
+    snippet = _clean_snippet(response.get("result") or "")
+    if not snippet:
+        return None, cost, model
+    return f"{_DRAFT_LABEL}\n{snippet}", cost, model
 
 
 def build_repair_options_for_finding(

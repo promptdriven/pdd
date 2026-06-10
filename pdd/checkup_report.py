@@ -209,6 +209,7 @@ class CheckupAccounting:
     total: int = 0
     fixed_manually: int = 0
     fixed_automatically: int = 0
+    drafted_by_llm: int = 0
     skipped_by_user: int = 0
     saved_for_review: int = 0
     manual_todo: int = 0
@@ -218,7 +219,12 @@ class CheckupAccounting:
 
     @property
     def remaining(self) -> int:
-        done = self.fixed_manually + self.fixed_automatically + self.skipped_by_user
+        done = (
+            self.fixed_manually
+            + self.fixed_automatically
+            + self.drafted_by_llm
+            + self.skipped_by_user
+        )
         return max(0, self.total - done)
 
     def summary_lines(
@@ -233,6 +239,8 @@ class CheckupAccounting:
         lines.append(f"  Total: {self.total}")
         lines.append(f"  Fixed manually: {self.fixed_manually}")
         lines.append(f"  Fixed automatically: {self.fixed_automatically}")
+        if self.drafted_by_llm:
+            lines.append(f"  Drafted by LLM (applied): {self.drafted_by_llm}")
         lines.append(f"  Skipped by user: {self.skipped_by_user}")
         lines.append(f"  Remaining: {self.remaining}")
         lines.append("")
