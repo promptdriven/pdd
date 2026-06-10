@@ -627,6 +627,37 @@ class TestAutoMode:
         assert acc["fixed_automatically"] == 2
         assert acc["patches_applied"] == 2
 
+    def test_auto_apply_dry_run_counts_low_risk_as_queued(self, tmp_path):
+        """Preview validates low-risk patches but must not report applied fixes."""
+        report = _low_risk_report(tmp_path, n=2)
+        session = RecordingCheckupSession()
+        planner = DeterministicPlanner()
+
+        with patch(
+            "pdd.checkup_agent.build_prompt_source_set_report", return_value=report
+        ), patch(
+            "pdd.checkup_agent.apply_approved_patches", return_value=0
+        ) as mock_apply:
+            agent = CheckupAgent(planner, session)
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                auto=True,
+                apply=True,
+                dry_run=True,
+            )
+
+        mock_apply.assert_called_once()
+        assert mock_apply.call_args.kwargs["dry_run"] is True
+        done = session.events_of_kind("session_done")[0].data
+        acc = done["accounting"]
+        assert done["applied"] is False
+        assert done["verification"] is None
+        assert acc["fixed_automatically"] == 0
+        assert acc["patches_applied"] == 0
+        assert acc["patches_queued"] == 2
+
     def test_interactive_option_b_records_alternative_patch(self, tmp_path):
         """Choosing Option B records the alternative repair candidate."""
         report = _low_risk_report(tmp_path, n=1)

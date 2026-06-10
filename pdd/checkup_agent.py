@@ -514,11 +514,14 @@ class CheckupAgent:
                 choices_by_finding=choices,
             )
             if exit_code == 0:
-                applied = True
-                self._tally_applied(disposition, acc, len(low_risk_patches))
-                verification = self._verify(
-                    prompt_path, target, root, strict, groups, quiet
-                )
+                if dry_run:
+                    acc.patches_queued = len(low_risk_patches)
+                else:
+                    applied = True
+                    self._tally_applied(disposition, acc, len(low_risk_patches))
+                    verification = self._verify(
+                        prompt_path, target, root, strict, groups, quiet
+                    )
             else:
                 acc.patches_failed = len(low_risk_patches)
         else:
