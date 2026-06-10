@@ -465,8 +465,15 @@ def test_claude_policy_capability_contract_declared_and_validated():
     assert caps["claude_policy"]["fields"] == {
         "allowedTools": ["string", "null"],
         "addDirs": "list[string]",
-        "noSessionPersistence": "boolean",
+        "noSessionPersistence": {
+            "standard": "boolean",
+            "interactive": False,
+        },
         "outputFormat": ["json"],
+    }
+    assert caps["claude_policy"]["modes"]["interactive"] == {
+        "noSessionPersistence": False,
+        "usageSource": "persisted_session_transcript",
     }
 
     normalized = validate_claude_policy({

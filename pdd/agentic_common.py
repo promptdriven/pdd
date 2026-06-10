@@ -38,14 +38,24 @@ def get_agentic_capabilities() -> Dict[str, Any]:
             "fields": {
                 "allowedTools": ["string", "null"],
                 "addDirs": "list[string]",
-                "noSessionPersistence": "boolean",
+                "noSessionPersistence": {
+                    "standard": "boolean",
+                    "interactive": False,
+                },
                 "outputFormat": ["json"],
+            },
+            "modes": {
+                "standard": {"noSessionPersistence": True},
+                "interactive": {
+                    "noSessionPersistence": False,
+                    "usageSource": "persisted_session_transcript",
+                },
             },
         }
     }
 
 
-def validate_claude_policy(policy: Any) -> ClaudePolicy:
+def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudePolicy:
     """Validate and normalize the Claude CLI policy contract PDD enforces."""
     if not isinstance(policy, dict):
         raise AgenticUnsupportedSemanticsError("claude_policy must be an object")
@@ -82,6 +92,12 @@ def validate_claude_policy(policy: Any) -> ClaudePolicy:
     if not isinstance(no_session, bool):
         raise AgenticUnsupportedSemanticsError(
             "claude_policy.noSessionPersistence must be a boolean"
+        )
+    if interactive and no_session:
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.noSessionPersistence is unsupported in interactive "
+            "Claude mode because Claude Code marks the flag as print-mode-only "
+            "and PDD interactive billing uses the persisted session transcript"
         )
 
     output_format = policy.get("outputFormat", "json")
@@ -2552,7 +2568,12 @@ def run_agentic_task(
         consumers can read ``result.usage`` or ``result[4]``.
     """
     normalized_claude_policy = (
-        validate_claude_policy(claude_policy) if claude_policy is not None else None
+        validate_claude_policy(
+            claude_policy,
+            interactive=_claude_code_interactive_enabled(os.environ),
+        )
+        if claude_policy is not None
+        else None
     )
 
     # get_agent_provider_preference() must be called first: for
@@ -2563,6 +2584,13 @@ def run_agentic_task(
 
     # Filter agents based on preference order
     candidates = [p for p in provider_pref if p in agents]
+    if normalized_claude_policy is not None:
+        if "anthropic" not in candidates:
+            raise AgenticUnsupportedSemanticsError(
+                "claude_policy requires Anthropic/Claude execution; no Anthropic "
+                "agent is available to enforce the requested policy"
+            )
+        candidates = ["anthropic"]
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
@@ -3392,7 +3420,9 @@ def _build_claude_interactive_command(
 ) -> List[str]:
     """Build the Claude Code interactive command without ``-p`` / JSON mode."""
     normalized_policy = (
-        validate_claude_policy(claude_policy) if claude_policy is not None else None
+        validate_claude_policy(claude_policy, interactive=True)
+        if claude_policy is not None
+        else None
     )
     cmd = [
         cli_path,
