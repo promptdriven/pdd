@@ -16,6 +16,7 @@ import pytest
 # may carry their own @pytest.mark.timeout override.
 pytestmark = pytest.mark.timeout(450)
 
+import pdd.agentic_sync_runner as _agentic_sync_runner_module
 from pdd.agentic_sync_runner import (
     GITHUB_COMMENT_BODY_LIMIT,
     MAX_WORKERS,
@@ -31,6 +32,36 @@ from pdd.agentic_sync_runner import (
     build_dep_graph_from_architecture,
     build_dep_graph_from_architecture_data,
 )
+
+
+@pytest.fixture(autouse=True)
+def _pin_agentic_sync_runner_module():
+    """Keep ``sys.modules['pdd.agentic_sync_runner']`` identical to the module
+    object this file imported its names from.
+
+    Other unit tests (e.g. ``tests/commands/test_generate.py`` /
+    ``test_fix.py``) mock ``pdd.*`` and re-import command modules during their
+    setup, which under the shared public-CI xdist workers can replace
+    ``sys.modules['pdd.agentic_sync_runner']`` with a freshly imported module
+    object. This file's top-level ``from pdd.agentic_sync_runner import ...``
+    names (``AsyncSyncRunner``, ``_parse_cost_from_csv``,
+    ``_find_pdd_executable``, ...) stay bound to the original module, while
+    ``@patch("pdd.agentic_sync_runner.*")`` resolves the *replacement* via
+    ``sys.modules`` — so the patches silently miss and the real subprocess /
+    cost-CSV paths run (observed in CI as ``cmd[0]`` being the installed ``pdd``
+    binary instead of the patched value, and cost ``0.0`` instead of the mocked
+    amount). Pin the canonical module back for the duration of each test so the
+    patch target and the code under test share one object, restoring whatever
+    was there afterwards so other test files are unaffected.
+    """
+    canonical = _agentic_sync_runner_module
+    previous = sys.modules.get("pdd.agentic_sync_runner")
+    sys.modules["pdd.agentic_sync_runner"] = canonical
+    try:
+        yield
+    finally:
+        if previous is not None and previous is not canonical:
+            sys.modules["pdd.agentic_sync_runner"] = previous
 
 
 def _make_mock_popen(stdout_text: str = "", stderr_text: str = "", exit_code: int = 0):
