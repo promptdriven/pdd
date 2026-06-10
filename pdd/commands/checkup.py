@@ -585,15 +585,6 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     ctx.ensure_object(dict)
     effective_dry_run = dry_run or preview
 
-    if apply and not (interactive or auto_mode):
-        raise click.UsageError("--apply requires --interactive or --auto.")
-
-    if llm_repair and not auto_mode:
-        raise click.UsageError(
-            "--llm-repair requires --auto (interactive mode already offers the "
-            "per-finding 'let the LLM draft this fix' option)."
-        )
-
     # --auto runs the agentic session with no per-finding prompts, so it is safe
     # without a terminal (CI / scripted demo replay). Only a genuinely
     # prompt-driven interactive session requires a real TTY.
@@ -673,6 +664,11 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     if target == "simplify":
         simplify_args = list(ctx.args)
+        # The parent ``checkup`` consumes ``--apply`` into its own flag, so
+        # re-inject it for ``checkup simplify`` (which has its own ``--apply``)
+        # — otherwise ``pdd checkup simplify --apply`` would silently preview.
+        if apply and "--apply" not in simplify_args:
+            simplify_args.append("--apply")
         if show_help:
             simplify_args.append("--help")
         exit_code = checkup_simplify.main(
@@ -811,6 +807,19 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         and target is not None
         and is_prompt_shaped_target(target, project_root=project_root)
     ):
+        # Validate the agentic-checkup flags here (inside prompt-target handling)
+        # rather than at the top of the command. The parent ``checkup`` defines
+        # ``--apply`` so it can land on a focused subcommand (e.g.
+        # ``pdd checkup simplify --apply``) — those dispatch and return above, and
+        # must reach their own ``--apply`` option instead of this guard.
+        if apply and not (interactive or auto_mode):
+            raise click.UsageError("--apply requires --interactive or --auto.")
+        if llm_repair and not auto_mode:
+            raise click.UsageError(
+                "--llm-repair requires --auto (interactive mode already offers the "
+                "per-finding 'let the LLM draft this fix' option)."
+            )
+
         _quiet = ctx.obj.get("quiet", False)
         _repair_defaults = load_prompt_repair_defaults(Path.cwd())
         _effective_repair = (

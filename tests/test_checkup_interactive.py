@@ -628,3 +628,29 @@ def test_single_file_repair_resolves_against_project_root(tmp_path: Path) -> Non
     # The whole-project sweep must NOT be used; only the resolved single file is repaired.
     mock_discover.assert_not_called()
     assert repaired_paths == [target_file]
+
+
+def test_simplify_apply_reaches_subcommand_not_parent_guard() -> None:
+    """`pdd checkup simplify --apply` must dispatch to checkup_simplify (with its
+    own --apply forwarded), not fail on the parent's --apply guard (#1519 P2)."""
+    captured = {}
+
+    def _fake_simplify_main(args, **kwargs):
+        captured["args"] = list(args)
+        return 0
+
+    with patch("pdd.commands.checkup.checkup_simplify.main", side_effect=_fake_simplify_main):
+        result = CliRunner().invoke(checkup, ["simplify", "--apply"], catch_exceptions=False)
+
+    assert "--apply requires --interactive" not in result.output
+    # The parent consumed --apply, so it must be re-injected for the subcommand.
+    assert "--apply" in captured.get("args", [])
+
+
+def test_apply_still_requires_interactive_or_auto_for_prompt_target(tmp_path: Path) -> None:
+    """The --apply guard still fires for a prompt-shaped target with no mode."""
+    prompt_file = tmp_path / "p.prompt"
+    prompt_file.write_text("% t\n")
+    result = CliRunner().invoke(checkup, [str(prompt_file), "--apply"])
+    assert result.exit_code != 0
+    assert "--apply requires --interactive or --auto" in result.output
