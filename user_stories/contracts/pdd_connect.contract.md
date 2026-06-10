@@ -25,7 +25,7 @@ starts a local server and may register a remote session when authenticated.
 2. Given the default port is busy and the user did not explicitly choose a port, when the command starts, then it scans the configured fallback range and reports the replacement port.
 3. Given an explicitly requested port is unavailable, when the user runs `pdd connect --port <port>`, then the command exits with an error instead of silently picking a different port.
 4. Given remote binding is requested without a token, when the user runs `pdd connect --allow-remote`, then the command warns and requires explicit confirmation before exposing the server.
-5. Given the user is authenticated and does not request local-only mode, when the server starts, then the command registers a cloud session, starts session maintenance, and displays the cloud access URL.
+5. Given the user is authenticated and does not request local-only mode, when the server starts, then the command registers a cloud session, starts session maintenance, and confirms registration to the user. The cloud access URL is captured but not printed (its display is deferred until the production `/connect` page is deployed).
 6. Given shutdown or interruption, when a remote session was registered, then the command stops listeners/heartbeat and deregisters the session.
 
 ## Oracle
@@ -35,6 +35,7 @@ These details matter for pass/fail:
 - explicit-port vs default-port conflict behavior
 - browser opening is skipped by `--no-browser`
 - cloud registration is skipped by `--local-only` or missing authentication
+- the cloud access URL is not printed to the user (display deferred until the production `/connect` page ships)
 - remote session cleanup is attempted on shutdown
 - no cost tracking or LLM invocation is introduced
 
