@@ -25,6 +25,7 @@ import contextlib
 import io
 import os
 import re
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
@@ -261,6 +262,35 @@ def _expand_include_many(text: str, recorder: "_SegmentRecorder") -> str:
     return _INCLUDE_MANY_RE.sub(_replace, text)
 
 
+# The audit resolves includes by temporarily mutating *process-global* state —
+# ``os.chdir(base_dir)`` plus a couple of env vars. Under ``pdd connect`` the
+# server calls the audit from a request handler, and the connect prompt screen
+# fires the audit alongside ``/analyze`` in one debounced cycle, so two
+# cwd-sensitive operations can be in flight at once. Because cwd/env are global,
+# overlapping runs could otherwise observe a half-applied cwd and resolve
+# includes against the wrong directory. This reentrant lock serializes that
+# critical section so include resolution stays deterministic under concurrent
+# connect usage (PR #1387 review #3). It is reentrant so a caller that already
+# holds it via :func:`cwd_env_lock` (e.g. the ``/analyze`` route wrapping its own
+# ``chdir`` + ``preprocess``) does not deadlock when it then runs an audit.
+_CWD_ENV_LOCK = threading.RLock()
+
+
+@contextlib.contextmanager
+def cwd_env_lock():
+    """Hold the audit's process-global cwd/env lock for cwd-sensitive work.
+
+    The audit (and any other server code that resolves includes by changing the
+    working directory — notably ``/analyze``'s ``chdir`` + ``preprocess``) must
+    run its cwd mutation under this lock so concurrent ``pdd connect`` requests
+    cannot cross-contaminate one another's include resolution (PR #1387 review
+    #3). The lock is reentrant: wrapping a call that itself runs an audit is
+    safe.
+    """
+    with _CWD_ENV_LOCK:
+        yield
+
+
 @contextlib.contextmanager
 def _audit_env(base_dir: Optional[str] = None):
     """Quiet, no-query-fallback, optionally cwd-scoped environment for the audit.
@@ -270,27 +300,33 @@ def _audit_env(base_dir: Optional[str] = None):
     when a deterministic ``select=`` on a ``query=`` include fails. ``base_dir``
     lets a caller (e.g. the server) resolve includes relative to a project root
     exactly as the CLI does when run from that directory.
+
+    The whole body runs under :data:`_CWD_ENV_LOCK`: the env-var and cwd mutation
+    are process-global, so holding the lock for the full set-yield-restore window
+    guarantees concurrent audits (and lock-wrapped server work) never observe a
+    partially-applied environment (PR #1387 review #3).
     """
-    prev_quiet = os.environ.get("PDD_QUIET")
-    prev_no_query_fallback = os.environ.get("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK")
-    prev_cwd = os.getcwd() if base_dir else None
-    os.environ["PDD_QUIET"] = "1"
-    os.environ["PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK"] = "1"
-    if base_dir:
-        os.chdir(base_dir)
-    try:
-        yield
-    finally:
-        if prev_cwd is not None:
-            os.chdir(prev_cwd)
-        if prev_quiet is None:
-            os.environ.pop("PDD_QUIET", None)
-        else:
-            os.environ["PDD_QUIET"] = prev_quiet
-        if prev_no_query_fallback is None:
-            os.environ.pop("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK", None)
-        else:
-            os.environ["PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK"] = prev_no_query_fallback
+    with _CWD_ENV_LOCK:
+        prev_quiet = os.environ.get("PDD_QUIET")
+        prev_no_query_fallback = os.environ.get("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK")
+        prev_cwd = os.getcwd() if base_dir else None
+        os.environ["PDD_QUIET"] = "1"
+        os.environ["PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK"] = "1"
+        if base_dir:
+            os.chdir(base_dir)
+        try:
+            yield
+        finally:
+            if prev_cwd is not None:
+                os.chdir(prev_cwd)
+            if prev_quiet is None:
+                os.environ.pop("PDD_QUIET", None)
+            else:
+                os.environ["PDD_QUIET"] = prev_quiet
+            if prev_no_query_fallback is None:
+                os.environ.pop("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK", None)
+            else:
+                os.environ["PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK"] = prev_no_query_fallback
 
 
 def _hydrate(text: str) -> Tuple[str, _SegmentRecorder]:
@@ -501,7 +537,16 @@ def audit_prompt_text(
     )
 
 
-def audit_prompt_file(prompt_path: str, model: str) -> ContextAudit:
-    """Audit the prompt file at ``prompt_path`` for ``model`` (no LLM call)."""
+def audit_prompt_file(
+    prompt_path: str, model: str, *, base_dir: Optional[str] = None
+) -> ContextAudit:
+    """Audit the prompt file at ``prompt_path`` for ``model`` (no LLM call).
+
+    ``base_dir`` resolves relative includes from a project root exactly as
+    :func:`audit_prompt_text`. The server passes it so the audit's cwd change
+    happens inside the shared :data:`_CWD_ENV_LOCK` (see :func:`_audit_env`)
+    rather than the route mutating the process cwd itself — keeping connect
+    audits deterministic under concurrency (PR #1387 review #3).
+    """
     raw = Path(prompt_path).read_text(encoding="utf-8")
-    return audit_prompt_text(raw, model)
+    return audit_prompt_text(raw, model, base_dir=base_dir)

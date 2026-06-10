@@ -11,6 +11,8 @@ module so all three paths agree numerically without an LLM/tokenizer call.
 import asyncio
 import importlib
 import json
+import os
+import threading
 
 import pytest
 from click.testing import CliRunner
@@ -185,3 +187,90 @@ def test_endpoint_override_content_audits_buffer_not_disk(tmp_path, monkeypatch,
     # The include in the buffer resolved against the project root.
     sources = {src: status for src, _, status, _ in from_buffer["rows"]}
     assert sources.get("context/a.txt") == "resolved"
+
+
+# --- PR #1387 review #3: the audit's process-global cwd/env mutation is
+# serialized so concurrent connect audits stay deterministic, and the server can
+# pass a project root via base_dir instead of changing cwd in its route. --------
+
+
+def test_audit_file_base_dir_resolves_without_leaking_cwd(
+    tmp_path, monkeypatch, patched_core
+):
+    """`audit_prompt_file(base_dir=...)` resolves includes from base_dir and
+    restores the caller's cwd, so the route never has to chdir itself."""
+    project = tmp_path / "proj"
+    (project / "context").mkdir(parents=True)
+    (project / "context" / "a.txt").write_text("alpha beta gamma", encoding="utf-8")
+    prompt = project / "p_python.prompt"
+    prompt.write_text("Body\n<include>context/a.txt</include>", encoding="utf-8")
+
+    # Run from an unrelated cwd to prove resolution uses base_dir, not cwd.
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    before = os.getcwd()
+
+    audit = ca_module.audit_prompt_file(
+        str(prompt), model="gpt-4o", base_dir=str(project)
+    )
+
+    assert os.getcwd() == before  # cwd restored — no leak into the caller
+    sources = {r.source: r.status for r in audit.rows}
+    assert sources.get("context/a.txt") == "resolved"
+
+
+def test_cwd_env_lock_is_reentrant():
+    """The shared cwd/env lock is reentrant, so a route holding it (e.g. /analyze)
+    can run an audit — which re-acquires it — without deadlocking."""
+    with ca_module.cwd_env_lock():
+        with ca_module.cwd_env_lock():
+            assert True
+
+
+def test_concurrent_audits_with_distinct_base_dirs_stay_correct(
+    tmp_path, monkeypatch, patched_core
+):
+    """Concurrent audits resolving includes from different project roots must not
+    cross-contaminate, and every run must restore cwd — the determinism the
+    serialized cwd/env lock provides (PR #1387 review #3)."""
+    monkeypatch.chdir(tmp_path)
+    origin = os.getcwd()
+
+    roots = []
+    for i in range(6):
+        proj = tmp_path / f"proj{i}"
+        (proj / "context").mkdir(parents=True)
+        # Each root's include has a distinct token count (i+1 words) so a
+        # cross-contaminated resolution would attribute the wrong number.
+        (proj / "context" / "a.txt").write_text(
+            " ".join(["w"] * (i + 1)), encoding="utf-8"
+        )
+        prompt = proj / "p_python.prompt"
+        prompt.write_text("Body\n<include>context/a.txt</include>", encoding="utf-8")
+        roots.append((proj, prompt, i + 1))
+
+    errors = []
+
+    def run(proj, prompt, expected):
+        try:
+            for _ in range(8):
+                audit = ca_module.audit_prompt_file(
+                    str(prompt), model="gpt-4o", base_dir=str(proj)
+                )
+                by_source = {r.source: r.tokens for r in audit.rows}
+                assert by_source.get("context/a.txt") == expected
+        except AssertionError as e:  # pragma: no cover - failure path
+            errors.append(str(e))
+
+    threads = [
+        threading.Thread(target=run, args=(proj, prompt, exp))
+        for proj, prompt, exp in roots
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert not errors, f"cross-contaminated audits: {errors}"
+    assert os.getcwd() == origin  # no thread leaked a cwd change

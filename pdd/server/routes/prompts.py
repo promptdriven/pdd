@@ -348,18 +348,25 @@ async def analyze_prompt(
             try:
                 # Import here to avoid circular imports
                 from pdd.preprocess import preprocess
+                # Share the context-audit core's cwd/env lock: /analyze and the
+                # context-audit endpoint both resolve includes by changing cwd and
+                # run together in connect's debounced cycle, so serialize them so
+                # concurrent requests cannot cross-contaminate include resolution
+                # (PR #1387 review #3).
+                from pdd.context_audit import cwd_env_lock
 
                 # Change to project root for relative includes to work
-                original_cwd = os.getcwd()
-                try:
-                    os.chdir(validator.project_root)
-                    processed_content = preprocess(
-                        raw_content,
-                        recursive=True,
-                        double_curly_brackets=True
-                    )
-                finally:
-                    os.chdir(original_cwd)
+                with cwd_env_lock():
+                    original_cwd = os.getcwd()
+                    try:
+                        os.chdir(validator.project_root)
+                        processed_content = preprocess(
+                            raw_content,
+                            recursive=True,
+                            double_curly_brackets=True
+                        )
+                    finally:
+                        os.chdir(original_cwd)
 
                 processed_metrics_obj = get_token_metrics(
                     processed_content,
@@ -449,14 +456,17 @@ async def context_audit(
             if abs_path.is_dir():
                 raise HTTPException(status_code=400, detail=f"Cannot audit directory: {request.path}")
 
-            # Resolve includes relative to the project root exactly as the CLI does
-            # when run from there, so the audit rows match the CLI's answer.
-            original_cwd = os.getcwd()
-            try:
-                os.chdir(validator.project_root)
-                audit = audit_prompt_file(str(abs_path), model=request.model)
-            finally:
-                os.chdir(original_cwd)
+            # Resolve includes relative to the project root exactly as the CLI
+            # does when run from there, so the audit rows match the CLI's answer.
+            # Pass base_dir instead of changing cwd in the route: the shared core
+            # performs (and serializes) the cwd change under its lock, so
+            # concurrent connect audits never cross-contaminate include
+            # resolution (PR #1387 review #3).
+            audit = audit_prompt_file(
+                str(abs_path),
+                model=request.model,
+                base_dir=str(validator.project_root),
+            )
 
         return ContextAuditResponse(
             total_tokens=audit.total_tokens,
