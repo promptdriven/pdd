@@ -118,3 +118,25 @@ def test_removing_or_changing_a_default_is_a_regression(old_entry, new_entry):
 )
 def test_union_parameter_compatibility(old_entry, new_entry, compatible):
     assert signature_entries_compatible(old_entry, new_entry) is compatible
+
+
+@pytest.mark.parametrize(
+    ("old_entry", "new_entry", "compatible"),
+    [
+        # Inserting a defaulted positional parameter in front of an existing
+        # *args rebinds existing positional calls: f(1, 2) used to land the 2
+        # in *args, but now binds it to the new parameter -> regression.
+        ("[function] (a, *args)", "[function] (a, b=0, *args)", False),
+        ("[function] (*args)", "[function] (b=0, *args)", False),
+        # A keyword-only parameter added after *args cannot intercept a
+        # positional slot, so it stays compatible.
+        ("[function] (a, *args)", "[function] (a, *args, b=0)", True),
+        # With no *args to steal a positional from, adding a defaulted
+        # positional parameter is a backward-compatible widening.
+        ("[function] (a)", "[function] (a, b=0)", True),
+    ],
+)
+def test_new_positional_before_varargs_is_a_regression(
+    old_entry, new_entry, compatible
+):
+    assert signature_entries_compatible(old_entry, new_entry) is compatible

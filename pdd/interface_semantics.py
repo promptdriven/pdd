@@ -266,12 +266,21 @@ def callable_contracts_compatible(
         for param in old.params
         if param.kind not in {"vararg", "kwarg"}
     }
+    old_has_vararg = any(param.kind == "vararg" for param in old.params)
     for new_param in new.params:
         if new_param.kind in {"vararg", "kwarg"}:
             continue
         if new_param.name in old_names:
             continue
         if new_param.required:
+            return False
+        # A new positional-capable parameter is a regression when the old
+        # signature had ``*args``: a positional argument that previously landed
+        # in ``*args`` now binds to this parameter instead -- ``def f(a, *args)``
+        # -> ``def f(a, b=0, *args)`` rebinds the second positional of
+        # ``f(1, 2)`` from ``args`` to ``b``.  Keyword-only additions after
+        # ``*args`` do not intercept positional slots and remain allowed.
+        if old_has_vararg and new_param.positional_capable:
             return False
     return True
 

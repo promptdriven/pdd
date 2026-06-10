@@ -2,7 +2,7 @@
 Example demonstrating how to use the code_generator_main module.
 
 This script sets up a mock environment containing a prompt file and then calls
-`code_generator_main` to generate code, simulating both full generation and 
+`code_generator_main` to generate code, simulating both full generation and
 architectural conformance checks.
 """
 

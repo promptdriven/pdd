@@ -12,12 +12,12 @@ from pdd.architecture_sync import (
 
 def run_example() -> None:
     """
-    A complete, runnable example demonstrating how to use the architecture_sync module 
+    A complete, runnable example demonstrating how to use the architecture_sync module
     to extract PDD metadata tags from prompt files and sync them into architecture.json.
-    
+
     Inputs:
         None (creates mock directories and files in './output' for illustration)
-        
+
     Outputs:
         Prints sync actions, extracted metadata, and validation results to the console.
     """

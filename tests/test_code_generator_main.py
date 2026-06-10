@@ -5589,6 +5589,37 @@ class TestSyncCompatibilityGates:
         assert excinfo.value.removed_symbols == ["calculate_sha256"]
         assert "- calculate_sha256" in excinfo.value.repair_directive
 
+    def test_public_surface_regression_catches_new_positional_before_varargs(self):
+        """Inserting a defaulted positional parameter in front of an existing
+        ``*args`` rebinds existing positional calls: ``process(h, 2)`` used to
+        put ``2`` in ``*args`` but now binds it to ``retries``. This MUST surface
+        as a signature regression, not be treated as a compatible widening."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "def process(handler, *args):\n"
+            "    return handler\n"
+        )
+        after = (
+            "def process(handler, retries=0, *args):\n"
+            "    return handler\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Add retries handling.",
+            )
+
+        assert excinfo.value.changed_signatures == ["process"]
+
     def test_public_surface_regression_catches_removed_import(self):
         """Removing an ``import`` re-export is a real downstream-breaking
         change — issue #1012's user-cited regression was specifically the
