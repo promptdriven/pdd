@@ -279,6 +279,35 @@ class TestArtifacts:
         assert arts == {}
         assert not (tmp_path / ".pdd" / "checkup").exists()
 
+    def test_patch_preview_renders_vocabulary_stub(self):
+        from pdd.checkup_report import render_patch_preview
+
+        fs = [
+            _finding("a", code="VAGUE_TERM_UNDEFINED", msg='Vague term "active" used'),
+            _finding("b", code="VAGUE_TERM_UNDEFINED", msg='Vague term "valid" used'),
+            _finding("a", code="VAGUE_TERM_UNDEFINED", msg='Vague term "active" used'),
+        ]
+        groups = group_findings(fs)
+        text = render_patch_preview(
+            [self._patch("a"), self._patch("b")], target="p", groups=groups
+        )
+        # actionable stub with the real, de-duplicated terms
+        assert "<vocabulary>" in text
+        assert '<term name="active">' in text
+        assert '<term name="valid">' in text
+        # "active" appears twice in findings but only once in the stub
+        assert text.count('<term name="active">') == 1
+        # per-finding details retained, but no longer mislabeled as a "replacement"
+        assert "per-finding details" in text
+        assert "recommended action:" in text
+
+    def test_patch_preview_without_groups_still_lists_patches(self):
+        from pdd.checkup_report import render_patch_preview
+
+        text = render_patch_preview([self._patch("a")], target="p")
+        assert "Patch 1" in text
+        assert "<vocabulary>" not in text  # no stub without vague-term groups
+
 
 # ---------------------------------------------------------------------------
 # Agent integration — skip reasons, review mode, verification
