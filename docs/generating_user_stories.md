@@ -55,7 +55,7 @@ flowchart TD
     B --> C["story__slug.md<br/>(human-verified Story)"]
     B --> D["contracts/slug.contract.md<br/>(generated)"]
     C --> E{"Human review:<br/>is this the behavior I want?"}
-    E -- edit Story --> F["pdd sync regenerates<br/>contract to re-align"]
+    E -- edit Story --> F["sync_user_story_contract()<br/>re-aligns the contract"]
     F --> E
     E -- approved --> G["pdd detect --stories<br/>(validate vs linked prompts)"]
     G -- fails --> H["pdd fix story__slug.md<br/>(apply story to prompts)"]
@@ -149,19 +149,34 @@ Open `user_stories/story__<slug>.md` and read the single sentence. This is the
 If the Story is right, you are done verifying — **trust the Story, let the
 tooling own the contract.** Skim the contract only as a reviewer; do not edit it.
 
-## Step 4 — Edit and re-sync (when the Story is wrong)
+## Step 4 — Edit and re-align the contract (when the Story is wrong)
 
-If the Story sentence is wrong, **edit the human Story file directly** and
-regenerate the contract so the two stay aligned:
+If the Story sentence is wrong, **edit the human Story file directly**, then
+regenerate the contract so the two stay aligned. Realignment is driven by
+`sync_user_story_contract()` in `pdd/user_story_tests.py`: it hashes the human
+Story, and when that hash differs from the contract header's `story-hash` it
+regenerates the contract from the edited Story plus the issue recorded in the
+header (`issue-ref="..."`). An unchanged Story is a no-op.
 
-```bash
-# After hand-editing user_stories/story__<slug>.md, regenerate its contract
-pdd sync user_stories/story__<slug>.md
-```
-
-The contract is re-derived from your edited Story plus the issue recorded in the
-contract header (`issue-ref="..."`), and the `story-hash` is updated. If no issue
-reference is recorded, re-run the Step 2 command with `--issue` to re-anchor it.
+> **Heads-up — no dedicated CLI command yet.** On this branch the realignment
+> step is exposed as a **library function**, not a `pdd` subcommand. (`pdd sync`
+> handles code/test/example/contract sync for prompts, not user-story
+> contracts.) Call it programmatically:
+>
+> ```python
+> from pdd.user_story_tests import sync_user_story_contract
+>
+> changed, msg, cost, model, contract_path = sync_user_story_contract(
+>     "user_stories/story__<slug>.md",
+>     # issue=... only needed if the contract has no issue-ref header yet
+> )
+> ```
+>
+> If no issue reference is recorded in the contract header, pass `issue=` (or
+> re-run the Step 2 command with `--issue` to re-anchor it). Wiring this into a
+> first-class CLI command is part of the user-story overhaul; until then prefer
+> the library call or the end-to-end story workflow in
+> `scripts/e2e_story_workflow_demo.py`.
 
 Never close the loop by editing the contract — your edits will be regenerated
 away. The Story is the source of truth; the contract follows it.
@@ -306,10 +321,10 @@ coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
 | Goal | Command |
 | --- | --- |
 | Generate a story + contract from an issue | `pdd test --issue <url\|number\|file> prompts/<module>_<lang>.prompt` |
-| Regenerate a contract after editing the Story | `pdd sync user_stories/story__<slug>.md` |
 | Refresh prompt-link metadata only | `pdd test user_stories/story__<slug>.md` |
 | Validate all stories against their prompts | `pdd detect --stories` |
 | Apply a story back to its prompts | `pdd fix user_stories/story__<slug>.md` |
+| Re-align a contract after editing the Story | `sync_user_story_contract(...)` (library function — no CLI yet; see Step 4) |
 
 ## See also
 
