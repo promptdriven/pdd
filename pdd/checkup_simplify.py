@@ -394,6 +394,8 @@ def _mypy_scoped_command(command: str, rel_paths: Sequence[str]) -> str:
     flags = [token for token in parts[1:] if token.startswith("-")]
     if "--follow-imports=skip" not in flags:
         flags.append("--follow-imports=skip")
+    if "--ignore-missing-imports" not in flags:
+        flags.append("--ignore-missing-imports")
     flag_text = " ".join(shlex.quote(flag) for flag in flags)
     path_text = " ".join(shlex.quote(path) for path in rel_paths)
     return f"mypy {flag_text} {path_text}".strip()

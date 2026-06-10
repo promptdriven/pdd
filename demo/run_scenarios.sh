@@ -6,6 +6,11 @@
 set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${PYTHON:-}" && -x "$REPO_ROOT/.venv/bin/python" ]]; then
+  PYTHON="$REPO_ROOT/.venv/bin/python"
+else
+  PYTHON="${PYTHON:-python}"
+fi
 PASS=0
 FAIL=0
 
@@ -33,12 +38,13 @@ check_output() {
 
 run_cmd() {
   # run_cmd CMD... — captures combined stdout+stderr into $CMD_OUT, exit code into $CMD_EXIT
-  CMD_OUT=$(python -m pdd "$@" 2>&1) && CMD_EXIT=0 || CMD_EXIT=$?
+  CMD_OUT=$("$PYTHON" -m pdd "$@" 2>&1) && CMD_EXIT=0 || CMD_EXIT=$?
 }
 
 cd "$REPO_ROOT"
 echo "=== Interactive Checkup Demo Scenarios (non-TTY) ==="
 echo "Working directory: $REPO_ROOT"
+echo "Python: $PYTHON"
 echo
 
 # ---------------------------------------------------------------------------
@@ -52,7 +58,7 @@ check_exit "A1 exit code" 2 "$CMD_EXIT"
 check_output "A1 error: requires --interactive" "requires --interactive" "$CMD_OUT"
 
 # A2: --interactive without TTY fires TTY guard
-CMD_OUT=$(python -m pdd checkup demo/prompts/prompt_lint_python.prompt --interactive < /dev/null 2>&1) && CMD_EXIT=0 || CMD_EXIT=$?
+CMD_OUT=$("$PYTHON" -m pdd checkup demo/prompts/prompt_lint_python.prompt --interactive < /dev/null 2>&1) && CMD_EXIT=0 || CMD_EXIT=$?
 check_exit "A2 exit code" 2 "$CMD_EXIT"
 check_output "A2 error: requires a TTY" "requires a TTY" "$CMD_OUT"
 
@@ -69,7 +75,7 @@ echo
 echo "--- Scenario B: fix_main_python ---"
 
 # B1: --interactive without TTY on a different prompt
-CMD_OUT=$(python -m pdd checkup demo/prompts/fix_main_python.prompt --interactive < /dev/null 2>&1) && CMD_EXIT=0 || CMD_EXIT=$?
+CMD_OUT=$("$PYTHON" -m pdd checkup demo/prompts/fix_main_python.prompt --interactive < /dev/null 2>&1) && CMD_EXIT=0 || CMD_EXIT=$?
 check_exit "B1 exit code" 2 "$CMD_EXIT"
 check_output "B1 error: requires a TTY" "requires a TTY" "$CMD_OUT"
 
@@ -81,7 +87,7 @@ echo
 echo "--- Scenario C: agentic_change_python ---"
 
 # C1: --explain --json includes requires_clarification in every finding
-CMD_OUT=$(python -m pdd checkup demo/prompts/agentic_change_python.prompt --explain --json 2>/dev/null) && CMD_EXIT=0 || CMD_EXIT=$?
+CMD_OUT=$("$PYTHON" -m pdd checkup demo/prompts/agentic_change_python.prompt --explain --json 2>/dev/null) && CMD_EXIT=0 || CMD_EXIT=$?
 check_output "C1 requires_clarification field present" "requires_clarification" "$CMD_OUT"
 check_output "C1 findings array present" '"findings"' "$CMD_OUT"
 check_output "C1 snapshot finding detected" "snapshot_policy" "$CMD_OUT"
