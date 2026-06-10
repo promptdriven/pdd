@@ -412,11 +412,15 @@ def _forward_subcommand_json(
     ),
 )
 @click.option(
+    "--dry-run",
     "--preview",
     "dry_run",
     is_flag=True,
     default=False,
-    help="With --apply: preview the changes without writing any files.",
+    help=(
+        "With --apply: preview the changes without writing any files. "
+        "--preview is kept as a compatibility alias."
+    ),
 )
 @click.option(
     "--planner",
@@ -782,21 +786,13 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         _repair_active = _effective_repair not in (None, "off")
         _machine_output = as_json or explain
 
-        # The agentic review UX is the DEFAULT for prompt targets — grouped
-        # findings, skip reasons, a pass/warn/block decision, and saved
-        # artifacts — with no extra flags required. --interactive / --planner /
-        # --auto select the interactive and auto variants. The structured path
-        # below is kept only for machine output (--json/--explain) and for the
-        # LLM prompt-repair loop when it is enabled.
+        # Agentic checkup is opt-in for prompt targets. Bare
+        # `pdd checkup <prompt>` stays on the structured source-set path so the
+        # issue #1423 interactive repair flow only runs after explicit intent.
         _single_prompt_file = target_kind == CheckupTargetKind.PROMPT_FILE
         _agent_requested = (
             _single_prompt_file
-            and (
-                interactive
-                or planner is not None
-                or auto_mode
-                or not (_machine_output or _repair_active)
-            )
+            and (interactive or planner is not None or auto_mode)
         ) and not _machine_output
         if _agent_requested:
             from ..checkup_agent import (  # pylint: disable=import-outside-toplevel

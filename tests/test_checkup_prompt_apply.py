@@ -62,6 +62,8 @@ def test_validate_patch_accepts_prompt_and_story(tmp_path: Path) -> None:
         ("prompts/secret_LLM.prompt", "vocab_definition", "_LLM.prompt"),
         ("README.md", "vocab_definition", "must be"),
         ("prompts/test_python.prompt", "repair_candidate", "allowlisted"),
+        ("pdd/commands/checkup.py", "vocab_definition", "not writable"),
+        ("pdd/checkup_prompt_main.py", "vocab_definition", "not writable"),
     ],
 )
 def test_validate_patch_rejects_invalid_targets(
@@ -77,6 +79,17 @@ def test_validate_patch_rejects_invalid_targets(
 
     with pytest.raises(ValueError, match=message):
         _validate_patch(_patch(kind=kind, target=target), tmp_path)
+
+
+def test_validate_patch_allows_packaged_prompt_sources(tmp_path: Path) -> None:
+    prompt = _write_prompt(tmp_path, "pdd/prompts/example_python.prompt")
+
+    resolved = _validate_patch(
+        _patch(target="pdd/prompts/example_python.prompt"),
+        tmp_path,
+    )
+
+    assert resolved == prompt
 
 
 def test_dry_run_writes_no_bytes_and_still_logs(tmp_path: Path) -> None:
@@ -131,8 +144,16 @@ def test_apply_rejects_invalid_patch_kind_in_log(tmp_path: Path) -> None:
     )
 
     assert result.findings[0].status == "rejected"
+    assert result.findings[0].reason
+    assert result.exit_code != 0
+    assert result.postflight_status != "pass"
     assert prompt.read_text(encoding="utf-8") == "unchanged\n"
     assert result.backup_root is None
+    assert result.log_path is not None
+    payload = json.loads(result.log_path.read_text(encoding="utf-8"))
+    assert payload["postflight_status"] == "rejected"
+    assert payload["findings"][0]["status"] == "rejected"
+    assert payload["findings"][0]["reason"]
 
 
 def test_postflight_failure_propagates_exit_code(tmp_path: Path) -> None:

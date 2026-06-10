@@ -1,0 +1,50 @@
+<pdd-reason>Agentic checkup session runner for explicitly requested prompt review, interactive, and auto modes.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {"name": "AgentEvent", "kind": "dataclass"},
+      {"name": "CheckupSession", "kind": "class"},
+      {"name": "TerminalCheckupSession", "kind": "class"},
+      {"name": "RecordingCheckupSession", "kind": "class"},
+      {"name": "CheckupAgent", "kind": "class"}
+    ],
+    "constants": [
+      {"name": "MODE_REVIEW", "value": "review"},
+      {"name": "MODE_INTERACTIVE", "value": "interactive"},
+      {"name": "MODE_AUTO", "value": "auto"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>checkup_interactive_main_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_planner_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_report_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_tools_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_prompt_main_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/checkup_agent.py`.
+
+% Requirements
+- Execute prompt checkup only when explicitly selected by CLI flags such as `--interactive`, `--auto`, or `--planner`.
+- Support review, interactive, and auto modes without making bare `pdd checkup <prompt>` agentic by default.
+- Terminal interactive mode MUST expose Option A, Option B, keep current / skip, custom fix, rationale/details, and question affordances.
+- Low-risk repairs may be queued or applied when `--apply` is set; medium-risk repairs are saved for review; high-risk findings remain manual TODOs.
+- When applying patches, use `checkup_interactive_main.apply_approved_patches` and respect non-zero applicator results.
+- Emit truthful accounting and blocking decisions; never claim success when unresolved strict failures remain.
+
+<contract_rules>
+R1 - Opt-in agentic path
+Bare `pdd checkup <prompt>` MUST NOT instantiate or run `CheckupAgent`.
+
+R2 - Interactive UX options
+Interactive terminal prompts MUST include Option A, Option B, keep current / skip, custom fix, and rationale/details affordances.
+
+R3 - Risk gating
+High-risk findings MUST NOT be auto-applied; medium-risk findings MUST be saved for review rather than applied automatically.
+</contract_rules>
+
+% Deliverables
+- Code: `pdd/checkup_agent.py`

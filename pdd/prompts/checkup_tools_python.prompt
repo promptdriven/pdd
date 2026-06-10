@@ -1,0 +1,32 @@
+<pdd-reason>Adapter layer from unified prompt source-set reports to named agentic checkup tools.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {"name": "ToolResult", "kind": "dataclass"},
+      {"name": "CheckupTool", "kind": "dataclass"}
+    ],
+    "constants": [
+      {"name": "ALL_TOOLS", "kind": "dict"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>checkup_prompt_main_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/checkup_tools.py`.
+
+% Requirements
+- Expose deterministic tool adapters for lint, contract, coverage, gate, snapshot, and drift checks represented in `PromptSourceSetReport`.
+- Tool extraction MUST reuse the already-built report; it must not rerun LLMs or mutate files.
+- Tool results include status, skip reason where relevant, and the findings belonging to the tool.
+
+<contract_rules>
+R1 - Report adapter only
+Tool extraction MUST be a read-only projection of `PromptSourceSetReport`.
+</contract_rules>
+
+% Deliverables
+- Code: `pdd/checkup_tools.py`

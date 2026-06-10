@@ -43,15 +43,19 @@ class ApplyFindingRecord:
     patch_kind: str
     target_path: str
     status: str
+    reason: str = ""
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        payload = {
             "id": self.id,
             "choice": self.choice,
             "patch_kind": self.patch_kind,
             "target_path": self.target_path,
             "status": self.status,
         }
+        if self.reason:
+            payload["reason"] = self.reason
+        return payload
 
 
 @dataclass
@@ -108,6 +112,12 @@ def _validate_patch(patch: ApprovedPatch, repo_root: Path) -> Path:
         raise ValueError("path traversal is not allowed")
 
     for prefix in _FORBIDDEN_REL_PREFIXES:
+        if (
+            prefix == "pdd/"
+            and rel.parts[:2] == ("pdd", "prompts")
+            and rel.suffix.lower() == ".prompt"
+        ):
+            continue
         if rel_posix == prefix.rstrip("/") or rel_posix.startswith(prefix):
             raise ValueError(f"patch target {rel_posix!r} is not writable")
 
@@ -216,6 +226,7 @@ def apply_approved_patches(
     records: list[ApplyFindingRecord] = []
     backup_root: Path | None = None
     applied_any = False
+    rejected_any = False
 
     for patch in patches:
         finding_id = patch.finding_id or str(patch.anchor.get("finding_id", ""))
@@ -223,7 +234,8 @@ def apply_approved_patches(
         try:
             target_path = _validate_patch(patch, repo_root)
             rel_target = _relative_posix_path(target_path, repo_root)
-        except ValueError:
+        except ValueError as exc:
+            rejected_any = True
             records.append(
                 ApplyFindingRecord(
                     id=finding_id,
@@ -231,6 +243,7 @@ def apply_approved_patches(
                     patch_kind=patch.kind,
                     target_path=str(patch.target),
                     status="rejected",
+                    reason=str(exc),
                 )
             )
             continue
@@ -265,6 +278,9 @@ def apply_approved_patches(
 
     postflight_status = "pass"
     exit_code = 0
+    if rejected_any:
+        postflight_status = "rejected"
+        exit_code = 2
     if not dry_run and applied_any:
         try:
             passed, _message, _cost, _model, exit_code = run_checkup_prompt(
@@ -281,6 +297,9 @@ def apply_approved_patches(
                 postflight_status = "fail"
         except Exception:  # pylint: disable=broad-except
             postflight_status = "error"
+            exit_code = 2
+        if rejected_any and postflight_status == "pass":
+            postflight_status = "rejected"
             exit_code = 2
 
     log_path: Path | None = None
