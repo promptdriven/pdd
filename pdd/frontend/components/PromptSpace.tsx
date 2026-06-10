@@ -9,7 +9,7 @@ import { javascript } from '@codemirror/lang-javascript';
 import { java } from '@codemirror/lang-java';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { marked, Marked } from 'marked';
-import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics, RunResult } from '../api';
+import { api, PromptInfo, PromptAnalyzeResponse, ContextAuditResponse, TokenMetrics, RunResult } from '../api';
 import { CommandType, CommandConfig, CommandOption, GlobalOption } from '../types';
 import { COMMANDS, GLOBAL_OPTIONS, GLOBAL_DEFAULTS } from '../constants';
 import type { GlobalDefaults } from '../types';
@@ -484,6 +484,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   // Token metrics and view mode state
   const [viewMode, setViewMode] = useState<'raw' | 'processed'>('raw');
   const [analysisResult, setAnalysisResult] = useState<PromptAnalyzeResponse | null>(null);
+  const [contextAudit, setContextAudit] = useState<ContextAuditResponse | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
@@ -704,13 +705,28 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
         // Use selected model for cost estimation, fallback to Claude Sonnet
         const modelForAnalysis = selectedModel?.model || 'claude-sonnet-4-20250514';
 
-        const result = await api.analyzePrompt({
-          path: prompt.prompt,
-          model: modelForAnalysis,
-          preprocess: true,
-          content: currentContent,  // Send current content instead of reading from file
-        });
+        // Aggregate metrics and the per-source context audit run from the SAME
+        // debounced flow and pass the SAME unsaved editor content, so the
+        // breakdown never disagrees with the visible buffer or the token totals.
+        const [result, audit] = await Promise.all([
+          api.analyzePrompt({
+            path: prompt.prompt,
+            model: modelForAnalysis,
+            preprocess: true,
+            content: currentContent,  // Send current content instead of reading from file
+          }),
+          api.contextAudit({
+            path: prompt.prompt,
+            model: modelForAnalysis,
+            content: currentContent,  // Audit the same unsaved content
+          }).catch((e: any) => {
+            // Per-source breakdown is optional; keep aggregate metrics on failure.
+            console.error('Failed to audit prompt context:', e);
+            return null;
+          }),
+        ]);
         setAnalysisResult(result);
+        setContextAudit(audit);
       } catch (e: any) {
         console.error('Failed to analyze prompt:', e);
         // Don't show error to user, just log it - metrics are optional
@@ -1639,6 +1655,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
               <PromptMetricsBar
                 rawMetrics={analysisResult?.raw_metrics || null}
                 processedMetrics={analysisResult?.processed_metrics || null}
+                contextAudit={contextAudit}
                 viewMode={viewMode}
                 onViewModeChange={handleViewModeChange}
                 isLoading={isAnalyzing}

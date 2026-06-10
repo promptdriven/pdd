@@ -174,6 +174,7 @@ export interface ContextAuditRequest {
   path: string;
   model?: string;
   threshold?: number;       // budget percent; 0 disables
+  content?: string;         // audit unsaved editor content instead of the file on disk
 }
 
 export interface ContextAuditResponse {

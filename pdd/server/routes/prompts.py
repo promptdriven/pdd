@@ -80,6 +80,12 @@ class ContextAuditRequest(BaseModel):
     path: str = Field(..., description="Path to prompt file (relative to project root)")
     model: str = Field("claude-sonnet-4-20250514", description="Model used for context-limit lookup")
     threshold: int = Field(80, ge=0, le=100, description="Budget threshold percent; 0 disables")
+    content: Optional[str] = Field(
+        None,
+        description="Optional prompt content to audit instead of reading from disk "
+        "(so connect reflects unsaved editor edits); includes still resolve "
+        "relative to path's project root",
+    )
 
 
 class ContextAuditResponse(BaseModel):
@@ -409,25 +415,48 @@ async def context_audit(
     ``pdd context`` CLI uses — so the API and CLI never drift (PR #1387).
     """
     try:
+        # Always validate path for project scope / base-dir semantics, even when
+        # auditing override content — includes still resolve from its project root.
         abs_path = validator.validate(request.path)
-
-        if not abs_path.exists():
-            raise HTTPException(status_code=404, detail=f"File not found: {request.path}")
-        if abs_path.is_dir():
-            raise HTTPException(status_code=400, detail=f"Cannot audit directory: {request.path}")
 
         # Imported here (matching this module's circular-import convention) and
         # never via pdd.commands.* — the CLI and this endpoint share ONE core.
-        from pdd.context_audit import audit_prompt_file, row_percent, threshold_exceeded
+        from pdd.context_audit import (
+            audit_prompt_file,
+            audit_prompt_text,
+            row_percent,
+            threshold_exceeded,
+        )
 
-        # Resolve includes relative to the project root exactly as the CLI does
-        # when run from there, so the audit rows match the CLI's answer.
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(validator.project_root)
-            audit = audit_prompt_file(str(abs_path), model=request.model)
-        finally:
-            os.chdir(original_cwd)
+        if request.content is not None:
+            # Audit the editor's unsaved content (matches /analyze's override
+            # behavior), so connect metrics agree with the visible buffer.
+            if len(request.content.encode("utf-8")) > 500 * 1024:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Content too large for audit (max 500KB)",
+                )
+            # Resolve relative includes from the project root, mirroring a CLI
+            # run from there, so override and on-disk audits use one base dir.
+            audit = audit_prompt_text(
+                request.content,
+                model=request.model,
+                base_dir=str(validator.project_root),
+            )
+        else:
+            if not abs_path.exists():
+                raise HTTPException(status_code=404, detail=f"File not found: {request.path}")
+            if abs_path.is_dir():
+                raise HTTPException(status_code=400, detail=f"Cannot audit directory: {request.path}")
+
+            # Resolve includes relative to the project root exactly as the CLI does
+            # when run from there, so the audit rows match the CLI's answer.
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(validator.project_root)
+                audit = audit_prompt_file(str(abs_path), model=request.model)
+            finally:
+                os.chdir(original_cwd)
 
         return ContextAuditResponse(
             total_tokens=audit.total_tokens,

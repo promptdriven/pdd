@@ -145,6 +145,18 @@ def prompts_test_env():
             percent_used=0.7, rows=_audit_rows, warnings=["a deferred warning"],
         )
     )
+    # Content-override path (unsaved editor edits): a distinct return so a test
+    # can prove the audit is based on the provided content, not the file on disk.
+    mock_context_audit.audit_prompt_text = MagicMock(
+        return_value=types.SimpleNamespace(
+            model="gpt-4o", total_tokens=99, context_limit=1000,
+            percent_used=9.9, rows=[
+                types.SimpleNamespace(
+                    source="prompt_body", tokens=99, status="body", note=None,
+                ),
+            ], warnings=[],
+        )
+    )
     mock_context_audit.row_percent = (
         lambda r, total: round(r.tokens / total * 100, 1) if total else 0.0
     )
@@ -372,6 +384,77 @@ async def test_context_audit_success(setup_validator, tmp_path):
     assert response.warnings == ["a deferred warning"]
     # The shared core was used (not pdd.commands.context).
     prompts_test_env['mock_context_audit'].audit_prompt_file.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_context_audit_uses_override_content(setup_validator, tmp_path):
+    """When `content` is provided (unsaved editor edits), the audit is based on
+    that content via the shared `audit_prompt_text` core — not the file on disk —
+    so connect metrics agree with the visible buffer (PR #1387 review item 2)."""
+    prompts_test_env, mock_validator = setup_validator
+    context_audit = prompts_test_env['context_audit']
+    ContextAuditRequest = prompts_test_env['ContextAuditRequest']
+    mock_core = prompts_test_env['mock_context_audit']
+
+    prompt = tmp_path / "p.prompt"
+    prompt.write_text("On-disk body that must NOT be audited")
+    mock_validator.validate.return_value = prompt
+    mock_validator.project_root = tmp_path
+
+    request = ContextAuditRequest(
+        path=str(prompt), model="gpt-4o", threshold=80,
+        content="Unsaved editor body\n<include>context/a.txt</include>",
+    )
+    response = await context_audit(request, validator=mock_validator)
+
+    # The override core was used; the file-reading core was not.
+    mock_core.audit_prompt_text.assert_called_once()
+    mock_core.audit_prompt_file.assert_not_called()
+    # The audit reflects the provided content (total_tokens=99), not the file.
+    assert response.total_tokens == 99
+    # The override content was passed through, and includes resolve from the
+    # project root (base_dir) so override and on-disk audits share one base dir.
+    call = mock_core.audit_prompt_text.call_args
+    assert call.args[0] == request.content
+    assert call.kwargs.get("base_dir") == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_context_audit_override_content_too_large(setup_validator, tmp_path):
+    """Override content over the 500KB cap is a 400, matching /analyze."""
+    prompts_test_env, mock_validator = setup_validator
+    context_audit = prompts_test_env['context_audit']
+    ContextAuditRequest = prompts_test_env['ContextAuditRequest']
+
+    prompt = tmp_path / "p.prompt"
+    prompt.write_text("Body")
+    mock_validator.validate.return_value = prompt
+    mock_validator.project_root = tmp_path
+
+    request = ContextAuditRequest(
+        path=str(prompt), model="gpt-4o", content="x" * (500 * 1024 + 1),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await context_audit(request, validator=mock_validator)
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_context_audit_override_content_skips_disk(setup_validator, tmp_path):
+    """With override content, a missing/absent file path is NOT a 404 — the audit
+    never touches disk, so the editor can audit a never-saved prompt."""
+    prompts_test_env, mock_validator = setup_validator
+    context_audit = prompts_test_env['context_audit']
+    ContextAuditRequest = prompts_test_env['ContextAuditRequest']
+
+    mock_validator.validate.return_value = tmp_path / "never_saved.prompt"
+    mock_validator.project_root = tmp_path
+
+    request = ContextAuditRequest(
+        path="never_saved.prompt", model="gpt-4o", content="Just-typed body",
+    )
+    response = await context_audit(request, validator=mock_validator)
+    assert response.total_tokens == 99  # audited the override content
 
 
 @pytest.mark.asyncio

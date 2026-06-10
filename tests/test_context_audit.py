@@ -84,6 +84,27 @@ def _facts_endpoint(prompt, project_root):
     )
 
 
+def _facts_endpoint_content(prompt, project_root, content):
+    """Audit facts from the endpoint's override-content path (unsaved edits)."""
+    validator = MagicMock()
+    validator.project_root = project_root
+    validator.validate.return_value = prompt
+    response = asyncio.run(
+        context_audit_endpoint(
+            ContextAuditRequest(
+                path=str(prompt), model="gpt-4o", threshold=80, content=content,
+            ),
+            validator=validator,
+        )
+    )
+    rows = [{"source": r.source, "tokens": r.tokens, "status": r.status, "note": r.note}
+            for r in response.rows]
+    return _norm(
+        response.total_tokens, response.context_limit, response.percent_used,
+        response.model, rows, response.warnings,
+    )
+
+
 def _assert_all_agree(prompt, project_root):
     cli = _facts_cli(prompt)
     core = _facts_core(prompt)
@@ -131,3 +152,36 @@ def test_parity_deferred_dynamic_tag(tmp_path, monkeypatch, patched_core):
     statuses = [status for _, _, status, _ in facts["rows"]]
     assert "deferred" in statuses
     assert any("query_include" in w and "deferred" in w for w in facts["warnings"])
+
+
+def test_endpoint_override_content_audits_buffer_not_disk(tmp_path, monkeypatch, patched_core):
+    """The endpoint's `content` override (unsaved editor edits) audits the
+    provided buffer — not the file on disk — and resolves includes from the
+    project root, so connect agrees with the visible editor (PR #1387 review #2).
+    """
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "context").mkdir()
+    (tmp_path / "context" / "a.txt").write_text("alpha beta gamma", encoding="utf-8")
+
+    # The on-disk file and the unsaved editor buffer deliberately differ.
+    prompt = tmp_path / "p_python.prompt"
+    prompt.write_text("Stale on-disk body, no includes", encoding="utf-8")
+    buffer = "Just-typed body\n<include>context/a.txt</include>"
+
+    # Endpoint(content=buffer) must equal the core run on the buffer itself,
+    # and must NOT equal the audit of the stale file on disk.
+    from_buffer = _facts_endpoint_content(prompt, tmp_path, buffer)
+    core_buffer = _norm(
+        *(lambda a: (
+            a.total_tokens, a.context_limit, a.percent_used, a.model,
+            [{"source": r.source, "tokens": r.tokens, "status": r.status, "note": r.note}
+             for r in a.rows],
+            a.warnings,
+        ))(ca_module.audit_prompt_text(buffer, model="gpt-4o", base_dir=str(tmp_path)))
+    )
+    assert from_buffer == core_buffer
+    assert from_buffer != _facts_endpoint(prompt, tmp_path)  # not the disk file
+
+    # The include in the buffer resolved against the project root.
+    sources = {src: status for src, _, status, _ in from_buffer["rows"]}
+    assert sources.get("context/a.txt") == "resolved"

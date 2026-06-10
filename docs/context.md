@@ -107,6 +107,8 @@ The JSON mode writes only that JSON object to stdout, with no onboarding banner,
 
 The audit logic lives in a shared core, `pdd.context_audit` (`audit_prompt_file` / `audit_prompt_text` returning a structured `ContextAudit`). Both this CLI and the `pdd connect` server endpoint `POST /api/v1/prompts/context-audit` call that one core, so the scriptable CI surface and the interactive surface always return the same per-source facts — they cannot drift. The connect endpoint mirrors the `--json` shape (same rows, `status`, `warnings`, and `threshold_exceeded`) and preserves the existing `/api/v1/prompts/analyze` fields for compatibility.
 
+The connect prompt screen calls this endpoint from the same debounced flow as `/analyze`, so the per-source breakdown appears alongside the aggregate token metrics. Like `/analyze`, the request accepts an optional `content` field: when present, the audit runs on that buffer via `audit_prompt_text(content, model, base_dir=<project root>)` instead of reading the file from disk, so the breakdown reflects **unsaved editor edits** and never disagrees with the visible content. The `path` is still validated for project scope and is used as the include base directory. Override content over 500 KB is rejected with `400`, matching `/analyze`.
+
 ## Attribution semantics
 
 `pdd context` attributes includes from the same expansion path used to hydrate the prompt. `lines=`, `select=`, compression modes, and nested includes are counted by their realized content, not by re-reading the whole source file. Nested includes roll up into the top-level include that brought them in; independent top-level includes each get their own row even when their text overlaps.
