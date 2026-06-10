@@ -136,7 +136,7 @@ def fix_error_loop(
             runs up to max_attempts (subject to budget) without those early exits.
         no_local_fallback: When True, cloud failures raise instead of falling back to local LLM.
             Only meaningful when use_cloud=True. Default is False.
-        compress_test_context: When True, use AST-based slicing for failing tests.
+        compress_test_context: When True, rank and select tests under a configurable token budget using TestContextPacker (ranked by import-graph distance, symbol overlap, and recency). Failing tests are always packed first.
         context_compression: Global compression mode override.
         compression_fallback: Strategy for when a file cannot be compressed.
     """
@@ -182,7 +182,7 @@ def fix_error_loop(
     <include optional mode="interface">pdd/fix_focus.py</include>
 </fix_focus>
 <test_context_packer>
-    <include mode="interface">pdd/test_context_packer.py</include>
+    <include optional mode="interface">pdd/test_context_packer.py</include>
 </test_context_packer>
 
 ### Instructions

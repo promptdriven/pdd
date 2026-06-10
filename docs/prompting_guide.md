@@ -125,7 +125,7 @@ To manage large context windows and reduce costs, PDD supports automated context
 Users can enable compression via **global** CLI flags (before the subcommand), `.pddrc` defaults, or command-local flags on `pdd sync` / `pdd fix`:
 
 - **`--compress-examples`**: Automatically applies `mode="interface"` to all example files in the `<include>` graph. This extracts signatures and docstrings, replacing function bodies with `...`.
-- **`--compress-test-context`**: Uses AST-based slicing to include only failing tests and their necessary fixtures from the test context during `pdd fix` or `pdd test`.
+- **`--compress-test-context`**: Rank and select tests under a configurable token budget (`PDD_TEST_TOKEN_BUDGET`, default 2 000 tokens) using import-graph distance, symbol overlap, failure recency, and file recency. Failing tests (from `PDD_FAILING_TESTS` or `.pytest_cache`) are always included first. A `TestPackingManifest` explaining selected and omitted tests is emitted in run telemetry. See [Ranked Test Selection](#ranked-test-selection) below.
 - **`--context-compression {off,test,examples,contracts,all}`**: Enables one or more compression modes for the invocation.
 
 Place global flags before the subcommand, for example `pdd --context-compression test generate prompts/foo_python.prompt`. The `generate` and `preprocess` commands do **not** accept `--context-compression` after the subcommand; `sync` and `fix` may pass the same flags after their subcommand as well.

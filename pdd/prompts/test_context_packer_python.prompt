@@ -38,16 +38,13 @@ This module implements deterministic ranked test packing. It selects which test 
 3. **Failing-test priority lane**: Failing tests MUST be packed unconditionally before budget accounting begins. If a failing-test file exceeds the remaining budget, apply `PytestSlicer` to include only the failing test functions and their necessary fixtures rather than the whole file.
 4. **Four-signal composite scoring**: Score non-failing candidates by: import-graph BFS distance to module under change (weight 0.40, closer = higher score), symbol-reference overlap with the module's exported names (weight 0.30), failure recency from `.pytest_cache` or `PDD_FAILING_TESTS` (weight 0.20), file modification recency (weight 0.10). Normalise all signals to [0, 1] before weighting.
 5. **Greedy packing with marginal redundancy penalty**: Sort candidates by composite score descending. During the greedy pass, apply an AdaGReS-style marginal redundancy penalty (`marginal_gain = score − λ × max_similarity(candidate, already_selected)`) so near-duplicate coverage yields diminishing value without a separate pre-filter step. Pack until `budget_tokens` is exhausted.
-6. **Cross-file deduplication**: During the greedy pass, evaluate Jaccard similarity on test function name sets. Files exceeding `PDD_TEST_DEDUP_THRESHOLD` against any already-selected file yield their budget slot; record reason `"near-duplicate of <file>"` in the omitted manifest entry.
+6. **Cross-file deduplication**: During the greedy pass, evaluate Jaccard similarity on imported symbol sets from the module under change. Files exceeding `PDD_TEST_DEDUP_THRESHOLD` against any already-selected file yield their budget slot; record reason `"near-duplicate of <file>"` in the omitted manifest entry.
 7. **Token counting**: Use `pdd.server.token_counter.count_tokens()` when importable; fall back to `len(text) // 4` when the server module is not importable, to avoid circular imports in CLI-only contexts.
 8. **Import graph**: Build lazily on first call with stdlib `ast` (BFS over `Import`/`ImportFrom` nodes from the module under change), cached per module path within the packer instance. Assign distance `∞` to unreachable nodes. No new external dependencies.
 9. **Configuration**: Read `PDD_TEST_TOKEN_BUDGET` (int, default 2000), `PDD_TEST_RANKING_WEIGHTS` (JSON override for the four weights), and `PDD_TEST_DEDUP_THRESHOLD` (float, default 0.8) from environment at instantiation.
 10. **Graceful degradation**: Unparseable module → recency-only fallback, log warning. Missing `.pytest_cache` → skip failure-recency signal, log `unavailability_reason` in manifest. No test files → return empty manifest without error. `budget_tokens ≤ 0` → return empty manifest without error.
 
 ### Dependencies:
-<python_preamble>
-    <include>context/python_preamble.prompt</include>
-</python_preamble>
 <pytest_slicer>
     <include mode="interface">pdd/pytest_slicer.py</include>
 </pytest_slicer>

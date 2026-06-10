@@ -52,7 +52,7 @@ This internal helper prepares bounded context for sync phase executors. It owns 
   <include mode="interface">pdd/operation_log.py</include>
 </pdd.operation_log>
 <test_context_packer>
-  <include mode="interface">pdd/test_context_packer.py</include>
+  <include optional mode="interface">pdd/test_context_packer.py</include>
 </test_context_packer>
 
 % Extension Analysis
