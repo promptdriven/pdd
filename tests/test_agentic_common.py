@@ -453,6 +453,160 @@ def test_build_claude_interactive_command_bypasses_print_mode(tmp_path):
     assert "job-123" in cmd[-1]
 
 
+def test_claude_policy_capability_contract_declared_and_validated():
+    from pdd.agentic_common import (
+        AgenticUnsupportedSemanticsError,
+        get_agentic_capabilities,
+        validate_claude_policy,
+    )
+
+    caps = get_agentic_capabilities()
+    assert caps["claude_policy"]["schema_version"] == 1
+    assert caps["claude_policy"]["fields"] == {
+        "allowedTools": ["string", "null"],
+        "addDirs": "list[string]",
+        "noSessionPersistence": "boolean",
+        "outputFormat": ["json"],
+    }
+
+    normalized = validate_claude_policy({
+        "allowedTools": "Read,Glob",
+        "addDirs": ["/tmp/references"],
+        "noSessionPersistence": True,
+        "outputFormat": "json",
+    })
+    assert normalized == {
+        "allowedTools": "Read,Glob",
+        "addDirs": ["/tmp/references"],
+        "noSessionPersistence": True,
+        "outputFormat": "json",
+    }
+
+    with pytest.raises(AgenticUnsupportedSemanticsError):
+        validate_claude_policy({"allowedTools": "Read", "outputFormat": "text"})
+
+    with pytest.raises(AgenticUnsupportedSemanticsError):
+        validate_claude_policy({"allowedTools": ["Read"], "outputFormat": "json"})
+
+
+def test_run_agentic_task_forwards_claude_policy_to_provider(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which
+):
+    mock_shutil_which.return_value = "/bin/claude"
+    os.environ["ANTHROPIC_API_KEY"] = "key"
+    policy = {
+        "allowedTools": "Read",
+        "addDirs": [],
+        "noSessionPersistence": True,
+        "outputFormat": "json",
+    }
+
+    with patch(
+        "pdd.agentic_common._run_with_provider",
+        return_value=(True, "Done.", 0.05, "claude-opus-4-8", {"claude": []}),
+    ) as mock_provider:
+        result = run_agentic_task("Audit only", mock_cwd, claude_policy=policy)
+
+    assert result.success
+    assert mock_provider.call_args.kwargs["claude_policy"] == policy
+
+
+def test_anthropic_claude_policy_builds_read_glob_add_dirs_no_session_json_command(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy.txt"
+    prompt_path.write_text("Audit", encoding="utf-8")
+    extra_dir = mock_cwd / "references"
+    extra_dir.mkdir()
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Detailed audit output that is long enough.",
+        "total_cost_usd": 0.05,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    success, _msg, _cost, provider = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [str(extra_dir)],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert success
+    assert provider is None
+    cmd = mock_subprocess.call_args.args[0]
+    assert "--dangerously-skip-permissions" not in cmd
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Glob"
+    assert cmd[cmd.index("--add-dir") + 1] == str(extra_dir)
+    assert "--no-session-persistence" in cmd
+    assert cmd[cmd.index("--output-format") + 1] == "json"
+
+
+def test_anthropic_claude_policy_null_allowed_tools_uses_no_tools(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy.txt"
+    prompt_path.write_text("Extract metadata", encoding="utf-8")
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": '{"title":"ok"}',
+        "total_cost_usd": 0.05,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": None,
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    cmd = mock_subprocess.call_args.args[0]
+    assert "--dangerously-skip-permissions" not in cmd
+    assert "--allowedTools" not in cmd
+    assert cmd[cmd.index("--tools") + 1] == ""
+    assert "--no-session-persistence" in cmd
+
+
+def test_build_claude_interactive_command_applies_claude_policy(tmp_path):
+    extra_dir = tmp_path / "references"
+    extra_dir.mkdir()
+
+    cmd = _build_claude_interactive_command(
+        cli_path="/bin/claude",
+        prompt_path=tmp_path / ".agentic_prompt_test.txt",
+        config_path=tmp_path / "mcp_config.json",
+        job_id="job-123",
+        session_id="11111111-2222-4333-8444-555555555555",
+        env={},
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [str(extra_dir)],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert "--dangerously-skip-permissions" not in cmd
+    assert cmd[cmd.index("--allowedTools") + 1] == "Read,Glob,mcp__pdd__pdd_reply"
+    assert cmd[cmd.index("--add-dir") + 1] == str(extra_dir)
+    assert "--no-session-persistence" in cmd
+    assert "--output-format" not in cmd
+    assert "return JSON text through pdd_reply" in cmd[-1]
+
+
 def test_claude_interactive_detects_workspace_trust_prompt():
     trust_prompt = (
         "Quick safety check: Is this a project you created or one you trust?\n"
