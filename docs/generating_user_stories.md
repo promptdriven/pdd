@@ -115,9 +115,12 @@ What this does:
 4. **Links the prompts** by writing a `<!-- pdd-story-prompts: ... -->` metadata
    comment at the top of the Story file.
 
-The `<slug>` is derived from the prompt file names (e.g.
-`prompts/commands/generate_python.prompt` → `story__pdd_test.md`). Pass
-`--output <dir-or-path>` to control where the Story is written.
+The default `<slug>` is derived from the prompt file basename, with the trailing
+`_<language>` stripped — so `prompts/commands/generate_python.prompt` defaults to
+`user_stories/story__generate.md`. Pass `--output <dir-or-path>` to control where
+the Story is written and what it is named; the `pdd_test`-named examples in the
+rest of this guide assume `--output user_stories/story__pdd_test.md` so the Story
+is named after the command it validates rather than the prompt's module.
 
 `pdd test` is one command with **four modes**, auto-selected from the arguments.
 Story generation is the `--issue` + `.prompt` combination; the others are listed
@@ -155,8 +158,16 @@ Open `user_stories/story__<slug>.md` and read the single sentence. This is the
 - **One capability.** Capture the single thing the user gains. Split unrelated
   capabilities into separate stories.
 
-If the Story is right, you are done verifying — **trust the Story, let the
-tooling own the contract.** Skim the contract only as a reviewer; do not edit it.
+If the Story is right, you have signed off on the **human** artifact — but you
+are not quite done. **Do not hand-edit the generated contract, but do not rubber-
+stamp it either.** The contract is the actual oracle that `pdd detect --stories`
+and `pdd fix story__*.md` run against, so before you commit or merge story
+coverage, spot-check it for *false* or *over-broad* acceptance criteria and
+`## Oracle` claims — behavior the implementation does not actually provide. The
+`pdd_connect` mismatch (a generated contract that asserted a cloud URL the
+command intentionally does not display) is the concrete failure mode. When you
+find a problem, fix it at the source — correct the Story and re-align (Step 4),
+or fix the prompt — never by editing the generated contract directly.
 
 ## Step 4 — Edit and re-align the contract (when the Story is wrong)
 
