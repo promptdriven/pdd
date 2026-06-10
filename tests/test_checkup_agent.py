@@ -212,6 +212,17 @@ class TestLLMPlanner:
         plan = planner.suggest(prompt_file, list(ALL_TOOL_NAMES), "text")
         assert set(plan.tools) == set(ALL_TOOL_NAMES)
 
+    def test_falls_back_on_invalid_tool_name(self, tmp_path):
+        """A hallucinated tool name must degrade to the deterministic plan,
+        not crash with ValueError from Plan.__post_init__."""
+        prompt_file = tmp_path / "x.prompt"
+        prompt_file.write_text("% Test\n", encoding="utf-8")
+        planner = LLMPlanner(
+            _call=self._make_fake_call(["lint", "not_a_real_tool"])
+        )
+        plan = planner.suggest(prompt_file, list(ALL_TOOL_NAMES), "text")
+        assert set(plan.tools) == set(ALL_TOOL_NAMES)
+
     def test_reads_file_when_no_prompt_text(self, tmp_path):
         prompt_file = tmp_path / "x.prompt"
         prompt_file.write_text("% Test\n", encoding="utf-8")
@@ -696,6 +707,55 @@ class TestAutoMode:
         acc = session.events_of_kind("session_done")[0].data["accounting"]
         assert acc["patches_queued"] == 2
         assert acc["patches_applied"] == 0
+
+    def test_non_explicit_interactive_scopes_to_clarification_only(self, tmp_path):
+        """run(explicit_interactive=False) must honor the flag and only bring
+        clarification-required findings into scope (not hardcode True)."""
+        prompt_file = tmp_path / "mixed.prompt"
+        prompt_file.write_text("% Mixed\nDo something.\n", encoding="utf-8")
+        findings = [
+            SourceSetFinding(
+                finding_id="lint-style-1",
+                source_check="lint",
+                severity="warn",
+                file=prompt_file,
+                line="2",
+                message="Style issue",
+                code="STYLE_1",  # not clarification
+            ),
+            SourceSetFinding(
+                finding_id="lint-vague-1",
+                source_check="lint",
+                severity="warn",
+                file=prompt_file,
+                line="2",
+                message='Vague term "thing" used',
+                code="VAGUE_TERM_UNDEFINED",  # requires_clarification
+            ),
+        ]
+        report = PromptSourceSetReport(
+            prompt_path=prompt_file,
+            project_root=tmp_path,
+            target=str(prompt_file),
+            findings=findings,
+            checks=[{"name": "lint", "status": "warn"}],
+        )
+        session = RecordingCheckupSession()
+        planner = DeterministicPlanner()
+
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent = CheckupAgent(planner, session)
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                auto=True,
+                explicit_interactive=False,
+            )
+
+        # Only the clarification finding is in scope; the STYLE_1 finding is not.
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["total"] == 1
 
     def test_switch_to_auto_mid_session(self, tmp_path):
         """Choosing 'auto' on a group switches the rest of the session to auto."""

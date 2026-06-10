@@ -29,13 +29,17 @@ logger = logging.getLogger(__name__)
 REPORT_SCHEMA = "pdd.prompt_source_set_report.v1"
 
 
+# Codes that genuinely need a human to supply *intent* before any repair.
+# These are matched as substrings, so each entry must be specific enough not to
+# capture mechanically-fixable structural defects. In particular do NOT use bare
+# "UNKNOWN"/"MALFORMED"/"AMBIGUOUS": they would swallow auto-repairable codes
+# like UNKNOWN_COVERAGE_REF, UNKNOWN_STORY_REF, and MALFORMED_ID, which are
+# fixable by editing the prompt and must stay in the automated repair path.
 _CLARIFICATION_CODE_MARKERS = (
     "VAGUE",
     "DUPLICATE_ID",
     "STORY_ONLY_AMBIGUOUS",
-    "UNKNOWN",
-    "MALFORMED",
-    "AMBIGUOUS",
+    "MALFORMED_WAIVER",
     "WAIVER_NOT_ALLOWED",
 )
 

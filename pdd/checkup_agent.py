@@ -32,7 +32,7 @@ verify the fix.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Union
 
@@ -411,7 +411,9 @@ class CheckupAgent:
             tr: ToolResult = tool.extract(report)
             tool_findings = [
                 f
-                for f in filter_interactive_findings(report, explicit_interactive=True)
+                for f in filter_interactive_findings(
+                    report, explicit_interactive=explicit_interactive
+                )
                 if f.source_check == tool_name
             ]
             self.session.on_event(
@@ -709,18 +711,10 @@ def _relpath(path: Path, root: Path) -> str:
 
 
 def _accounting_dict(acc: CheckupAccounting) -> dict:
-    return {
-        "total": acc.total,
-        "fixed_manually": acc.fixed_manually,
-        "fixed_automatically": acc.fixed_automatically,
-        "skipped_by_user": acc.skipped_by_user,
-        "saved_for_review": acc.saved_for_review,
-        "manual_todo": acc.manual_todo,
-        "remaining": acc.remaining,
-        "patches_applied": acc.patches_applied,
-        "patches_queued": acc.patches_queued,
-        "patches_failed": acc.patches_failed,
-    }
+    # asdict() covers every dataclass field automatically so newly added
+    # accounting fields are never silently dropped from the event payload;
+    # ``remaining`` is a derived property and must be added explicitly.
+    return {**asdict(acc), "remaining": acc.remaining}
 
 
 # ---------------------------------------------------------------------------

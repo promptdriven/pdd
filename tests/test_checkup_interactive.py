@@ -496,3 +496,48 @@ def test_out_of_bounds_option_choice_emits_warning_and_skips(
     assert result is not None
     message, _, _ = result
     assert "skipped" in message
+
+
+def test_repair_patch_replacement_is_annotation_not_raw_prose(tmp_path: Path) -> None:
+    """Applied patch content must be a clearly-delimited checkup annotation, not the
+    raw recommended_action prose that would corrupt the prompt (#1519 prose-injection)."""
+    from pdd.checkup_interactive_main import build_repair_options_for_finding
+
+    finding = SourceSetFinding(
+        finding_id="lint:test:2:STYLE_1",
+        source_check="lint",
+        severity="warn",
+        file=Path("prompts/test.prompt"),
+        line="2",
+        message="Style issue",
+        recommended_action="Tidy wording",
+        code="STYLE_1",
+    )
+    options = build_repair_options_for_finding(finding, project_root=tmp_path)
+
+    primary_replacement = options[0].patch.replacement
+    # The human guidance is preserved as the menu label / preview...
+    assert options[0].label == "Tidy wording"
+    # ...but the *applied* content is an inert, labelled annotation, never bare prose.
+    assert primary_replacement != "Tidy wording"
+    assert primary_replacement.startswith("<!--")
+    assert primary_replacement.endswith("-->")
+    assert "STYLE_1" in primary_replacement
+
+
+def test_generate_forwards_apply_to_prompt_gate() -> None:
+    """`pdd generate --apply` must reach the workflow gate (choices were silently
+    discarded before because apply was never forwarded) (#1519 apply-not-forwarded)."""
+    from pdd.commands.generate import generate, _maybe_run_prompt_gate
+    import inspect
+
+    assert "apply" in {p.name for p in generate.params}
+    # The shared gate helper must accept and forward apply.
+    assert "apply" in inspect.signature(_maybe_run_prompt_gate).parameters
+
+
+def test_change_forwards_apply_to_prompt_gate() -> None:
+    """`pdd change --apply` must expose the flag for the workflow gate."""
+    from pdd.commands.modify import change
+
+    assert "apply" in {p.name for p in change.params}

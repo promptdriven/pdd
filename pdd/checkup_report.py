@@ -427,10 +427,18 @@ def render_patch_preview(
     for i, p in enumerate(patches, 1):
         tgt = getattr(p, "target", "")
         if project_root is not None and tgt:
-            try:
-                tgt = Path(tgt).relative_to(project_root)
-            except ValueError:
-                tgt = Path(tgt).name
+            tgt_path = Path(tgt)
+            if tgt_path.is_absolute():
+                # Absolute targets are relativized against the project root;
+                # fall back to the basename only when they escape it.
+                try:
+                    tgt = tgt_path.relative_to(project_root)
+                except ValueError:
+                    tgt = tgt_path.name
+            else:
+                # Targets are already stored repo-relative — preserve the
+                # directory context instead of collapsing to the basename.
+                tgt = tgt_path
         anchor = getattr(p, "anchor", {}) or {}
         context = anchor.get("line") if isinstance(anchor, dict) else None
         lines.append(f"## {i}. {getattr(p, 'finding_id', '')}")
@@ -496,10 +504,6 @@ def write_artifacts(
 # ---------------------------------------------------------------------------
 # Plan display
 # ---------------------------------------------------------------------------
-
-
-def compact_plan_line(tools: Sequence[str]) -> str:
-    return "Plan:\n  " + ", ".join(tools)
 
 
 def descriptive_plan_lines(tools: Sequence[str], descriptions: dict) -> list[str]:

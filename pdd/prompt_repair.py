@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .change import MODIFIED_PROMPT_END, MODIFIED_PROMPT_START, change
+from .checkup_prompt_main import _finding_requires_clarification
 from .json_atomic import atomic_write_json, atomic_write_text
 from .prompt_lint import LintIssue, scan_prompt
 from .server.token_counter import count_tokens
@@ -202,9 +203,6 @@ def _actionable_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     ]
 
 
-_CLARIFICATION_CODE_MARKERS = ("VAGUE",)
-
-
 def _lint_findings(issues: Sequence[LintIssue]) -> List[Dict[str, Any]]:
     return [
         {
@@ -214,9 +212,11 @@ def _lint_findings(issues: Sequence[LintIssue]) -> List[Dict[str, Any]]:
             "line": issue.line,
             "message": issue.message,
             "evidence": issue.section,
-            "requires_clarification": any(
-                marker in (issue.code or "").upper()
-                for marker in _CLARIFICATION_CODE_MARKERS
+            # Reuse the single canonical classifier (checkup_prompt_main) so the
+            # lint-only repair path and the structured report path agree on which
+            # findings require human clarification.
+            "requires_clarification": _finding_requires_clarification(
+                issue.code or "", "lint"
             ),
         }
         for issue in issues
