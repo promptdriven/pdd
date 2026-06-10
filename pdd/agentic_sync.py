@@ -1170,6 +1170,9 @@ def run_global_sync(
             "strength": strength,
             "temperature": temperature,
             "context": context_override,
+            # Propagate the global --estimate flag so child syncs run as
+            # side-effect-free dry-run previews (sub-issue #1359).
+            "estimate": os.environ.get("PDD_ESTIMATE") == "1",
         },
         github_info=None,
         quiet=quiet,
@@ -2206,6 +2209,9 @@ def run_agentic_sync(
         "strength": strength,
         "temperature": temperature,
         "context": context_override,
+        # Propagate the global --estimate flag so child syncs run as
+        # side-effect-free dry-run previews (sub-issue #1359).
+        "estimate": os.environ.get("PDD_ESTIMATE") == "1",
     }
 
     github_info = {

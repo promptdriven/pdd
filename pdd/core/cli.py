@@ -559,7 +559,9 @@ def cli(
     estimate_mode = bool(estimate or estimate_json or _env_flag_enabled("PDD_ESTIMATE"))
     json_mode = prompt_lint_json_mode or estimate_json
     quiet = quiet or json_mode or estimate_mode
-    core_dump = core_dump and not json_mode
+    # Estimate mode is a read-only dry-run preview; suppress the diagnostic
+    # core dump so previews never write to .pdd/core_dumps.
+    core_dump = core_dump and not json_mode and not estimate_mode
 
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()

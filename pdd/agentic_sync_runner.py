@@ -1704,6 +1704,9 @@ class AsyncSyncRunner:
         if not self.basenames:
             return True, "No modules to sync", self.initial_cost
 
+        if self.sync_options.get("estimate"):
+            return self._run_estimate()
+
         if self._resumed_modules and not self.quiet:
             resumed = sorted(self._resumed_modules)
             console.print(
@@ -1742,6 +1745,33 @@ class AsyncSyncRunner:
             except (ValueError, OSError, TypeError):
                 pass
             self._kill_children()
+
+    def _run_estimate(self) -> Tuple[bool, str, float]:
+        """Side-effect-free estimate run for agentic sync.
+
+        Each module is dispatched as a child ``pdd --estimate sync`` dry-run
+        (see ``_build_command``/``_build_env``), so no provider calls, generated
+        files, or ``--output-cost`` rows are produced. The agentic runner itself
+        must not persist ``.pdd/agentic_sync_state.json`` or post/update GitHub
+        comments either, because no real progress has occurred. The reported
+        total cost is always 0.0 since estimate mode makes no billable call.
+        """
+        results: List[Tuple[str, bool]] = []
+        all_success = True
+        for basename in self.basenames:
+            try:
+                success, _cost, _error = self._sync_one_module(basename)
+            except Exception:
+                success = False
+            all_success = all_success and bool(success)
+            results.append((basename, bool(success)))
+
+        succeeded = [b for b, ok in results if ok]
+        failed = [b for b, ok in results if not ok]
+        summary = f"Estimate complete for {len(succeeded)} module(s): {succeeded}."
+        if failed:
+            summary += f" Estimate gaps: {failed}."
+        return all_success, summary, 0.0
 
     def _run_inner(self) -> Tuple[bool, str, float]:
         """Inner run loop, separated so signal handlers wrap it."""
@@ -1878,6 +1908,10 @@ class AsyncSyncRunner:
         temperature = self.sync_options.get("temperature")
         if temperature is not None:
             cmd.extend(["--temperature", str(temperature)])
+        # --estimate is a global flag and must precede the `sync` subcommand so
+        # the child runs a side-effect-free dry-run cost preview.
+        if self.sync_options.get("estimate"):
+            cmd.append("--estimate")
         cmd.append("sync")
 
         # Module-specific flags
@@ -1917,7 +1951,13 @@ class AsyncSyncRunner:
     ) -> Dict[str, str]:
         """Build the env dict for subprocess Popen."""
         env = os.environ.copy()
-        env["PDD_OUTPUT_COST_PATH"] = cost_file_path
+        if self.sync_options.get("estimate"):
+            # Estimate-mode child syncs must not inherit a cost-log writer: no
+            # billable provider call occurs, so no --output-cost CSV rows may
+            # be created.
+            env.pop("PDD_OUTPUT_COST_PATH", None)
+        else:
+            env["PDD_OUTPUT_COST_PATH"] = cost_file_path
         env["CI"] = "1"
         env["PDD_FORCE"] = "1"
         env["PDD_AUTO_UPDATE"] = "false"

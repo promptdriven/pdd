@@ -591,6 +591,211 @@ def _auto_submit_example(
             rprint(f"[bold red]Failed to submit example: {response.text}[/bold red]")
 
 
+# Downstream sync steps whose cost can only be projected approximately in
+# estimate mode, because their LLM requests depend on output that has not been
+# generated yet. The first step (generate) is estimated exactly.
+_SYNC_ESTIMATE_DOWNSTREAM_STEPS = ("verify", "test", "fix", "update")
+
+
+def _discover_estimate_prompt(basename: str) -> Tuple[Optional[Path], str]:
+    """Locate the prompt file (and language) for a sync estimate, read-only.
+
+    Tries .pddrc context templates first, then falls back to globbing
+    ``prompts/`` and the current directory for ``<basename>_<lang>.prompt``.
+    Returns ``(None, "python")`` when nothing is found.
+    """
+    try:
+        result = _find_prompt_in_contexts(basename)
+        if result:
+            _context, prompt_path, language = result
+            return Path(prompt_path), (language or "python")
+    except Exception:
+        pass
+
+    for base_dir in (Path("prompts"), Path(".")):
+        try:
+            if not base_dir.is_dir():
+                continue
+            matches = sorted(base_dir.glob(f"{basename}_*.prompt"))
+        except Exception:
+            continue
+        if matches:
+            prompt_path = matches[0]
+            stem = prompt_path.stem
+            language = (
+                stem[len(basename) + 1:]
+                if stem.startswith(f"{basename}_")
+                else "python"
+            )
+            return prompt_path, (language or "python")
+    return None, "python"
+
+
+def _run_sync_estimate(
+    ctx: click.Context,
+    basename: str,
+    *,
+    quiet: bool,
+    verbose: bool,
+) -> Tuple[Dict[str, Any], float, str]:
+    """Side-effect-free dry-run cost preview for ``pdd sync``.
+
+    Estimates the first sync step (generate) exactly from the real built
+    messages via the shared ``--estimate`` machinery (sub-issue #1358), then
+    labels downstream steps as approximate because their prompts depend on
+    output that has not been generated yet (a one-round assumption). Performs
+    no provider calls, writes no generated/example/test files, acquires no sync
+    locks, and appends no ``--output-cost`` CSV rows. Estimate records are
+    accumulated on ``ctx.obj['estimate_results']`` for the CLI renderer; this
+    function never raises.
+    """
+    import os as _os
+
+    console = Console()
+
+    # Estimate mode never writes a cost log.
+    if isinstance(ctx.obj, dict):
+        ctx.obj["output_cost"] = None
+        if not isinstance(ctx.obj.get("estimate_results"), list):
+            ctx.obj["estimate_results"] = []
+        records = ctx.obj["estimate_results"]
+    else:
+        records = []
+    _os.environ.pop("PDD_OUTPUT_COST_PATH", None)
+
+    prompt_path, language = _discover_estimate_prompt(basename)
+    model_name = "unknown"
+    gap_reason: Optional[str] = None
+    before = len(records)
+
+    if prompt_path is None or not prompt_path.exists():
+        gap_reason = f"no prompt file found for '{basename}'"
+    else:
+        # Resolve an output path purely for the generate call's signature; the
+        # file is never written because estimate mode short-circuits inside
+        # llm_invoke before any provider call or write.
+        try:
+            from .sync_determine_operation import get_extension
+            output_path = str(Path("src") / f"{basename}.{get_extension(language)}")
+        except Exception:
+            output_path = str(Path("src") / f"{basename}.py")
+        try:
+            from .code_generator_main import code_generator_main
+
+            try:
+                code_generator_main(
+                    ctx,
+                    prompt_file=str(prompt_path.resolve()),
+                    output=output_path,
+                    original_prompt_file_path=None,
+                    force_incremental_flag=False,
+                    language=language,
+                    output_from_config=False,
+                )
+            except Exception as exc:  # noqa: BLE001 - estimate sentinel
+                if exc.__class__.__name__ != "EstimateOnlyResult":
+                    raise
+        except Exception as exc:  # noqa: BLE001 - degrade to a reported gap
+            gap_reason = f"first-step (generate) estimate unavailable: {exc}"
+
+    first_records = records[before:]
+    for record in first_records:
+        if isinstance(record, dict):
+            record["command"] = "sync:generate"
+            record["sync_step"] = "generate"
+            record["approximate"] = False
+            model_name = record.get("model") or record.get("pricing_model") or model_name
+
+    if first_records:
+        first_known = all(r.get("cost_known") for r in first_records)
+        first_cost = sum(
+            float(r.get("estimated_cost", r.get("total_cost", 0.0)) or 0.0)
+            for r in first_records
+        )
+        # One-round assumption: project each downstream step at the exact
+        # first-step cost, clearly labelled approximate.
+        for step in _SYNC_ESTIMATE_DOWNSTREAM_STEPS:
+            records.append({
+                "estimate": True,
+                "command": f"sync:{step}",
+                "sync_step": step,
+                "approximate": True,
+                "model": model_name,
+                "pricing_model": model_name,
+                "input_tokens": 0,
+                "predicted_output_tokens": 0,
+                "input_rate_per_million": None,
+                "output_rate_per_million": None,
+                "input_cost": None,
+                "output_cost": None,
+                "estimated_cost": first_cost if first_known else None,
+                "total_cost": first_cost if first_known else None,
+                "cost_known": bool(first_known),
+                "unknown_cost": not bool(first_known),
+                "currency": "USD",
+                "context_limit": None,
+                "context_usage_percent": None,
+                "provider_call_made": False,
+                "call_type": "completion",
+                "note": "approximate: depends on generated output (one-round assumption)",
+            })
+        if not quiet:
+            console.print(
+                "[dim]Sync estimate: step 1 (generate) is exact; downstream "
+                "steps are approximate (one-round assumption, they depend on "
+                "generated output).[/dim]"
+            )
+        summary = (
+            f"Sync estimate for '{basename}': 1 exact step (generate) + "
+            f"{len(_SYNC_ESTIMATE_DOWNSTREAM_STEPS)} approximate downstream steps. "
+            "No provider calls, file writes, or cost-log rows performed."
+        )
+    else:
+        # No exact first step available -> report the contract gap safely.
+        reason = gap_reason or "estimate prerequisite unavailable"
+        records.append({
+            "estimate": True,
+            "command": "sync:generate",
+            "sync_step": "generate",
+            "approximate": True,
+            "model": model_name,
+            "input_tokens": 0,
+            "predicted_output_tokens": 0,
+            "input_rate_per_million": None,
+            "output_rate_per_million": None,
+            "estimated_cost": None,
+            "total_cost": None,
+            "cost_known": False,
+            "unknown_cost": True,
+            "currency": "USD",
+            "context_limit": None,
+            "context_usage_percent": None,
+            "provider_call_made": False,
+            "call_type": "completion",
+            "note": f"approximate: {reason}",
+        })
+        if not quiet:
+            console.print(
+                f"[yellow]Sync estimate is approximate ({reason}); no provider "
+                "calls, file writes, or cost-log rows were performed.[/yellow]"
+            )
+        summary = (
+            f"Sync estimate for '{basename}' unavailable as an exact projection "
+            f"({reason}); reported approximately with no side effects."
+        )
+
+    return (
+        {
+            "success": True,
+            "sync_estimate": True,
+            "operations_completed": [],
+            "summary": summary,
+        },
+        0.0,
+        model_name,
+    )
+
+
 def sync_main(
     ctx: click.Context,
     basename: str,
@@ -651,6 +856,13 @@ def sync_main(
         raise click.BadParameter("Budget must be a positive number.", param_hint="--budget")
     if max_attempts is not None and max_attempts < 0:
         raise click.BadParameter("Max attempts must be a non-negative integer.", param_hint="--max-attempts")
+
+    # Estimate mode: produce a side-effect-free dry-run cost preview and return
+    # before any prompt-discovery side effects, lock acquisition, generation, or
+    # cost-log writes (sub-issue #1359). The shared --estimate state is set on
+    # ctx.obj by the root CLI (sub-issue #1358).
+    if isinstance(ctx.obj, dict) and ctx.obj.get("estimate"):
+        return _run_sync_estimate(ctx, basename, quiet=quiet, verbose=verbose)
 
     # 3. Try template-based prompt discovery first (uses outputs.prompt.path from .pddrc)
     template_result = _find_prompt_in_contexts(basename)

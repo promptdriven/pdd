@@ -47,6 +47,78 @@ def _make_mock_popen(stdout_text: str = "", stderr_text: str = "", exit_code: in
 # ModuleState
 # ---------------------------------------------------------------------------
 
+def test_agentic_sync_estimate_mode_prompt_contract_strips_write_surfaces():
+    """The agentic sync prompt must keep child estimate runs side-effect free."""
+    prompt_text = Path("pdd/prompts/agentic_sync_runner_python.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    required_fragments = [
+        "Estimate mode",
+        "global `--estimate` flag before the `sync` subcommand",
+        "Do not set `PDD_OUTPUT_COST_PATH`",
+        "create temporary cost CSV files",
+        "Do not save or delete `.pdd/agentic_sync_state.json`",
+        "update or create GitHub comments",
+        "launch repair retries",
+        "write generated files or contact providers",
+        "approximate total",
+        "Contract gap handling",
+    ]
+
+    for fragment in required_fragments:
+        assert fragment in prompt_text
+
+
+def test_agentic_sync_estimate_child_command_strips_cost_log_env(tmp_path, monkeypatch):
+    """Runtime contract: child estimate syncs use --estimate and do not inherit cost-log writers."""
+    monkeypatch.chdir(tmp_path)
+    runner = AsyncSyncRunner(
+        basenames=["calculator"],
+        dep_graph={"calculator": []},
+        sync_options={"estimate": True, "budget": 1.0},
+        github_info=None,
+        quiet=True,
+    )
+
+    cmd = runner._build_command("calculator")
+    sync_index = cmd.index("sync")
+    assert "--estimate" in cmd[:sync_index]
+
+    env = runner._build_env(str(tmp_path / "run.csv"))
+    assert "PDD_OUTPUT_COST_PATH" not in env
+
+
+def test_agentic_sync_estimate_request_skips_state_and_github_writes(
+    tmp_path,
+    monkeypatch,
+):
+    """Runtime contract: agentic estimate mode reports locally without state or GitHub writes."""
+    monkeypatch.chdir(tmp_path)
+    runner = AsyncSyncRunner(
+        basenames=["calculator"],
+        dep_graph={"calculator": []},
+        sync_options={"estimate": True},
+        github_info={"owner": "promptdriven", "repo": "pdd", "issue_number": 1359},
+        issue_url="https://github.com/promptdriven/pdd/issues/1359",
+        quiet=True,
+    )
+
+    with patch.object(runner, "_update_github_comment") as update_comment, \
+         patch.object(runner, "_save_state") as save_state, \
+         patch.object(runner, "_delete_state") as delete_state, \
+         patch.object(runner, "_sync_one_module", return_value=(True, 0.0, "")):
+        success, summary, total_cost = runner.run()
+
+    update_comment.assert_not_called()
+    save_state.assert_not_called()
+    delete_state.assert_not_called()
+    assert not (tmp_path / STATE_FILE_PATH).exists()
+    assert success is True
+    assert "estimate" in summary.lower()
+    assert total_cost == pytest.approx(0.0)
+
+
 class TestModuleState:
     def test_defaults(self):
         state = ModuleState()

@@ -1,8 +1,36 @@
 <include>context/python_preamble.prompt</include>
+
+<pdd-reason>Runs dependency-aware multi-module sync subprocesses with progress tracking and estimate-mode safety.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "AsyncSyncRunner", "signature": "(basenames, dep_graph, sync_options, github_info, quiet=False, verbose=False, issue_url=None, module_cwds=None, module_targets=None, initial_cost=0.0) -> AsyncSyncRunner", "returns": "AsyncSyncRunner"},
+      {"name": "AsyncSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"},
+      {"name": "build_dep_graph_from_architecture", "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"},
+      {"name": "build_dep_graph_from_architecture_data", "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"},
+      {"name": "build_conformance_hard_failure_from_error", "signature": "(exc: ArchitectureConformanceError, basename: str) -> str", "returns": "str"},
+      {"name": "build_public_surface_hard_failure_from_error", "signature": "(exc: PublicSurfaceRegressionError, basename: str) -> str", "returns": "str"},
+      {"name": "build_test_churn_hard_failure_from_error", "signature": "(exc: TestChurnError, basename: str) -> str", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>sync_order_python.prompt</pdd-dependency>
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>core/cli_python.prompt</pdd-dependency>
+
+% Estimate-mode prerequisite context:
+<estimate_mode_interfaces>
+  <cli_interface><include optional mode="interface" select="def:cli">pdd/core/cli.py</include></cli_interface>
+  <llm_interface><include optional mode="interface" select="def:llm_invoke">pdd/llm_invoke.py</include></llm_interface>
+</estimate_mode_interfaces>
 
 % Goal
 Write the `pdd/agentic_sync_runner.py` module.
@@ -14,7 +42,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, module_targets, initial_cost=0.0)`
    - `basenames: List[str]` — modules to sync
    - `dep_graph: Dict[str, List[str]]` — basename -> [dependency basenames]
-   - `sync_options: Dict` — budget, total_budget, target_coverage, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session, local, timeout_adder, context, strength, temperature
+   - `sync_options: Dict` — budget, total_budget, target_coverage, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session, local, timeout_adder, context, strength, temperature, estimate
    - `github_info: Optional[Dict]` — owner, repo, issue_number, cwd (None to disable comments)
    - `issue_url: Optional[str]` — GitHub issue URL for state persistence (None disables resumability)
    - `module_cwds: Optional[Dict[str, Path]]` — per-module working directories (defaults to project_root)
@@ -35,6 +63,13 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 6. Failure scheduling: when a module fails, set `self.failed = True`, but do not globally pause the queue. Failed modules block only modules that depend on them through `dep_graph`; unrelated modules whose own dependencies are satisfied must continue to run so partial progress is preserved and future retries can resume from more completed modules. Blocked-module classification must be transitive: if `a` fails and `b` depends on `a`, then pending modules that depend on `b` are also blocked. Only total-budget exhaustion stops new scheduling globally, and `_budget_exhausted()` must be checked after every completed future, including failed module results, before scheduling more work.
 7. Each module runs as a `pdd sync` subprocess with `--force`, `--agentic`, `--no-steer` flags; append global `--local` before `sync` if `sync_options["local"]` is truthy; append `--target-coverage` if `sync_options["target_coverage"]` is not None; append `--one-session` if `sync_options["one_session"]` is truthy
 8. Use `PDD_OUTPUT_COST_PATH` env var for cost capture from subprocess (CSV format)
+8a. Estimate mode: when `sync_options["estimate"]` or the inherited shared CLI estimate context is active, preserve planning-only semantics across all child syncs:
+   - Contract gap handling: if the included `pdd/core/cli.py` and `pdd/llm_invoke.py` interfaces do not expose a concrete shared estimate-mode API, report that prerequisite gap explicitly and do not invent a local estimate flag, collector, provider stub, or env-only substitute.
+   - Add the global `--estimate` flag before the `sync` subcommand whenever child subprocesses are used for estimate collection.
+   - Do not set `PDD_OUTPUT_COST_PATH`, create temporary cost CSV files, parse cost CSVs, or leave inherited cost-log environment variables in child env.
+   - Do not save or delete `.pdd/agentic_sync_state.json`, update or create GitHub comments, launch repair retries, or run child commands in a mode that can write generated files or contact providers.
+   - Aggregate child per-module/per-step estimate output as approximate unless a child reports an exact first-step estimate from its shared collector. Printed output must include an approximate total and the assumptions for heuristic downstream rows.
+   - Console reporting may print a local estimate breakdown, but GitHub progress reporting is disabled in estimate mode.
 9. Sync failure detection: exit code != 0 OR "Overall status:" line contains "Failed"
 9a. Failed-module error-summary contract (issue #1399): the `error` string returned for a failed module MUST start with a deterministic failure reason — the `Overall status: Failed` line if present in stdout, otherwise `f"Exit code {exit_code}"`. Then append high-signal lines from stdout+stderr (those containing `error`/`failed`/`traceback`/`exception`/`abort`, lowercased), filtering out `INFO`/`DEBUG` log lines and known nonfatal warnings (module-level constant `_NONFATAL_WARNING_SUBSTRINGS`, currently `("ContentSelector failed",)`, exposed via helper `_is_nonfatal_warning(line)`). Drop any candidate line equal to the failure reason so it is not echoed twice. If no high-signal line exists, fall back to labeled `--- stderr tail ---` and `--- stdout tail ---` blocks (last 10 non-blank, non-warning, non-failure-reason lines each). Cap keyword-line summary at last 20 lines. Console preview: `error[:500]`.
 9b. Architecture-conformance / public-surface / test-churn retry/repair (issues #865, #1012): when a per-module `pdd sync` subprocess fails AND the captured stdout/stderr contains a repairable generation failure — detected via any of the line prefixes `Architecture conformance error for `, `Public surface regression for `, or `Test churn threshold exceeded for ` — the runner MUST treat it as a repairable generation failure and retry the same module up to `MAX_CONFORMANCE_ATTEMPTS = 3` total attempts (initial attempt + up to 2 repair attempts). Each repair attempt MUST set the `PDD_REPAIR_DIRECTIVE` environment variable in the subprocess env to a directive built by the appropriate parser — `_parse_conformance_failure(stdout, stderr)`, `_parse_public_surface_failure(stdout, stderr)`, or `_parse_test_churn_failure(stdout, stderr)` — that names the exact offending symbols / churn ratio and forbids editing `architecture.json` or rewriting unrelated tests. The directive MUST NOT be set on the first attempt. Retries MUST NOT advance the per-module `current_phase` to a later phase; these failures restart the same generate-then-verify cycle. Repair retries do NOT count against any per-module test/fix attempt budget — they are a separate, prompt-level repair loop. When `total_budget` is set, every retry command MUST receive the remaining total budget after subtracting both persisted module costs and the current module's in-flight retry costs; if the in-flight repair cost exhausts the remaining total budget, stop retrying before launching another child process and record a hard failure. The runner MUST also forward the parent's resolved `.pddrc` context and `--strength` (when present in `sync_options`) on EVERY retry attempt so a flaky regeneration cannot silently switch model or context between attempts.

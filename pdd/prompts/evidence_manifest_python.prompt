@@ -5,9 +5,9 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "write_evidence_manifest", "signature": "(*, command: str, grounding: Optional[Dict[str, Any]] = None, ...) -> Path", "returns": "Path"},
+      {"name": "write_evidence_manifest", "signature": "def write_evidence_manifest(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = '', cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False) -> Path", "returns": "Path"},
       {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> dict", "returns": "dict"},
-      {"name": "resolve_generate_output_paths", "signature": "(prompt_file, *, output=None, ...) -> list[str]", "returns": "list[str]"}
+      {"name": "resolve_generate_output_paths", "signature": "def resolve_generate_output_paths(prompt_file: str | Path, *, output: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]", "returns": "list[str]"}
     ]
   }
 }

@@ -1971,6 +1971,29 @@ def _display_sync_log(
     return {'success': True, 'log_entries': log_entries}
 
 
+def _sync_estimate_requested(explicit: bool = False) -> bool:
+    """Return True when sync should run in dry-run cost-estimate mode.
+
+    Detection order: an explicit caller flag, then the shared ``--estimate``
+    state stored on the active Click context by the root CLI, then the
+    ``PDD_ESTIMATE`` environment fallback the CLI also sets. Any failure to
+    read the context degrades to "not estimating" so normal syncs are never
+    short-circuited.
+    """
+    if explicit:
+        return True
+    try:
+        import click
+
+        ctx = click.get_current_context(silent=True)
+        obj = getattr(ctx, "obj", None) if ctx is not None else None
+        if isinstance(obj, dict) and obj.get("estimate"):
+            return True
+    except Exception:
+        pass
+    return os.environ.get("PDD_ESTIMATE") == "1"
+
+
 def sync_orchestration(
     basename: str,
     target_coverage: float = 90.0,
@@ -1999,6 +2022,7 @@ def sync_orchestration(
     no_steer: bool = False,
     steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
     agentic_mode: bool = False,
+    estimate: bool = False,
 ) -> Dict[str, Any]:
     """
     Orchestrates the complete PDD sync workflow with parallel animation.
@@ -2029,6 +2053,40 @@ def sync_orchestration(
         if _dry_paths:
             return _display_sync_log(basename, language, verbose, paths=_dry_paths)
         return _display_sync_log(basename, language, verbose)
+
+    # --- Estimate mode: short-circuit before any side effects ---
+    # When the global --estimate flag is active, sync must not acquire sync
+    # locks, run any operation, create generated code/example/test files,
+    # append --output-cost CSV rows, or call an LLM provider. Producing an
+    # exact per-step sync breakdown additionally depends on the shared
+    # estimate collector/sentinel API reaching this layer; when that
+    # prerequisite is not wired through we report the contract gap rather than
+    # silently running or fabricating a breakdown (see the "Contract gap
+    # handling" section of sync_orchestration_python.prompt).
+    if _sync_estimate_requested(estimate):
+        return {
+            "success": False,
+            "estimate": True,
+            "operations_completed": [],
+            "skipped_operations": [],
+            "total_cost": 0.0,
+            "total_time": 0.0,
+            "errors": [
+                "estimate mode prerequisite (shared --estimate collector) is "
+                "not available to sync_orchestration in this checkout",
+            ],
+            "error": (
+                "Sync estimate unavailable: the per-step estimate breakdown "
+                "prerequisite (shared --estimate collector/sentinel) is not "
+                "wired through to sync_orchestration. No operations, locks, "
+                "generated files, or --output-cost rows were written."
+            ),
+            "summary": (
+                "Sync estimate skipped: estimate-mode prerequisite not "
+                "available at the orchestration layer; no provider calls, "
+                "lock acquisitions, file writes, or cost-log rows performed."
+            ),
+        }
 
     # --- Initialize State and Paths ---
     try:

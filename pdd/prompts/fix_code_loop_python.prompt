@@ -1,4 +1,29 @@
-% You are an expert LLM Prompt Engineer. Your goal is to generate a high-quality PDD prompt for the `fix_code_loop` module.
+<pdd-reason>Runs crash-fix verification loops with estimate-mode short-circuiting and agentic fallback.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "cloud_crash_fix", "signature": "(program, prompt, code, errors, strength, temperature, time, verbose, program_path='', code_path='', language='python') -> Tuple[bool, bool, str, str, str, float, Optional[str]]", "returns": "Tuple[bool, bool, str, str, str, float, Optional[str]]"},
+      {"name": "run_process_with_output", "signature": "(cmd_args, timeout=300) -> Tuple[int, str, str]", "returns": "Tuple[int, str, str]"},
+      {"name": "_normalize_agentic_result", "signature": "(result) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "_safe_run_agentic_crash", "signature": "(*, prompt_file, code_file, program_file, crash_log_file, cwd=None) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "fix_code_loop", "signature": "(code_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file, verbose=False, time=DEFAULT_TIME, prompt_file='', agentic_fallback=True, use_cloud=False, prior_cost=0.0) -> Tuple[bool, str, str, int, float, Optional[str]]", "returns": "Tuple[bool, str, str, int, float, Optional[str]]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_crash_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
+<pdd-dependency>get_language_python.prompt</pdd-dependency>
+<pdd-dependency>fix_code_module_errors_python.prompt</pdd-dependency>
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+<pdd-dependency>core/cli_python.prompt</pdd-dependency>
+<pdd-dependency>core/cloud_python.prompt</pdd-dependency>
+
+% You are an expert Python Software Engineer. Your goal is to implement `pdd/fix_code_loop.py` with the declared public interface and requirements.
 
 % Role and Scope:
 The `fix_code_loop` module is a core component of the PDD orchestration layer. Its responsibility is to manage an iterative "test-fix" cycle. It executes a verification program against a target code file, captures errors, and uses an LLM (local or cloud-based) to suggest fixes until the code passes verification, the budget is exhausted, or the maximum number of attempts is reached. It also provides an agentic fallback for complex or non-Python scenarios.
@@ -16,6 +41,12 @@ The `fix_code_loop` module is a core component of the PDD orchestration layer. I
 6. **Agentic Fallback**: If the primary loop fails and `agentic_fallback` is True, invoke `_safe_run_agentic_crash`.
 7. **Logging**: Maintain a detailed XML-formatted `history_log` containing verification status, stdout/stderr (in CDATA), LLM analysis, decisions, and costs. Write this log to `error_log_file` after every attempt.
 8. **Process Execution**: Use `subprocess.Popen` with `start_new_session=True`. Implement a threaded byte-by-byte stream capture for stdout/stderr to prevent pipe clogging. Ensure process groups are killed on timeout (300s).
+9. **Estimate Mode**: When the shared estimate state/sentinel exposed by `llm_invoke` is active, short-circuit before the normal fix loop performs side effects. Do not add a second estimate mechanism.
+    - Contract gap handling: if the included `pdd/core/cli.py` and `pdd/llm_invoke.py` interfaces do not expose a concrete shared estimate-mode API, report that prerequisite gap explicitly and do not invent a local estimate flag, collector, provider stub, or env-only substitute.
+    - If the first crash-fix LLM prompt can be built safely from the available prompt/code/error payloads, enter the shared `llm_invoke` estimate path and record that row through the collector as exact.
+    - If an exact prompt cannot be built without executing verification or mutating files, register one approximate crash-fix round with an explicit assumption.
+    - MUST NOT remove or write `error_log_file`, create backups, modify the code file or verification program, run verification subprocesses, call `cloud_crash_fix`, or invoke `_safe_run_agentic_crash`.
+    - Return the existing 6-tuple shape `(success, final_program, final_code, total_attempts, total_cost, model_name)` with projected cost/model metadata from the shared collector and `total_attempts` set to 0. The projected cost is informational only and MUST NOT be treated as real budget spend.
 
 % Dependencies:
 <module_dependencies>
@@ -23,6 +54,8 @@ The `fix_code_loop` module is a core component of the PDD orchestration layer. I
   <pdd.agentic_langtest><include>context/agentic_langtest_example.py</include></pdd.agentic_langtest>
   <pdd.get_language><include>context/get_language_example.py</include></pdd.get_language>
   <pdd.fix_code_module_errors><include>context/fix_code_module_errors_example.py</include></pdd.fix_code_module_errors>
+  <pdd.llm_invoke_estimate_interface><include optional mode="interface" select="def:llm_invoke">pdd/llm_invoke.py</include></pdd.llm_invoke_estimate_interface>
+  <pdd.cli_estimate_interface><include optional mode="interface" select="def:cli">pdd/core/cli.py</include></pdd.cli_estimate_interface>
   <pdd.python_preamble><include>context/python_preamble.prompt</include></pdd.python_preamble>
 </module_dependencies>
 

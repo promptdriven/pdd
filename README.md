@@ -856,7 +856,9 @@ Estimate mode assembles the messages that would be sent to the provider, counts 
 
 Supported standard/manual command paths include `generate`, `example`, manual `test`, and single-file `update`. PDD rejects agentic, PRD-propagation, repository-wide, metadata-sync, `conflicts`, `crash`, and `fix` modes that could invoke external agents or require provider output before the next request can be assembled.
 
-`--estimate-json` prints the same estimate fields as JSON for scripts. Estimate mode does not append rows to `--output-cost` CSV files; use `--output-cost` for actual-run accounting.
+For multi-step flows such as `sync`, estimate mode prints a per-step breakdown: the first known step is estimated exactly from the built messages, and later steps are labelled approximate because they depend on output that has not been generated yet.
+
+`--estimate-json` prints the same estimate fields as JSON for scripts. Estimate mode does not append rows to `--output-cost` CSV files; use `--output-cost` for actual-run accounting. Cost CSV rows are written only for real command executions, because no billable LLM call occurs in estimate mode.
 
 ### Cost Calculation and Presentation
 
@@ -947,6 +949,8 @@ Options:
 - `--durable-branch TEXT`: Durable mode only. Override the durable checkpoint branch name. Default is `sync/issue-<N>` derived from the GitHub issue. Refused if it resolves to `main`, `master`, or the repository default branch.
 - `--no-resume`: Durable mode only. Ignore existing `PDD-Sync-Checkpoint-V1` commit trailers on the durable branch and re-run every selected module. By default, durable sync reads checkpoint trailers (`PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>`) and skips modules already checkpointed for the same issue, which is what makes a cloud rerun safely resume completed work after a partial failure.
 - `--durable-max-parallel INT`: Durable mode only. Cap how many module worktrees run concurrently. Defaults to the standard runner concurrency. A total budget still forces sequential execution.
+
+Estimate-mode note: the sync prompt contract for the prerequisite-backed `--estimate` implementation requires an exact first-step estimate from built messages when available, then labelled approximate downstream estimates for generation, example, crash, test, verify, fix, update, and issue-sync child modules whose prompts depend on generated artifacts. The total must be labelled approximate when any heuristic row contributes, and estimate mode must preserve no-provider-call and no-file-write semantics.
 
 **Durable Issue Sync** (`--durable`):
 
