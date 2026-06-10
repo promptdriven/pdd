@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import json
 import os
 import pathlib
@@ -20,7 +21,11 @@ from rich.panel import Panel
 from rich.text import Text # ADDED THIS IMPORT
 
 # Import the function to be tested using an absolute path
-from pdd.code_generator_main import code_generator_main, _verify_architecture_conformance
+from pdd.code_generator_main import (
+    code_generator_main,
+    _repair_architecture_interface_types,
+    _verify_architecture_conformance,
+)
 from pdd.core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeout
 from pdd.get_jwt_token import AuthError, NetworkError, TokenError, UserCancelledError, RateLimitError
 
@@ -1926,6 +1931,38 @@ def test_architecture_template_repairs_invalid_interface_type(
     assert saved[0]["interface"]["type"] == "page"
 
 
+def test_architecture_interface_type_repair_preserves_entrypoint():
+    """``entrypoint`` is a supported architecture interface type."""
+    payload = [
+        {
+            "filename": "main_TypeScriptReact.prompt",
+            "filepath": "src/main.tsx",
+            "interface": {"type": "entrypoint"},
+        }
+    ]
+
+    repaired, changed = _repair_architecture_interface_types(payload)
+
+    assert changed is False
+    assert repaired[0]["interface"]["type"] == "entrypoint"
+
+
+def test_architecture_interface_type_repair_infers_entrypoint_key():
+    """An explicit ``entrypoint`` sub-object should infer type entrypoint."""
+    payload = [
+        {
+            "filename": "main_TypeScriptReact.prompt",
+            "filepath": "src/main.tsx",
+            "interface": {"entrypoint": {}},
+        }
+    ]
+
+    repaired, changed = _repair_architecture_interface_types(payload)
+
+    assert changed is True
+    assert repaired[0]["interface"]["type"] == "entrypoint"
+
+
 def test_postprocess_uses_temp_input_when_llm_enabled(
     mock_ctx,
     temp_dir_setup,
@@ -3450,6 +3487,29 @@ class TestVerifyArchitectureConformance:
         _verify_architecture_conformance(
             generated_code="export default function DashboardPage() { return <div/>; }",
             prompt_name="dashboard_page_TypeScriptReact.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="typescript",
+                verbose=False,
+            )
+
+    def test_skips_entrypoint_type_modules(self, tmp_path):
+        """Entrypoint files intentionally export nothing, so symbol checking skips them."""
+        arch = [
+            {
+                "filename": "main_TypeScriptReact.prompt",
+                "filepath": "src/main.tsx",
+                "interface": {"type": "entrypoint"},
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        _verify_architecture_conformance(
+            generated_code=(
+                "import React from 'react';\n"
+                "import ReactDOM from 'react-dom/client';\n"
+                "ReactDOM.createRoot(document.getElementById('root')).render(<App />);\n"
+            ),
+            prompt_name="main_TypeScriptReact.prompt",
             arch_path=str(tmp_path / "architecture.json"),
             language="typescript",
             verbose=False,
@@ -7831,6 +7891,105 @@ class TestPddInterfaceSignatureConformance:
         arch_path.write_text(json.dumps(arch))
         return str(arch_path)
 
+    def _assert_annotation_pair_passes(
+        self,
+        tmp_path,
+        declared_annotation: str,
+        actual_annotation: str,
+    ) -> None:
+        """Helper: verify a prompt/code annotation pair does not drift."""
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "update_main",
+                        "signature": f"(ctx, value: {declared_annotation} = None)",
+                    }
+                ]
+            },
+        }
+        prompt_content = f"<pdd-interface>{json.dumps(interface)}</pdd-interface>\n"
+        generated_code = (
+            f"def update_main(ctx, value: {actual_annotation} = None):\n"
+            "    pass\n"
+        )
+
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def _assert_annotation_pair_fails(
+        self,
+        tmp_path,
+        declared_annotation: str,
+        actual_annotation: str,
+    ) -> None:
+        """Helper: verify a prompt/code annotation pair is reported as drift."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "update_main",
+                        "signature": f"(ctx, value: {declared_annotation} = None)",
+                    }
+                ]
+            },
+        }
+        prompt_content = f"<pdd-interface>{json.dumps(interface)}</pdd-interface>\n"
+        generated_code = (
+            f"def update_main(ctx, value: {actual_annotation} = None):\n"
+            "    pass\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        exc = excinfo.value
+        assert "update_main.value" in exc.missing_symbols
+        assert "annotation" in exc.repair_directive
+
+    def test_code_generator_main_prompt_contract_matches_runtime_signature(self):
+        """The active prompt interface must mirror the generated entrypoint signature."""
+        from pdd.code_generator_main import _extract_pdd_interface_signatures
+
+        prompt_content = pathlib.Path(
+            "pdd/prompts/code_generator_main_python.prompt"
+        ).read_text(encoding="utf-8")
+        metadata_header = prompt_content.split("\n---\n", 1)[0]
+        assert metadata_header.count("<pdd-interface>") == 1
+        declarations, parse_error = _extract_pdd_interface_signatures(
+            prompt_content,
+            "code_generator_main_python.prompt",
+        )
+
+        assert parse_error is False
+        declared_params = {
+            name: [param_name for param_name, _, _ in params]
+            for name, params in declarations
+        }
+        assert declared_params["code_generator_main"] == list(
+            inspect.signature(code_generator_main).parameters
+        )
+
     def test_missing_kwarg_in_function_raises_conformance_error(self, tmp_path):
         """Missing kwarg declared in <pdd-interface> raises ArchitectureConformanceError."""
         from pdd.code_generator_main import ArchitectureConformanceError
@@ -8225,6 +8384,59 @@ class TestPddInterfaceSignatureConformance:
         assert "default" in exc.repair_directive
         assert "`False`" in exc.repair_directive
         assert "`True`" in exc.repair_directive
+
+    def test_typing_alias_annotations_are_compatible(self, tmp_path):
+        """Equivalent builtin/typing generic spellings must not drift."""
+        self._assert_annotation_pair_passes(
+            tmp_path,
+            declared_annotation="Optional[set]",
+            actual_annotation="Optional[Set[str]]",
+        )
+
+    def test_pep604_optional_annotations_are_compatible(self, tmp_path):
+        """PEP 604 ``T | None`` and ``Optional[T]`` express the same contract."""
+        self._assert_annotation_pair_passes(
+            tmp_path,
+            declared_annotation="Set[str] | None",
+            actual_annotation="Optional[Set[str]]",
+        )
+
+    def test_builtin_generic_alias_annotations_are_compatible(self, tmp_path):
+        """PEP 585 builtins and typing aliases compare semantically."""
+        self._assert_annotation_pair_passes(
+            tmp_path,
+            declared_annotation="typing.Dict[str, Any]",
+            actual_annotation="dict[str, Any]",
+        )
+        self._assert_annotation_pair_passes(
+            tmp_path,
+            declared_annotation="List[str]",
+            actual_annotation="list[str]",
+        )
+
+    def test_semantic_annotation_base_type_drift_still_raises(self, tmp_path):
+        """The semantic comparison must still catch real container drift."""
+        self._assert_annotation_pair_fails(
+            tmp_path,
+            declared_annotation="List[str]",
+            actual_annotation="Dict[str, str]",
+        )
+
+    def test_optional_annotation_drift_still_raises(self, tmp_path):
+        """Optionality is part of the public signature contract."""
+        self._assert_annotation_pair_fails(
+            tmp_path,
+            declared_annotation="Optional[str]",
+            actual_annotation="str",
+        )
+
+    def test_arbitrary_dotted_annotation_names_are_not_aliases(self, tmp_path):
+        """Only known typing/builtin dotted names should normalize as aliases."""
+        self._assert_annotation_pair_fails(
+            tmp_path,
+            declared_annotation="mytypes.Set",
+            actual_annotation="Set[str]",
+        )
 
     def test_missing_default_raises_drift_even_when_annotation_present(self, tmp_path):
         """Defaults are runtime signature behavior, not static metadata. A

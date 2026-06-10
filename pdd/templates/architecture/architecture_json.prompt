@@ -96,7 +96,7 @@ output_schema:
       interface:
         type: object
         properties:
-          type: { type: string, enum: [component, page, module, api, graphql, cli, job, message, config] }
+          type: { type: string, enum: [component, page, entrypoint, module, api, graphql, cli, job, message, config] }
           component: { type: object }
           page:
             type: object
@@ -150,7 +150,7 @@ INSTRUCTIONS:
 - If TECH_STACK_FILE is absent, infer a reasonable tech stack from the PRD and included files; state key assumptions within each item's description.
 - Output a single top-level JSON array of items. Each item must include:
   - reason (briefly explain why this code module needs to exist), description, dependencies (filenames), priority (1 = highest), filename, filepath, optional tags.
-  - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). Omit all non-applicable sub-objects entirely.
+  - interface: include only the applicable sub-object (component, page, module, api, graphql, cli, job, message, or config). For entrypoint, use only `"type": "entrypoint"` with no nested sub-object. Omit all non-applicable sub-objects entirely.
   - When interface.type is "page", each entry in `dataSources` must be an object with at least `kind` and `source` (e.g., URL or identifier). The `kind` field MUST be exactly one of: `"api"`, `"query"`, `"stream"`, `"file"`, `"cache"`, `"message"`, `"job"`, or `"other"`. Do not invent new values like `"api/mutation"`; instead, use `"api"` (for any HTTP/REST/GraphQL endpoint) or `"other"` and describe details such as queries vs. mutations in `description` or `notes`. Provide `method`, `description`, and any other useful metadata when known.
 - context_urls (optional): An array of {{url, purpose}} objects associating web documentation references with this module. These URLs provide reference documentation for the module's implementation. Populate with official docs, tutorials, or code examples relevant to the module.
 - Valid JSON only. No comments or trailing commas.
@@ -204,6 +204,7 @@ WRONG (do NOT do this):
 
 INTERFACE TYPES (emit only applicable):
 - page: route (string), renderingModel? (enum: "server" | "client" | "hybrid"), params? (array of {name, type, description?}), dataSources? (array), layout? (object)
+- entrypoint: no nested object; use for bootstrap files that intentionally export no symbols
 - component: props (array of {name, type, required?}), emits? (array), context? (array)
 - module: functions (array of {name, signature, returns?, errors?, sideEffects?})
 - api: endpoints (array of {method, path, auth?, requestSchema?, responseSchema?, errors?})

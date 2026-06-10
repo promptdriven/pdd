@@ -2310,6 +2310,7 @@ def _repair_architecture_interface_types(payload: Any) -> Tuple[Any, bool]:
     """
     allowed_types = {
         "component",
+        "entrypoint",
         "page",
         "module",
         "api",
@@ -2338,7 +2339,7 @@ def _repair_architecture_interface_types(payload: Any) -> Tuple[Any, bool]:
             continue
 
         inferred_type = None
-        for key in ("page", "component", "module", "api", "graphql", "cli", "job", "message", "config"):
+        for key in ("page", "entrypoint", "component", "module", "api", "graphql", "cli", "job", "message", "config"):
             if isinstance(interface.get(key), dict):
                 inferred_type = key
                 break
@@ -2449,6 +2450,264 @@ def _collect_actual_param_names(func_node: ast.AST) -> List[str]:
 # whitespace-stripped strings (via ``ast.unparse``) so equality compares
 # the canonical form and not the original quoting.
 ParamSpec = Tuple[str, Optional[str], Optional[str]]
+AnnotationShape = Tuple[str, Tuple[Any, ...]]
+
+_TYPE_ALIASES: Dict[str, str] = {
+    "typing.Any": "any",
+    "typing_extensions.Any": "any",
+    "Any": "any",
+    "builtins.bool": "bool",
+    "builtins.bytes": "bytes",
+    "builtins.float": "float",
+    "builtins.int": "int",
+    "builtins.object": "object",
+    "builtins.str": "str",
+    "typing.List": "list",
+    "typing_extensions.List": "list",
+    "List": "list",
+    "list": "list",
+    "typing.Dict": "dict",
+    "typing_extensions.Dict": "dict",
+    "Dict": "dict",
+    "dict": "dict",
+    "typing.Set": "set",
+    "typing_extensions.Set": "set",
+    "Set": "set",
+    "set": "set",
+    "typing.FrozenSet": "frozenset",
+    "typing_extensions.FrozenSet": "frozenset",
+    "FrozenSet": "frozenset",
+    "frozenset": "frozenset",
+    "typing.Tuple": "tuple",
+    "typing_extensions.Tuple": "tuple",
+    "Tuple": "tuple",
+    "tuple": "tuple",
+    "typing.Mapping": "mapping",
+    "typing_extensions.Mapping": "mapping",
+    "collections.abc.Mapping": "mapping",
+    "Mapping": "mapping",
+    "typing.MutableMapping": "mutablemapping",
+    "typing_extensions.MutableMapping": "mutablemapping",
+    "collections.abc.MutableMapping": "mutablemapping",
+    "MutableMapping": "mutablemapping",
+    "typing.Sequence": "sequence",
+    "typing_extensions.Sequence": "sequence",
+    "collections.abc.Sequence": "sequence",
+    "Sequence": "sequence",
+    "typing.MutableSequence": "mutablesequence",
+    "typing_extensions.MutableSequence": "mutablesequence",
+    "collections.abc.MutableSequence": "mutablesequence",
+    "MutableSequence": "mutablesequence",
+    "typing.Iterable": "iterable",
+    "typing_extensions.Iterable": "iterable",
+    "collections.abc.Iterable": "iterable",
+    "Iterable": "iterable",
+    "typing.Callable": "callable",
+    "typing_extensions.Callable": "callable",
+    "collections.abc.Callable": "callable",
+    "Callable": "callable",
+    "typing.Optional": "optional",
+    "typing_extensions.Optional": "optional",
+    "Optional": "optional",
+    "typing.Union": "union",
+    "typing_extensions.Union": "union",
+    "Union": "union",
+    "typing.Literal": "literal",
+    "typing_extensions.Literal": "literal",
+    "Literal": "literal",
+    "typing.Annotated": "annotated",
+    "typing_extensions.Annotated": "annotated",
+    "Annotated": "annotated",
+    "typing.Final": "final",
+    "typing_extensions.Final": "final",
+    "Final": "final",
+    "typing.ClassVar": "classvar",
+    "typing_extensions.ClassVar": "classvar",
+    "ClassVar": "classvar",
+    "typing.Required": "required",
+    "typing_extensions.Required": "required",
+    "Required": "required",
+    "typing.NotRequired": "notrequired",
+    "typing_extensions.NotRequired": "notrequired",
+    "NotRequired": "notrequired",
+    "None": "none",
+    "NoneType": "none",
+    "types.NoneType": "none",
+    "builtins.None": "none",
+}
+_GENERIC_BASES = {
+    "list",
+    "dict",
+    "set",
+    "frozenset",
+    "tuple",
+    "mapping",
+    "mutablemapping",
+    "sequence",
+    "mutablesequence",
+    "iterable",
+    "callable",
+}
+_TRANSPARENT_WRAPPER_BASES = {
+    "annotated",
+    "final",
+    "classvar",
+    "required",
+    "notrequired",
+}
+
+
+def _annotation_dotted_name(node: ast.AST) -> Optional[str]:
+    """Return a dotted name from a Name/Attribute annotation node."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _annotation_dotted_name(node.value)
+        if parent:
+            return f"{parent}.{node.attr}"
+        return node.attr
+    return None
+
+
+def _normalize_annotation_name(name: str) -> str:
+    """Map spelling variants from ``typing``/builtins to a stable base name."""
+    exact = _TYPE_ALIASES.get(name)
+    if exact is not None:
+        return exact
+    if "." not in name:
+        return _TYPE_ALIASES.get(name, name)
+    return name
+
+
+def _annotation_subscript_args(slice_node: ast.AST) -> List[ast.AST]:
+    """Return the logical type arguments from an annotation subscript slice."""
+    if isinstance(slice_node, ast.Tuple):
+        return list(slice_node.elts)
+    return [slice_node]
+
+
+def _annotation_union_shape(args: List[AnnotationShape]) -> AnnotationShape:
+    """Normalize ``Union``/PEP 604 unions, including Optional sugar."""
+    flat_args: List[AnnotationShape] = []
+    for arg in args:
+        if arg[0] == "union":
+            flat_args.extend(arg[1])
+        else:
+            flat_args.append(arg)
+
+    non_none = [arg for arg in flat_args if arg[0] != "none"]
+    if len(non_none) != len(flat_args):
+        if not non_none:
+            return ("none", ())
+        inner = (
+            non_none[0]
+            if len(non_none) == 1
+            else ("union", tuple(sorted(non_none, key=repr)))
+        )
+        return ("optional", (inner,))
+    return ("union", tuple(sorted(flat_args, key=repr)))
+
+
+def _annotation_shape_from_node(node: ast.AST) -> AnnotationShape:
+    """Convert a Python annotation AST into a comparable semantic shape."""
+    dotted_name = _annotation_dotted_name(node)
+    if dotted_name:
+        return (_normalize_annotation_name(dotted_name), ())
+
+    if isinstance(node, ast.Constant):
+        if node.value is None:
+            return ("none", ())
+        if node.value is Ellipsis:
+            return ("ellipsis", ())
+        return ("const", (type(node.value).__name__, repr(node.value)))
+
+    if isinstance(node, ast.List):
+        return ("arglist", tuple(_annotation_shape_from_node(item) for item in node.elts))
+
+    if isinstance(node, ast.Tuple):
+        return ("tupleexpr", tuple(_annotation_shape_from_node(item) for item in node.elts))
+
+    if isinstance(node, ast.Subscript):
+        base_name = _annotation_dotted_name(node.value)
+        if not base_name:
+            return ("raw", (ast.unparse(node).strip(),))
+        base = _normalize_annotation_name(base_name)
+        arg_shapes = [
+            _annotation_shape_from_node(arg)
+            for arg in _annotation_subscript_args(node.slice)
+        ]
+        if base == "optional" and len(arg_shapes) == 1:
+            return ("optional", (arg_shapes[0],))
+        if base == "union":
+            return _annotation_union_shape(arg_shapes)
+        if base in _TRANSPARENT_WRAPPER_BASES and arg_shapes:
+            return arg_shapes[0]
+        return (base, tuple(arg_shapes))
+
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _annotation_union_shape(
+            [
+                _annotation_shape_from_node(node.left),
+                _annotation_shape_from_node(node.right),
+            ]
+        )
+
+    if isinstance(node, ast.Ellipsis):
+        return ("ellipsis", ())
+
+    return ("raw", (ast.unparse(node).strip(),))
+
+
+def _normalize_annotation(annotation_src: str) -> Optional[AnnotationShape]:
+    """Parse an annotation source string into a semantic comparison shape."""
+    try:
+        expr = ast.parse(annotation_src, mode="eval").body
+    except SyntaxError:
+        return None
+
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        try:
+            expr = ast.parse(expr.value, mode="eval").body
+        except SyntaxError:
+            return ("forwardref", (expr.value,))
+
+    return _annotation_shape_from_node(expr)
+
+
+def _annotation_shapes_compatible(
+    declared_shape: AnnotationShape,
+    actual_shape: AnnotationShape,
+) -> bool:
+    """Return whether two normalized annotation shapes express the same contract."""
+    declared_base, declared_args = declared_shape
+    actual_base, actual_args = actual_shape
+    if declared_base != actual_base:
+        return False
+    if declared_base in _GENERIC_BASES and (not declared_args or not actual_args):
+        return True
+    if len(declared_args) != len(actual_args):
+        return False
+    for declared_arg, actual_arg in zip(declared_args, actual_args):
+        if isinstance(declared_arg, tuple) and isinstance(actual_arg, tuple):
+            if not _annotation_shapes_compatible(declared_arg, actual_arg):
+                return False
+        elif declared_arg != actual_arg:
+            return False
+    return True
+
+
+def _annotations_compatible(
+    declared_src: Optional[str],
+    actual_src: Optional[str],
+) -> bool:
+    """Conservative semantic annotation comparison for interface signatures."""
+    if not declared_src or not actual_src:
+        return True
+    declared_shape = _normalize_annotation(declared_src)
+    actual_shape = _normalize_annotation(actual_src)
+    if declared_shape is None or actual_shape is None:
+        return declared_src == actual_src
+    return _annotation_shapes_compatible(declared_shape, actual_shape)
 
 
 def _ast_args_to_specs(args: ast.arguments) -> List[ParamSpec]:
@@ -2724,8 +2983,9 @@ def _verify_pdd_interface_signatures(
     missing_funcs: List[str] = []
     # Signature drift detection:
     # * Annotations are checked conservatively — only raise when BOTH sides
-    #   specify the annotation and the canonical sources differ. Adding an
-    #   annotation later (gradual typing) should not churn the gate.
+    #   specify the annotation and the semantic shapes differ. Equivalent
+    #   typing spellings such as ``set``/``Set[str]`` or ``T | None``/
+    #   ``Optional[T]`` should not churn the gate.
     # * Defaults are checked strictly — defaults are runtime signature
     #   behavior, not static metadata. A prompt declaring
     #   ``sync_metadata=False`` advertises that callers may omit the kwarg;
@@ -2758,11 +3018,7 @@ def _verify_pdd_interface_signatures(
                 continue
             found_in_code.append(dotted)
             _, actual_ann, actual_default = actual_by_name[declared_name]
-            if (
-                declared_ann
-                and actual_ann
-                and declared_ann != actual_ann
-            ):
+            if not _annotations_compatible(declared_ann, actual_ann):
                 drifted.append(
                     (func_name, declared_name, "annotation", declared_ann, actual_ann)
                 )
@@ -2997,8 +3253,8 @@ def _verify_architecture_json_conformance(
         for ep in api_spec.get("endpoints", []):
             # For API modules we don't check symbol names by default
             pass
-    elif iface_type == "page":
-        # Pages typically export a default — skip symbol checking
+    elif iface_type in {"page", "entrypoint"}:
+        # Pages and bootstrap entrypoints may have no named exports.
         return entry
     elif iface_type == "component":
         comp_spec = interface.get("component", {})
@@ -3244,9 +3500,9 @@ def _wire_to_parent_init(output_path: str, exports: list[str], verbose: bool = F
 def code_generator_main(
     ctx: click.Context,
     prompt_file: str,
-    output: Optional[str],
-    original_prompt_file_path: Optional[str],
-    force_incremental_flag: bool,
+    output: Optional[str] = None,
+    original_prompt_file_path: Optional[str] = None,
+    force_incremental_flag: bool = False,
     env_vars: Optional[Dict[str, str]] = None,
     unit_test_file: Optional[str] = None,
     exclude_tests: bool = False,

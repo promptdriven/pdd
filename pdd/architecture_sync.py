@@ -15,7 +15,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from lxml import etree
 
@@ -25,6 +25,21 @@ from .architecture_registry import (
 )
 
 from .architecture_sync_helper import filepath_to_prompt_filename
+
+__all__ = [
+    "normalize_architecture_filenames",
+    "parse_prompt_tags",
+    "register_untracked_prompts",
+    "update_architecture_from_prompt",
+    "sync_all_prompts_to_architecture",
+    "validate_dependencies",
+    "validate_interface_structure",
+    "get_architecture_entry_for_prompt",
+    "has_pdd_tags",
+    "generate_tags_from_architecture",
+    "validate_architecture_modules",
+    "sync_prompts_to_architecture",
+]
 
 # --- Issue #617: filename mirrors filepath ---
 
@@ -547,7 +562,7 @@ def register_untracked_prompts(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
     dry_run: bool = False,
-    only_files: Optional[set] = None,
+    only_files: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """
     Discover prompt files that have PDD tags but no architecture.json entry,
@@ -1438,7 +1453,7 @@ def sync_all_prompts_to_architecture(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
     dry_run: bool = False,
-    only_files: Optional[set] = None,
+    only_files: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """
     Sync ALL prompt files to architecture.json.
@@ -1722,7 +1737,7 @@ def sync_prompts_to_architecture(
 
     try:
         if filenames is None:
-            register_only_files: Optional[set] = None
+            register_only_files: Optional[Set[str]] = None
             try:
                 prompts_owner = resolved_prompts_dir.parent.resolve(strict=False)
                 architecture_owner = resolved_architecture_path.parent.resolve(strict=False)
@@ -1854,8 +1869,9 @@ def validate_interface_structure(interface: Dict[str, Any]) -> Dict[str, Any]:
     Validate interface JSON structure.
 
     Interface must have:
-    - 'type' field with value: 'module' | 'cli' | 'command' | 'frontend'
-    - Corresponding nested object with appropriate structure
+    - 'type' field with value: 'module' | 'cli' | 'command' | 'frontend' | 'config' | 'entrypoint'
+    - Corresponding nested object with appropriate structure, except entrypoint
+      which requires no nested object
 
     Args:
         interface: Parsed interface JSON dict
@@ -1878,9 +1894,12 @@ def validate_interface_structure(interface: Dict[str, Any]) -> Dict[str, Any]:
 
     # Check type field
     itype = interface.get('type')
-    if itype not in ['module', 'cli', 'command', 'frontend']:
-        errors.append(f"Invalid type: '{itype}'. Must be: module, cli, command, or frontend")
+    if itype not in ['module', 'cli', 'command', 'frontend', 'config', 'entrypoint']:
+        errors.append(f"Invalid type: '{itype}'. Must be: module, cli, command, frontend, config, or entrypoint")
         return {'valid': False, 'errors': errors}
+
+    if itype == 'entrypoint':
+        return {'valid': True, 'errors': errors}
 
     # Check corresponding nested key exists
     if itype not in interface:
@@ -1901,6 +1920,9 @@ def validate_interface_structure(interface: Dict[str, Any]) -> Dict[str, Any]:
     elif itype == 'frontend':
         if 'pages' not in nested_obj:
             errors.append("frontend.pages is required")
+    elif itype == 'config':
+        if 'keys' not in nested_obj:
+            errors.append("config.keys is required")
 
     return {
         'valid': len(errors) == 0,
