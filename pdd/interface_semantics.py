@@ -243,9 +243,13 @@ def signature_entries_compatible(old_entry: str, new_entry: str) -> Optional[boo
 def _existing_param_compatible(old: ParamContract, new: ParamContract) -> bool:
     if old.name != new.name:
         return False
-    if old.has_default != new.has_default:
+    # Adding a default to a previously-required parameter preserves every call
+    # form the old signature accepted (callers always supplied it), so widening
+    # required -> optional is backward compatible.  Dropping a default the old
+    # signature had IS a regression: callers that omitted the argument break.
+    if old.has_default and not new.has_default:
         return False
-    if old.has_default and old.default != new.default:
+    if old.has_default and new.has_default and old.default != new.default:
         return False
     return semantic_types_compatible(old.annotation, new.annotation)
 

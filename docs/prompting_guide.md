@@ -939,7 +939,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 **`<pdd-interface>`**
 - **Purpose**: JSON describing the module's public API (functions, commands, pages)
 - **Maps to**: `architecture.json["interface"]`
-- **Format**: Valid JSON matching one of four interface types (see below)
+- **Format**: Valid JSON matching one of the supported interface types (see below)
 - **Example**:
   ```xml
   <pdd-interface>
