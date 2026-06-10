@@ -183,8 +183,12 @@ class TerminalCheckupSession(CheckupSession):
         frm = data.get("from", "interactive")
         to = data.get("to", "auto")
         click.echo(f"\nMode changed: {frm} -> {to}")
-        click.echo("Auto-applying low-risk fixes for remaining findings.")
-        click.echo("Risky or ambiguous fixes will be left for review.")
+        if to == "llm-auto":
+            click.echo("Letting the LLM draft and apply a fix for every remaining group.")
+            click.echo("Each group costs a model call; offline groups are saved for review.")
+        else:
+            click.echo("Auto-applying low-risk fixes for remaining findings.")
+            click.echo("Risky or ambiguous fixes will be left for review.")
 
     def _render_verifying(self, data: dict) -> None:
         click.echo("\nVerifying fixes...")
@@ -232,12 +236,16 @@ class TerminalCheckupSession(CheckupSession):
             click.echo("[3] Keep current / skip")
             click.echo("[4] Custom fix")
             click.echo("[5] Let the LLM draft this fix now (costs a model call)")
-            click.echo("[a] Auto for remaining groups  [q] Quit")
+            click.echo("[a] Auto for remaining — deterministic (apply low-risk, save the rest)")
+            click.echo("[f] Let the LLM fix ALL remaining — auto, applies real fixes")
+            click.echo("[q] Quit")
             answer = click.prompt("Choice", default="1", show_default=False).strip().lower()
             if answer in ("q", "quit"):
                 return "quit"
             if answer in ("a", "auto"):
                 return "auto"
+            if answer in ("f", "fix", "fixall", "llm-auto", "llmauto"):
+                return "llm_auto"
             if answer in ("", "1", "y", "yes", "option a"):
                 return "accept"
             if answer in ("2", "b", "option b"):
@@ -248,7 +256,7 @@ class TerminalCheckupSession(CheckupSession):
                 return "edit"
             if answer in ("5", "l", "llm", "draft"):
                 return "llm"
-            click.echo("Choose 1-5, a, or q.")
+            click.echo("Choose 1-5, a, f, or q.")
 
     def ask_definition(self) -> str:
         return click.prompt("Enter your definition / replacement", default="", show_default=False)
@@ -463,7 +471,7 @@ class CheckupAgent:
         # "custom" (operator edit).
         disposition: dict[str, str] = {}
         _auto = mode == MODE_AUTO
-        # LLM-drafted, operator-approved patches (menu option 7). Applied
+        # LLM-drafted, operator-approved patches (menu option 5/[f]). Applied
         # separately from the bulk --apply path because each was explicitly
         # confirmed in-session.
         llm_patches: list[ApprovedPatch] = []
@@ -487,33 +495,17 @@ class CheckupAgent:
                         },
                     )
                 )
-            new_text, cost_inc, model_inc = self.repair_drafter_full(
-                groups, prompt_text=prompt_text
+            cost_inc, model_inc, auto_llm_done = self._full_rewrite_all(
+                groups=groups,
+                prompt_text=prompt_text,
+                root=root,
+                disposition=disposition,
+                llm_patches=llm_patches,
             )
             total_cost += cost_inc
             if model_inc:
                 last_model = model_inc
-            if new_text:
-                rep_file = groups[0].findings[0].file
-                src = rep_file if rep_file.is_absolute() else Path(root) / rep_file
-                try:
-                    target_path = src.resolve().relative_to(Path(root).resolve())
-                except ValueError:
-                    target_path = rep_file
-                llm_patches.append(
-                    ApprovedPatch(
-                        kind="full_rewrite",
-                        target=target_path,
-                        anchor={"finding_id": "checkup:full"},
-                        replacement=new_text,
-                        finding_id="checkup:full",
-                    )
-                )
-                for g in groups:
-                    for f in g.findings:
-                        disposition[f.finding_id] = "llm"
-                auto_llm_done = True
-            elif not quiet:
+            if not auto_llm_done and not quiet:
                 click.echo(
                     "\nLLM repair unavailable (no credential / offline / out of credits) "
                     "— falling back to per-finding review."
@@ -553,9 +545,35 @@ class CheckupAgent:
                         AgentEvent("mode_switch", {"from": "interactive", "to": "auto"})
                     )
                     decision = "accept"
+                elif decision == "llm_auto":
+                    # [f]: LLM-fix EVERY group in one coherent rewrite (the same
+                    # reliable mechanism as --auto --llm-repair), then finish.
+                    self.session.on_event(
+                        AgentEvent("mode_switch", {"from": "interactive", "to": "llm-auto"})
+                    )
+                    cost_inc, model_inc, done = self._full_rewrite_all(
+                        groups=groups,
+                        prompt_text=prompt_text,
+                        root=root,
+                        disposition=disposition,
+                        llm_patches=llm_patches,
+                    )
+                    total_cost += cost_inc
+                    if model_inc:
+                        last_model = model_inc
+                    if done:
+                        auto_llm_done = True
+                        break
+                    # Offline / no key → finish deterministically for the rest.
+                    _auto = True
+                    if not quiet:
+                        click.echo(
+                            "\nLLM repair unavailable (no credential / offline / out of "
+                            "credits) — finishing with deterministic auto."
+                        )
+                    decision = "accept"
 
-            # Interactive [5] drafts one group via the LLM, approved per group.
-            # (--auto --llm-repair is handled in one pass above the loop.)
+            # [5]: draft one group via the LLM, approved per group.
             if decision == "llm":
                 cost_inc, model_inc, handled = self._draft_group(
                     group=group,
@@ -730,6 +748,47 @@ class CheckupAgent:
         "gate": "waiver",
         "snapshot": "contract_rule",
     }
+
+    def _full_rewrite_all(
+        self,
+        *,
+        groups: list,
+        prompt_text: str,
+        root: Path,
+        disposition: dict,
+        llm_patches: list,
+    ) -> tuple[float, str, bool]:
+        """One LLM pass rewrites the whole prompt to fix every group, queued once.
+
+        Returns ``(cost, model, done)``. ``done`` is False when no draft is
+        available (offline / no key), so callers fall back to the deterministic
+        path. Shared by ``--auto --llm-repair`` and the interactive ``[f]`` option
+        so both fix all findings in one coherent, reliably-verified rewrite.
+        """
+        if not groups:
+            return 0.0, "", False
+        new_text, cost, model = self.repair_drafter_full(groups, prompt_text=prompt_text)
+        if not new_text:
+            return cost, model, False
+        rep_file = groups[0].findings[0].file
+        src = rep_file if rep_file.is_absolute() else Path(root) / rep_file
+        try:
+            target_path = src.resolve().relative_to(Path(root).resolve())
+        except ValueError:
+            target_path = rep_file
+        llm_patches.append(
+            ApprovedPatch(
+                kind="full_rewrite",
+                target=target_path,
+                anchor={"finding_id": "checkup:full"},
+                replacement=new_text,
+                finding_id="checkup:full",
+            )
+        )
+        for group in groups:
+            for finding in group.findings:
+                disposition[finding.finding_id] = "llm"
+        return cost, model, True
 
     def _draft_group(
         self,

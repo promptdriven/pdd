@@ -1051,6 +1051,48 @@ class TestLLMDraftOption:
         assert acc["drafted_by_llm"] == 0
         assert acc["patches_queued"] >= 1
 
+    def test_llm_auto_fixes_all_remaining_in_one_rewrite(self, tmp_path):
+        """Pressing [f] (llm_auto) fixes every group in ONE coherent rewrite (the
+        same mechanism as --auto --llm-repair), not group-by-group."""
+        prompt_file = tmp_path / "two.prompt"
+        prompt_file.write_text("% two\nDo something.\n", encoding="utf-8")
+        findings = [
+            SourceSetFinding(
+                finding_id="v1", source_check="lint", severity="warn",
+                file=prompt_file, line="1", message='Vague term "a"',
+                code="VAGUE_TERM_UNDEFINED",
+            ),
+            SourceSetFinding(
+                finding_id="c1", source_check="contract", severity="warn",
+                file=prompt_file, line="1", message="contract wording",
+                code="CONTRACT_WORDING", recommended_action="tighten wording",
+            ),
+        ]
+        report = PromptSourceSetReport(
+            prompt_path=prompt_file, project_root=tmp_path, target=str(prompt_file),
+            findings=findings,
+            checks=[{"name": "lint", "status": "warn"}, {"name": "contract", "status": "warn"}],
+        )
+
+        def full(groups, *, prompt_text):
+            return "% two\n<vocabulary>fixed</vocabulary>\n", 0.04, "fake/model"
+
+        # Decide [f] on the first group → one rewrite fixes everything.
+        session = RecordingCheckupSession(group_decisions=["llm_auto"])
+        agent = CheckupAgent(DeterministicPlanner(), session, repair_drafter_full=full)
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            _, cost, _ = agent.run(
+                str(report.prompt_path), project_root=tmp_path, quiet=True, mode="interactive"
+            )
+
+        assert prompt_file.read_text(encoding="utf-8") == "% two\n<vocabulary>fixed</vocabulary>\n"
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 2       # both groups resolved
+        assert acc["patches_applied"] == 1      # one full-rewrite patch
+        assert cost == pytest.approx(0.04)      # exactly one model call
+        switches = session.events_of_kind("mode_switch")
+        assert any(e.data.get("to") == "llm-auto" for e in switches)
+
 
 def test_draft_group_replacement_is_offline_safe():
     """A failing/None-returning model must yield None, not raise."""
