@@ -19,7 +19,6 @@
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
-<pdd-dependency>context/python_preamble.prompt</pdd-dependency>
 <pdd-dependency>context_snapshot_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
 

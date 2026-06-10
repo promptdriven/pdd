@@ -2008,7 +2008,6 @@
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
       "_keyring_timeout_python.prompt",
-      "context/python_preamble.prompt",
       "context_snapshot_python.prompt",
       "compressed_sync_context_python.prompt"
     ],
@@ -6782,6 +6781,16 @@
             "name": "register_untracked_prompts",
             "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
             "returns": "Dict with keys: registered, skipped, errors"
+          },
+          {
+            "name": "validate_architecture_modules",
+            "signature": "(modules: List[Dict[str, Any]]) -> Dict[str, Any]",
+            "returns": "Dict with keys: valid, errors, warnings"
+          },
+          {
+            "name": "sync_prompts_to_architecture",
+            "signature": "(filenames: Optional[List[str]] = None, prompts_dir: Optional[Path] = None, architecture_path: Optional[Path] = None, dry_run: bool = False) -> Dict[str, Any]",
+            "returns": "Dict with keys: success, updated_count, results, errors, registered"
           }
         ]
       }

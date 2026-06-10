@@ -37,6 +37,8 @@ __all__ = [
     "get_architecture_entry_for_prompt",
     "has_pdd_tags",
     "generate_tags_from_architecture",
+    "validate_architecture_modules",
+    "sync_prompts_to_architecture",
 ]
 
 # --- Issue #617: filename mirrors filepath ---
