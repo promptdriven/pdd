@@ -24,6 +24,27 @@ Run the whole thing non-interactively:
 bash demos/checkup_interactive/run_demo.sh --workflow
 ```
 
+The `--workflow` demo runs the **one simple command in auto mode over every
+prompt** in `demos/checkup_interactive/prompts/`:
+
+```bash
+for f in demos/checkup_interactive/prompts/*.prompt; do
+  python -m pdd checkup "$f" --planner deterministic --auto
+done
+```
+
+Auto mode handles everything — it groups findings, applies low-risk fixes,
+saves medium-risk fixes for review (never fabricated), writes artifacts, and
+prints a `Decision:` for each prompt. The demo tallies the outcomes, e.g.:
+
+```
+Prompts checked: 7    pass: 3    warn: 3    block: 1
+```
+
+`pass`/`warn` continue the lifecycle; `block` (here `06_snapshot_candidate`, a
+hard snapshot-policy error) stops it until the prompt is fixed. The steps below
+explain one prompt end to end.
+
 ---
 
 ## Step 1 — PRD / issue / user request

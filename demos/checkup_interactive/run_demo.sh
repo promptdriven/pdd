@@ -308,61 +308,58 @@ demo_strict_gate() {
 }
 
 # ---------------------------------------------------------------------------
-# Full PDD lifecycle demo — PRD/issue → prompt → checkup → repair → decision → code
+# Full workflow demo — auto-mode checkup over every prompt in prompts/
 # ---------------------------------------------------------------------------
 demo_full_workflow() {
-  banner "Full PDD workflow — PRD/issue → prompt → checkup → repair → code"
-  local PROMPT="$REL/02_vague_clarification.prompt"
+  banner "Full workflow — auto checkup over every prompt in prompts/"
+  cat <<EOF
 
-  subhead "Step 1 — PRD / issue / user request"
-  cat <<'EOF'
-    "Add an auth-check module that validates user sessions and rejects
-     unauthorized or duplicate tokens."  (a real, slightly vague request)
+  For each prompt the demo runs the one simple command in auto mode:
+
+      python -m pdd checkup <prompt> --planner deterministic --auto
+
+  Auto mode handles everything: it groups findings, applies low-risk fixes,
+  saves medium-risk fixes for review (never fabricated), writes artifacts, and
+  decides whether the workflow can continue or must block.
+
 EOF
 
-  subhead "Step 2 — generate / update the prompt"
-  note "The request becomes a PDD prompt (here: 02_vague_clarification.prompt)."
-  sed -n '1,12p' "$PROMPT" | sed 's/^/    /'
+  local total=0 p=0 w=0 b=0
+  for f in "$PROMPTS"/*.prompt; do
+    [ -e "$f" ] || continue
+    total=$((total + 1))
+    local name rel
+    name=$(basename "$f")
+    rel="$REL/$name"
 
-  subhead "Step 3 — automatic prompt checkup (the gate)"
-  echo "    \$ python -m pdd checkup $PROMPT --planner deterministic"
-  run_pdd checkup "$PROMPT" --planner deterministic
-  echo "$CMD_OUT" | grep -E "undefined vague terms|Saved for review|Decision:|→ (continue|block)|Patch preview|Report:" \
-    | sed 's/^/    /' | head -12
-  assert_contains "undefined vague terms" "checkup grouped the vague terms"
-  assert_contains "Decision:"             "checkup printed a lifecycle decision"
+    subhead "checkup $name --auto"
+    run_pdd checkup "$rel" --planner deterministic --auto
+    echo "$CMD_OUT" | grep -E "Decision:|→ (continue|block)|Saved for review:|Fixed automatically:" \
+      | sed 's/^/    /'
 
-  subhead "Step 4 — LLM-assisted / interactive repair"
-  note "Repair adds a <vocabulary> block defining the vague terms. By default it"
-  note "is saved for review (a patch preview), never silently applied:"
-  if [ -f "$REPO_ROOT/.pdd/checkup/02_vague_clarification.patch" ]; then
-    head -8 "$REPO_ROOT/.pdd/checkup/02_vague_clarification.patch" | sed 's/^/      /'
-    pass "repair patch preview was generated"
+    if echo "$CMD_OUT" | grep -q "→ block"; then
+      b=$((b + 1))
+      pass "$name → BLOCK (exit $CMD_EXIT) — gate stops the lifecycle here"
+    elif echo "$CMD_OUT" | grep -q "pass → continue"; then
+      p=$((p + 1))
+      pass "$name → PASS, continue (exit $CMD_EXIT)"
+    elif echo "$CMD_OUT" | grep -q "warn → continue"; then
+      w=$((w + 1))
+      pass "$name → WARN, continue (exit $CMD_EXIT)"
+    else
+      fail "$name produced no recognizable decision (exit $CMD_EXIT)"
+    fi
+  done
+
+  echo
+  info "Prompts checked: $total    pass: $p    warn: $w    block: $b"
+  if [ "$total" -ge 1 ]; then
+    pass "auto-mode checkup ran over every prompt in prompts/"
   else
-    note "(run step 3 first to generate the patch preview)"
+    fail "no prompts found under $PROMPTS"
   fi
-  note "Interactively:  python -m pdd checkup $PROMPT --interactive --planner deterministic"
-  note "Apply for real: add --apply (then checkup re-verifies the fix)."
-
-  subhead "Step 5 — decision: pass / warn → continue, strict → block"
-  if echo "$CMD_OUT" | grep -q "→ continue"; then
-    pass "warn → CONTINUE: the workflow may proceed to code generation"
-  else
-    fail "expected a continue decision in non-strict mode"
-  fi
-  note "In strict mode the same prompt would BLOCK (exit 2) until repaired."
-
-  subhead "Step 6 — generate / modify code"
-  cat <<'EOF'
-    Because the decision is "continue", the next PDD step runs:
-
-      $ python -m pdd generate demos/checkup_interactive/prompts/02_vague_clarification.prompt
-      # → produces pdd/auth_check.py
-
-    (Code generation is not executed here — it needs an LLM — but this is the
-     exact next command in the lifecycle.)
-EOF
-  pass "full lifecycle demonstrated end-to-end"
+  # Auto mode wrote artifacts under .pdd/checkup for prompts with findings.
+  rm -rf "$REPO_ROOT/.pdd/checkup"
 }
 
 # ---------------------------------------------------------------------------

@@ -145,7 +145,7 @@ bash demos/checkup_interactive/run_demo.sh
 1) Run fast prompt checkup demo (the simple default command)
 2) Run LLM / interactive repair demo
 3) Run strict gate / blocking demo (pass · warn · block)
-4) Run full PRD → prompt → checkup → code workflow demo
+4) Run full workflow demo (auto checkup over every prompt)
 5) Run all checkup demos
 6) Cleanup generated artifacts
 d) Direct subcommand comparison (lint/contract/.../drift)
@@ -160,7 +160,7 @@ bash demos/checkup_interactive/run_demo.sh --all          # every demo below
 bash demos/checkup_interactive/run_demo.sh --fast         # the simple default command
 bash demos/checkup_interactive/run_demo.sh --repair       # LLM/interactive repair
 bash demos/checkup_interactive/run_demo.sh --strict-gate  # pass / warn / strict block
-bash demos/checkup_interactive/run_demo.sh --workflow     # PRD → prompt → checkup → code
+bash demos/checkup_interactive/run_demo.sh --workflow     # auto checkup over every prompt
 bash demos/checkup_interactive/run_demo.sh --auto         # apply low-risk only
 bash demos/checkup_interactive/run_demo.sh --llm-fallback # LLM path + graceful fallback
 bash demos/checkup_interactive/run_demo.sh --direct       # six direct subcommands

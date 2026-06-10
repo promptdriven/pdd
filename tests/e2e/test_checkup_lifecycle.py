@@ -162,12 +162,18 @@ def test_run_demo_strict_gate_passes() -> None:
 
 
 @pytest.mark.slow
-def test_run_demo_full_workflow_passes() -> None:
+def test_run_demo_full_workflow_runs_auto_over_every_prompt() -> None:
+    """--workflow runs `checkup <prompt> --planner deterministic --auto` per prompt."""
     proc = _bash("--workflow")
     assert proc.returncode == 0, proc.stdout[-2000:]
-    # the six lifecycle steps are present
-    for step in ("Step 1", "Step 3", "Step 5", "Step 6"):
-        assert step in proc.stdout
+    assert "--planner deterministic --auto" in proc.stdout
+    # every demo prompt appears as an auto checkup line
+    for prompt in ALL_PROMPTS:
+        assert f"checkup {prompt.name} --auto" in proc.stdout
+    # a per-prompt lifecycle decision is shown, and the tally is printed
+    assert "→ continue" in proc.stdout
+    assert "→ block" in proc.stdout  # 06_snapshot is a hard block
+    assert "Prompts checked:" in proc.stdout
     assert "FAIL: 0" in proc.stdout
 
 
