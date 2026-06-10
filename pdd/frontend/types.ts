@@ -91,7 +91,7 @@ export interface MockPrompt {
 
 // Architecture types for PRD-driven project building
 export interface ArchitectureInterface {
-  type: 'page' | 'component' | 'module' | 'api' | 'graphql' | 'cli' | 'job' | 'message' | 'config';
+  type: 'page' | 'component' | 'module' | 'api' | 'graphql' | 'cli' | 'job' | 'message' | 'config' | 'entrypoint';
   page?: {
     route: string;
     params?: { name: string; type: string; description?: string }[];

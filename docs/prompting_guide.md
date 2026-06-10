@@ -1022,12 +1022,12 @@ The `<pdd-interface>` tag supports six interface types, matching the architectur
 {
   "type": "config",
   "config": {
-    "keys": ["DATABASE_URL", "API_KEY", "LOG_LEVEL"]
+    "keys": ["issue_url", "repo_owner", "issue_number"]
   }
 }
 ```
 
-`config.keys` is required: list the configuration or input variable names the module depends on. It may be an empty array (`"keys": []`) when the prompt or module declares no keys yet.
+`config.keys` is required and lists the prompt's configuration or input variable names as plain strings (for example, template variables such as `issue_url`). It may be an empty array (`"keys": []`) when none are declared yet.
 
 **Entrypoint Interface** (framework bootstrap files that export nothing):
 ```json
