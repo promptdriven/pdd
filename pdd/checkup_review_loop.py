@@ -1605,6 +1605,19 @@ def run_checkup_review_loop(
                     worktree, guard_changed_files, head_ref=guard_head_ref
                 )
             residual_refusal = registry_guard_refusal or guard_refusal
+            # Never push a repair whose fixer turn itself reported failure, even
+            # if the deterministic guards happen to pass on a partial prompt
+            # edit — fall through to the structured blocker instead.
+            if (
+                not residual_refusal
+                and sot_details.get("repair_attempted")
+                and not sot_details.get("fixer_reported_success", True)
+            ):
+                residual_refusal = (
+                    "source-of-truth repair fixer reported failure; "
+                    "refusing to push a partial repair."
+                )
+            residual_refusal = residual_refusal or ""
             sot_details["blocked"] = bool(residual_refusal)
             state.source_of_truth = sot_details
             if residual_refusal:
@@ -6387,6 +6400,15 @@ def _attempt_source_of_truth_repair(
         artifacts_dir / f"round-{round_number}-source-of-truth-repair.output.txt",
         output,
     )
+    details["fixer_reported_success"] = bool(success)
+    if not success:
+        # The repair fixer turn itself failed. Do NOT regenerate code from a
+        # possibly-botched prompt edit, and signal the caller to block rather
+        # than push a partial repair (even if a partial prompt co-edit would
+        # let the deterministic guard pass).
+        details["repair_skipped_reason"] = "source-of-truth repair fixer reported failure"
+        details["blocked"] = True
+        return details
     # Best-effort regeneration so the code provably matches the repaired prompt.
     regen_results = []
     for offender in repairable:
@@ -6396,7 +6418,6 @@ def _attempt_source_of_truth_repair(
         state.total_cost += float(regen.get("cost") or 0.0)
         regen_results.append({**offender, "regenerated": regen.get("ok"), "regen_error": regen.get("error")})
     details["repaired"] = regen_results
-    details["fixer_reported_success"] = bool(success)
     # ``blocked`` is provisional here; the caller re-runs the guards and
     # overwrites it with the authoritative residual result.
     details["blocked"] = bool(unrepairable)

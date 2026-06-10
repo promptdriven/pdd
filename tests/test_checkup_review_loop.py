@@ -7828,6 +7828,43 @@ class TestAttemptSourceOfTruthRepair2047:
         assert details["repair_attempted"] is False
         assert "budget" in details["repair_skipped_reason"]
 
+    def test_fixer_failure_skips_regen_and_blocks(self, tmp_path, monkeypatch):
+        # Review hardening: if the repair fixer turn reports failure, do NOT
+        # regenerate (no code from a botched prompt edit) and block — never push
+        # a partial repair even if a co-edit would let the guard pass.
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path)
+        state = State()
+        calls = {"regen": 0}
+        monkeypatch.setattr(
+            mod, "_run_role_task", lambda *a, **k: (False, "fixer failed", 0.2, "claude")
+        )
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: calls.__setitem__("regen", calls["regen"] + 1) or {"ok": True, "cost": 0.0, "model": "", "error": ""},
+        )
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(enable_source_of_truth_repair=True, max_cost=50.0),
+            state=state,
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=float("inf"),
+            active_fixer="claude",
+            verbose=False,
+            quiet=True,
+        )
+        assert details["repair_attempted"] is True
+        assert details["fixer_reported_success"] is False
+        assert details["blocked"] is True
+        assert calls["regen"] == 0  # no regeneration on fixer failure
+
 
 def _machine_verdict_from_report(report: str) -> Dict[str, Any]:
     """Extract the parsed ``### Machine Verdict`` JSON block from a report."""
