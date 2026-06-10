@@ -368,9 +368,7 @@ class TestCheckupAgent:
 
         with patch(
             "pdd.checkup_agent.build_prompt_source_set_report"
-        ) as mock_report, patch(
-            "pdd.checkup_agent._prompt_agent_menu_choice", return_value=4
-        ):
+        ) as mock_report:
             mock_report.return_value = PromptSourceSetReport(
                 prompt_path=prompt_file,
                 project_root=tmp_path,
@@ -404,14 +402,13 @@ class TestCheckupAgent:
         prompt_file.write_text("% Test\n", encoding="utf-8")
 
         custom_plan = Plan(tools=["lint"], rationale="only lint")
+        # Custom plan only applies in interactive mode (where confirm_plan runs).
         session = RecordingCheckupSession(custom_plan=custom_plan)
         planner = DeterministicPlanner()
 
         with patch(
             "pdd.checkup_agent.build_prompt_source_set_report"
-        ) as mock_report, patch(
-            "pdd.checkup_agent._prompt_agent_menu_choice", return_value=4
-        ):
+        ) as mock_report:
             mock_report.return_value = PromptSourceSetReport(
                 prompt_path=prompt_file,
                 project_root=tmp_path,
@@ -420,7 +417,12 @@ class TestCheckupAgent:
                 checks=[{"name": "lint", "status": "pass"}],
             )
             agent = CheckupAgent(planner, session)
-            agent.run(str(prompt_file), project_root=tmp_path, quiet=True)
+            agent.run(
+                str(prompt_file),
+                project_root=tmp_path,
+                quiet=True,
+                mode="interactive",
+            )
 
         tool_starts = session.events_of_kind("tool_start")
         tool_names = [e.data["tool"] for e in tool_starts]
@@ -437,6 +439,7 @@ class TestCheckupAgent:
     def test_agent_processes_lint_finding(self, tmp_path):
         prompt_file = tmp_path / "vague.prompt"
         prompt_file.write_text("% Vague\nDo something valid.\n", encoding="utf-8")
+        # code contains VAGUE → requires_clarification=True → medium risk.
         finding = SourceSetFinding(
             finding_id="lint-v-001",
             source_check="lint",
@@ -444,7 +447,7 @@ class TestCheckupAgent:
             file=prompt_file,
             line="2",
             message="Vague term 'valid'",
-            evidence="valid",
+            evidence="requirements",
             recommended_action="Specify criterion",
             fix_command="",
             code="VAGUE_TERM",
@@ -455,9 +458,7 @@ class TestCheckupAgent:
 
         with patch(
             "pdd.checkup_agent.build_prompt_source_set_report"
-        ) as mock_report, patch(
-            "pdd.checkup_agent._prompt_agent_menu_choice", return_value=4  # skip
-        ):
+        ) as mock_report:
             mock_report.return_value = PromptSourceSetReport(
                 prompt_path=prompt_file,
                 project_root=tmp_path,
@@ -466,13 +467,20 @@ class TestCheckupAgent:
                 checks=[{"name": "lint", "status": "warn"}],
             )
             agent = CheckupAgent(planner, session)
-            msg, cost, model = agent.run(str(prompt_file), project_root=tmp_path, quiet=True)
+            msg, cost, model = agent.run(
+                str(prompt_file), project_root=tmp_path, quiet=True, mode="review"
+            )
 
         assert "complete" in msg.lower()
-        done_events = session.events_of_kind("session_done")
-        assert done_events
-        assert done_events[0].data["total_findings"] == 1
-        assert done_events[0].data["skipped"] == 1
+        done = session.events_of_kind("session_done")[0]
+        acc = done.data["accounting"]
+        assert acc["total"] == 1
+        # vague term is medium risk → saved for review, not skipped or applied
+        assert acc["saved_for_review"] == 1
+        assert acc["skipped_by_user"] == 0
+        assert acc["fixed_automatically"] == 0
+        # legacy keys retained for back-compat
+        assert done.data["total_findings"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -492,8 +500,8 @@ def test_cli_planner_flag_invalid(tmp_path):
     assert "invalid" in result.output.lower() or "error" in result.output.lower()
 
 
-def test_cli_planner_requires_interactive(tmp_path):
-    """--planner without --interactive should not invoke CheckupAgent."""
+def test_cli_planner_without_interactive_runs_review_mode(tmp_path):
+    """--planner without --interactive runs the agent in non-interactive review mode."""
     from click.testing import CliRunner
 
     from pdd.commands.checkup import checkup
@@ -502,17 +510,17 @@ def test_cli_planner_requires_interactive(tmp_path):
     prompt_file.write_text("% Test\nDo something.\n", encoding="utf-8")
 
     runner = CliRunner()
-    # --planner without --interactive falls through to normal prompt checkup
-    # (no crash, just runs non-interactively)
-    with patch("pdd.commands.checkup.run_checkup_prompt") as mock_run:
-        mock_run.return_value = (True, "ok", 0.0, "", 0)
+    with patch("pdd.checkup_agent.CheckupAgent.run") as mock_run:
+        mock_run.return_value = ("done", 0.0, "")
         result = runner.invoke(
             checkup,
             ["--planner", "deterministic", str(prompt_file)],
             catch_exceptions=False,
         )
-    # Should not raise; --planner is silently ignored without --interactive
-    assert result.exit_code == 0 or "error" not in result.output.lower()
+    mock_run.assert_called_once()
+    # review mode: non-interactive, not auto
+    assert mock_run.call_args.kwargs.get("mode") == "review"
+    assert result.exit_code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -520,126 +528,156 @@ def test_cli_planner_requires_interactive(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-class TestAutoMode:
-    def _make_report(self, tmp_path: Path, n_findings: int = 2) -> PromptSourceSetReport:
-        prompt_file = tmp_path / "vague.prompt"
-        prompt_file.write_text("% Vague\nDo something valid.\n", encoding="utf-8")
-        findings = [
-            SourceSetFinding(
-                finding_id=f"lint-v-{i:03d}",
-                source_check="lint",
-                severity="warn",
-                file=prompt_file,
-                line=str(i + 1),
-                message=f"Vague term 'valid' #{i}",
-                evidence="valid",
-                recommended_action="Specify criterion",
-                fix_command="",
-                code="VAGUE_TERM",
-            )
-            for i in range(n_findings)
-        ]
-        return PromptSourceSetReport(
-            prompt_path=prompt_file,
-            project_root=tmp_path,
-            target=str(prompt_file),
-            findings=findings,
-            checks=[{"name": "lint", "status": "warn"}],
+def _low_risk_report(tmp_path: Path, n: int = 2) -> PromptSourceSetReport:
+    """A report with low-risk lint findings (mechanical, not vague/clarification)."""
+    prompt_file = tmp_path / "style.prompt"
+    prompt_file.write_text("% Style\nDo something.\n", encoding="utf-8")
+    findings = [
+        SourceSetFinding(
+            finding_id=f"lint-s-{i:03d}",
+            source_check="lint",
+            severity="warn",
+            file=prompt_file,
+            line=str(i + 1),
+            message=f"Style issue #{i}",
+            evidence="prose",
+            recommended_action="Tidy wording",
+            fix_command="",
+            code=f"STYLE_{i}",  # no VAGUE marker → requires_clarification stays False
         )
+        for i in range(n)
+    ]
+    return PromptSourceSetReport(
+        prompt_path=prompt_file,
+        project_root=tmp_path,
+        target=str(prompt_file),
+        findings=findings,
+        checks=[{"name": "lint", "status": "warn"}],
+    )
 
-    def test_auto_mode_applies_primary_without_menu(self, tmp_path):
-        """In auto mode, no menu is shown — findings are auto-applied."""
-        prompt_file = tmp_path / "vague.prompt"
-        prompt_file.write_text("% Vague\n", encoding="utf-8")
-        report = self._make_report(tmp_path, n_findings=2)
 
-        session = RecordingCheckupSession()
-        planner = DeterministicPlanner()
+def _medium_report(tmp_path: Path, n: int = 2) -> PromptSourceSetReport:
+    """A report with medium-risk vague-term findings (saved for review)."""
+    prompt_file = tmp_path / "vague.prompt"
+    prompt_file.write_text("% Vague\n", encoding="utf-8")
+    findings = [
+        SourceSetFinding(
+            finding_id=f"lint-v-{i:03d}",
+            source_check="lint",
+            severity="warn",
+            file=prompt_file,
+            line=str(i + 1),
+            message=f'Vague term "term{i}" used in [requirements]',
+            evidence="requirements",
+            recommended_action="Define in <vocabulary>",
+            fix_command="",
+            code="VAGUE_TERM_UNDEFINED",
+        )
+        for i in range(n)
+    ]
+    return PromptSourceSetReport(
+        prompt_path=prompt_file,
+        project_root=tmp_path,
+        target=str(prompt_file),
+        findings=findings,
+        checks=[{"name": "lint", "status": "warn"}],
+    )
 
-        with patch(
-            "pdd.checkup_agent.build_prompt_source_set_report", return_value=report
-        ), patch(
-            "pdd.checkup_agent._prompt_agent_menu_choice"
-        ) as mock_menu:
-            agent = CheckupAgent(planner, session)
-            msg, _, _ = agent.run(
-                str(report.prompt_path),
-                project_root=tmp_path,
-                quiet=True,
-                auto=True,
-            )
 
-        # Menu should never have been called in auto mode.
-        mock_menu.assert_not_called()
-        assert "complete" in msg.lower()
-        done_events = session.events_of_kind("session_done")
-        assert done_events[0].data["auto_applied"] == 2
-        assert done_events[0].data["skipped"] == 0
-
-    def test_auto_mode_message_includes_auto_applied(self, tmp_path):
-        report = self._make_report(tmp_path, n_findings=1)
+class TestAutoMode:
+    def test_auto_mode_saves_medium_risk_for_review(self, tmp_path):
+        """Auto mode never fabricates vague-term definitions — it saves them."""
+        report = _medium_report(tmp_path, n=3)
         session = RecordingCheckupSession()
         planner = DeterministicPlanner()
 
         with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
             agent = CheckupAgent(planner, session)
             msg, _, _ = agent.run(
-                str(report.prompt_path),
-                project_root=tmp_path,
-                quiet=True,
-                auto=True,
+                str(report.prompt_path), project_root=tmp_path, quiet=True, auto=True
             )
 
-        assert "auto-applied" in msg
+        assert "complete" in msg.lower()
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["saved_for_review"] == 3
+        assert acc["fixed_automatically"] == 0
 
-    def test_switch_to_auto_mid_session(self, tmp_path):
-        """Choosing [a] mid-session switches subsequent findings to auto mode."""
-        prompt_file = tmp_path / "vague.prompt"
-        prompt_file.write_text("% Vague\n", encoding="utf-8")
-        report = self._make_report(tmp_path, n_findings=3)
-
+    def test_auto_mode_applies_low_risk_when_apply(self, tmp_path):
+        """Low-risk fixes are auto-applied (fixed_automatically) when --apply."""
+        report = _low_risk_report(tmp_path, n=2)
         session = RecordingCheckupSession()
         planner = DeterministicPlanner()
-
-        # First finding: interactive (return 4=skip)
-        # Second finding: user types 'a' → switch to auto (return 5)
-        # Third finding: should be auto-applied without menu call
-        menu_returns = iter([4, 5])
 
         with patch(
             "pdd.checkup_agent.build_prompt_source_set_report", return_value=report
         ), patch(
-            "pdd.checkup_agent._prompt_agent_menu_choice",
-            side_effect=lambda f, o: next(menu_returns),
-        ):
+            "pdd.checkup_agent.apply_approved_patches", return_value=0
+        ) as mock_apply:
             agent = CheckupAgent(planner, session)
-            msg, _, _ = agent.run(
+            agent.run(
                 str(report.prompt_path),
                 project_root=tmp_path,
                 quiet=True,
-                auto=False,
+                auto=True,
+                apply=True,
+            )
+
+        mock_apply.assert_called_once()
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["fixed_automatically"] == 2
+        assert acc["patches_applied"] == 2
+
+    def test_low_risk_queued_without_apply(self, tmp_path):
+        """Without --apply, low-risk fixes are queued, not applied."""
+        report = _low_risk_report(tmp_path, n=2)
+        session = RecordingCheckupSession()
+        planner = DeterministicPlanner()
+
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent = CheckupAgent(planner, session)
+            agent.run(
+                str(report.prompt_path), project_root=tmp_path, quiet=True, auto=True
+            )
+
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["patches_queued"] == 2
+        assert acc["patches_applied"] == 0
+
+    def test_switch_to_auto_mid_session(self, tmp_path):
+        """Choosing 'auto' on a group switches the rest of the session to auto."""
+        report = _medium_report(tmp_path, n=2)
+        # Two findings share one (lint, VAGUE_TERM_UNDEFINED) group, so to test a
+        # switch we need two groups. Give them distinct codes.
+        report.findings[1].code = "VAGUE_TERM_OTHER"
+        session = RecordingCheckupSession(group_decisions=["skip", "auto"])
+        planner = DeterministicPlanner()
+
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent = CheckupAgent(planner, session)
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                mode="interactive",
             )
 
         mode_events = session.events_of_kind("mode_switch")
         assert len(mode_events) == 1
         assert mode_events[0].data["to"] == "auto"
-
-        done = session.events_of_kind("session_done")[0]
-        # finding 0: skipped interactively, finding 1: auto (on switch), finding 2: auto
-        assert done.data["skipped"] == 1
-        assert done.data["auto_applied"] == 2
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["skipped_by_user"] == 1  # first group skipped
 
     def test_no_auto_emits_no_mode_switch(self, tmp_path):
-        """Pure interactive mode with skip choices emits no mode_switch events."""
-        report = self._make_report(tmp_path, n_findings=1)
-        session = RecordingCheckupSession()
+        """Interactive mode without an 'auto' decision emits no mode_switch."""
+        report = _medium_report(tmp_path, n=1)
+        session = RecordingCheckupSession(group_decisions=["skip"])
         planner = DeterministicPlanner()
 
-        with patch(
-            "pdd.checkup_agent.build_prompt_source_set_report", return_value=report
-        ), patch("pdd.checkup_agent._prompt_agent_menu_choice", return_value=4):
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
             agent = CheckupAgent(planner, session)
-            agent.run(str(report.prompt_path), project_root=tmp_path, quiet=True, auto=False)
+            agent.run(
+                str(report.prompt_path), project_root=tmp_path, quiet=True, mode="interactive"
+            )
 
         assert not session.events_of_kind("mode_switch")
 
