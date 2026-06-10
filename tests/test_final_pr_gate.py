@@ -22,6 +22,9 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from pdd.agentic_checkup import (
+    _classify_layer1_failure_category,
+    _format_github_checks_gate_failure_report,
+    _format_layer1_failure_report,
     _review_loop_ship_verdict,
     run_agentic_checkup,
 )
@@ -839,3 +842,69 @@ class TestFinalGateCli:
         )
         assert result.exit_code == 2
         assert "--max-review-rounds must be >= 1" in result.output
+
+
+class TestLayer1FailureCategory2047:
+    """Machine-readable ``failure_category`` classification (issue #2047).
+
+    These map the distinct Layer-1 / github-checks failure shapes (grounded in
+    real prod job output for promptdriven/pdd #1361, #1387, #1501) to stable
+    categories the pdd_cloud checkup-label reporter consumes.
+    """
+
+    def test_empty_step7_json_is_provider_parser(self) -> None:
+        msg = (
+            "Checkup did not verify all issues fixed after 3 fix-verify "
+            "iterations. Step 7 verdict JSON could not be parsed: empty step "
+            "7 output."
+        )
+        assert _classify_layer1_failure_category(msg) == "provider_parser_failure"
+
+    def test_targeted_only_is_incomplete_verification(self) -> None:
+        msg = (
+            "Targeted verification (777 tests) passes after applying 1 checkup "
+            "fix. Full suite (11,060 tests) not run due to time budget — "
+            "full-suite/CI re-run needed. Verification scope: targeted — full "
+            "suite not run."
+        )
+        assert _classify_layer1_failure_category(msg) == "incomplete_verification"
+
+    def test_full_suite_build_failure(self) -> None:
+        msg = (
+            "Verification scope: full suite. Build replay still fails at "
+            "frontend TypeScript checking, and the backend full pytest suite "
+            "timed out after 900 seconds with 5 reproduced tests already failing."
+        )
+        assert _classify_layer1_failure_category(msg) == "full_suite_failed"
+
+    def test_source_of_truth_refusal(self) -> None:
+        msg = (
+            "generated-code-only fix refused: pdd/x.py is generated from "
+            "pdd/prompts/x_python.prompt. Update the prompt source."
+        )
+        assert _classify_layer1_failure_category(msg) == "source_of_truth_repair_needed"
+
+    def test_generic_layer1_fallback(self) -> None:
+        assert _classify_layer1_failure_category("something else failed") == "layer1_failed"
+
+    def test_layer1_report_embeds_failure_category(self) -> None:
+        report = _format_layer1_failure_report(
+            pr_url="https://github.com/o/r/pull/1",
+            issue_url="https://github.com/o/r/issues/2",
+            layer1_message="Step 7 verdict JSON could not be parsed: empty step 7 output.",
+            full_suite_source="github-checks",
+        )
+        block = report.split("```json", 1)[1].split("```", 1)[0]
+        payload = json.loads(block)
+        assert payload["failure_category"] == "provider_parser_failure"
+        assert payload["stage"] == "layer1"
+
+    def test_github_checks_report_embeds_failure_category(self) -> None:
+        report = _format_github_checks_gate_failure_report(
+            pr_url="https://github.com/o/r/pull/1",
+            issue_url="https://github.com/o/r/issues/2",
+            github_checks_message="2 checks failing on head",
+        )
+        block = report.split("```json", 1)[1].split("```", 1)[0]
+        payload = json.loads(block)
+        assert payload["failure_category"] == "github_checks_failed"

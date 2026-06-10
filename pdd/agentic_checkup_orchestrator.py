@@ -640,6 +640,37 @@ def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
     return fn(worktree)
 
 
+def _companion_source_of_truth_paths(
+    worktree: Path, pr_file_set: Set[str]
+) -> Set[str]:
+    """Owning prompt (+ ``architecture.json``) for each PR-changed code file.
+
+    Issue #2047. The Layer 1 scope guard refuses any fixer edit outside the
+    PR's changed-file set. That dead-ends a legitimate source-of-truth repair:
+    when the fixer must edit the OWNING PROMPT of a code file that IS in the PR
+    diff (so the generated-code/source-of-truth contract holds), the prompt is
+    not itself in the PR diff and the guard blocks it. This returns exactly
+    those companion source-of-truth paths so they flow INTO the fixer, while
+    every other out-of-scope edit stays blocked: only a prompt that OWNS a
+    PR-changed code file is admitted — never an arbitrary unrelated prompt.
+    """
+    code_to_prompt = _load_prompt_source_map(worktree)
+    if not code_to_prompt:
+        return set()
+    pr_norm = {str(p) for p in pr_file_set}
+    companions: Set[str] = {
+        prompt_path
+        for code_path, prompt_path in code_to_prompt.items()
+        if code_path in pr_norm
+    }
+    if companions:
+        # The architecture entry is the registry side of the same contract;
+        # admit it so the fixer can update interface/dependency metadata for a
+        # repaired prompt without tripping the scope guard.
+        companions.add("architecture.json")
+    return companions
+
+
 def _git_rev_parse_head(worktree: Path) -> str:
     """Lazy wrapper around the review-loop HEAD-SHA helper."""
     from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
@@ -4407,8 +4438,19 @@ def _run_agentic_checkup_orchestrator_inner(
                             r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
                             step5_for_scope,
                         ))
+                    # Issue #2047: admit the owning prompt + architecture entry
+                    # for any code file already in the PR diff so a source-of-
+                    # truth repair (edit the prompt that owns a PR-changed code
+                    # file) flows into the fixer instead of dead-ending at the
+                    # scope guard. Unrelated prompts are NOT admitted.
+                    companion_sot_paths = _companion_source_of_truth_paths(
+                        worktree_path, pr_file_set
+                    )
                     scope_allowed: set = (
-                        pr_file_set | scope_failure_paths | justified_paths_set
+                        pr_file_set
+                        | scope_failure_paths
+                        | justified_paths_set
+                        | companion_sot_paths
                     )
                     out_of_scope = [
                         f for f in guard_changed_files

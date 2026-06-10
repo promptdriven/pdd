@@ -27,7 +27,14 @@ from .agentic_change import (
 )
 from .agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 from .checkup_review_loop import (
+    FINAL_GATE_CATEGORY_FULL_SUITE,
+    FINAL_GATE_CATEGORY_GITHUB_CHECKS,
+    FINAL_GATE_CATEGORY_INCOMPLETE_VERIFICATION,
+    FINAL_GATE_CATEGORY_LAYER1,
+    FINAL_GATE_CATEGORY_PROVIDER_PARSER,
+    FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
     FINAL_GATE_REPORT_SCHEMA,
+    PROMPT_SOURCE_GUARD_REFUSAL_MARKER,
     ReviewLoopConfig,
     ReviewLoopContext,
     clear_final_state,
@@ -331,6 +338,50 @@ def _markdown_table_cell(value: str) -> str:
     return (value or "").replace("|", "\\|").replace("\n", " ").strip()
 
 
+def _classify_layer1_failure_category(message: str) -> str:
+    """Map a Layer 1 failure ``message`` to a stable ``failure_category``.
+
+    Layer 1 (the PR-mode orchestrator checkup) surfaces several distinct
+    failure shapes through one free-text message. Issue #2047 needs these
+    distinguished so pdd_cloud reports the right next action instead of a
+    generic failure:
+
+      - empty / unparseable Step 7 verdict  -> provider_parser_failure (retryable infra)
+      - targeted-only verification, full suite not run -> incomplete_verification
+      - full-suite/build/test verification failed -> full_suite_failed
+      - generated-code-only / source-of-truth refusal -> source_of_truth_repair_needed
+      - anything else -> layer1_failed
+    """
+    text = (message or "").lower()
+    if (
+        "verdict json could not be parsed" in text
+        or "empty step 7 output" in text
+        or "could not be parsed" in text
+        or "empty step-7" in text
+    ):
+        return FINAL_GATE_CATEGORY_PROVIDER_PARSER
+    if PROMPT_SOURCE_GUARD_REFUSAL_MARKER in text or (
+        "source of truth" in text and "prompt" in text
+    ):
+        return FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+    if (
+        "full suite not run" in text
+        or "full-suite/ci re-run" in text
+        or "full suite (" in text and "not run" in text
+        or "verification scope: targeted" in text
+    ):
+        return FINAL_GATE_CATEGORY_INCOMPLETE_VERIFICATION
+    if (
+        "build replay still fails" in text
+        or "pytest suite timed out" in text
+        or "tests already failing" in text
+        or "reproduced tests" in text
+        or ("full suite" in text and "fail" in text)
+    ):
+        return FINAL_GATE_CATEGORY_FULL_SUITE
+    return FINAL_GATE_CATEGORY_LAYER1
+
+
 def _format_github_checks_gate_failure_report(
     *,
     pr_url: str,
@@ -348,6 +399,7 @@ def _format_github_checks_gate_failure_report(
         "schema": FINAL_GATE_REPORT_SCHEMA,
         "stage": "github-checks",
         "status": "failed",
+        "failure_category": FINAL_GATE_CATEGORY_GITHUB_CHECKS,
         "reason": github_checks_message,
         "pr_url": pr_url,
         "issue_url": issue_url,
@@ -419,6 +471,7 @@ def _format_layer1_failure_report(
         "schema": FINAL_GATE_REPORT_SCHEMA,
         "stage": "layer1",
         "status": "failed",
+        "failure_category": _classify_layer1_failure_category(payload_reason),
         "reason": payload_reason,
         "pr_url": pr_url,
         "issue_url": issue_url,

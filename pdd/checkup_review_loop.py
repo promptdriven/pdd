@@ -68,6 +68,23 @@ ROLE_TO_PROVIDER: Dict[str, str] = {
 DEFAULT_BLOCKING_SEVERITIES: Tuple[str, ...] = ("blocker", "critical", "medium")
 DEFAULT_CLEAN_REVIEWER_STATES: Tuple[str, ...] = ("clean",)
 FINAL_GATE_REPORT_SCHEMA = "pdd.checkup.final_gate.v1"
+# Machine-readable failure categories embedded in the ``pdd.checkup.final_gate.v1``
+# verdict (the ``failure_category`` field). They give downstream consumers
+# (pdd_cloud's checkup label reporting, issue #2047) a deterministic signal to
+# classify the outcome instead of substring-matching free-text ``reason``.
+# Keep these strings stable — the cloud classifier keys off them.
+FINAL_GATE_CATEGORY_PASSED = "passed"
+FINAL_GATE_CATEGORY_REVIEW_FINDINGS = "review_findings_remain"
+FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH = "source_of_truth_repair_needed"
+FINAL_GATE_CATEGORY_GITHUB_CHECKS = "github_checks_failed"
+FINAL_GATE_CATEGORY_LAYER1 = "layer1_failed"
+FINAL_GATE_CATEGORY_FULL_SUITE = "full_suite_failed"
+FINAL_GATE_CATEGORY_INCOMPLETE_VERIFICATION = "incomplete_verification"
+FINAL_GATE_CATEGORY_PROVIDER_PARSER = "provider_parser_failure"
+FINAL_GATE_CATEGORY_BUDGET_EXHAUSTED = "budget_exhausted"
+# The deterministic refusal substring emitted by ``_check_prompt_source_guard``;
+# used to classify a review-loop stop as a source-of-truth blocker.
+PROMPT_SOURCE_GUARD_REFUSAL_MARKER = "generated-code-only fix refused"
 PR_API_CHANGED_FILES_MAX_LINES = 300
 PR_API_CHANGED_FILES_MAX_CHARS = 20000
 # R8: cover every suffix Python can import as a module under ``pdd/``.
@@ -685,6 +702,16 @@ class ReviewLoopConfig:
     enable_gates: bool = True
     gate_timeout: float = 60.0
     gate_allow: Tuple[str, ...] = ()
+    # APPENDED — Issue #2047 source-of-truth repair. When True (default),
+    # a prompt-source-guard refusal on a ``drift`` offender (registered
+    # code changed without its owning prompt) is not an immediate dead
+    # end: the loop drives one fixer turn to repair the owning prompt so
+    # the regenerated code matches, then re-runs the guards before push.
+    # New modules / deleted-prompt offenders are NEVER auto-authored —
+    # they remain a precise structured blocker. Set False to restore the
+    # legacy "refuse and stop" behavior. MUST stay at the end of the field
+    # list so positional callers keep working unchanged.
+    enable_source_of_truth_repair: bool = True
 
 
 @dataclass
@@ -795,6 +822,17 @@ class ReviewLoopState:
     # False. Kept at the end of the field list so positional
     # construction stays stable.
     gate_runs: List[Dict[str, Any]] = field(default_factory=list)
+    # Issue #2047: structured source-of-truth outcome recorded when the
+    # prompt-source guard trips and the loop attempts (or declines) a
+    # source-of-truth repair. ``None`` when the guard never fired. Shape:
+    # ``{"blocked": bool, "repair_attempted": bool, "repaired": [...],
+    #    "unrepairable": [{"code_path","prompt_path","kind","reason"}],
+    #    "offenders": [{"code_path","prompt_path","kind"}]}``.
+    # Surfaced verbatim in the final-gate machine verdict so pdd_cloud can
+    # report exactly which prompt/architecture source files need repair.
+    # Kept at the end of the field list so positional construction stays
+    # stable.
+    source_of_truth: Optional[Dict[str, Any]] = None
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -1530,12 +1568,63 @@ def run_checkup_review_loop(
             worktree, guard_changed_files, head_ref=guard_head_ref
         )
         if guard_refusal:
-            _write_artifact(
-                artifacts_dir / f"round-{round_number}-prompt-source-guard-refusal.txt",
-                guard_refusal + "\n",
+            # Issue #2047: a prompt-source-guard refusal on a ``drift``
+            # offender (registered code changed without its owning prompt)
+            # is REPAIRABLE — drive one fixer turn to repair the owning
+            # prompt and regenerate the code, then re-run BOTH deterministic
+            # guards against the new change set. New modules / deleted-prompt
+            # offenders stay a precise structured blocker. The guards (not
+            # the repair's prose) remain the trust boundary, so we never push
+            # on a repair that did not actually satisfy them.
+            sot_details = _attempt_source_of_truth_repair(
+                context=context,
+                config=config,
+                state=state,
+                worktree=worktree,
+                changed_files=guard_changed_files,
+                head_ref=guard_head_ref,
+                round_number=round_number,
+                artifacts_dir=artifacts_dir,
+                deadline=deadline,
+                active_fixer=active_fixer,
+                verbose=verbose,
+                quiet=quiet,
             )
-            state.stop_reason = guard_refusal
-            break
+            if sot_details.get("repair_attempted"):
+                guard_changed_files = list(_git_changed_files(worktree))
+                if pre_fix_sha:
+                    seen = set(guard_changed_files)
+                    for path in _files_changed_since(worktree, pre_fix_sha):
+                        if path not in seen:
+                            guard_changed_files.append(path)
+                            seen.add(path)
+                registry_guard_refusal = _check_architecture_registry_edit_guard(
+                    worktree, guard_changed_files, head_ref=guard_head_ref
+                )
+                guard_refusal = _check_prompt_source_guard(
+                    worktree, guard_changed_files, head_ref=guard_head_ref
+                )
+            residual_refusal = registry_guard_refusal or guard_refusal
+            sot_details["blocked"] = bool(residual_refusal)
+            state.source_of_truth = sot_details
+            if residual_refusal:
+                _write_artifact(
+                    artifacts_dir / f"round-{round_number}-prompt-source-guard-refusal.txt",
+                    residual_refusal
+                    + "\n\n"
+                    + json.dumps(sot_details, indent=2, sort_keys=True)
+                    + "\n",
+                )
+                state.stop_reason = _source_of_truth_stop_reason(
+                    residual_refusal, sot_details
+                )
+                break
+            # Source-of-truth repair succeeded and both guards now pass; fall
+            # through to the normal commit/push of the repaired prompt + code.
+            _write_artifact(
+                artifacts_dir / f"round-{round_number}-source-of-truth-repaired.json",
+                json.dumps(sot_details, indent=2, sort_keys=True) + "\n",
+            )
 
         pushed, push_message = _commit_and_push_if_changed(
             worktree,
@@ -6000,6 +6089,82 @@ def _arch_entries_changed_set(worktree: Path, base_ref: Optional[str]) -> Set[st
     return {fp for fp in all_paths if pre.get(fp) != post.get(fp)}
 
 
+# Issue #2047: human-readable reasons for offender kinds that are NOT safely
+# auto-repairable inside the review loop. Authoring a destroyed/relocated
+# source of truth (or a brand-new prompt contract for an unregistered module)
+# is exactly the mis-specification risk the guard exists to prevent, so these
+# surface as a precise blocker instead.
+_SOT_UNREPAIRABLE_REASON: Dict[str, str] = {
+    "missing_prompt": (
+        "owning prompt source was deleted — regeneration would have no source "
+        "of truth; restore or re-author the prompt contract by hand"
+    ),
+    "rename_drift": (
+        "registered generated file was moved/deleted without updating its "
+        "owning prompt or architecture.json entry; reconcile the registry by hand"
+    ),
+}
+
+
+def _prompt_source_offenders(
+    worktree: Path,
+    changed_files: Sequence[str],
+    head_ref: str = "HEAD",
+) -> List[Dict[str, str]]:
+    """Structured offender set behind ``_check_prompt_source_guard``.
+
+    Returns ``[{"code_path", "prompt_path", "kind"}]`` for every changed
+    generated file whose owning prompt was NOT co-edited. ``kind`` is:
+
+      - ``"drift"``: code changed, owning prompt present but unedited — the
+        original #1063 failure mode, and the only kind the #2047 source-of-
+        truth repair attempts to fix (edit the prompt, regenerate the code).
+      - ``"missing_prompt"``: code persists but its owning prompt was deleted.
+      - ``"rename_drift"``: registered code moved/deleted while its prompt was
+        left behind.
+
+    ``_check_prompt_source_guard`` and ``_attempt_source_of_truth_repair``
+    both consume this so the deterministic refusal and the repair input can
+    never disagree about which pairs are offending. Mirrors the guard's
+    graceful-degradation contract (empty list when the registry is missing,
+    unparseable, or yields no prompt-owned modules).
+    """
+    if not changed_files:
+        return []
+    code_to_prompt = _load_prompt_source_map(worktree, head_ref=head_ref)
+    if code_to_prompt is None:
+        return []
+    changed_norm = {Path(p).as_posix() for p in changed_files if p}
+    offenders: List[Dict[str, str]] = []
+    for code_path, prompt_path in code_to_prompt.items():
+        if code_path not in changed_norm:
+            continue
+        code_still_exists = (worktree / code_path).is_file()
+        prompt_still_exists = (worktree / prompt_path).is_file()
+        if not code_still_exists:
+            # Code gone: allow legitimate retirement/refactor (prompt also
+            # deleted or co-edited); otherwise the registered file moved out
+            # from under its source of truth = drift via rename.
+            if not prompt_still_exists or prompt_path in changed_norm:
+                continue
+            offenders.append(
+                {"code_path": code_path, "prompt_path": prompt_path, "kind": "rename_drift"}
+            )
+            continue
+        if not prompt_still_exists:
+            offenders.append(
+                {"code_path": code_path, "prompt_path": prompt_path, "kind": "missing_prompt"}
+            )
+            continue
+        if prompt_path in changed_norm:
+            # Prompt co-edited with the code → contract satisfied.
+            continue
+        offenders.append(
+            {"code_path": code_path, "prompt_path": prompt_path, "kind": "drift"}
+        )
+    return offenders
+
+
 def _check_prompt_source_guard(
     worktree: Path,
     changed_files: Sequence[str],
@@ -6032,74 +6197,237 @@ def _check_prompt_source_guard(
 
     Failing closed on those cases would brick auto-heal on a temporarily
     broken registry, which is the inverse of the bug we are fixing.
+
+    The per-offender disk-state classification lives in
+    ``_prompt_source_offenders`` so the deterministic refusal here and the
+    issue #2047 source-of-truth repair share one source of truth.
     """
-    if not changed_files:
-        return None
-
-    code_to_prompt = _load_prompt_source_map(worktree, head_ref=head_ref)
-    if code_to_prompt is None:
-        return None
-
-    changed_norm = {Path(p).as_posix() for p in changed_files if p}
-
-    offenders: List[Tuple[str, str]] = []
-    for code_path, prompt_path in code_to_prompt.items():
-        if code_path not in changed_norm:
-            continue
-        # Disk-state checks distinguish six cases against the
-        # POST-change worktree state. Deletion and rename both leave
-        # the registered path absent on disk - the prompt's fate is
-        # the discriminator for "legitimate retirement / refactor"
-        # vs "drift via rename" (the reconciliation between Finding
-        # A's rename-blocking intent and Finding 1's retirement-
-        # allowing intent).
-        code_still_exists = (worktree / code_path).is_file()
-        prompt_still_exists = (worktree / prompt_path).is_file()
-
-        if not code_still_exists:
-            # Code is gone from disk: either retired (deletion) or
-            # moved (rename). Allow only when the prompt is also
-            # part of this change - either deleted alongside (full
-            # retirement) or co-edited / co-renamed (refactor). If
-            # the prompt is unchanged and still present, the
-            # registered file moved out from under its source of
-            # truth without telling the prompt: that is drift via
-            # rename (review pass #2 Finding A).
-            if not prompt_still_exists or prompt_path in changed_norm:
-                continue
-            offenders.append((code_path, prompt_path))
-            continue
-        if not prompt_still_exists:
-            # Code persists on disk but the prompt has been
-            # destroyed. STRICTLY WORSE drift than the original
-            # #1063 case because the source of truth is gone
-            # entirely - subsequent regeneration would have nothing
-            # to regenerate from. Block unconditionally, even when
-            # the prompt deletion is part of the same change set:
-            # that's a same-commit attack, not a legitimate
-            # retirement (review pass #3 Finding 1).
-            offenders.append((code_path, prompt_path))
-            continue
-        # Both files still exist. If the prompt is also part of
-        # this change set, the source-of-truth contract is
-        # satisfied - the user/bot is explicitly co-editing the
-        # prompt with the code. Allow.
-        if prompt_path in changed_norm:
-            continue
-        # Both files exist, code changed, prompt unchanged = DRIFT
-        # (the original #1063 failure mode).
-        offenders.append((code_path, prompt_path))
-
+    offenders = _prompt_source_offenders(worktree, changed_files, head_ref=head_ref)
     if not offenders:
         return None
 
     pairs_text = "; ".join(
-        f"{code} is generated from {prompt}" for code, prompt in offenders
+        f"{o['code_path']} is generated from {o['prompt_path']}" for o in offenders
     )
     return (
         "generated-code-only fix refused: "
         f"{pairs_text}. Update the prompt source or run the proper PDD "
         "sync path before re-running the review loop."
+    )
+
+
+def _source_of_truth_repair_prompt(offenders: Sequence[Dict[str, str]]) -> str:
+    """Build the fixer instruction for an issue #2047 source-of-truth repair.
+
+    The fixer already changed the listed generated code files but left their
+    owning prompts untouched (``drift``). PDD's contract is that the prompt is
+    the source of truth, so the durable fix is to express the SAME change in
+    the prompt and regenerate the code from it. The instruction is deliberately
+    narrow: edit ONLY the owning prompt(s) to reflect the intended behavior, do
+    not introduce unrelated changes, and do not delete the prompt.
+    """
+    pairs = "\n".join(
+        f"- generated code `{o['code_path']}` is generated from prompt "
+        f"`{o['prompt_path']}` (edit this prompt)"
+        for o in offenders
+    )
+    return f"""You are repairing a PDD source-of-truth violation, not reviewing the PR.
+
+In this worktree you previously changed generated code WITHOUT updating the
+owning prompt. In PDD the prompt is the source of truth and the code is
+regenerated from it, so a code-only change is silently reverted by the next
+`pdd sync`. Fix that now.
+
+Offending pairs (code already changed, owning prompt NOT yet updated):
+{pairs}
+
+Required actions:
+1. For each pair, edit ONLY the owning prompt file so that regenerating the
+   code from it would produce the behavior your code change intended. Update
+   the prompt's interface/behavior description (and any `<pdd-interface>` /
+   `<pdd-dependency>` tags) to match the code change exactly.
+2. Do NOT delete the prompt. Do NOT edit unrelated prompts or code.
+3. Keep the generated code consistent with the repaired prompt (the loop will
+   regenerate it; leave your code edit in place so it is not lost if
+   regeneration is skipped).
+
+Report the prompt files you edited. Do not open a PR or run git push."""
+
+
+def _regenerate_module_from_prompt(
+    worktree: Path,
+    code_path: str,
+    prompt_path: str,
+) -> Dict[str, Any]:
+    """Best-effort one-shot regeneration of one module's code from its prompt.
+
+    Issue #2047: after the fixer repairs the owning prompt, regenerate the
+    generated code so it provably matches the (now-authoritative) prompt. This
+    is the "run the correct regeneration path" half of the contract. It is
+    deliberately fail-soft: ANY error returns ``{"ok": False, ...}`` and the
+    caller proceeds on the strength of the co-edited prompt alone (which still
+    satisfies the deterministic guard). Returns
+    ``{"ok", "cost", "model", "error"}``.
+    """
+    prompt_abs = worktree / prompt_path
+    code_abs = worktree / code_path
+    if not prompt_abs.is_file():
+        return {"ok": False, "cost": 0.0, "model": "", "error": "prompt missing"}
+    prev_cwd = os.getcwd()
+    try:
+        # Lazy imports: code_generator_main pulls in the heavy generation
+        # stack; keep it off the module import path of the review loop.
+        from .code_generator_main import code_generator_main
+        from .sync_orchestration import _create_mock_context
+
+        os.chdir(worktree)
+        ctx = _create_mock_context(force=True, quiet=True)
+        code, _incremental, cost, model = code_generator_main(
+            ctx,
+            prompt_file=str(prompt_abs),
+            output=str(code_abs),
+            original_prompt_file_path=None,
+            force_incremental_flag=False,
+            output_from_config=False,
+        )
+        ok = bool(code and code.strip())
+        return {
+            "ok": ok,
+            "cost": float(cost or 0.0),
+            "model": model or "",
+            "error": "" if ok else "regeneration produced empty code",
+        }
+    except Exception as exc:  # noqa: BLE001 — fail-soft by contract
+        return {"ok": False, "cost": 0.0, "model": "", "error": str(exc)[:300]}
+    finally:
+        try:
+            os.chdir(prev_cwd)
+        except OSError:
+            pass
+
+
+def _attempt_source_of_truth_repair(
+    *,
+    context: ReviewLoopContext,
+    config: ReviewLoopConfig,
+    state: ReviewLoopState,
+    worktree: Path,
+    changed_files: Sequence[str],
+    head_ref: str,
+    round_number: int,
+    artifacts_dir: Path,
+    deadline: Optional[float],
+    active_fixer: str,
+    verbose: bool,
+    quiet: bool,
+) -> Dict[str, Any]:
+    """React to a prompt-source-guard refusal by repairing the source of truth.
+
+    Issue #2047. Splits offenders by kind:
+
+      * ``drift`` (registered code changed, owning prompt present but unedited)
+        is REPAIRABLE: one fixer turn edits the owning prompt(s), then a
+        best-effort one-shot regeneration makes the code match.
+      * ``missing_prompt`` / ``rename_drift`` are NOT auto-repaired — safely
+        re-authoring a destroyed/relocated source of truth (or a brand-new
+        prompt contract) is the mis-specification risk the guard exists to
+        prevent. They are recorded as a precise structured blocker.
+
+    Returns the structured dict stored in ``state.source_of_truth``. It records
+    what was attempted; the CALLER re-runs the deterministic guards to decide
+    the final ``blocked`` flag (the guard is the trust boundary, not this
+    function's prose).
+    """
+    offenders = _prompt_source_offenders(worktree, changed_files, head_ref=head_ref)
+    repairable = [o for o in offenders if o.get("kind") == "drift"]
+    unrepairable = [
+        {**o, "reason": _SOT_UNREPAIRABLE_REASON.get(o.get("kind", ""), "not auto-repairable")}
+        for o in offenders
+        if o.get("kind") != "drift"
+    ]
+    details: Dict[str, Any] = {
+        "blocked": True,
+        "repair_attempted": False,
+        "repaired": [],
+        "unrepairable": unrepairable,
+        "offenders": offenders,
+    }
+    if not config.enable_source_of_truth_repair:
+        details["repair_skipped_reason"] = "source-of-truth repair disabled"
+        return details
+    if not repairable:
+        # Pure blocker (e.g. #1519: new modules needing prompt contracts).
+        return details
+    if _budget_exhausted(config, state, deadline):
+        details["repair_skipped_reason"] = "budget exhausted before source-of-truth repair"
+        return details
+
+    details["repair_attempted"] = True
+    instruction = _source_of_truth_repair_prompt(repairable)
+    _write_artifact(
+        artifacts_dir / f"round-{round_number}-source-of-truth-repair.prompt.txt",
+        instruction,
+    )
+    success, output, cost, model = _run_role_task(
+        active_fixer,
+        instruction,
+        worktree,
+        verbose=verbose,
+        quiet=quiet,
+        label=f"checkup-review-loop-sot-repair-{active_fixer}-round{round_number}",
+        timeout=1200.0 + config.timeout_adder,
+        max_retries=DEFAULT_MAX_RETRIES,
+        reasoning_time=config.reasoning_time,
+    )
+    state.total_cost += cost
+    if model:
+        state.last_model = model
+    state.raw_outputs.append((f"sot-repair:{active_fixer}:round{round_number}", output))
+    _write_artifact(
+        artifacts_dir / f"round-{round_number}-source-of-truth-repair.output.txt",
+        output,
+    )
+    # Best-effort regeneration so the code provably matches the repaired prompt.
+    regen_results = []
+    for offender in repairable:
+        regen = _regenerate_module_from_prompt(
+            worktree, offender["code_path"], offender["prompt_path"]
+        )
+        state.total_cost += float(regen.get("cost") or 0.0)
+        regen_results.append({**offender, "regenerated": regen.get("ok"), "regen_error": regen.get("error")})
+    details["repaired"] = regen_results
+    details["fixer_reported_success"] = bool(success)
+    # ``blocked`` is provisional here; the caller re-runs the guards and
+    # overwrites it with the authoritative residual result.
+    details["blocked"] = bool(unrepairable)
+    return details
+
+
+def _source_of_truth_stop_reason(
+    residual_refusal: str,
+    details: Optional[Dict[str, Any]],
+) -> str:
+    """Compose the review-loop ``stop_reason`` for an unrepaired SoT blocker.
+
+    Appends the precise unrepairable-module list so the report (and pdd_cloud)
+    can name exactly which prompt/architecture sources still need hand repair.
+    """
+    base = residual_refusal or "generated-code-only fix refused"
+    if not details:
+        return base
+    unrepairable = details.get("unrepairable") or []
+    if not unrepairable:
+        if details.get("repair_attempted"):
+            return f"{base} Source-of-truth repair was attempted but the guard still refuses the push."
+        return base
+    items = "; ".join(
+        f"{u.get('code_path')} ({u.get('reason', 'not auto-repairable')})"
+        for u in unrepairable
+    )
+    return (
+        f"{base} Source-of-truth repair could not resolve: {items}. "
+        "Author the missing prompt contracts / architecture entries by hand, "
+        "then re-run the final gate."
     )
 
 
@@ -7105,6 +7433,28 @@ def _json_bool_or_none(value: str) -> Optional[bool]:
     return None
 
 
+def _review_loop_failure_category(state: ReviewLoopState, passed: bool) -> str:
+    """Classify a review-loop verdict into a stable ``failure_category``.
+
+    Returns one of the ``FINAL_GATE_CATEGORY_*`` strings. ``passed`` short-
+    circuits to ``FINAL_GATE_CATEGORY_PASSED``. A source-of-truth blocker
+    (recorded in ``state.source_of_truth`` or detectable from the guard
+    refusal substring in ``state.stop_reason``) wins over budget exhaustion
+    and generic remaining findings so the cloud can route the user to the
+    owning prompt/architecture files. Issue #2047.
+    """
+    if passed:
+        return FINAL_GATE_CATEGORY_PASSED
+    sot = state.source_of_truth
+    if (sot and sot.get("blocked")) or (
+        PROMPT_SOURCE_GUARD_REFUSAL_MARKER in (state.stop_reason or "")
+    ):
+        return FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+    if state.max_rounds_reached or state.max_cost_reached or state.max_duration_reached:
+        return FINAL_GATE_CATEGORY_BUDGET_EXHAUSTED
+    return FINAL_GATE_CATEGORY_REVIEW_FINDINGS
+
+
 def _render_machine_verdict_block(
     *,
     context: ReviewLoopContext,
@@ -7137,6 +7487,8 @@ def _render_machine_verdict_block(
         "schema": FINAL_GATE_REPORT_SCHEMA,
         "stage": "review-loop",
         "status": "passed" if passed else "failed",
+        "failure_category": _review_loop_failure_category(state, passed),
+        "source_of_truth": state.source_of_truth,
         "reason": state.stop_reason or "Review loop completed.",
         "pr_url": context.pr_url,
         "issue_url": context.issue_url,

@@ -6962,3 +6962,41 @@ class TestSetupWorktreeStaleBranch:
             cwd=wt, capture_output=True, text=True,
         ).stdout.strip()
         assert head == "checkup/issue-9", head
+
+
+class TestCompanionSourceOfTruthPaths2047:
+    """``_companion_source_of_truth_paths`` admits owning prompts of PR-diff code (#2047)."""
+
+    def test_admits_owning_prompt_and_arch_for_pr_code(self, monkeypatch) -> None:
+        import pdd.agentic_checkup_orchestrator as orch
+
+        monkeypatch.setattr(
+            orch,
+            "_load_prompt_source_map",
+            lambda _wt: {
+                "pdd/foo.py": "pdd/prompts/foo_python.prompt",
+                "pdd/bar.py": "pdd/prompts/bar_python.prompt",
+            },
+        )
+        # Only foo.py is in the PR diff -> only foo's prompt is admitted.
+        out = orch._companion_source_of_truth_paths(Path("/x"), {"pdd/foo.py"})
+        assert out == {"pdd/prompts/foo_python.prompt", "architecture.json"}
+
+    def test_unrelated_prompt_not_admitted(self, monkeypatch) -> None:
+        import pdd.agentic_checkup_orchestrator as orch
+
+        monkeypatch.setattr(
+            orch,
+            "_load_prompt_source_map",
+            lambda _wt: {"pdd/foo.py": "pdd/prompts/foo_python.prompt"},
+        )
+        # PR touches only an unregistered file -> no companion prompt admitted,
+        # so an arbitrary prompt edit still trips the scope guard.
+        out = orch._companion_source_of_truth_paths(Path("/x"), {"pdd/unrelated.py"})
+        assert out == set()
+
+    def test_no_registry_returns_empty(self, monkeypatch) -> None:
+        import pdd.agentic_checkup_orchestrator as orch
+
+        monkeypatch.setattr(orch, "_load_prompt_source_map", lambda _wt: None)
+        assert orch._companion_source_of_truth_paths(Path("/x"), {"pdd/foo.py"}) == set()
