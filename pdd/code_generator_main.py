@@ -44,6 +44,10 @@ from .grounding_provenance import (
     warn_cloud_examples_not_preapproved,
 )
 from .compressed_sync_context import compressed_context_is_active, render_for_prompt
+from .interface_semantics import (
+    annotations_compatible,
+    signature_entries_compatible,
+)
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -2043,15 +2047,20 @@ def _verify_public_surface_regression(
         patch_targets=after_patch_targets,
     )
     allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
-    changed_set = {
-        symbol
-        for symbol, signature in before_signatures.items()
-        if (
-            symbol in after_signatures
-            and after_signatures[symbol] != signature
-            and symbol not in allowed_signature_changes
-        )
-    }
+    changed_set: Set[str] = set()
+    for symbol, signature in before_signatures.items():
+        if symbol not in after_signatures or symbol in allowed_signature_changes:
+            continue
+        after_signature = after_signatures[symbol]
+        if after_signature == signature:
+            continue
+        compatible = signature_entries_compatible(signature, after_signature)
+        if compatible is True:
+            continue
+        # If either side is not a callable contract we understand, keep the
+        # historical exact string comparison so binding-kind and re-export
+        # changes remain strict.
+        changed_set.add(symbol)
     for symbol in before_signatures:
         if symbol in after_signatures or symbol in changed_set:
             continue
@@ -2318,6 +2327,7 @@ def _repair_architecture_interface_types(payload: Any) -> Tuple[Any, bool]:
         "job",
         "message",
         "config",
+        "entrypoint",
     }
     changed = False
     if not isinstance(payload, list):
@@ -2338,7 +2348,18 @@ def _repair_architecture_interface_types(payload: Any) -> Tuple[Any, bool]:
             continue
 
         inferred_type = None
-        for key in ("page", "component", "module", "api", "graphql", "cli", "job", "message", "config"):
+        for key in (
+            "page",
+            "component",
+            "module",
+            "api",
+            "graphql",
+            "cli",
+            "job",
+            "message",
+            "config",
+            "entrypoint",
+        ):
             if isinstance(interface.get(key), dict):
                 inferred_type = key
                 break
@@ -2761,7 +2782,7 @@ def _verify_pdd_interface_signatures(
             if (
                 declared_ann
                 and actual_ann
-                and declared_ann != actual_ann
+                and not annotations_compatible(declared_ann, actual_ann)
             ):
                 drifted.append(
                     (func_name, declared_name, "annotation", declared_ann, actual_ann)
@@ -2997,8 +3018,9 @@ def _verify_architecture_json_conformance(
         for ep in api_spec.get("endpoints", []):
             # For API modules we don't check symbol names by default
             pass
-    elif iface_type == "page":
-        # Pages typically export a default — skip symbol checking
+    elif iface_type in {"page", "entrypoint"}:
+        # Pages and runtime entrypoints typically export framework-discovered
+        # defaults rather than named symbols — skip symbol checking.
         return entry
     elif iface_type == "component":
         comp_spec = interface.get("component", {})

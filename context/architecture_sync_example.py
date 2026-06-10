@@ -1,284 +1,128 @@
-"""
-Example usage of the architecture_sync module for bidirectional sync
-between architecture.json and prompt files using PDD metadata tags.
-"""
+from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 from pdd.architecture_sync import (
-    parse_prompt_tags,
     update_architecture_from_prompt,
-    sync_all_prompts_to_architecture,
-    sync_prompts_to_architecture,
-    validate_dependencies,
-    validate_interface_structure,
-    get_architecture_entry_for_prompt,
-    has_pdd_tags,
-    generate_tags_from_architecture,
+    register_untracked_prompts,
+    parse_prompt_tags,
+    validate_architecture_modules,
 )
 
+def run_example() -> None:
+    """
+    A complete, runnable example demonstrating how to use the architecture_sync module
+    to extract PDD metadata tags from prompt files and sync them into architecture.json.
 
-# --- Example 1: Parse PDD tags from prompt content ---
-def example_parse_tags():
-    """Parse PDD metadata tags from prompt content."""
-    prompt_content = """
-<pdd-reason>Handles user authentication and session management</pdd-reason>
+    Inputs:
+        None (creates mock directories and files in './output' for illustration)
+
+    Outputs:
+        Prints sync actions, extracted metadata, and validation results to the console.
+    """
+    # 1. Setup mock workspace inside './output'
+    base_dir = Path("./output").resolve()
+    prompts_dir = base_dir / "prompts"
+    architecture_path = base_dir / "architecture.json"
+
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"[Setup] Creating mock environment in: {base_dir}")
+
+    # Create a mock architecture.json containing one registered module
+    mock_arch = {
+        "modules": [
+            {
+                "filename": "llm_invoke_python.prompt",
+                "filepath": "pdd/llm_invoke.py",
+                "reason": "Old description to be updated",
+                "dependencies": [],
+                "tags": ["module", "python"],
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": []
+                    }
+                }
+            }
+        ]
+    }
+    architecture_path.write_text(json.dumps(mock_arch, indent=2), encoding="utf-8")
+
+    # Create a mock prompt file with explicit PDD metadata tags
+    mock_prompt_content = """---
+author: Developer
+type: prompt
+---
+<pdd-reason>Provides unified LLM invocation across all PDD operations.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "authenticate", "signature": "(username: str, password: str) -> Optional[User]", "returns": "Optional[User]"},
-      {"name": "create_session", "signature": "(user: User) -> str", "returns": "str"}
+      {
+        "name": "invoke_llm",
+        "signature": "(prompt_text: str) -> str"
+      }
     ]
   }
 }
 </pdd-interface>
 
-<pdd-dependency>database_python.prompt</pdd-dependency>
-<pdd-dependency>config_python.prompt</pdd-dependency>
+<pdd-dependency>config_helper_python.prompt</pdd-dependency>
 
-% Role & Scope
-Your goal is to implement user authentication...
+% Content Section starts here
+This is the actual prompt text instructions for the LLM...
 """
+    prompt_file = prompts_dir / "llm_invoke_python.prompt"
+    prompt_file.write_text(mock_prompt_content, encoding="utf-8")
 
-    tags = parse_prompt_tags(prompt_content)
+    # 2. Extract PDD tags directly from prompt content
+    print("\n--- Step 1: Parsing PDD metadata tags directly from prompt content ---")
+    parsed_tags = parse_prompt_tags(mock_prompt_content)
+    print(f"Parsed Reason: {parsed_tags['reason']}")
+    print(f"Parsed Dependencies: {parsed_tags['dependencies']}")
+    print(f"Parsed Interface: {json.dumps(parsed_tags['interface'], indent=2)}")
 
-    print(f"Reason: {tags['reason']}")
-    print(f"Interface type: {tags['interface']['type']}")
-    print(f"Dependencies: {tags['dependencies']}")
-    print(f"Has dependency tags: {tags['has_dependency_tags']}")
-
-    return tags
-
-
-# --- Example 2: Update architecture.json from a single prompt ---
-def example_update_single_prompt():
-    """Update architecture.json from a single prompt file's PDD tags."""
-    result = update_architecture_from_prompt(
-        prompt_filename="user_service_python.prompt",
-        prompts_dir=Path("prompts"),
-        architecture_path=Path("architecture.json"),
-        dry_run=True  # Preview changes without writing
+    # 3. Synchronize prompt file changes back to architecture.json
+    print("\n--- Step 2: Syncing specific prompt file to architecture.json ---")
+    sync_result = update_architecture_from_prompt(
+        prompt_filename="llm_invoke_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=False
     )
 
-    if result['success']:
-        if result['updated']:
-            print("Changes detected:")
-            for field, change in result['changes'].items():
-                print(f"  {field}: {change['old']} -> {change['new']}")
-        else:
-            print("No changes needed")
-    else:
-        print(f"Error: {result['error']}")
+    print(f"Sync Success: {sync_result['success']}")
+    print(f"Fields Updated: {list(sync_result['changes'].keys())}")
+    if 'reason' in sync_result['changes']:
+        print(f"  Reason change: '{sync_result['changes']['reason']['old']}' -> '{sync_result['changes']['reason']['new']}'")
 
-    return result
+    # 4. Auto-register any untracked prompt files that contain PDD tags
+    print("\n--- Step 3: Registering untracked prompts with PDD tags ---")
+    # Let's create an untracked prompt file
+    untracked_prompt = prompts_dir / "config_helper_python.prompt"
+    untracked_prompt.write_text("""<pdd-reason>Helper for parsing config files.</pdd-reason>
+<pdd-interface>{\"type\": \"module\"}</pdd-interface>\n""", encoding="utf-8")
 
-
-# --- Example 3: Sync all prompts to architecture.json ---
-def example_sync_all():
-    """Sync all prompt files to architecture.json."""
-    result = sync_all_prompts_to_architecture(
-        prompts_dir=Path("prompts"),
-        architecture_path=Path("architecture.json"),
-        dry_run=True  # Preview changes
+    reg_result = register_untracked_prompts(
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=False
     )
+    print(f"Auto-registered prompts: {reg_result['registered']}")
+    print(f"Skipped prompts: {reg_result['skipped']}")
 
-    print(f"Success: {result['success']}")
-    print(f"Updated: {result['updated_count']} modules")
-    print(f"Skipped: {result['skipped_count']} modules")
-
-    if result['errors']:
-        print("Errors:")
-        for error in result['errors']:
-            print(f"  - {error}")
-
-    return result
-
-
-def example_sync_prompts_to_architecture():
-    """Sync selected prompt metadata tags into architecture.json."""
-    result = sync_prompts_to_architecture(
-        filenames=["commands/maintenance_python.prompt"],
-        dry_run=True,
-    )
-
-    print(f"Success: {result['success']}")
-    print(f"Updated: {result['updated_count']} modules")
-    print(f"Skipped: {result['skipped_count']} modules")
-
-    if result["errors"]:
-        print("Errors:")
-        for error in result["errors"]:
-            print(f"  - {error}")
-
-    return result
-
-
-# --- Example 4: Validate dependencies ---
-def example_validate_dependencies():
-    """Validate that all dependencies exist and are unique."""
-    dependencies = [
-        "database_python.prompt",
-        "config_python.prompt",
-        "missing_file.prompt",  # This will fail
-        "database_python.prompt",  # This is a duplicate
-    ]
-
-    result = validate_dependencies(dependencies, prompts_dir=Path("prompts"))
-
-    print(f"Valid: {result['valid']}")
-    print(f"Missing files: {result['missing']}")
-    print(f"Duplicates: {result['duplicates']}")
-
-    return result
-
-
-# --- Example 5: Validate interface structure ---
-def example_validate_interface():
-    """Validate interface JSON structure."""
-    # Valid module interface
-    valid_interface = {
-        "type": "module",
-        "module": {
-            "functions": [
-                {"name": "process", "signature": "(data: Dict) -> Dict", "returns": "Dict"}
-            ]
-        }
-    }
-
-    result = validate_interface_structure(valid_interface)
-    print(f"Valid interface: {result['valid']}")
-
-    # Invalid interface (missing nested key)
-    invalid_interface = {
-        "type": "module"
-        # Missing "module" key
-    }
-
-    result = validate_interface_structure(invalid_interface)
-    print(f"Invalid interface errors: {result['errors']}")
-
-    return result
-
-
-# --- Example 6: Generate tags from architecture entry (reverse direction) ---
-def example_generate_tags():
-    """Generate PDD tags from an architecture.json entry."""
-    arch_entry = {
-        "filename": "user_service_python.prompt",
-        "filepath": "pdd/user_service.py",
-        "reason": "Handles user authentication and profile management",
-        "interface": {
-            "type": "module",
-            "module": {
-                "functions": [
-                    {"name": "authenticate", "signature": "(username, password)", "returns": "User"}
-                ]
-            }
-        },
-        "dependencies": ["database_python.prompt", "config_python.prompt"]
-    }
-
-    tags = generate_tags_from_architecture(arch_entry)
-    print("Generated tags:")
-    print(tags)
-
-    return tags
-
-
-# --- Example 7: Check if prompt already has PDD tags ---
-def example_check_existing_tags():
-    """Check if a prompt already has PDD tags (to avoid overwriting)."""
-    prompt_with_tags = """
-<pdd-reason>Existing reason</pdd-reason>
-
-% Role & Scope
-...
-"""
-
-    prompt_without_tags = """
-% Role & Scope
-Your goal is to implement...
-"""
-
-    print(f"Prompt with tags: {has_pdd_tags(prompt_with_tags)}")  # True
-    print(f"Prompt without tags: {has_pdd_tags(prompt_without_tags)}")  # False
-
-    return has_pdd_tags(prompt_with_tags), has_pdd_tags(prompt_without_tags)
-
-
-# --- Example 8: Get architecture entry for a prompt ---
-def example_get_entry():
-    """Look up architecture entry by prompt filename."""
-    entry = get_architecture_entry_for_prompt(
-        "llm_invoke_python.prompt",
-        architecture_path=Path("architecture.json")
-    )
-
-    if entry:
-        print(f"Found entry for: {entry['filename']}")
-        print(f"Reason: {entry.get('reason', 'N/A')}")
-    else:
-        print("No entry found")
-
-    return entry
-
-
-# --- Example 9: Full workflow - inject tags into new prompt ---
-def example_inject_tags_workflow():
-    """
-    Complete workflow: Check if prompt needs tags, generate and inject them.
-    This is what preprocess_main does with --pdd-tags flag.
-    """
-    prompt_filename = "my_module_python.prompt"
-    prompt_content = """
-% Role & Scope
-Your goal is to implement a data processor...
-
-% Requirements
-1. Process input data
-2. Return results
-"""
-
-    # Step 1: Check if prompt already has tags
-    if has_pdd_tags(prompt_content):
-        print("Prompt already has PDD tags, skipping injection")
-        return prompt_content
-
-    # Step 2: Get architecture entry
-    arch_entry = get_architecture_entry_for_prompt(prompt_filename)
-
-    if not arch_entry:
-        print(f"No architecture entry found for {prompt_filename}")
-        return prompt_content
-
-    # Step 3: Generate and inject tags
-    tags = generate_tags_from_architecture(arch_entry)
-
-    if tags:
-        final_content = tags + '\n\n' + prompt_content
-        print("Tags injected successfully!")
-        return final_content
-
-    return prompt_content
-
+    # 5. Validate the resulting architecture
+    print("\n--- Step 4: Validating updated architecture.json ---")
+    updated_arch = json.loads(architecture_path.read_text(encoding="utf-8"))
+    modules = updated_arch.get("modules", [])
+    validation_result = validate_architecture_modules(modules)
+    print(f"Architecture valid: {validation_result['valid']}")
+    print(f"Validation Errors: {validation_result['errors']}")
+    print(f"Validation Warnings: {validation_result['warnings']}")
 
 if __name__ == "__main__":
-    print("=== Architecture Sync Examples ===\n")
-
-    print("1. Parse PDD tags:")
-    example_parse_tags()
-    print()
-
-    print("5. Validate interface:")
-    example_validate_interface()
-    print()
-
-    print("6. Generate tags from architecture:")
-    example_generate_tags()
-    print()
-
-    print("7. Check existing tags:")
-    example_check_existing_tags()
-    print()
+    run_example()
