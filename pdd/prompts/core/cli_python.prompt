@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "cli", "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, estimate, estimate_json, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps)", "returns": "None"},
+      {"name": "cli", "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, estimate, estimate_json, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps, compress_examples, compress_test_context, context_compression, compression_fallback)", "returns": "None"},
       {"name": "process_commands", "signature": "(ctx, results, **kwargs)", "returns": "None"},
       {"name": "_derive_success_from_normalized_results", "signature": "(normalized_results: List[Any])", "returns": "bool"},
       {"name": "_restore_captured_streams", "signature": "(ctx)", "returns": "None"},
@@ -15,10 +15,10 @@
 }
 </pdd-interface>
 
-<pdd-dependency>dump_python.prompt</pdd-dependency>
-<pdd-dependency>errors_python.prompt</pdd-dependency>
-<pdd-dependency>utils_python.prompt</pdd-dependency>
-<pdd-dependency>duplicate_cli_guard_python.prompt</pdd-dependency>
+<pdd-dependency>core/dump_python.prompt</pdd-dependency>
+<pdd-dependency>core/errors_python.prompt</pdd-dependency>
+<pdd-dependency>core/utils_python.prompt</pdd-dependency>
+<pdd-dependency>core/duplicate_cli_guard_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>auto_update_python.prompt</pdd-dependency>
 <pdd-dependency>track_cost_python.prompt</pdd-dependency>
@@ -47,9 +47,9 @@
        - Fail-safe Core Dump: For unexpected exceptions, attempt to collect captured output, restore streams, and call `_write_core_dump` before exiting with code 2 (UsageError) or 1.
 
   3. **Main Entry (`cli`)**:
-     - Global Options: `--force`, `--strength`, `--temperature`, `--time` (default `DEFAULT_TIME`), `--verbose`, `--quiet`, `--output-cost`, `--estimate`, `--dry-run-cost` (alias for `--estimate`), `--estimate-json`, `--review-examples`, `--local`, `--context` (override), `--list-contexts`, `--core-dump` (default True), `--keep-core-dumps` (default 10). `--estimate-json` implies estimate mode and machine-readable output.
+     - Global Options: `--force`, `--strength`, `--temperature`, `--time` (default `DEFAULT_TIME`), `--verbose`, `--quiet`, `--output-cost`, `--estimate`, `--dry-run-cost` (alias for `--estimate`), `--estimate-json`, `--review-examples`, `--local`, `--context` (override), `--list-contexts`, `--core-dump` (default True), `--keep-core-dumps` (default 10), `--compress-examples` (bool), `--compress-test-context` (bool), `--context-compression` (choice: off, test, examples, contracts, all), `--compression-fallback` (choice: full, error). `--estimate-json` implies estimate mode and machine-readable output.
      - Initialization: Call `get_local_pdd_path()`, `clear_core_dump_errors()`, and `garbage_collect_core_dumps(keep=keep_core_dumps)`.
-     - Propagate flags to `ctx.obj` and env vars (`PDD_FORCE`, `PDD_FORCE_LOCAL`, `PDD_QUIET`, `PDD_ESTIMATE`, `PDD_ESTIMATE_JSON`). `ctx.obj["estimate"]` is true when either `--estimate`/`--dry-run-cost`, `--estimate-json`, or `PDD_ESTIMATE=1` is supplied; `ctx.obj["estimate_json"]` is true only for `--estimate-json`; initialize `ctx.obj["estimate_results"] = []` and alias `ctx.obj["estimate_records"]` to that list for downstream `llm_invoke` accumulation. Estimate mode forces local execution (`ctx.obj["local"] = True`, `PDD_FORCE_LOCAL=1`) so cloud/auth/provider setup is not contacted. `ctx.obj["time"]` is always populated (the `DEFAULT_TIME` fallback), so additionally set `ctx.obj["time_explicit"] = (time is not None)` so callers that want to forward an explicit per-call reasoning override can gate on it (otherwise plain `pdd bug ...` would behave as if `--time DEFAULT_TIME` was passed and force-set provider effort). When `--time` is explicitly provided, also export `PDD_REASONING_EFFORT={low,medium,high}` using `reasoning.time_to_effort_level` so agentic provider subprocesses (Codex/Claude/Gemini/Antigravity via `agentic_common._run_with_provider`) honor reasoning effort. When `--time` is omitted, leave `PDD_REASONING_EFFORT` untouched so values pre-set by a worker `env.yaml` (e.g. `CODEX_REASONING_EFFORT=xhigh` for GPT-5.4 Codex routing) keep applying.
+     - Propagate flags to `ctx.obj` and env vars (`PDD_FORCE`, `PDD_FORCE_LOCAL`, `PDD_QUIET`, `PDD_ESTIMATE`, `PDD_ESTIMATE_JSON`, `PDD_COMPRESS_EXAMPLES`, `PDD_COMPRESS_TEST_CONTEXT`, `PDD_CONTEXT_COMPRESSION`, `PDD_COMPRESSION_FALLBACK`). `ctx.obj["estimate"]` is true when either `--estimate`/`--dry-run-cost`, `--estimate-json`, or `PDD_ESTIMATE=1` is supplied; `ctx.obj["estimate_json"]` is true only for `--estimate-json`; initialize `ctx.obj["estimate_results"] = []` and alias `ctx.obj["estimate_records"]` to that list for downstream `llm_invoke` accumulation. Estimate mode forces local execution (`ctx.obj["local"] = True`, `PDD_FORCE_LOCAL=1`) so cloud/auth/provider setup is not contacted. `ctx.obj["time"]` is always populated (the `DEFAULT_TIME` fallback), so additionally set `ctx.obj["time_explicit"] = (time is not None)` so callers that want to forward an explicit per-call reasoning override can gate on it (otherwise plain `pdd bug ...` would behave as if `--time DEFAULT_TIME` was passed and force-set provider effort). When `--time` is explicitly provided, also export `PDD_REASONING_EFFORT={low,medium,high}` using `reasoning.time_to_effort_level` so agentic provider subprocesses (Codex/Claude/Gemini/Antigravity via `agentic_common._run_with_provider`) honor reasoning effort. When `--time` is omitted, leave `PDD_REASONING_EFFORT` untouched so values pre-set by a worker `env.yaml` (e.g. `CODEX_REASONING_EFFORT=xhigh` for GPT-5.4 Codex routing) keep applying.
      - Estimate Mode Cost Suppression: When estimate mode is active, suppress actual-run cost CSV writes by setting `ctx.obj["output_cost"] = None` and removing/ignoring `PDD_OUTPUT_COST_PATH` for this process even if `--output-cost` or the environment variable is present. Estimate mode reports preview data only; it must not append cost rows.
      - Estimate Output: In any estimate mode, force quiet command execution for downstream helpers so they do not print onboarding reminders, auto-update chatter, duplicate-run prompts, prompt-template load notices, preprocessing chatter, process-log LLM attribution JSON, normal command summaries, grounding summaries, per-step cost summaries, or cost CSV writes around the estimate payload. Set package-level `pdd` logging to ERROR and disable `PDD_LLM_ATTRIBUTION_PROCESS_LOG` / `PDD_LLM_ATTRIBUTION_STDOUT` for the process. The result callback still renders the human estimate table. `--estimate-json` additionally treats the payload as quiet machine output.
      - When `--review-examples` is supplied, set `ctx.obj["review_examples"] = True` AND initialize `ctx.obj["grounding_review_decisions"] = []` so downstream grounding consumers can append per-module review decisions (`{"module": str, "decision": "accept"|"reject", "reason": Optional[str]}`) for the evidence-manifest writer to record under `generation.grounding.reviewed`. When `--review-examples` is not supplied, do NOT pre-create the key — the manifest writer treats its absence as "no review observed" and records `reviewed: false`.
@@ -75,10 +75,10 @@
   <pdd.core.track_cost>
     <include>context/track_cost_example.py</include>
   </pdd.core.track_cost>
-  <pdd.core.cli><include select="class:PDDCLI,def:cli,def:process_commands">context/core/cli_example.py</include></pdd.core.cli>
-  <pdd.core.dump><include select="def:_write_core_dump,def:garbage_collect_core_dumps,def:clear_core_dump_errors">context/core/dump_example.py</include></pdd.core.dump>
-  <pdd.core.errors><include select="def:handle_error">context/core/errors_example.py</include></pdd.core.errors>
-  <pdd.core.utils><include select="def:get_local_pdd_path,def:_should_show_onboarding_reminder,def:list_available_contexts">context/core/utils_example.py</include></pdd.core.utils>
+  <pdd.core.cli><!-- Invalid selector for context/core/cli_example.py: Class 'PDDCLI' not found in source --></pdd.core.cli>
+  <pdd.core.dump><!-- Invalid selector for context/core/dump_example.py: Function '_write_core_dump' not found in source --></pdd.core.dump>
+  <pdd.core.errors><!-- Invalid selector for context/core/errors_example.py: Function 'handle_error' not found in source --></pdd.core.errors>
+  <pdd.core.utils><!-- Invalid selector for context/core/utils_example.py: Function 'get_local_pdd_path' not found in source --></pdd.core.utils>
   <pdd.agentic_common>
     <include query="logic for _run_with_provider and PDD_REASONING_EFFORT or reasoning time to effort level mapping">context/agentic_common_example.py</include>
   </pdd.agentic_common>

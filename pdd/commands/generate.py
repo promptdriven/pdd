@@ -19,6 +19,7 @@ from ..evidence_manifest import (
     resolve_test_output_paths,
     write_evidence_manifest,
 )
+from ..prompt_gate import maybe_run_workflow_prompt_gate
 from ..user_story_tests import cache_story_prompt_links, generate_user_story
 
 # Initialize console
@@ -54,6 +55,50 @@ def _estimate_result_tuple(exception: Exception) -> Tuple[Dict[str, Any], float,
     payload = getattr(exception, "payload", None) or getattr(exception, "estimate", {})
     model = str(payload.get("model") or "unknown") if isinstance(payload, dict) else "unknown"
     return payload, 0.0, model
+
+
+def _maybe_run_prompt_gate(
+    *,
+    output_files: Tuple[str, ...] | List[str],
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
+    project_root: Optional[str],
+    quiet: bool,
+    dry_run: bool = False,
+) -> tuple[bool, int]:
+    """Run the prompt gate; return ``(should_continue, exit_code)``."""
+    if dry_run:
+        return True, 0
+    root = Path(project_root or Path.cwd()).resolve()
+    return maybe_run_workflow_prompt_gate(
+        output_files,
+        cli_prompt_checkup=prompt_checkup,
+        no_prompt_checkup=no_prompt_checkup,
+        project_root=root,
+        quiet=quiet,
+    )
+
+
+def _enforce_prompt_gate_or_exit(
+    *,
+    output_files: Tuple[str, ...] | List[str],
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
+    project_root: Optional[str],
+    quiet: bool,
+    dry_run: bool = False,
+) -> None:
+    """Raise ``click.Exit`` when strict prompt checkup blocks downstream work."""
+    should_continue, exit_code = _maybe_run_prompt_gate(
+        output_files=output_files,
+        prompt_checkup=prompt_checkup,
+        no_prompt_checkup=no_prompt_checkup,
+        project_root=project_root,
+        quiet=quiet,
+        dry_run=dry_run,
+    )
+    if not should_continue:
+        raise click.exceptions.Exit(exit_code)
 
 class GenerateCommand(click.Command):
     """
@@ -127,6 +172,37 @@ class GenerateCommand(click.Command):
     default=False,
     help="Write a machine-readable evidence manifest for this run.",
 )
+@click.option(
+    "--snapshot-context",
+    is_flag=True,
+    default=False,
+    help=(
+        "Write replayable expanded prompt context artifacts (single prompt-file "
+        "generation only; not global/agentic sync). Use pdd replay on the "
+        "snapshot manifest under .pdd/evidence/runs/."
+    ),
+)
+@click.option(
+    "--compress",
+    is_flag=True,
+    default=False,
+    help=(
+        "Use AST-based compression for Python includes when expanding the "
+        "prompt (few-shot context reduction)."
+    ),
+)
+@click.option(
+    "--prompt-checkup",
+    type=click.Choice(["warn", "strict"]),
+    default=None,
+    help="Automatic prompt checkup after creating or modifying .prompt files.",
+)
+@click.option(
+    "--no-prompt-checkup",
+    is_flag=True,
+    default=False,
+    help="Disable automatic prompt checkup for this run.",
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -148,6 +224,10 @@ def generate(
     no_github_state: bool,
     project_root: Optional[str],
     evidence: bool,
+    snapshot_context: bool,
+    compress: bool,
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -209,6 +289,8 @@ def generate(
         )
         if experimental_prd and not incremental:
             raise click.UsageError("--experimental-prd requires --incremental.")
+        if snapshot_context and (is_github_issue or experimental_prd):
+            raise click.UsageError("--snapshot-context is only supported for prompt-file generation.")
         if experimental_prd and has_code_generation_options:
             raise click.UsageError(
                 "--experimental-prd cannot be combined with code-generation "
@@ -286,6 +368,15 @@ def generate(
                     temperature=obj.get("temperature", 0.0),
                     **grounding_kwargs_from_ctx(ctx.obj),
                 )
+            if success:
+                _enforce_prompt_gate_or_exit(
+                    output_files=output_files,
+                    prompt_checkup=prompt_checkup,
+                    no_prompt_checkup=no_prompt_checkup,
+                    project_root=project_root,
+                    quiet=quiet,
+                    dry_run=dry_run,
+                )
             return (message, cost, model) if success else None
 
         if dry_run:
@@ -328,6 +419,14 @@ def generate(
                     temperature=(ctx.obj or {}).get("temperature", 0.0),
                     basename="agentic-generate",
                     **grounding_kwargs_from_ctx(ctx.obj),
+                )
+            if success:
+                _enforce_prompt_gate_or_exit(
+                    output_files=output_files,
+                    prompt_checkup=prompt_checkup,
+                    no_prompt_checkup=no_prompt_checkup,
+                    project_root=project_root,
+                    quiet=quiet,
                 )
             return (message, cost, model) if success else None
 
@@ -399,7 +498,9 @@ def generate(
                 force_incremental_flag=incremental,
                 env_vars=env_vars if env_vars else None,
                 unit_test_file=unit_test,
-                exclude_tests=exclude_tests
+                exclude_tests=exclude_tests,
+                snapshot_context=snapshot_context,
+                compress=compress,
             )
         except Exception as exception:
             if _is_estimate_only_result(exception):
@@ -439,11 +540,13 @@ def generate(
                 model=model,
                 cost_usd=cost,
                 temperature=ctx_obj.get("temperature", 0.0),
+                compress=compress,
                 **grounding_kwargs_from_ctx(ctx_obj),
+                context_snapshot=ctx_obj.get("context_snapshot"),
             )
         return generated_code, cost, model
 
-    except (click.Abort, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+    except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
         if _is_estimate_only_result(e):
@@ -515,6 +618,15 @@ def example(
 @click.option("--target-coverage", type=float, default=90.0, help="Desired code coverage percentage.")
 @click.option("--merge", is_flag=True, help="Merge new tests with existing test file.")
 @click.option(
+    "--issue",
+    default=None,
+    help=(
+        "Issue source for story generation: a GitHub issue/PR URL, an issue "
+        "number, or a path to a local issue markdown file. The story is "
+        "authored from the issue, independent of the prompt."
+    ),
+)
+@click.option(
     "--evidence",
     is_flag=True,
     default=False,
@@ -536,6 +648,7 @@ def test(
     existing_tests: Tuple[str, ...],
     target_coverage: float,
     merge: bool,
+    issue: Optional[str],
     evidence: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
@@ -544,7 +657,7 @@ def test(
     Supports four modes:
     1. Agentic UI Test Generation: pdd test <GITHUB_ISSUE_URL>
     2. Manual Unit Test Generation: pdd test --manual PROMPT_FILE CODE_OR_EXAMPLE_FILE
-    3. Story Generation: pdd test prompts/upload_python.prompt prompts/notify_python.prompt
+    3. Story Generation: pdd test --issue <url|number|issue.md> prompts/upload_python.prompt
     4. Story Metadata Linking: pdd test user_stories/story__my_story.md
     """
     from ..cmd_test_main import cmd_test_main
@@ -613,6 +726,7 @@ def test(
             story_prompt_args = [str(Path(arg)) for arg in args]
             success, message, cost, model, generated_story_file, linked_prompts = generate_user_story(
                 prompt_files=story_prompt_args,
+                issue=issue,
                 output=output,
                 stories_dir=os.environ.get("PDD_USER_STORIES_DIR"),
                 prompts_dir=os.environ.get("PDD_PROMPTS_DIR"),
@@ -628,6 +742,8 @@ def test(
                     console.print(f"[bold red]Story generation failed:[/bold red] {message}")
                 if linked_prompts:
                     console.print(f"Linked prompts: {', '.join(linked_prompts)}")
+            if not success:
+                raise click.ClickException(message)
             result_dict = {
                 "success": success,
                 "message": message,
@@ -744,7 +860,7 @@ def test(
                 )
             return test_result.content, test_result.cost, test_result.model
 
-    except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
+    except (click.Abort, click.exceptions.Exit, click.ClickException, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
         if _is_estimate_only_result(e):

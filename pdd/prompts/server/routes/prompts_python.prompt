@@ -35,7 +35,7 @@
 
   5. `GET /models`:
      - Load model table via `pdd.llm_invoke._load_model_data(LLM_MODEL_CSV_PATH)`.
-     - Build `ModelInfo` entries with provider/cost/ELO/context/reasoning fields, sort by ELO descending, return `default_model=DEFAULT_BASE_MODEL`.
+     - Build `ModelInfo` entries with provider/cost/raw ELO/model_rank_score/context/reasoning fields, sort by `model_rank_score` descending, return `default_model=DEFAULT_BASE_MODEL`.
 
   6. `POST /check-match`:
      - Use `llm_invoke` with a strict JSON schema returning `match_score`, `summary`, `missing`, `extra`, `suggestions`.

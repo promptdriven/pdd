@@ -30,3 +30,29 @@ def atomic_write_json(path: Path, data: Any, *, indent: int = 2) -> None:
         except OSError:
             pass
         raise
+
+
+def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    """Write *text* to *path* via a temp file in the same directory and ``os.replace``.
+
+    Flushes and fsyncs before renaming so a crash during the write cannot leave
+    the target file in a partially-written state.  The caller is responsible for
+    ensuring ``path.parent`` exists before calling.
+    """
+    fd, tmp = tempfile.mkstemp(
+        dir=str(path.parent),
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(fd, "w", encoding=encoding) as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise

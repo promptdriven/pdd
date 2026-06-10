@@ -5,11 +5,15 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str], file_path: str = None, mode: str = \"full\")", "returns": "str"}
+      {"name": "ContentSelector.select", "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\", expand_dependencies: bool = False)", "returns": "str"}
     ]
   }
 }
 </pdd-interface>
+
+<pdd-dependency>context/python_preamble.prompt</pdd-dependency>
+<pdd-dependency>pytest_slicer_python.prompt</pdd-dependency>
+<pdd-dependency>api_contract_slicer_python.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>
 
@@ -20,13 +24,13 @@ Write the `pdd/content_selector.py` module.
 Deterministic content extraction from files based on line ranges, Python AST structures, Markdown sections, regex patterns, and JSON/YAML path traversal. Used by the PDD preprocessor to handle selective includes (`<include select="...">`).
 
 % Requirements
-1. Class: `ContentSelector` with a static `select(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = "full") -> str` method
+1. Class: `ContentSelector` with a static `select(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = "full", expand_dependencies: bool = False) -> str` method
 2. Exception: `SelectorError(Exception)` — all user-facing errors must raise `SelectorError` with a descriptive message
-3. Selectors are `kind:value` strings where `kind` is one of: `lines`, `def`, `class`, `section`, `pattern`, `path`
+3. Selectors are `kind:value` strings where `kind` is one of: `lines`, `def`, `class`, `section`, `pattern`, `path`, `pytest`, `contract`
    - Accept `selectors` as a `list[str]` or a single comma-separated string
    - Skip empty/whitespace-only strings silently
-   - Raise `SelectorError` for non-empty strings that don't match `kind:value` format
-4. When selectors is empty, return full content — unless `mode="interface"`, which produces a full-file interface
+   - Raise `SelectorError` for non-empty strings that don't match `kind:value` format. Error messages must explicitly list all valid kinds (e.g., "Invalid selector kind 'foo'. Valid kinds are: lines, def, class, section, pattern, path, pytest, contract").
+4. When selectors is empty, return full content — unless `mode="interface"` (which produces a full-file interface) or `mode="compressed"` (which produces a full-file compressed version)
 5. Infer file type from `file_path` extension:
    - `.py` → Python, `.md`/`.markdown` → Markdown, `.json` → JSON, `.yaml`/`.yml` → YAML
    - Default to Python when `file_path` is `None`
@@ -62,22 +66,61 @@ Deterministic content extraction from files based on line ranges, Python AST str
     - Re-serialize extracted value as pretty-printed output in the source format (JSON or YAML matching input)
     - Raise `SelectorError` for missing keys, index out of range, type mismatches (e.g., array index on a dict), empty path, or parse failures
     - YAML support is optional — raise `SelectorError` with a clear message if PyYAML is not installed
+12. `pytest:test_name` — AST-based test context slicing
+    - Delegate to `PytestSlicer` to extract the test and its transitive closure of dependencies (fixtures, helpers, imports)
+    - Catch `SlicerError` from `PytestSlicer` and re-raise as `SelectorError` if the test is not found or if slicing fails
+    - Only supported for `.py` files; raise `SelectorError` otherwise
+13. `contract:symbol[,symbol...]` — API/dependency contract slicing
+    - Delegate to `ApiContractSlicer` to preserve seed symbols and transitive local dependencies
+    - Catch `ContractSlicerError` and re-raise as `SelectorError`
+    - Only supported for `.py` files; raise `SelectorError` otherwise
 
 % Combining Results
-12. Multiple selectors: merge overlapping line spans to preserve file order. Path results collected separately and appended after span-based content, joined with `\n`.
-13. Any unexpected exception during selector processing should be caught and re-raised as `SelectorError` with context about which selector failed.
-14. Preserve original indentation and whitespace in all extracted content.
+13. Multiple selectors: merge overlapping line spans to preserve file order. Path results collected separately and appended after span-based content, joined with `\n`.
+14. Any unexpected exception during selector processing should be caught and re-raised as `SelectorError` with context about which selector failed.
+15. Preserve original indentation and whitespace in all extracted content.
+
+% Expansion (Python only)
+15. `expand_dependencies=True`: Recursively expand the selection to include local dependencies and patch targets.
+    - Local Dependencies: Scan AST of selected functions/classes for references to other top-level symbols (functions, classes, constants) within the same file. Include their definitions (recursive).
+    - Imports: Include top-level imports referenced by the selected/expanded symbols.
+    - Circular Dependencies: Handle circular references between local symbols gracefully (prevent infinite loops during expansion).
+    - Patch Target Preservation: Scan sibling `test_*.py` files (if `file_path` is known) for mock/patch targets (e.g., `@patch("module.symbol")`, `monkeypatch.setattr("module.symbol", ...)`, `patch.object(Class, "method", ...)`) where `module` matches the current module name.
+    - Include these patch targets (even if private/underscore-prefixed) in the expanded selection if they are defined in the current file.
+    - Implementation: Use Python's `ast` module for dependency analysis. Use AST preferred (with regex fallback) on sibling test files to identify patch targets.
 
 % Interface Mode (Python only)
 - Full-file interface (no selectors): include imports, module-level constants, annotated assignments, module docstring, and all public classes/functions. Skip private top-level names (starting with `_`). Insert blank lines between top-level definitions for readability.
 - For each function/async function: keep decorators, the full signature (may span multiple lines), and docstring. Replace body with `...` at the body's indentation level.
 - Within classes: keep decorators, class header, class docstring, class-level annotated assignments. Include public methods (processed as above). Exclude private methods (starting with `_`) except `__init__`.
 - With selectors + `mode="interface"`: apply interface transformation only to AST nodes overlapping the selected spans. If no AST nodes overlap, fall back to returning the raw span content.
+- If `expand_dependencies=True`, apply expansion *before* interface mode transformation.
+
+% Context Compression Modes
+- `contracts` mode: Extract only contract-related elements from prompt or documentation files. This includes:
+  - Architecture metadata tags: `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`.
+  - Logical sections: `<responsibility>`, `<non_responsibilities>`, `<vocabulary>`, `<contract_rules>`, `<capabilities>`, `<waivers>`, `<coverage>`.
+  - Contract rules: Any numbered list item starting with `R\d+ -` (e.g., `R1 - Idempotency`).
+  - Vocabulary definitions: Any line starting with `- ` within a `<vocabulary>` block.
+  - Non-responsibilities: Any line starting with `- ` within a `<non_responsibilities>` block.
+  - Capabilities: Any line starting with `- MAY`, `- MUST`, or `- MUST NOT` within a `<capabilities>` block.
+- `test_interface` mode: use AST-based slicing to include only failing tests (identified by a comma-separated list of test names or IDs passed in the `PDD_FAILING_TESTS` environment variable or a separate metadata channel) and their necessary fixtures (functions decorated with @pytest.fixture). This mode is optimized for minimizing token usage when providing failing test context to an LLM.
+
+% Compression Mode (Python only)
+- `mode="compressed"`: optimized for dense few-shot examples.
+- Strip all docstrings (module, class, function) and their surrounding whitespace.
+- Strip all standalone comment blocks that aren't following code on the same line.
+- Preserve all executable logic, including full function and class bodies (do not replace with `...`).
+- Sibling Test Preservation: When the file path indicates a test file (starts with `test_` or ends with `_test.py`), MUST preserve the original test structure exactly (to keep the "mold walls" stable) but still strip docstrings.
+- If `mode="compressed"` is combined with selectors, apply compression only to the resulting extracted spans.
 
 % Error Reporting
 - Use `rich.console.Console` with a custom theme for formatted error messages. Print error context (including file path when available) before raising `SelectorError`.
 
 % Dependencies
+<pytest_slicer_interface>
+  <include mode="interface">pdd/pytest_slicer.py</include>
+</pytest_slicer_interface>
 <rich_example>
   <include>context/core/errors_example.py</include>
 </rich_example>

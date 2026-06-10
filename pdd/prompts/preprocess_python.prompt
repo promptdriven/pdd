@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "preprocess", "signature": "(prompt, recursive, double_curly_brackets, exclude_keys, _seen)", "returns": "str"},
+      {"name": "preprocess", "signature": "(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, compress=False, examples_dir=\"examples/\", tests_dir=\"tests/\", _seen=None, _failed=None, _user_intent_paths=None, snapshot_recorder=None, exclude=None)", "returns": "str"},
       {"name": "get_file_path", "signature": "(file_name)", "returns": "str"}
     ]
   }
@@ -15,6 +15,7 @@
 <pdd-dependency>path_resolution_python.prompt</pdd-dependency>
 <pdd-dependency>content_selector_python.prompt</pdd-dependency>
 <pdd-dependency>include_query_extractor_python.prompt</pdd-dependency>
+<pdd-dependency>context_snapshot_python.prompt</pdd-dependency>
 
 <include>./context/python_preamble.prompt</include>
 
@@ -25,20 +26,33 @@ Write the `pdd/preprocess.py` module.
 Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<include>`, `<include-many>`, `<shell>`, `<web>`) and optionally escaping curly braces. Supports recursive include resolution, selective extraction, semantic LLM queries, and code block protection.
 
 % Requirements
-1. Function: `preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, _seen=None) -> str`
+1. Function: `preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=None, compress=False, examples_dir="examples/", tests_dir="tests/", _seen=None, _failed=None, _user_intent_paths=None, snapshot_recorder=None, exclude=None) -> str`
    - `_seen`: set of resolved real paths for circular include detection, passed to child calls
+   - `compress`: when True, `<include>` tags without an explicit `mode` default to `mode="compressed"` for supported files (Python) after env-based auto-mode detection
+   - `examples_dir` / `tests_dir`: directory prefixes for automatic context compression mode detection
+   - `snapshot_recorder`: optional context snapshot recorder object; default `None` preserves the existing return value and behavior
    - Returns the preprocessed prompt string; preserve leading/trailing whitespace
    - If `prompt` is not a string, return `str(prompt)`; if empty, print error and return `""`
 2. Tags must be processed in this order: `<pdd>` → `<include>` (and backtick includes) → `<include-many>` → `<shell>` → `<web>`. This order matters because earlier tags can produce content containing later tags (e.g., an included file may contain `<shell>` tags). Apply curly-brace doubling last, only on the top-level call.
-3. Tags inside fenced code blocks (``` or ~~~) or inline backtick spans must NOT be processed. Tags that span into or overlap a code block must also be skipped.
+3. Tags inside fenced code blocks (``` or ~~~) or inline backtick spans must NOT be processed (except for backtick includes defined in Requirement 13). Tags that span into or overlap a code block must also be skipped.
 4. `<pdd>...</pdd>` — delete entire block including tags (human-only comment)
 5. `<include>path</include>` — read file as UTF-8 and replace tag with contents
    - Also supports self-closing syntax: `<include path="..." />`
    - Also supports `lines` attribute shorthand: `<include lines="1-10">file</include>`
    - Parse attributes with `key="value"` or `key='value'` syntax
-6. `<include select="..." mode="...">file</include>` — delegate to `ContentSelector.select()`. `mode` defaults to `"full"`; `"interface"` extracts signatures only.
-   - On failure (import error or selector error), log warning and fall back to full file content
-   - If `query=` was also present, try query extraction before falling back to full file
+6. `<include select="..." mode="...">file</include>` — delegate to `ContentSelector.select()`. `mode` defaults to `"full"` (or `"compressed"` when `compress=True` and no explicit mode); `"interface"` extracts signatures only; `"contracts"` extracts PDD contract rules and metadata; `"test_interface"` extracts failing tests and fixtures; `"compressed"` strips docstrings and comment-only lines (Python).
+   - When `mode="compressed"` (explicit or via `compress=True`), use `apply_compressed_include_with_fallback()`; if output exceeds ~120k characters, fall back to interface mode with sibling patch-target restoration, then truncate.
+   - **Global Compression Overrides**:
+     - The global `PDD_CONTEXT_COMPRESSION` env var (from `--context-compression`) accepts a comma-separated list of modes: `test`, `examples`, `contracts`, `all`, or `off` (default).
+     - When `PDD_CONTEXT_COMPRESSION` includes `examples` or `all` (or legacy `PDD_COMPRESS_EXAMPLES=1`), any include whose path is within the configured `examples_dir` (default: `examples/`) must default to `mode="interface"` unless a mode is explicitly specified in the tag.
+     - When `PDD_CONTEXT_COMPRESSION` includes `test` or `all` (or legacy `PDD_COMPRESS_TEST_CONTEXT=1`), any include whose path is within the configured `tests_dir` (default: `tests/`) must default to `mode="test_interface"` unless a mode is explicitly specified.
+     - When `PDD_CONTEXT_COMPRESSION` includes `contracts` or `all`, any include for a `.prompt` file must default to `mode="contracts"`. For `.md`, `.markdown`, or `.rst` files, default to `mode="contracts"` only if the file explicitly includes PDD architecture tags (`<pdd-reason>`, `<pdd-interface>`, or `<pdd-dependency>`); narrative documents without these tags should default to `mode="full"` to prevent mangling narrative content like tutorials or PRDs that do not follow the contract/vocabulary structure.
+   - **Compression Fallback Strategy**:
+     - Controlled by `PDD_COMPRESSION_FALLBACK` env var (from `--compression-fallback`): `full` (default) or `error`.
+     - On selector failure (e.g., AST syntax error in `interface` mode):
+       - If `full`, log a warning and fall back to the full file content.
+       - If `error`, raise `SelectorError` immediately.
+   - If `query=` was also present, try query extraction before applying fallback.
 7. `<include query="...">file</include>` — delegate to `IncludeQueryExtractor.extract()`. Deferred when `recursive=True` (leave tag intact). On import error or exception, return inline error message in brackets (e.g., `[Error: pdd.include_query_extractor not found...]`).
 8. When both `select=` and `query=` present, keep `select=` and discard `query=`; fall back to `query=` only if `select=` fails
 9. Image includes (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px and convert to base64 data URL. GIF first frame converted to static image. HEIC converted to JPEG (requires `pillow_heif`).
@@ -46,6 +60,16 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 11. `<shell>cmd</shell>` — execute command string in a shell, replace with stdout. Timeout controlled by `PDD_SHELL_TIMEOUT` env var (default 30s). On non-zero exit, insert error message with exit code and combined stdout/stderr. On timeout, insert timeout message. Deferred when `recursive=True`.
 12. `<web>url</web>` — fetch via Firecrawl (requires `FIRECRAWL_API_KEY`), replace with markdown content. Cache responses via `firecrawl_cache`. Use a hard 30s client-side timeout to prevent hanging. Handle missing API key, import error, empty response, timeout, and scrape failure with inline error messages. Deferred when `recursive=True`.
 13. Backtick includes: ``` `<path>` ``` → ```{file contents}```. Same recursive/missing-file behavior as XML includes.
+14. Snapshot capture:
+   - Thread `snapshot_recorder` through all top-level and child preprocessing calls without changing the default return value.
+   - Record deterministic include inputs and content hashes for XML includes, backtick includes, and include-many inputs that are actually resolved.
+   - When snapshot capture is enabled, record shell command, stdout, stderr, exit status, timeout metadata, resolved replacement text, and whether redaction was applied.
+   - When snapshot capture is enabled, record web URL, resolved markdown content, source/cache metadata when available, replacement text, and whether redaction was applied.
+   - When snapshot capture is enabled, record semantic `query=` include inputs, extracted text, model/cache metadata when available, replacement text, and whether the tag was nondeterministic.
+   - Mark `<shell>`, `<web>`, and `<include query="...">` outputs as nondeterministic context only when they execute during this pass.
+   - Compute and record the final expanded prompt SHA-256 on the top-level non-recursive call after all replacements and optional curly-brace handling are complete.
+   - Apply the context snapshot redaction policy before durable shell/web payloads are written. Preserve enough metadata to audit hash mismatches even when content is redacted.
+   - Snapshot capture must preserve existing recursive/deferred behavior. When `recursive=True`, deferred shell/web/query/include-many tags remain intact and MUST NOT be claimed as captured dynamic output for that pass.
 
 % Circular Include Detection
 - Detect circular includes by tracking resolved file paths; raise `ValueError` with "Circular include" in the message if a file appears twice in the include chain

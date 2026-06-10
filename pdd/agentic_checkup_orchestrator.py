@@ -17,10 +17,11 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from rich.console import Console
 
@@ -37,6 +38,9 @@ from .agentic_common import (
     run_agentic_task,
     save_workflow_state,
     substitute_template_variables,
+    drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
+    STEER_STATE_KEYS,
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
@@ -270,6 +274,59 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return True, ""
     except subprocess.CalledProcessError as e:
         return False, e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+
+
+def _prune_worktrees(cwd: Path) -> None:
+    """Drop registrations for worktrees whose directories no longer exist.
+
+    A crashed or out-of-band-cleaned-up checkup run can leave a
+    ``checkup/issue-N`` branch registered to a worktree directory that has since
+    been removed. Git then refuses to delete OR re-add that branch ("Cannot
+    delete branch ... checked out at <gone path>" / "a branch named ... already
+    exists"), which fails the whole checkup the next time it runs. Pruning the
+    stale registration lets the branch be deleted and recreated. Best-effort.
+    """
+    try:
+        subprocess.run(
+            ["git", "worktree", "prune"],
+            cwd=cwd,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        pass
+
+
+def _worktree_holding_branch(cwd: Path, branch: str) -> Optional[str]:
+    """Return the path of the live worktree that has ``branch`` checked out.
+
+    Parses ``git worktree list --porcelain``. Returns ``None`` if no live
+    worktree currently has the branch checked out (e.g. it is just a plain
+    leftover ref, or it was only registered to a directory that has since been
+    pruned). Used to turn git's cryptic "refusing to fetch into branch ...
+    checked out at <path>" failure into an actionable message that names the
+    worktree the operator must remove. Best-effort: returns ``None`` on any
+    git error.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        return None
+
+    target = f"refs/heads/{branch}"
+    current_path: Optional[str] = None
+    for line in result.stdout.splitlines():
+        if line.startswith("worktree "):
+            current_path = line[len("worktree "):].strip()
+        elif line.startswith("branch ") and line[len("branch "):].strip() == target:
+            return current_path
+    return None
 
 
 def _pr_worktree_branch_name(git_root: Path, pr_number: int) -> str:
@@ -574,6 +631,15 @@ def _git_changed_files(worktree: Path) -> List[str]:
     return fn(worktree)
 
 
+def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
+    """Lazy wrapper around the review-loop prompt source map helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _load_prompt_source_map as fn,
+    )
+
+    return fn(worktree)
+
+
 def _git_rev_parse_head(worktree: Path) -> str:
     """Lazy wrapper around the review-loop HEAD-SHA helper."""
     from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
@@ -796,8 +862,76 @@ def _scrub_secrets(text: str) -> str:
     return fn(text)
 
 
+def _normalise_step7_path(value: Any) -> str:
+    """Return a comparable path-ish string from a Step 7 JSON field."""
+    path = str(value or "").strip().strip("`").replace("\\", "/")
+    while path.startswith("./"):
+        path = path[2:]
+    return path.strip("/")
+
+
+def _step7_nonblocking_reason(issue: Dict[str, Any]) -> str:
+    """Return Step 7's structured reason for treating a critical as non-blocking."""
+    for key in (
+        "non_blocking_reason",
+        "out_of_scope_reason",
+        "scope_reason",
+        "reason",
+    ):
+        value = issue.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _step7_unfixed_critical_blocks_targeted_pr(
+    issue: Dict[str, Any],
+    *,
+    changed_files: List[str],
+    payload_message: str,
+) -> bool:
+    """Decide whether an unfixed critical Step 7 finding blocks targeted PR mode."""
+    del changed_files, payload_message
+    reason = _step7_nonblocking_reason(issue)
+    blocking = issue.get("blocking")
+    if blocking is False and reason:
+        return False
+
+    in_scope = issue.get("in_scope")
+    if in_scope is False and reason:
+        return False
+
+    scope = str(
+        issue.get("scope")
+        or issue.get("verification_scope")
+        or issue.get("pr_scope")
+        or ""
+    ).strip().lower().replace("_", "-")
+    explicit_nonblocking_scopes = {
+        "out-of-scope",
+        "outside-pr",
+        "outside-pr-scope",
+        "non-blocking",
+        "baseline",
+        "project",
+        "project-wide",
+        "repo",
+        "repository",
+        "global",
+    }
+    if scope in explicit_nonblocking_scopes and reason:
+        return False
+    if scope in {"pr", "pr-diff", "changed-file", "changed-files", "in-scope", "blocking"}:
+        return True
+
+    return True
+
+
 def _step7_passed(
-    step7_output: str, pr_mode: bool, has_issue: bool = True
+    step7_output: str,
+    pr_mode: bool,
+    has_issue: bool = True,
+    pr_test_scope: str = "full",
 ) -> Tuple[bool, str]:
     """Parse Step 7's JSON report and decide whether the checkup may proceed.
 
@@ -821,6 +955,9 @@ def _step7_passed(
       ``True``; with no issue (#1292) the alignment gate is dropped and the
       verdict rests on code findings alone (review the PR on its own merits);
     * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
+      In targeted PR mode, unfixed critical findings outside the PR diff are
+      informational because the full-suite truth comes from the GitHub checks
+      gate.
 
     Fails closed: if no JSON object can be extracted, returns
     ``(False, "Step 7 verdict JSON could not be parsed: ...")`` so the
@@ -864,6 +1001,17 @@ def _step7_passed(
             f"{payload.get('message') or '<no message>'}",
         )
 
+    raw_changed_files = payload.get("changed_files")
+    changed_files: List[str] = []
+    if isinstance(raw_changed_files, list):
+        changed_files = [
+            _normalise_step7_path(path)
+            for path in raw_changed_files
+            if _normalise_step7_path(path)
+        ]
+    payload_message = str(payload.get("message") or "").lower()
+    targeted_pr_mode = pr_mode and pr_test_scope == "targeted"
+
     issues = payload.get("issues")
     if isinstance(issues, list):
         unfixed_critical: List[str] = []
@@ -874,6 +1022,12 @@ def _step7_passed(
             if severity != "critical":
                 continue
             if issue.get("fixed") is True:
+                continue
+            if targeted_pr_mode and not _step7_unfixed_critical_blocks_targeted_pr(
+                issue,
+                changed_files=changed_files,
+                payload_message=payload_message,
+            ):
                 continue
             module = issue.get("module") or issue.get("file") or "<unknown>"
             desc = (
@@ -994,8 +1148,50 @@ def _setup_pr_worktree(
 
     # 2. Fetch the PR's head into a local branch.
     #    Always refresh (force) so a re-run picks up new pushes to the PR.
-    if _branch_exists(git_root, branch_name) and not resume_existing:
-        _delete_branch(git_root, branch_name)
+    #    A crashed or manually cleaned run can leave the checkup/pr-* branch
+    #    registered to a worktree directory that no longer exists, so prune
+    #    first: that frees the branch so it can be deleted and re-fetched.
+    #    If the branch survives the delete even after pruning, it is genuinely
+    #    checked out in a LIVE worktree (a concurrent or abandoned checkup on
+    #    this same PR in this clone). We must NOT proceed to fetch in that case:
+    #    git refuses to update a checked-out branch
+    #    ("refusing to fetch into branch ... checked out at ..."), so the user
+    #    would otherwise see a cryptic "Failed to fetch PR" error. Surface a
+    #    clear, actionable conflict instead. (Unlike issue mode, reusing the
+    #    branch via a forced worktree add is not viable here: we could not
+    #    refresh it to the PR head, so verification would run against stale
+    #    code — exactly what PR mode exists to avoid.)
+    _prune_worktrees(git_root)
+    has_branch = _branch_exists(git_root, branch_name)
+    deleted_branch = False
+    if has_branch and not resume_existing:
+        deleted, del_err = _delete_branch(git_root, branch_name)
+        if deleted:
+            has_branch = False
+            deleted_branch = True
+        else:
+            holder = _worktree_holding_branch(git_root, branch_name)
+            location = f" (checked out at {holder})" if holder else ""
+            remove_hint = (
+                f"git worktree remove {holder}"
+                if holder
+                else f"git worktree remove <path> (or git branch -D {branch_name})"
+            )
+            return None, (
+                f"Cannot set up the PR #{pr_number} checkup worktree: branch "
+                f"{branch_name} is still checked out in another live worktree"
+                f"{location}. Remove it and retry: {remove_hint}. "
+                f"(git: {del_err.strip()})"
+            )
+    elif has_branch and resume_existing:
+        holder = _worktree_holding_branch(git_root, branch_name)
+        if holder:
+            return None, (
+                f"Cannot resume the PR #{pr_number} checkup worktree: branch "
+                f"{branch_name} is still checked out in another live worktree "
+                f"(checked out at {holder}). Remove it and retry: "
+                f"git worktree remove {holder}."
+            )
 
     # Resolve which remote actually has this PR. Prefer a configured remote
     # (uses the user's auth + caching); fall back to the explicit GitHub URL
@@ -1029,12 +1225,20 @@ def _setup_pr_worktree(
     # 3. Create worktree on the fetched branch.
     try:
         worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["git", "worktree", "add", str(worktree_path), branch_name],
-            cwd=git_root,
-            capture_output=True,
-            check=True,
-        )
+        if has_branch and not deleted_branch:
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        else:
+            subprocess.run(
+                ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
         return None, f"Failed to create PR worktree: {err_msg}"
@@ -1080,8 +1284,16 @@ def _setup_worktree(
                 console.print(f"[yellow]Removing stale directory at {worktree_path}[/yellow]")
             shutil.rmtree(worktree_path)
 
-    # 2. Handle existing branch
+    # 2. Handle existing branch. Prune stale worktree registrations first: a
+    #    crashed or cleaned-up prior run can leave `checkup/issue-N` registered
+    #    to a worktree directory that no longer exists, which makes `git branch
+    #    -D` fail ("Cannot delete branch ... checked out at <gone path>") and the
+    #    later `git worktree add -b` fail ("a branch named ... already exists"),
+    #    failing the whole checkup whenever a stale checkup/issue-* branch is
+    #    present.
+    _prune_worktrees(git_root)
     has_branch = _branch_exists(git_root, branch_name)
+    deleted_branch = False
     if has_branch:
         if resume_existing:
             if not quiet:
@@ -1089,8 +1301,20 @@ def _setup_worktree(
         else:
             if not quiet:
                 console.print(f"[yellow]Removing existing branch {branch_name}[/yellow]")
-            _delete_branch(git_root, branch_name)
-            has_branch = False
+            deleted, del_err = _delete_branch(git_root, branch_name)
+            if deleted:
+                has_branch = False
+                deleted_branch = True
+            elif not quiet:
+                # Pruning could not free the branch (it is still checked out by
+                # another worktree). Do NOT hard-fail the checkup: reuse the
+                # existing branch via a forced worktree add (step 3) instead of
+                # recreating it with `-b` (which would raise "a branch named ...
+                # already exists").
+                console.print(
+                    f"[yellow]Could not delete {branch_name} ({del_err.strip()}); "
+                    f"reusing it via a forced worktree add.[/yellow]"
+                )
 
     # 3. Create worktree
     try:
@@ -1099,6 +1323,16 @@ def _setup_worktree(
         if has_branch and resume_existing:
             subprocess.run(
                 ["git", "worktree", "add", str(worktree_path), branch_name],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        elif has_branch and not deleted_branch:
+            # The branch survived deletion (still checked out elsewhere). Reuse
+            # it with --force so a stale/duplicate worktree registration cannot
+            # block setup, rather than `-b` (which would fail: branch exists).
+            subprocess.run(
+                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
                 cwd=git_root,
                 capture_output=True,
                 check=True,
@@ -1736,6 +1970,308 @@ def _format_pr_changed_files_for_prompt(
     )
 
 
+_NON_CODE_PR_SUFFIXES = {
+    ".adoc",
+    ".bmp",
+    ".csv",
+    ".drawio",
+    ".gif",
+    ".ico",
+    ".jpeg",
+    ".jpg",
+    ".md",
+    ".mdx",
+    ".pdf",
+    ".png",
+    ".rst",
+    ".svg",
+    ".txt",
+    ".webp",
+}
+
+_CODE_OR_CONFIG_PR_SUFFIXES = {
+    ".bash",
+    ".c",
+    ".cc",
+    ".cfg",
+    ".cjs",
+    ".cpp",
+    ".cs",
+    ".css",
+    ".go",
+    ".graphql",
+    ".h",
+    ".hpp",
+    ".html",
+    ".ini",
+    ".java",
+    ".js",
+    ".json",
+    ".jsx",
+    ".kt",
+    ".kts",
+    ".mjs",
+    ".php",
+    ".proto",
+    ".py",
+    ".rb",
+    ".rs",
+    ".sass",
+    ".scala",
+    ".scss",
+    ".sh",
+    ".sql",
+    ".svelte",
+    ".swift",
+    ".toml",
+    ".ts",
+    ".tsx",
+    ".vue",
+    ".yaml",
+    ".yml",
+    ".zsh",
+}
+
+_CODE_OR_CONFIG_PR_BASENAMES = {
+    ".babelrc",
+    ".dockerignore",
+    ".eslintrc",
+    ".gitignore",
+    ".npmrc",
+    ".prettierrc",
+    "dockerfile",
+    "jest.config.js",
+    "makefile",
+    "package-lock.json",
+    "package.json",
+    "pnpm-lock.yaml",
+    "poetry.lock",
+    "pyproject.toml",
+    "pytest.ini",
+    "requirements-dev.txt",
+    "requirements.txt",
+    "tsconfig.json",
+    "uv.lock",
+    "vite.config.js",
+    "yarn.lock",
+}
+
+_PACKAGE_MANAGER_LOCKFILE_BASENAMES = {
+    "package-lock.json",
+    "npm-shrinkwrap.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+}
+
+
+def _is_package_manager_lockfile_path(path: str) -> bool:
+    return Path(path.strip().strip("/")).name in _PACKAGE_MANAGER_LOCKFILE_BASENAMES
+
+
+def _discard_clean_run_side_effects(
+    worktree: Path,
+    changed_files: List[str],
+) -> Tuple[List[str], List[str]]:
+    """Restore worktree dirt created when no fixer ran."""
+    # When Steps 3/4/5 are clean, the fixer is skipped. Any remaining
+    # worktree dirt came from discovery/verification/tooling side effects,
+    # not from a causal fix. Restore it so the PR can pass without pushing
+    # unrelated edits.
+    discardable = list(changed_files)
+    if not discardable:
+        return changed_files, []
+
+    git_cmd, git_env = _trusted_gate_git(worktree)
+    if not git_cmd or git_env is None:
+        return changed_files, []
+
+    discarded: List[str] = []
+    for rel_path in discardable:
+        rel = Path(rel_path)
+        if rel.is_absolute() or ".." in rel.parts:
+            continue
+        rel_posix = rel.as_posix()
+        tracked = subprocess.run(
+            [git_cmd, "ls-files", "--error-unmatch", "--", rel_posix],
+            cwd=worktree,
+            capture_output=True,
+            env=git_env,
+            text=True,
+        )
+        if tracked.returncode == 0:
+            restored = subprocess.run(
+                [git_cmd, "restore", "--worktree", "--staged", "--", rel_posix],
+                cwd=worktree,
+                capture_output=True,
+                env=git_env,
+                text=True,
+            )
+            if restored.returncode == 0:
+                discarded.append(rel_posix)
+            continue
+
+        target = worktree / rel
+        try:
+            if target.is_file() or target.is_symlink():
+                target.unlink()
+                discarded.append(rel_posix)
+        except OSError:
+            continue
+
+    if not discarded:
+        return changed_files, []
+
+    refreshed = [
+        path for path in _git_changed_files(worktree)
+        if not path.startswith(".pdd/")
+    ]
+    return refreshed, discarded
+
+
+def _pr_changed_paths_for_targeted_checks(changed_files_text: str) -> List[str]:
+    """Extract changed paths from ``_format_pr_changed_files_for_prompt`` text."""
+    paths: List[str] = []
+    seen: Set[str] = set()
+    row_re = re.compile(r"^\s*-\s+[A-Z][A-Z0-9]*:\s*(.+?)\s*$")
+    for line in (changed_files_text or "").splitlines():
+        match = row_re.match(line)
+        if not match:
+            continue
+        path_text = match.group(1).strip().strip("`")
+        candidates = (
+            [part.strip() for part in path_text.split(" -> ", 1)]
+            if " -> " in path_text
+            else [path_text]
+        )
+        for candidate in candidates:
+            candidate = candidate.strip().strip("`")
+            if not candidate or candidate.startswith("NOTE:"):
+                continue
+            normalized = Path(candidate).as_posix().lstrip("./")
+            if normalized and normalized not in seen:
+                paths.append(normalized)
+                seen.add(normalized)
+    return paths
+
+
+def _is_obviously_non_code_pr_path(path: str) -> bool:
+    """Return True only for paths that should not trigger executable tests."""
+    normalized = path.strip().strip("/").lower()
+    if not normalized:
+        return False
+    path_obj = Path(normalized)
+    basename = path_obj.name
+    if basename.startswith("requirements") and basename.endswith(".txt"):
+        return False
+    if basename in _CODE_OR_CONFIG_PR_BASENAMES:
+        return False
+    if path_obj.suffix in _CODE_OR_CONFIG_PR_SUFFIXES:
+        return False
+    if path_obj.suffix in _NON_CODE_PR_SUFFIXES:
+        return True
+    parts = path_obj.parts
+    if parts and parts[0] in {"docs", "documentation"}:
+        return True
+    return False
+
+
+def _targeted_non_code_step5_result(
+    context: Dict[str, str],
+    step_cwd: Path,
+    *,
+    iteration: int,
+) -> Optional[Tuple[bool, str, float, str]]:
+    """Return a deterministic Step 5 result for docs/assets-only PRs."""
+    if context.get("pr_mode") != "true" or context.get("pr_test_scope") != "targeted":
+        return None
+
+    changed_files_text = context.get("pr_changed_files", "")
+    base_match = re.search(r"^Base:\s+(.+?)\s*$", changed_files_text, re.MULTILINE)
+    if not base_match:
+        return None
+
+    changed_paths = _pr_changed_paths_for_targeted_checks(changed_files_text)
+    if not changed_paths:
+        return None
+    if not all(_is_obviously_non_code_pr_path(path) for path in changed_paths):
+        return None
+
+    git_cmd, git_env = _trusted_gate_git(step_cwd)
+    if not git_cmd or git_env is None:
+        return None
+
+    base_ref = base_match.group(1).strip()
+    args = [git_cmd, "diff", "--check", f"{base_ref}...HEAD", "--", *changed_paths]
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=step_cwd,
+            capture_output=True,
+            env=git_env,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError, subprocess.TimeoutExpired):
+        return None
+
+    display_args = [
+        "git",
+        "diff",
+        "--check",
+        f"{base_ref}...HEAD",
+        "--",
+        *changed_paths,
+    ]
+    command = " ".join(shlex.quote(part) for part in display_args)
+    raw_output = (completed.stdout or "") + (completed.stderr or "")
+    raw_output = raw_output.strip()
+    status = "pass" if completed.returncode == 0 else "fail"
+    failure_rows = (
+        "None. Changed files are docs/assets only; no executable tests were applicable."
+        if status == "pass"
+        else "| git diff --check | configuration_error | Whitespace errors in PR diff |"
+    )
+    output_text = (
+        raw_output
+        if raw_output
+        else (
+            "Changed files are docs/assets only; no executable tests were "
+            "applicable. git diff --check passed for the PR diff."
+        )
+    )
+    indented_output = "\n".join(f"  {line}" for line in output_text.splitlines())
+    report = f"""<step_report>
+## Step 5/8: Test Execution (Iteration {iteration})
+
+### Test Runner
+`{command}`
+
+### Results Summary
+- **Total:** 0 executable tests
+- **Passed:** 0
+- **Failed:** {0 if status == "pass" else 1}
+- **Skipped:** 0
+- **Errors:** 0
+
+### Failures
+{failure_rows}
+
+---
+*Proceeding to Step 6: Fix Issues*
+</step_report>
+
+```failure_signal
+command: {command}
+exit_code: {completed.returncode}
+status: {status}
+failing_ids:
+artifact_path: inline
+output: |
+{indented_output}
+```"""
+    return (True, report, 0.0, "deterministic-step5")
+
+
 # ---------------------------------------------------------------------------
 # Internal: run a single step
 # ---------------------------------------------------------------------------
@@ -1752,6 +2288,7 @@ def _run_single_step(
     label: str,
     timeout_adder: float,
     reasoning_time: Optional[float] = None,
+    steers: Optional[List[Any]] = None,
 ) -> Optional[Tuple[bool, str, float, str]]:
     """Load template, preprocess, format, and run a single LLM step.
 
@@ -1768,12 +2305,12 @@ def _run_single_step(
     if not prompt_template:
         return None  # Signals missing template — caller returns error.
 
-    exclude_keys = list(context.keys())
+    exclude = list(context.keys())
     prompt_template = preprocess(
         prompt_template,
         recursive=True,
         double_curly_brackets=True,
-        exclude_keys=exclude_keys,
+        exclude=exclude,
     )
 
     formatted_prompt = substitute_template_variables(prompt_template, context)
@@ -1787,6 +2324,7 @@ def _run_single_step(
         timeout=CHECKUP_STEP_TIMEOUTS.get(step_num, 600.0) + timeout_adder,
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=reasoning_time,
+        steers=steers,
     )
     return (success, output, cost, model)
 
@@ -2248,6 +2786,12 @@ def _run_agentic_checkup_orchestrator_inner(
     last_completed_step_to_save = last_completed_step
     consecutive_provider_failures = 0
 
+    steer_state: Dict[str, Any] = {}
+    if state is not None:
+        for _steer_key in STEER_STATE_KEYS:
+            if _steer_key in state:
+                steer_state[_steer_key] = state[_steer_key]
+
     # ---- Helper closures for state management ----
 
     def _save_state() -> None:
@@ -2266,6 +2810,9 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_head_sha=current_pr_head_sha if pr_mode else None,
             step_comments=sorted(step_comments_set),
         )
+        for _steer_key in STEER_STATE_KEYS:
+            if _steer_key in steer_state:
+                new_state[_steer_key] = steer_state[_steer_key]
         github_comment_id = save_workflow_state(
             cwd=cwd, issue_number=issue_number, workflow_type="checkup",
             state=new_state, state_dir=state_dir,
@@ -2273,6 +2820,24 @@ def _run_agentic_checkup_orchestrator_inner(
             use_github_state=use_github_state,
             github_comment_id=github_comment_id,
         )
+
+    def _issue_step_steers():
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            steer_state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if step_steers:
+            _save_state()
+        return step_steers
+
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, steer_state, cwd=cwd, quiet=quiet
+    ):
+        _save_state()
 
     def _step_comment_key(step_num: Union[int, float], iteration: int = 1) -> int:
         """Project (step_num, iteration) -> deterministic non-negative int.
@@ -2449,6 +3014,7 @@ def _run_agentic_checkup_orchestrator_inner(
             label="step7_post_push_reverify",
             timeout_adder=timeout_adder,
             reasoning_time=reasoning_time,
+            steers=_issue_step_steers() or None,
         )
         if result is None:
             template_name = f"agentic_checkup_step7_{name7}_LLM"
@@ -2463,18 +3029,27 @@ def _run_agentic_checkup_orchestrator_inner(
         abort = _handle_step_result(7, success, output, cost, model)
         if abort is not None:
             return abort
-        if not success or "All Issues Fixed" not in output:
-            return (
-                False,
-                "Post-push verification did not confirm the final rebased PR head is clean.",
-                total_cost,
-                last_model_used,
-            )
         # Round-4 Finding 1 follow-through: re-apply the strict JSON gate
         # to the post-push reverify output. The "All Issues Fixed" string
         # alone is just a loop-exit sentinel; the structured verdict is
         # what tells us the rebased tree actually satisfies the contract.
-        passed, reason = _step7_passed(output, pr_mode=pr_mode, has_issue=has_issue)
+        passed, reason = _step7_passed(
+            output,
+            pr_mode=pr_mode,
+            has_issue=has_issue,
+            pr_test_scope=pr_test_scope,
+        )
+        structured_targeted_pass = pr_mode and pr_test_scope == "targeted" and passed
+        if not success or (
+            "All Issues Fixed" not in output and not structured_targeted_pass
+        ):
+            return (
+                False,
+                "Post-push verification did not confirm the final rebased PR "
+                f"head is clean. {reason}".strip(),
+                total_cost,
+                last_model_used,
+            )
         if not passed:
             return (
                 False,
@@ -2662,6 +3237,7 @@ def _run_agentic_checkup_orchestrator_inner(
             label=f"step{step_num}",
             timeout_adder=timeout_adder,
             reasoning_time=reasoning_time,
+            steers=_issue_step_steers() or None,
         )
 
         if result is None:
@@ -2702,14 +3278,25 @@ def _run_agentic_checkup_orchestrator_inner(
                     f"{description}..."
                 )
 
-            result = _run_single_step(
-                step_num, name, context,
-                cwd=cwd, step_cwd=nofix_step_cwd,
-                verbose=verbose, quiet=quiet,
-                label=f"step{step_num}",
-                timeout_adder=timeout_adder,
-                reasoning_time=reasoning_time,
+            result = (
+                _targeted_non_code_step5_result(
+                    context,
+                    nofix_step_cwd,
+                    iteration=fix_verify_iteration or 1,
+                )
+                if step_num == 5
+                else None
             )
+            if result is None:
+                result = _run_single_step(
+                    step_num, name, context,
+                    cwd=cwd, step_cwd=nofix_step_cwd,
+                    verbose=verbose, quiet=quiet,
+                    label=f"step{step_num}",
+                    timeout_adder=timeout_adder,
+                    reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
+                )
 
             if result is None:
                 template_name = f"agentic_checkup_step{step_num}_{name}_LLM"
@@ -2851,6 +3438,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 label="step7",
                 timeout_adder=timeout_adder,
                 reasoning_time=reasoning_time,
+                steers=_issue_step_steers() or None,
             )
 
             if result is None:
@@ -2871,7 +3459,10 @@ def _run_agentic_checkup_orchestrator_inner(
         # return tuple. Returning success when Step 7 reported failure
         # would be the same anti-pattern as the fix-mode push case.
         nofix_gate_passed, nofix_gate_reason = _step7_passed(
-            nofix_step7_output, pr_mode=pr_mode, has_issue=has_issue
+            nofix_step7_output,
+            pr_mode=pr_mode,
+            has_issue=has_issue,
+            pr_test_scope=pr_test_scope,
         )
 
         # Skip step 8.
@@ -3022,9 +3613,9 @@ def _run_agentic_checkup_orchestrator_inner(
 
         # Codex round-3 Finding 2: track whether the fixer (Steps 6.1/6.2/6.3)
         # ever actually ran. Defaults to False so that a clean-run PR (Steps
-        # 3/4/5 all clean) cannot push side-effect edits left in the worktree
-        # by other steps or tooling. Non-PR mode skips the side-effect refusal
-        # path entirely (regular checkup commits its fixes the usual way).
+        # 3/4/5 all clean) can restore side-effect edits left in the worktree
+        # by other steps or tooling before the push path. Non-PR mode skips
+        # this PR-only clean-run side-effect path entirely.
         #
         # Codex round-6 Finding 3 / round-7 Finding 2: a resume that skips
         # ahead bypasses the assignment that would otherwise flip the
@@ -3032,7 +3623,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # guard would refuse the dirty changes the previous run's fixer
         # produced. Seed ONLY from persisted ``step_outputs`` so a manual
         # ``--start-step 7`` (no prior fixer execution, no persisted 6_x
-        # outputs) does NOT bypass the side-effect guard for dirty files
+        # outputs) does NOT bypass the clean-run side-effect handling for dirty files
         # left by tooling. The earlier ``or start_step > 6`` clause made
         # that bypass possible.
         fixer_invoked = any(
@@ -3131,14 +3722,25 @@ def _run_agentic_checkup_orchestrator_inner(
                         f"{description} (iter {fix_verify_iteration})..."
                     )
 
-                result = _run_single_step(
-                    step_num, name, context,
-                    cwd=cwd, step_cwd=step_cwd,
-                    verbose=verbose, quiet=quiet,
-                    label=iter_label,
-                    timeout_adder=timeout_adder,
-                    reasoning_time=reasoning_time,
+                result = (
+                    _targeted_non_code_step5_result(
+                        context,
+                        step_cwd,
+                        iteration=fix_verify_iteration,
+                    )
+                    if step_num == 5
+                    else None
                 )
+                if result is None:
+                    result = _run_single_step(
+                        step_num, name, context,
+                        cwd=cwd, step_cwd=step_cwd,
+                        verbose=verbose, quiet=quiet,
+                        label=iter_label,
+                        timeout_adder=timeout_adder,
+                        reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
+                    )
 
                 if result is None:
                     tmpl_name = f"agentic_checkup_step{step_str}_{name}_LLM"
@@ -3315,8 +3917,20 @@ def _run_agentic_checkup_orchestrator_inner(
                 if step_num == 7:
                     step7_output = output
 
-            # Check exit condition: "All Issues Fixed" in step 7 output.
-            if "All Issues Fixed" in step7_output:
+            step7_gate_passed, _step7_gate_reason = _step7_passed(
+                step7_output,
+                pr_mode=pr_mode,
+                has_issue=has_issue,
+                pr_test_scope=pr_test_scope,
+            )
+            structured_targeted_pass = (
+                pr_mode
+                and pr_test_scope == "targeted"
+                and step7_gate_passed
+            )
+
+            # Check exit condition: legacy marker or targeted structured pass.
+            if "All Issues Fixed" in step7_output or structured_targeted_pass:
                 if not quiet:
                     console.print("[green]All issues fixed — exiting loop.[/green]")
                 break
@@ -3327,17 +3941,29 @@ def _run_agentic_checkup_orchestrator_inner(
             is_first_loop_pass = False
             _save_state()
 
-        if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and "All Issues Fixed" not in step7_output:
+        final_step7_gate_passed, final_step7_gate_reason = _step7_passed(
+            step7_output,
+            pr_mode=pr_mode,
+            has_issue=has_issue,
+            pr_test_scope=pr_test_scope,
+        )
+        final_structured_targeted_pass = (
+            pr_mode
+            and pr_test_scope == "targeted"
+            and final_step7_gate_passed
+        )
+        final_loop_verified = (
+            "All Issues Fixed" in step7_output or final_structured_targeted_pass
+        )
+
+        if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and not final_loop_verified:
             max_msg = (
                 f"Checkup did not verify all issues fixed after "
                 f"{MAX_FIX_VERIFY_ITERATIONS} fix-verify iterations."
             )
             max_reason = max_msg
-            max_gate_passed, max_gate_reason = _step7_passed(
-                step7_output, pr_mode=pr_mode, has_issue=has_issue
-            )
-            if not max_gate_passed:
-                max_reason = f"{max_msg} {max_gate_reason}"
+            if not final_step7_gate_passed:
+                max_reason = f"{max_msg} {final_step7_gate_reason}"
             if not quiet:
                 console.print(
                     f"[red]{max_reason} Not pushing fixes or creating a PR.[/red]"
@@ -3370,7 +3996,12 @@ def _run_agentic_checkup_orchestrator_inner(
         # with `issue_aligned: false` or unfixed critical issues could be
         # marked green by downstream consumers.
         # --------------------------------------------------------------
-        gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode, has_issue=has_issue)
+        gate_passed, gate_reason = _step7_passed(
+            step7_output,
+            pr_mode=pr_mode,
+            has_issue=has_issue,
+            pr_test_scope=pr_test_scope,
+        )
         if not gate_passed:
             if not quiet:
                 console.print(
@@ -3512,6 +4143,19 @@ def _run_agentic_checkup_orchestrator_inner(
                     f for f in _raw_guard_changed_files
                     if not f.startswith(".pdd/")
                 ]
+                discarded_tooling_side_effects: List[str] = []
+                if not fixer_invoked and guard_changed_files:
+                    (
+                        guard_changed_files,
+                        discarded_tooling_side_effects,
+                    ) = _discard_clean_run_side_effects(
+                        worktree_path,
+                        guard_changed_files,
+                    )
+                    if discarded_tooling_side_effects:
+                        context["clean_run_discarded_side_effects"] = (
+                            ", ".join(sorted(discarded_tooling_side_effects))
+                        )
                 pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
 
                 registry_refusal = _check_architecture_registry_edit_guard(
@@ -3637,14 +4281,9 @@ def _run_agentic_checkup_orchestrator_inner(
                         last_model_used,
                     )
 
-                # Codex round-3 Finding 2: when Steps 3/4/5 were all clean
-                # the fixer (6.1/6.2/6.3) was skipped, so any dirty files in
-                # the worktree are side effects from non-fixer steps (Step 7
-                # tooling, ad-hoc agent edits, etc.). Pushing them would
-                # recreate the non-convergent clean-run failure where each
-                # rerun publishes a new "checkup fix" commit that nobody
-                # asked for. Refuse the push, record the artifact, and post
-                # the canonical Step 7 verdict instead.
+                # Defensive fallback: clean-run side effects should already
+                # have been restored above. If anything remains, refuse the
+                # push rather than publishing unrelated non-fixer edits.
                 if (
                     not fixer_invoked
                     and not no_changes_clean_run
@@ -4184,6 +4823,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 label="step8",
                 timeout_adder=timeout_adder,
                 reasoning_time=reasoning_time,
+                steers=_issue_step_steers() or None,
             )
 
             if result is None:

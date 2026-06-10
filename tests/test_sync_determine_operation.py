@@ -33,6 +33,7 @@ from sync_determine_operation import (
     get_pdd_dir,
     get_meta_dir,
     get_locks_dir,
+    is_test_extend_disabled,
     validate_expected_files,
     _handle_missing_expected_files,
     _is_workflow_complete,
@@ -439,6 +440,106 @@ def test_decision_test_on_low_coverage(mock_get_pdd_paths, mock_construct, pdd_t
     # When tests pass but coverage is low, we return test_extend to add more tests
     assert decision.operation == 'test_extend'
     assert f"coverage 75.0% below target {TARGET_COVERAGE:.1f}%" in decision.reason.lower()
+
+
+@patch('sync_determine_operation.construct_paths')
+@patch('sync_determine_operation.get_pdd_file_paths')
+def test_decision_pr_scope_guard_suppresses_python_low_coverage_test_extend(
+    mock_get_pdd_paths,
+    mock_construct,
+    pdd_test_environment,
+    monkeypatch,
+):
+    """#1403: PDD_DISABLE_TEST_EXTEND converts Python coverage growth into a no-op."""
+    tmp_path = pdd_test_environment
+    Path("tests").mkdir(exist_ok=True)
+    test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+    create_file(test_path, "def test_foo(): pass")
+    code_path = tmp_path / f"{BASENAME}.py"
+    create_file(code_path, "def foo(): pass")
+
+    mock_get_pdd_paths.return_value = {
+        'prompt': tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt",
+        'code': code_path,
+        'example': tmp_path / f"{BASENAME}_example.py",
+        'test': test_path,
+    }
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "1.0", "timestamp": "t", "command": "test",
+        "prompt_hash": "p", "code_hash": "c", "example_hash": "e", "test_hash": "t"
+    })
+    create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 62, "tests_failed": 0,
+        "coverage": 0.0, "test_hash": "t"
+    })
+
+    monkeypatch.setenv("PDD_DISABLE_TEST_EXTEND", "1")
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
+
+    assert decision.operation == 'all_synced'
+    assert decision.details['test_extend_skipped'] is True
+    assert decision.details['skip_reason'] == 'PDD_DISABLE_TEST_EXTEND'
+    assert decision.details['current_coverage'] == 0.0
+
+
+@patch('sync_determine_operation.construct_paths')
+@patch('sync_determine_operation.get_pdd_file_paths')
+def test_decision_test_extend_default_still_runs_without_pr_scope_guard(
+    mock_get_pdd_paths,
+    mock_construct,
+    pdd_test_environment,
+    monkeypatch,
+):
+    """#1403 regression guard: normal pdd sync still chooses test_extend when the flag is absent."""
+    tmp_path = pdd_test_environment
+    Path("tests").mkdir(exist_ok=True)
+    test_path = tmp_path / "tests" / f"test_{BASENAME}.py"
+    create_file(test_path, "def test_foo(): pass")
+    code_path = tmp_path / f"{BASENAME}.py"
+    create_file(code_path, "def foo(): pass")
+
+    mock_get_pdd_paths.return_value = {
+        'prompt': tmp_path / "prompts" / f"{BASENAME}_{LANGUAGE}.prompt",
+        'code': code_path,
+        'example': tmp_path / f"{BASENAME}_example.py",
+        'test': test_path,
+    }
+    create_fingerprint_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}.json", {
+        "pdd_version": "1.0", "timestamp": "t", "command": "test",
+        "prompt_hash": "p", "code_hash": "c", "example_hash": "e", "test_hash": "t"
+    })
+    create_run_report_file(get_meta_dir() / f"{BASENAME}_{LANGUAGE}_run.json", {
+        "timestamp": "t", "exit_code": 0, "tests_passed": 62, "tests_failed": 0,
+        "coverage": 0.0, "test_hash": "t"
+    })
+
+    monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
+    decision = sync_determine_operation(BASENAME, LANGUAGE, TARGET_COVERAGE)
+
+    assert decision.operation == 'test_extend'
+    assert decision.details['extend_tests'] is True
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("1", True), ("true", True), ("TRUE", True), ("Yes", True), ("on", True),
+        ("  on  ", True),
+        ("0", False), ("false", False), ("no", False), ("off", False), ("", False),
+        ("maybe", False),
+    ],
+)
+def test_test_extend_disabled_truthiness(value, expected, monkeypatch):
+    """#1403: only 1/true/yes/on (case-insensitive, trimmed) enable the guard;
+    falsey values (incl. '0'/'false') must leave test_extend enabled."""
+    monkeypatch.setenv("PDD_DISABLE_TEST_EXTEND", value)
+    assert is_test_extend_disabled() is expected
+
+
+def test_test_extend_disabled_unset_is_false(monkeypatch):
+    """#1403: with the flag unset the guard is inactive (default behavior)."""
+    monkeypatch.delenv("PDD_DISABLE_TEST_EXTEND", raising=False)
+    assert is_test_extend_disabled() is False
 
 # --- No Fingerprint Tests ---
 @patch('sync_determine_operation.construct_paths')
@@ -5008,4 +5109,345 @@ class TestIssue1201GenerateOutputPathInArchBranch:
         assert "backend" in code_parts and "src" in code_parts, (
             f"With context_override='backend', code_path should be in backend/src/, "
             f"but got: {paths['code']!r}"
+        )
+from datetime import datetime, timezone
+from pathlib import Path
+
+from pdd.sync_determine_operation import _handle_missing_expected_files
+
+
+def test_missing_example_schedules_example_by_default(tmp_path: Path) -> None:
+    from pdd.sync_determine_operation import Fingerprint
+    prompt = tmp_path / "prompts" / "calc_python.prompt"
+    code = tmp_path / "pdd" / "calc.py"
+    example = tmp_path / "context" / "calc_example.py"
+    test = tmp_path / "tests" / "test_calc.py"
+    prompt.parent.mkdir()
+    code.parent.mkdir()
+    example.parent.mkdir()
+    test.parent.mkdir()
+    prompt.write_text("Create calc.\n", encoding="utf-8")
+    code.write_text("def add(a, b): return a + b\n", encoding="utf-8")
+    fingerprint = Fingerprint("test", datetime.now(timezone.utc).isoformat(), "fix", "p", "c", "e", "t")
+
+    decision = _handle_missing_expected_files(
+        ["example"],
+        {"prompt": prompt, "code": code, "example": example, "test": test},
+        fingerprint,
+        "calc",
+        "python",
+        str(prompt.parent),
+    )
+
+    assert decision.operation == "example"
+
+
+def test_missing_example_is_bypassed_for_isolated_repair_or_replay(tmp_path: Path) -> None:
+    from pdd.sync_determine_operation import Fingerprint
+
+    prompt = tmp_path / "prompts" / "calc_python.prompt"
+    code = tmp_path / "pdd" / "calc.py"
+    example = tmp_path / "context" / "calc_example.py"
+    test = tmp_path / "tests" / "test_calc.py"
+    prompt.parent.mkdir()
+    code.parent.mkdir()
+    example.parent.mkdir()
+    test.parent.mkdir()
+    prompt.write_text("Create calc.\n", encoding="utf-8")
+    code.write_text("def add(a, b): return a + b\n", encoding="utf-8")
+    fingerprint = Fingerprint("test", datetime.now(timezone.utc).isoformat(), "fix", "p", "c", "e", "t")
+
+    decision = _handle_missing_expected_files(
+        ["example"],
+        {"prompt": prompt, "code": code, "example": example, "test": test},
+        fingerprint,
+        "calc",
+        "python",
+        str(prompt.parent),
+        isolated_replay_or_repair=True,
+    )
+
+    assert decision.operation == "generate"
+    assert decision.details["isolated_replay_or_repair"] is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #551 (reopened): YAML and Markdown example/test paths use raw language
+# name instead of canonical file extension.
+#
+# Root cause: local get_extension() in sync_determine_operation fell back to
+# language.lower() for languages not in its hard-coded map, returning "yaml"
+# instead of "yml" and "markdown" instead of "md".
+#
+# Fix: local get_extension() now reads the first matching row from the
+# package-local language_format.csv, which maps YAML -> .yml and Markdown -> .md.
+# ---------------------------------------------------------------------------
+
+class TestIssue551CanonicalExtensionInGetPddFilePaths:
+    """Regression tests for issue #551 (reopened): YAML and Markdown example/test
+    paths must use canonical file extensions, not raw language names.
+    """
+
+    def _write_arch_json(self, tmp_path: Path, prompt_filename: str, filepath: str) -> None:
+        (tmp_path / "architecture.json").write_text(json.dumps({
+            "modules": [{"filename": prompt_filename, "filepath": filepath}]
+        }))
+
+    def _setup_dirs(self, tmp_path: Path) -> None:
+        for d in ("prompts", "examples", "tests", ".pdd/meta", ".pdd/locks"):
+            (tmp_path / d).mkdir(parents=True, exist_ok=True)
+
+    @pytest.mark.parametrize("language,code_filename,expected_example_suffix,expected_test_suffix", [
+        ("YAML",     "ci.yml",          ".yml",  ".yml"),
+        ("Markdown", "manifest.md",     ".md",   ".md"),
+        ("Text",     "dockerfile.txt",  ".txt",  ".txt"),
+    ])
+    def test_architecture_paths_use_canonical_extensions(
+        self,
+        tmp_path,
+        monkeypatch,
+        language,
+        code_filename,
+        expected_example_suffix,
+        expected_test_suffix,
+    ):
+        """get_pdd_file_paths must derive example/test extensions from the canonical
+        language mapping, not the raw language string.
+
+        Before the fix:
+          YAML     -> ci_example.yaml / test_ci.yaml   (wrong, should be .yml)
+          Markdown -> manifest_example.markdown         (wrong, should be .md)
+          Text     -> dockerfile_example.text           (wrong, should be .txt)
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+
+        basename = Path(code_filename).stem
+        prompt_filename = f"{basename}_{language}.prompt"
+        (tmp_path / "prompts" / prompt_filename).write_text(f"% {language} module\n")
+        self._write_arch_json(tmp_path, prompt_filename, code_filename)
+
+        paths = get_pdd_file_paths(basename, language, "prompts")
+
+        assert paths["example"].suffix == expected_example_suffix, (
+            f"Issue #551: example path for {language} must end with {expected_example_suffix!r}, "
+            f"got {paths['example'].suffix!r} (full path: {paths['example']})"
+        )
+        assert paths["test"].suffix == expected_test_suffix, (
+            f"Issue #551: test path for {language} must end with {expected_test_suffix!r}, "
+            f"got {paths['test'].suffix!r} (full path: {paths['test']})"
+        )
+
+    def test_yaml_example_path_is_yml_not_yaml(self, tmp_path, monkeypatch):
+        """Explicit regression for the reported YAML case: ci.yml must produce
+        ci_example.yml (not ci_example.yaml) and test_ci.yml (not test_ci.yaml).
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        (tmp_path / "prompts" / "ci_YAML.prompt").write_text("% CI pipeline\n")
+        self._write_arch_json(tmp_path, "ci_YAML.prompt", "ci.yml")
+
+        paths = get_pdd_file_paths("ci", "YAML", "prompts")
+
+        assert paths["example"].name == "ci_example.yml", (
+            f"Issue #551: YAML example must be ci_example.yml, got {paths['example'].name!r}"
+        )
+        assert paths["test"].name == "test_ci.yml", (
+            f"Issue #551: YAML test must be test_ci.yml, got {paths['test'].name!r}"
+        )
+
+    def test_markdown_example_path_is_md_not_markdown(self, tmp_path, monkeypatch):
+        """Explicit regression for the reported Markdown case: manifest.md must
+        produce manifest_example.md (not manifest_example.markdown).
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        (tmp_path / "prompts" / "manifest_Markdown.prompt").write_text("% Manifest docs\n")
+        self._write_arch_json(tmp_path, "manifest_Markdown.prompt", "manifest.md")
+
+        paths = get_pdd_file_paths("manifest", "Markdown", "prompts")
+
+        assert paths["example"].name == "manifest_example.md", (
+            f"Issue #551: Markdown example must be manifest_example.md, "
+            f"got {paths['example'].name!r}"
+        )
+        assert paths["test"].name == "test_manifest.md", (
+            f"Issue #551: Markdown test must be test_manifest.md, "
+            f"got {paths['test'].name!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Comprehensive sibling-language parametrized regression tests
+    # These cover languages from the Step 6 NEEDS_FIX list where the old
+    # local helper returned raw language names instead of canonical exts.
+    # ------------------------------------------------------------------
+
+    @pytest.mark.parametrize("language,code_filename,expected_example_suffix,expected_test_suffix", [
+        # C-family / systems
+        ("C++",             "engine.cpp",   ".cpp",    ".cpp"),
+        ("C#",              "service.cs",   ".cs",     ".cs"),
+        ("Haskell",         "parser.hs",    ".hs",     ".hs"),
+        ("F#",              "module.fs",    ".fs",     ".fs"),
+        ("R",               "stats.R",      ".R",      ".R"),
+        ("LaTeX",           "paper.tex",    ".tex",    ".tex"),
+        ("Assembly",        "boot.asm",     ".asm",    ".asm"),
+        ("Fortran",         "solver.f90",   ".f90",    ".f90"),
+        ("COBOL",           "report.cob",   ".cob",    ".cob"),
+        ("Prolog",          "facts.pl",     ".pl",     ".pl"),
+        ("Erlang",          "node.erl",     ".erl",    ".erl"),
+        ("Clojure",         "core.clj",     ".clj",    ".clj"),
+        ("Julia",           "compute.jl",   ".jl",     ".jl"),
+        ("Elixir",          "worker.ex",    ".ex",     ".ex"),
+        ("Pascal",          "program.pas",  ".pas",    ".pas"),
+        ("VBScript",        "script.vbs",   ".vbs",    ".vbs"),
+        ("CoffeeScript",    "app.coffee",   ".coffee", ".coffee"),
+        ("Objective-C",     "view.m",       ".m",      ".m"),
+        ("Scheme",          "eval.scm",     ".scm",    ".scm"),
+        ("OCaml",           "lexer.ml",     ".ml",     ".ml"),
+        ("LLM",             "agent.prompt", ".prompt", ".prompt"),
+        ("reStructuredText","manual.rst",   ".rst",    ".rst"),
+        ("Verilog",         "adder.v",      ".v",      ".v"),
+        ("Systemverilog",   "module.sv",    ".sv",     ".sv"),
+        ("Jinja",           "tmpl.jinja2",  ".jinja2", ".jinja2"),
+        ("Handlebars",      "page.hbs",     ".hbs",    ".hbs"),
+        ("Terraform",       "main.tf",      ".tf",     ".tf"),
+        ("Solidity",        "token.sol",    ".sol",    ".sol"),
+        ("Protobuf",        "schema.proto", ".proto",  ".proto"),
+        ("Starlark",        "rules.bzl",    ".bzl",    ".bzl"),
+    ])
+    def test_sibling_language_architecture_paths_use_canonical_extensions(
+        self,
+        tmp_path,
+        monkeypatch,
+        language,
+        code_filename,
+        expected_example_suffix,
+        expected_test_suffix,
+    ):
+        """Issue #551 scope expansion: all languages from the Step 6 NEEDS_FIX list
+        must produce canonical extensions in get_pdd_file_paths, not raw language names.
+
+        Before the fix, the local get_extension() fell back to language.lower() for any
+        language not in its hard-coded map, producing suffixes like .c++, .haskell,
+        .terraform, .restructuredtext, etc. instead of canonical .cpp, .hs, .tf, .rst.
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+
+        basename = Path(code_filename).stem
+        prompt_filename = f"{basename}_{language}.prompt"
+        (tmp_path / "prompts" / prompt_filename).write_text(f"% {language} module\n")
+        self._write_arch_json(tmp_path, prompt_filename, code_filename)
+
+        paths = get_pdd_file_paths(basename, language, "prompts")
+
+        assert paths["example"].suffix == expected_example_suffix, (
+            f"Issue #551 ({language}): example path must end with {expected_example_suffix!r}, "
+            f"got {paths['example'].suffix!r} (full path: {paths['example']})"
+        )
+        assert paths["test"].suffix == expected_test_suffix, (
+            f"Issue #551 ({language}): test path must end with {expected_test_suffix!r}, "
+            f"got {paths['test'].suffix!r} (full path: {paths['test']})"
+        )
+        assert paths["test_files"] == [paths["test"]], (
+            f"Issue #551 ({language}): test_files must contain the canonical test path, "
+            f"got {paths['test_files']!r}"
+        )
+
+    def test_makefile_uses_no_extension(self, tmp_path, monkeypatch):
+        """Makefile has no extension in language_format.csv — example/test paths must
+        not get a raw .makefile suffix.
+
+        Before the fix: get_extension('Makefile') returned 'makefile', so paths
+        would be *_example.makefile and test_*.makefile.
+        After the fix: the canonical CSV row has empty extension, so get_extension
+        returns '' and paths omit the suffix.
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        (tmp_path / "prompts" / "build_Makefile.prompt").write_text("% Build rules\n")
+        self._write_arch_json(tmp_path, "build_Makefile.prompt", "Makefile")
+
+        paths = get_pdd_file_paths("Makefile", "Makefile", "prompts")
+
+        # The empty extension must not leave a malformed trailing-dot path
+        # (e.g. "Makefile_example.") via the unconditional ".{extension}" join.
+        for key in ("code", "example", "test"):
+            name = paths[key].name
+            assert not name.endswith("."), (
+                f"Issue #551 (Makefile): {key} path must not end with a trailing "
+                f"dot, got {name!r}"
+            )
+            assert ".makefile" not in name.lower(), (
+                f"Issue #551 (Makefile): {key} path must not contain .makefile, "
+                f"got {name!r}"
+            )
+
+        # test_files entries must likewise be free of trailing dots.
+        for tf in paths.get("test_files", []):
+            tf_name = Path(tf).name
+            assert not tf_name.endswith("."), (
+                f"Issue #551 (Makefile): test_files entry must not end with a "
+                f"trailing dot, got {tf_name!r}"
+            )
+
+    def test_test_files_list_uses_canonical_extension(self, tmp_path, monkeypatch):
+        """test_files key in get_pdd_file_paths return must also use the canonical extension.
+
+        Before the fix, YAML produced test_files=[Path('tests/test_ci.yaml')] instead of
+        [Path('tests/test_ci.yml')].
+        """
+        monkeypatch.chdir(tmp_path)
+        self._setup_dirs(tmp_path)
+        (tmp_path / "prompts" / "ci_YAML.prompt").write_text("% CI pipeline\n")
+        self._write_arch_json(tmp_path, "ci_YAML.prompt", "ci.yml")
+
+        paths = get_pdd_file_paths("ci", "YAML", "prompts")
+
+        assert len(paths["test_files"]) >= 1, "test_files must be non-empty"
+        for tf in paths["test_files"]:
+            assert Path(tf).suffix == ".yml", (
+                f"Issue #551: test_files entry must end with .yml, got {Path(tf).suffix!r} "
+                f"(entry: {tf!r})"
+            )
+            assert Path(tf).suffix != ".yaml", (
+                f"Issue #551: test_files must not contain .yaml path, got {tf!r}"
+            )
+
+    def test_pdd_path_unset_generation_matches_sync_extension(self, tmp_path, monkeypatch):
+        """Issue #551 (FM1): with PDD_PATH unset, the extension generation WRITES
+        (construct_paths' offline fallback) must equal the extension sync EXPECTS
+        (get_pdd_file_paths). Before the shared-CSV fix, generation wrote
+        ci_example.yaml (BUILTIN_EXT_MAP) while sync expected ci_example.yml
+        (bundled CSV) -> sync looped regenerating forever.
+        """
+        from pdd.construct_paths import construct_paths
+
+        monkeypatch.delenv("PDD_PATH", raising=False)
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "prompts").mkdir(parents=True, exist_ok=True)
+        prompt_file = tmp_path / "prompts" / "ci_YAML.prompt"
+        code_file = tmp_path / "ci.yml"
+        prompt_file.write_text("% CI pipeline example\n")
+        code_file.write_text("on: [push]\n")
+
+        # What generation writes for `pdd example` when PDD_PATH is unset.
+        _, _, output_paths, _ = construct_paths(
+            input_file_paths={"prompt_file": str(prompt_file), "code_file": str(code_file)},
+            force=True,
+            quiet=True,
+            command="example",
+            command_options={},
+        )
+        written = Path(output_paths["output"])
+
+        # What sync expects for the same module.
+        expected = get_pdd_file_paths("ci", "YAML", "prompts")["example"]
+
+        assert written.suffix == ".yml", (
+            f"FM1: generation should write .yml offline, got {written.name!r}"
+        )
+        assert written.suffix == expected.suffix, (
+            f"FM1: generation writes {written.suffix!r} but sync expects "
+            f"{expected.suffix!r} (PDD_PATH unset) -> #551 regeneration loop"
         )

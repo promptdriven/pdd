@@ -24,6 +24,11 @@ from .process_csv_change import process_csv_change
 from .get_extension import get_extension
 from .user_story_tests import run_user_story_tests, discover_prompt_files
 from .validate_prompt_includes import sanitize_prompt_output
+from .prompt_gate import (
+    maybe_run_workflow_prompt_gate,
+    prompt_gate_block_message,
+    resolve_prompt_gate_project_root,
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -318,6 +323,7 @@ def change_main(
                 return msg, 0.0, ""
 
         # --- 4. Save Results ---
+        saved_prompt_paths: List[Path] = []
         # Determine output path object using the potentially normalized 'output'
         output_path_obj: Optional[Path] = None
         if output:
@@ -447,6 +453,7 @@ def change_main(
                                 output_file.write(modified_content)
                             logger.debug("Saved modified prompt to: %s", individual_output_path)
                             saved_files_count += 1
+                            saved_prompt_paths.append(individual_output_path.resolve())
                         except IOError as io_error:
                             msg = f"Failed to write output file '{individual_output_path}': {io_error}"
                             if not quiet:
@@ -488,6 +495,7 @@ def change_main(
                         )
                     with open(output_path_obj, 'w', encoding='utf-8') as output_file:
                         output_file.write(result_message)  # result_message contains the modified content here
+                    saved_prompt_paths.append(output_path_obj.resolve())
                     if not quiet:
                         rprint(f"[green]Modified prompt saved to:[/green] {output_path_obj}")
                         rprint(Panel(result_message, title="Modified Prompt Content", expand=False))
@@ -506,6 +514,20 @@ def change_main(
                         rprint(f"[bold red]Error: {msg}[/bold red]")
                     logger.error(msg, exc_info=True)
                     return msg, total_cost, model_name or ""
+
+        if saved_prompt_paths:
+            should_continue, gate_exit = maybe_run_workflow_prompt_gate(
+                saved_prompt_paths,
+                cli_prompt_checkup=ctx.obj.get("prompt_checkup"),
+                no_prompt_checkup=ctx.obj.get("no_prompt_checkup", False),
+                project_root=resolve_prompt_gate_project_root(saved_prompt_paths),
+                quiet=quiet,
+            )
+            if not should_continue:
+                msg = prompt_gate_block_message(gate_exit)
+                if not quiet:
+                    rprint(f"[bold red]{msg}[/bold red]")
+                return msg, total_cost, model_name or ""
 
         # --- 5. User Story Validation (Optional) ---
         # CSV mode without an explicit output path writes individual prompt files

@@ -2111,6 +2111,38 @@ class TestSyncOneModule:
         assert cmd[:4] == ["/usr/bin/pdd", "--force", "--local", "sync"]
         assert cmd[4] == "foo"
 
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_resolved_compressed_context_flag_is_forwarded_to_child_sync(self, mock_find):
+        """Child syncs must preserve the parent's resolved compression setting."""
+        enabled = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={"compressed_context": True},
+            github_info=None,
+            quiet=True,
+        )._build_command("foo")
+        disabled = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={"compressed_context": False},
+            github_info=None,
+            quiet=True,
+        )._build_command("foo")
+        omitted = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )._build_command("foo")
+
+        assert "--compressed-context" in enabled
+        assert "--no-compressed-context" not in enabled
+        assert "--no-compressed-context" in disabled
+        assert "--compressed-context" not in disabled
+        assert "--compressed-context" not in omitted
+        assert "--no-compressed-context" not in omitted
+
     @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
     @patch("pdd.agentic_sync_runner.subprocess.Popen")

@@ -8,7 +8,9 @@
 Implement user story utilities that:
 - discover story files (`story__*.md`) and prompt files (`*.prompt`)
 - validate stories against prompts via `detect_change`
-- generate contract-aware `story__*.md` files from prompt inputs (`pdd test <*.prompt>`)
+- generate LLM-authored `story__*.md` files from a GitHub **issue**
+  (`pdd test --issue <url|number|issue.md> <*.prompt>`), linking the story to the
+  prompt files it validates, without any deterministic story-generation fallback
 - apply prompt fixes for a single story by orchestrating `change_main`
 
 % Issue #820 — contract-aware story template (epic #833)
@@ -22,15 +24,59 @@ the guide may say `## Forbidden Outcomes` — same intent).
 `## Non-Goals`, `## Notes`. Do not emit `## Prompt Scope`; list scoped prompts in
 `## Context` and in `<!-- pdd-story-prompts: ... -->` metadata.
 
-**`generate_user_story()` / `_render_story_markdown_from_prompts()`**
-- Invoked from `pdd/commands/generate.py` when `pdd test` receives `.prompt` files.
-- Seed `## Covers` from `<contract_rules>` via `parse_prompt_contracts()` in
-  `pdd/contract_ir.py` (Path-based API; do not duplicate parsing).
-- Single-prompt: `- R{n}: <summary>`. Multi-prompt: `prompts/<file>.prompt#R{n}: <summary>`.
-- When no contract rules exist, emit one placeholder Covers bullet for authors.
-- Seed `## Negative Cases` bullets from MUST/SHALL/MAY NOT rule text when present.
-- Emit starter Oracle and Non-Oracle bullets (issue #820 examples). Remain deterministic
-  (no LLM for story generation).
+**`generate_user_story()` / `_llm_generate_story_markdown()`**
+- Invoked from `pdd/commands/generate.py` when `pdd test` receives `.prompt` files
+  together with an `--issue` source.
+- **Issue #1356 — issue-derived, prompt-independent stories.** `generate_user_story()`
+  requires an `issue` argument. It resolves the issue source via
+  `resolve_issue_source()` (a GitHub issue/PR URL, a bare/`#`-prefixed issue number
+  resolved against the `origin` remote with the `gh` CLI, or a path to a local issue
+  markdown file), then calls `_llm_generate_story_markdown()`, which loads the
+  `generate_user_story_LLM` meta-prompt (via `load_prompt_template`, `preprocess`) and
+  calls `llm_invoke` with the **issue text only** so the MODEL writes the real user
+  story (persona / capability / benefit, Context, Acceptance Criteria, Negative Cases,
+  ...). The narrative is derived from the ISSUE, never from the prompt content.
+- **Independence is the point.** The prompt files (and generated code) MUST NOT be
+  passed to `_llm_generate_story_markdown()`. The story is an independent TDD oracle:
+  if it were authored from the prompt, it would merely restate the prompt and could
+  not catch a prompt that drifts away from the issue's intended behavior. When `issue`
+  is missing, `generate_user_story()` fails with a clear message rather than falling
+  back to prompt-derived authoring. When the issue source cannot be resolved, it fails
+  without an LLM call.
+- **Required-section validation, no deterministic fallback.** Accept the LLM output
+  only when it contains the FULL canonical section set required by issue #1356 —
+  `## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
+  `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, and `## Notes` — (strip a
+  wrapping ``` ``` ``` fence first) and it does not contain unresolved placeholders
+  such as `<persona>`, `<capability>`, `<benefit>`, `<detail>`, `<state>`, or
+  `<action>`. A response carrying only `## Story` and `## Acceptance Criteria` is
+  rejected so an incomplete LLM story is never written. When the LLM is unavailable
+  (no provider key, offline, error) OR the output is empty, missing any required
+  canonical section, or placeholder-filled, `_llm_generate_story_markdown()`
+  returns `(None, cost, model)` and `generate_user_story()` returns failure without
+  writing a story file. Do not use any deterministic prompt-content renderer or
+  template path for the story body. A deterministic story can be too shallow and
+  pass `pdd detect --stories` after meaningful prompt drift, so `pdd test <*.prompt>`
+  must require a valid LLM-authored story.
+- **Issue-behavior extraction quality.** The `generate_user_story_LLM` meta-prompt
+  must tell the model that it is given the ISSUE only — not the prompt or the
+  generated code — and that it must describe observable, user-facing behavior the
+  issue specifies without guessing at implementation detail. It must prioritize the
+  issue's Acceptance Criteria, Proposed Solution / Requirements, CLI options,
+  inputs/outputs, warnings, exit codes, side effects, and explicit negative
+  constraints. The resulting story must be specific enough that behavior-changing
+  prompt mutations (for example changing per-source token attribution to
+  aggregate-only totals) fail user-story validation.
+  Keep a regression test for a harmful prompt mutation that verifies
+  `run_user_story_tests()` returns a failed result when `detect_change` reports the
+  story no longer matches the mutated prompt.
+- **Metadata is independent of generation.** Regardless of which path produced the
+  body, `generate_user_story()` stitches `<!-- pdd-story-prompts: ... -->`
+  metadata directly from the exact prompt files the user passed. It must not call
+  `detect_change` or `cache_story_prompt_links`; validation and metadata relinking
+  remain the job of `pdd detect --stories`, `run_user_story_tests`, and
+  `cache_story_prompt_links`.
+- Story-generation `llm_invoke` cost/model accumulate into the returned cost/model.
 
 **Backward compatibility**
 - `run_user_story_tests`, `cache_story_prompt_links`, and `run_user_story_fix` must not
@@ -64,11 +110,34 @@ the guide may say `## Forbidden Outcomes` — same intent).
    - If no stories are found, return success with zero cost.
    - If no prompt files are found, return failure with a clear message and zero cost.
 
-3. **Story generation (#820)**
-   - `_seed_covers_from_prompts`, `_rule_covers_summary`, `_cross_module_covers_ref`,
-     `_seed_negative_cases_from_rules`, and `_render_story_markdown_from_prompts` implement
-     the contract-aware template. Use `Rule` and `parse_prompt_contracts` from `contract_ir`.
-   - After writing the story file, run `cache_story_prompt_links` / `detect_change` as today.
+3. **Story generation (#820, #1356)**
+   - `generate_user_story` requires an `issue` argument (GitHub issue/PR URL, issue
+     number, or local issue markdown path). It fails with a clear message when `issue`
+     is missing (it must NOT fall back to authoring from prompt content) and when the
+     issue source cannot be resolved (no LLM call in that case).
+   - `resolve_issue_source(issue) -> (title, body, ref)` prefers a local markdown file
+     when the path exists (deterministic/offline), otherwise parses a GitHub issue/PR
+     URL or a bare/`#` number and fetches `(title, body)` with the `gh` CLI
+     (`gh issue view <n> --repo <owner/repo> --json title,body`), inferring the repo
+     from the `origin` remote for bare numbers. Returns `(None, None, None)` on
+     failure. All subprocess/network errors are caught.
+   - `generate_user_story` writes the body via `_llm_generate_story_markdown` (LLM,
+     issue #1356) and returns failure without writing a story when the LLM is
+     unavailable or returns markdown missing any required canonical section
+     (`## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
+     `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Notes`), or leaves
+     template placeholders in the output.
+   - `_llm_generate_story_markdown` takes the resolved issue text/ref (NOT prompt
+     content), loads the `generate_user_story_LLM` meta-prompt (`load_prompt_template`),
+     escapes it via `preprocess(double_curly_brackets=True,
+     exclude_keys=["STORY_TITLE", "ISSUE_TEXT"])`, calls `llm_invoke` with the issue
+     text, strips a wrapping code fence, validates required sections, rejects
+     placeholder-filled output, and returns `(markdown_or_None, cost, model)`. All
+     imports are lazy to avoid an `llm_invoke` import cycle.
+   - After writing the story file, directly upsert `pdd-story-prompts` metadata for the
+     exact prompt files passed by the user (this is what links the issue-derived story
+     to the prompts it validates and triggers re-checking when they change). Do not
+     call `detect_change` or `cache_story_prompt_links` from `generate_user_story`.
 
 4. **Story fix flow**
    - `run_user_story_fix` must:
@@ -97,11 +166,16 @@ the guide may say `## Forbidden Outcomes` — same intent).
 - `.detect_change.detect_change`
 - `.change_main.change_main` (import lazily inside fix function to avoid cycles)
 - `.get_extension.get_extension`
+- `.llm_invoke.llm_invoke`, `.load_prompt_template.load_prompt_template`,
+  `.preprocess.preprocess` (import lazily inside `_llm_generate_story_markdown`
+  to avoid an `llm_invoke` import cycle)
+- `pdd/prompts/generate_user_story_LLM.prompt` — the story-generation meta-prompt
 - `rich.print` for PASS/FAIL output when not quiet
 
-% Deliverables (issue #820)
+% Deliverables (issue #820, #1356)
 - `user_stories/story__template.md`
 - `pdd/user_story_tests.py`
+- `pdd/prompts/generate_user_story_LLM.prompt` (story-generation meta-prompt, #1356)
 - `tests/test_user_story_tests.py` and `tests/fixtures/contract_rules_python.prompt`
 - `README.md` and `docs/prompting_guide.md` (targeted edits)
 

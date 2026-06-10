@@ -284,8 +284,8 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
     with mock.patch('os.path.isfile', side_effect=_isfile_for_existing_inputs):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
-    # Ensure that open was called with the path from environment variable
-    mock_open_file.assert_called_once_with('/env/path/cost.csv', 'a', newline='', encoding='utf-8')
+    # Ensure the cost CSV was opened for append (other opens may occur, e.g. auth bridge)
+    mock_open_file.assert_any_call('/env/path/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()

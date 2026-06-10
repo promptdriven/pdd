@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 from contextlib import contextmanager
@@ -23,7 +24,10 @@ from .grounding_provenance import grounding_reviewed_for_manifest, normalize_gro
 from .sync_order import extract_includes_from_file
 
 SCHEMA_VERSION = 2
-_NONDETERMINISTIC_TAG_RE = re.compile(r"<(?:shell|web)\b", re.IGNORECASE)
+_NONDETERMINISTIC_TAG_RE = re.compile(
+    r"<(?:shell|web)\b|<include[^>]*\bquery\s*=",
+    re.IGNORECASE,
+)
 _UNSUPPORTED_EXPANSION_RE = re.compile(
     r"<(?:shell|web|include-many)\b|<include[^>]*(?:query|select)\s*=|\$\{",
     re.IGNORECASE,
@@ -38,6 +42,15 @@ _INCLUDE_SELF_CLOSING_RE = re.compile(
 )
 _BACKTICK_INCLUDE_RE = re.compile(r"```<([^>]*?)>```", re.DOTALL)
 _CONTRACT_RULES_RE = re.compile(r"<contract_rules\b", re.IGNORECASE)
+
+
+def _has_active_tag(pattern: re.Pattern[str], content: str) -> bool:
+    """Return True only when *pattern* matches outside fenced/inline code spans."""
+    code_spans = _extract_code_spans(content)
+    for m in pattern.finditer(content):
+        if not _intersects_any_span(m.start(), m.end(), code_spans):
+            return True
+    return False
 
 
 @contextmanager
@@ -161,42 +174,158 @@ def _existing_file_records(
     return records
 
 
-def _prompt_include_records(prompt_path: Path, project_root: Path) -> list[dict[str, str]]:
+def _include_tag_requests_compression(
+    attrs: Mapping[str, str],
+    include_path: Path,
+    *,
+    global_compress: bool,
+) -> bool:
+    """True when an include tag should be treated as compressed for evidence."""
+    mode = (attrs.get("mode") or "").strip().lower()
+    if mode == "compressed":
+        return True
+    if mode in ("full", "interface"):
+        return False
+    if global_compress and include_path.suffix.lower() == ".py":
+        return True
+    return False
+
+
+def _include_uses_compressed_mode(
+    parent_content: str,
+    include_path: Path,
+    parent_file: Path,
+    project_root: Path,
+    *,
+    global_compress: bool = False,
+) -> bool:
+    """True when *parent_content* references *include_path* with compression active."""
+    parent_text = parent_content
+    code_spans = _extract_code_spans(parent_text)
+    for match in _INCLUDE_BODY_RE.finditer(parent_text):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            continue
+        attrs = _parse_attrs(match.group(1) or "")
+        body = (match.group(2) or "").strip()
+        path_value = (attrs.get("path") or body).strip()
+        if not path_value:
+            continue
+        resolved = _resolve_include_path(path_value, parent_file, project_root)
+        if resolved.resolve() != include_path.resolve():
+            continue
+        if _include_tag_requests_compression(
+            attrs, include_path, global_compress=global_compress
+        ):
+            return True
+    for match in _INCLUDE_SELF_CLOSING_RE.finditer(parent_text):
+        if _intersects_any_span(match.start(), match.end(), code_spans):
+            continue
+        attrs = _parse_attrs(match.group(1) or "")
+        path_value = (attrs.get("path") or "").strip()
+        if not path_value:
+            continue
+        resolved = _resolve_include_path(path_value, parent_file, project_root)
+        if resolved.resolve() != include_path.resolve():
+            continue
+        if _include_tag_requests_compression(
+            attrs, include_path, global_compress=global_compress
+        ):
+            return True
+    return False
+
+
+def _compressed_include_evidence_text(source_text: str, include_path: Path) -> str:
+    """Compressed bytes for evidence metadata (matches preprocess compression)."""
+    from pdd.content_selector import apply_compressed_include_with_fallback
+
+    return apply_compressed_include_with_fallback(
+        source_text,
+        file_path=str(include_path),
+    )
+
+
+def _prompt_include_records(
+    prompt_path: Path,
+    project_root: Path,
+    *,
+    global_compress: bool = False,
+) -> list[dict[str, Any]]:
     """Collect hashes for reachable local includes using production include grammar."""
-    records: list[dict[str, str]] = []
+    records: list[dict[str, Any]] = []
     seen: set[Path] = set()
 
     def walk(file_path: Path) -> None:
+        try:
+            parent_content = file_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            parent_content = ""
         for raw_include in sorted(_include_paths_for_file(file_path)):
             include_path = _resolve_include_path(raw_include, file_path, project_root)
             if include_path in seen or not include_path.is_file():
                 continue
             seen.add(include_path)
-            records.append(
-                {
-                    "path": _display_path(include_path, project_root),
-                    "sha256": _sha256_file(include_path),
-                }
-            )
+            source_hash = _sha256_file(include_path)
+            record: dict[str, Any] = {
+                "path": _display_path(include_path, project_root),
+                "sha256": source_hash,
+            }
+            if _include_uses_compressed_mode(
+                parent_content,
+                include_path,
+                file_path,
+                project_root,
+                global_compress=global_compress,
+            ):
+                try:
+                    source_text = include_path.read_text(encoding="utf-8")
+                    compressed_text = _compressed_include_evidence_text(
+                        source_text,
+                        include_path,
+                    )
+                    record["source_sha256"] = source_hash
+                    record["compressed_sha256"] = _sha256_bytes(
+                        compressed_text.encode("utf-8")
+                    )
+                    record["estimated_tokens"] = math.ceil(len(compressed_text) / 4)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    record["source_sha256"] = source_hash
+            records.append(record)
             walk(include_path)
 
     walk(prompt_path)
     return records
 
 
-def _preprocessed_expanded_sha256(content: str, project_root: Path) -> Optional[str]:
+def _preprocessed_expanded_sha256(
+    content: str,
+    project_root: Path,
+    *,
+    compress: bool = False,
+) -> Optional[str]:
     """Hash of prompt text after the same deterministic include expansion as generation."""
-    if _UNSUPPORTED_EXPANSION_RE.search(content) or _NONDETERMINISTIC_TAG_RE.search(content):
+    if _has_active_tag(_UNSUPPORTED_EXPANSION_RE, content) or _has_active_tag(
+        _NONDETERMINISTIC_TAG_RE, content
+    ):
         return None
     try:
         with _project_cwd(project_root):
-            expanded = preprocess(content, recursive=True, double_curly_brackets=False)
+            expanded = preprocess(
+                content,
+                recursive=True,
+                double_curly_brackets=False,
+                compress=compress,
+            )
     except Exception:  # pylint: disable=broad-exception-caught
         return None
     return _sha256_bytes(expanded.encode("utf-8"))
 
 
-def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dict[str, Any]:
+def _prompt_record(
+    prompt_file: Optional[str | Path],
+    project_root: Path,
+    *,
+    compress: bool = False,
+) -> dict[str, Any]:
     if not prompt_file:
         return {
             "path": None,
@@ -215,11 +344,13 @@ def _prompt_record(prompt_file: Optional[str | Path], project_root: Path) -> dic
             "uses_nondeterministic_tags": False,
         }
     content = path.read_text(encoding="utf-8")
-    nondeterministic = bool(_NONDETERMINISTIC_TAG_RE.search(content))
+    nondeterministic = _has_active_tag(_NONDETERMINISTIC_TAG_RE, content)
     return {
         "path": _display_path(path, project_root),
         "sha256": _sha256_bytes(content.encode("utf-8")),
-        "expanded_sha256": _preprocessed_expanded_sha256(content, project_root),
+        "expanded_sha256": _preprocessed_expanded_sha256(
+            content, project_root, compress=compress
+        ),
         "uses_nondeterministic_tags": nondeterministic,
     }
 
@@ -343,6 +474,35 @@ def _safe_slug(value: str) -> str:
     return slug or "run"
 
 
+def _dynamic_artifact_records(
+    artifacts: Iterable[Mapping[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    """Summarize captured shell, web, and query-include snapshot artifacts."""
+
+    shell_records: list[dict[str, Any]] = []
+    web_records: list[dict[str, Any]] = []
+    query_records: list[dict[str, Any]] = []
+    for artifact in artifacts:
+        artifact_type = str(artifact.get("type") or "")
+        path = artifact.get("path")
+        digest = artifact.get("sha256")
+        if not isinstance(path, str) or not isinstance(digest, str):
+            continue
+        record: dict[str, Any] = {"path": path, "sha256": digest}
+        metadata = artifact.get("metadata")
+        if isinstance(metadata, Mapping):
+            record["metadata"] = dict(metadata)
+        if artifact.get("redaction_applied"):
+            record["redaction_applied"] = True
+        if artifact_type == "shell":
+            shell_records.append(record)
+        elif artifact_type == "web":
+            web_records.append(record)
+        elif artifact_type == "query_include":
+            query_records.append(record)
+    return shell_records, web_records, query_records
+
+
 def devunit_slug_for_prompt(prompt_path: str | Path) -> Optional[str]:
     """Return the devunit evidence filename slug for a prompt (matches latest manifests).
 
@@ -460,6 +620,37 @@ def grounding_kwargs_from_ctx(
     return {"grounding": grounding, "reviewed": reviewed}
 
 
+_SENSITIVE_METADATA_KEYS = {
+    "content",
+    "compressed_content",
+    "compressed_context",
+    "context",
+    "prompt",
+    "raw",
+    "raw_context",
+    "rendered",
+    "rendered_context",
+    "text",
+}
+
+
+def _safe_generation_metadata(value: Any) -> Any:
+    """Copy generation metadata while omitting raw prompt/context payload fields."""
+    if isinstance(value, Mapping):
+        safe: dict[str, Any] = {}
+        for key, item in value.items():
+            key_str = str(key)
+            if key_str.lower() in _SENSITIVE_METADATA_KEYS:
+                continue
+            safe[key_str] = _safe_generation_metadata(item)
+        return safe
+    if isinstance(value, (list, tuple)):
+        return [_safe_generation_metadata(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
 
 def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-locals
     *,
@@ -473,8 +664,12 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     logs: Optional[Mapping[str, Optional[str]]] = None,
     basename: Optional[str] = None,
     project_root: Optional[str | Path] = None,
+    context_snapshot: Optional[Mapping[str, Any]] = None,
     grounding: Optional[Mapping[str, Any]] = None,
     reviewed: bool = False,
+    compression: Optional[Mapping[str, Any]] = None,
+    agentic_fallback: Optional[Mapping[str, Any]] = None,
+    compress: bool = False,
 ) -> Path:
     """Write a versioned evidence manifest and the dev-unit latest copy."""
     root = Path(project_root or Path.cwd()).resolve()
@@ -485,7 +680,7 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         candidates = direct or fallback
         if len(candidates) == 1:
             prompt_file = candidates[0]
-    prompt = _prompt_record(prompt_file, root)
+    prompt = _prompt_record(prompt_file, root, compress=compress)
     prompt_path = None
     if prompt_file:
         prompt_path = Path(prompt_file)
@@ -512,7 +707,20 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
     if logs:
         log_values.update(logs)
 
+    snapshot_context = dict(context_snapshot or {})
+    snapshot_expanded = snapshot_context.get("expanded_prompt")
+    if isinstance(snapshot_expanded, Mapping) and isinstance(snapshot_expanded.get("sha256"), str):
+        prompt["expanded_sha256"] = snapshot_expanded["sha256"]
+    if snapshot_context.get("uses_nondeterministic_context") is not None:
+        prompt["uses_nondeterministic_tags"] = bool(
+            snapshot_context.get("uses_nondeterministic_context")
+        )
+
+    artifacts = list(snapshot_context.get("artifacts") or [])
+    shell_snapshots, web_snapshots, query_snapshots = _dynamic_artifact_records(artifacts)
     grounding_block = normalize_grounding(grounding, reviewed=reviewed)
+    snapshot_grounding = list(snapshot_context.get("grounding_examples") or [])
+    grounding_examples = list(grounding_block.get("selected_examples") or []) or snapshot_grounding
 
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
@@ -524,16 +732,21 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         },
         "prompt": prompt,
         "context": {
-            "includes": _prompt_include_records(prompt_path, root) if prompt_path else [],
-            "web_snapshots": [],
-            "shell_snapshots": [],
+            "includes": (
+                _prompt_include_records(prompt_path, root, global_compress=compress)
+                if prompt_path
+                else []
+            ),
+            "web_snapshots": web_snapshots,
+            "shell_snapshots": shell_snapshots,
+            "query_snapshots": query_snapshots,
         },
         "generation": {
             "model": model or None,
             "temperature": temperature,
             "cost_usd": float(cost_usd),
             "grounding": grounding_block,
-            "grounding_examples": list(grounding_block.get("selected_examples") or []),
+            "grounding_examples": grounding_examples,
         },
         "outputs": _existing_file_records(output_files, root),
         "contracts": _contract_statuses(prompt_path),
@@ -545,6 +758,36 @@ def write_evidence_manifest(  # pylint: disable=too-many-arguments,too-many-loca
         },
         "logs": log_values,
     }
+    if compression is not None:
+        manifest["generation"]["compression"] = _safe_generation_metadata(compression)
+    if agentic_fallback is not None:
+        manifest["generation"]["agentic_fallback"] = _safe_generation_metadata(agentic_fallback)
+    if snapshot_context:
+        manifest["context_snapshot"] = {
+            "enabled": True,
+            "manifest_path": snapshot_context.get("manifest_path"),
+            "snapshot_dir": snapshot_context.get("snapshot_dir"),
+            "expanded_prompt": snapshot_expanded,
+            "expanded_prompt_path": (
+                snapshot_expanded.get("path")
+                if isinstance(snapshot_expanded, Mapping)
+                else None
+            ),
+            "expanded_sha256": (
+                snapshot_expanded.get("sha256")
+                if isinstance(snapshot_expanded, Mapping)
+                else None
+            ),
+            "uses_nondeterministic_context": bool(
+                snapshot_context.get("uses_nondeterministic_context")
+            ),
+            "dynamic_tags": list(snapshot_context.get("dynamic_tags") or []),
+            "declared_dynamic_tags": list(snapshot_context.get("declared_dynamic_tags") or []),
+            "redaction_applied": bool(snapshot_context.get("redaction_applied")),
+            "redaction": snapshot_context.get("redaction"),
+            "artifacts": artifacts,
+            "run_id": snapshot_context.get("run_id"),
+        }
 
     runs_dir = root / ".pdd" / "evidence" / "runs"
     latest_dir = root / ".pdd" / "evidence" / "devunits"

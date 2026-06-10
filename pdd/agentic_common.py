@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import logging
 import os
 import signal
 import sys
@@ -12,12 +13,17 @@ import time
 import uuid
 import re
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 
 from rich.console import Console
+
+_steer_logger = logging.getLogger(__name__ + ".steer")
+
+AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
+
 
 def _load_model_data(*args, **kwargs):
     """Lazily load model data from ``pdd.llm_invoke``.
@@ -99,6 +105,84 @@ class TokenMatch:
         return True
 
 
+class AgenticTaskResult(tuple):
+    """Public result for ``run_agentic_task`` with legacy four-item unpacking.
+
+    The underlying tuple has five fields so downstream bridges can detect
+    structured usage with ``isinstance(result, tuple)``, ``len(result) >= 5``,
+    and ``result[4]``. Iteration intentionally yields the historical four
+    fields to preserve existing ``success, output, cost, provider = ...``
+    callers.
+    """
+
+    def __new__(
+        cls,
+        success: bool,
+        output_text: str,
+        cost_usd: float,
+        provider: str,
+        usage: AgenticUsage = None,
+    ) -> "AgenticTaskResult":
+        return tuple.__new__(
+            cls,
+            (success, output_text, cost_usd, provider, usage),
+        )
+
+    def __iter__(self):
+        return (tuple.__getitem__(self, i) for i in range(4))
+
+    @property
+    def success(self) -> bool:
+        return bool(tuple.__getitem__(self, 0))
+
+    @property
+    def output_text(self) -> str:
+        return str(tuple.__getitem__(self, 1))
+
+    @property
+    def cost_usd(self) -> float:
+        return float(tuple.__getitem__(self, 2))
+
+    @property
+    def provider(self) -> str:
+        return str(tuple.__getitem__(self, 3))
+
+    @property
+    def usage(self) -> AgenticUsage:
+        return tuple.__getitem__(self, 4)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-serializable mapping shape for structured consumers."""
+        return {
+            "success": self.success,
+            "output_text": self.output_text,
+            "cost_usd": self.cost_usd,
+            "provider": self.provider,
+            "usage": self.usage,
+        }
+
+
+class _ProviderRunResult(tuple):
+    """Internal provider result carrying optional structured usage."""
+
+    def __new__(
+        cls,
+        success: bool,
+        output_text: str,
+        cost_usd: float,
+        model: Optional[str],
+        usage: AgenticUsage = None,
+    ) -> "_ProviderRunResult":
+        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage))
+
+    def __iter__(self):
+        return (tuple.__getitem__(self, i) for i in range(4))
+
+    @property
+    def usage(self) -> AgenticUsage:
+        return tuple.__getitem__(self, 4)
+
+
 @dataclass
 class SteerEntry:
     """Mid-run user steering entry (typically from GitHub issue comments)."""
@@ -106,6 +190,164 @@ class SteerEntry:
     comment_id: str
     author: str
     body: str
+
+
+def _steer_body_for_llm(body: str) -> str:
+    """Remove human-only ``<pdd>...</pdd>`` blocks before LLM-facing steer text."""
+    from pdd.preprocess import process_pdd_tags
+
+    return process_pdd_tags(body).strip()
+
+
+STEER_STATE_KEYS = (
+    "last_steered_comment_id",
+    "last_steer_at",
+    "steer_generation",
+    "steer_cursor_seeded",
+)
+
+
+def merge_steer_state(from_state: Dict[str, Any], into_state: Dict[str, Any]) -> None:
+    """Copy steer cursor fields from *from_state* into *into_state*."""
+    for key in STEER_STATE_KEYS:
+        if key in from_state:
+            into_state[key] = from_state[key]
+
+
+def _step_output_awaiting_clarification(output: str) -> bool:
+    """True when a cached step output indicates a clarification hard-stop."""
+    if not isinstance(output, str) or not output:
+        return False
+    if re.search(r"STOP_CONDITION:\s*.+", output, re.IGNORECASE):
+        return True
+    # Bug orchestrator step 3 uses substring matching (no STOP_CONDITION tag).
+    if re.search(r"Needs\s+More\s+Info", output, re.IGNORECASE):
+        return True
+    return False
+
+
+def workflow_awaiting_clarification(
+    state: Dict[str, Any],
+    clarification_step_numbers: Set[int],
+) -> bool:
+    """True when cached outputs show the workflow paused for user clarification."""
+    outputs = state.get("step_outputs") or {}
+    for step in clarification_step_numbers:
+        out = outputs.get(str(step), "")
+        if _step_output_awaiting_clarification(out):
+            return True
+    return False
+
+
+def merge_steers_into_issue_content(
+    issue_content: str,
+    steers: List[SteerEntry],
+) -> str:
+    """Append drained mid-run steers so clarification steps see new user input."""
+    if not steers:
+        return issue_content
+    block_lines = [
+        "",
+        "## Mid-run user comments (since workflow pause)",
+        "The following issue comments arrived while the workflow was paused. "
+        "Address them in this step:",
+    ]
+    for steer in steers:
+        block_lines.append(
+            f"- @{steer.author} ({steer.comment_id}): {_steer_body_for_llm(steer.body)}"
+        )
+    return issue_content.rstrip() + "\n" + "\n".join(block_lines) + "\n"
+
+
+def issue_update_should_clear_workflow_state(
+    state: Dict[str, Any],
+    stored_updated_at: str,
+    current_updated_at: str,
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    cwd: Path,
+    clarification_step_numbers: Optional[Set[int]] = None,
+) -> bool:
+    """Return True when ``issue_updated_at`` drift should wipe cached workflow state.
+
+    Preserves state when pending human steers exist (comment-only activity) or when
+    the workflow is paused awaiting clarification responses.
+    """
+    if not stored_updated_at or not current_updated_at:
+        return False
+    if stored_updated_at == current_updated_at:
+        return False
+
+    scratch = _steer_state_slice(state)
+    pending = drain_issue_steers(
+        repo_owner, repo_name, issue_number, scratch, cwd=cwd
+    )
+    if pending:
+        merge_steer_state(scratch, state)
+        return False
+
+    if clarification_step_numbers and workflow_awaiting_clarification(
+        state, clarification_step_numbers
+    ):
+        return False
+
+    return True
+
+
+def apply_clarification_steers_on_resume(
+    issue_content: str,
+    state: Dict[str, Any],
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    clarification_step_numbers: Set[int],
+    *,
+    cwd: Path,
+    quiet: bool = False,
+) -> str:
+    """Merge newly drained steers into *issue_content* when resuming clarification."""
+    if not workflow_awaiting_clarification(state, clarification_step_numbers):
+        return issue_content
+    steers = drain_issue_steers(
+        repo_owner, repo_name, issue_number, state, cwd=cwd
+    )
+    if not steers:
+        return issue_content
+    if not quiet:
+        preview = ", ".join(f"@{s.author}" for s in steers[:3])
+        suffix = f" (+{len(steers) - 3} more)" if len(steers) > 3 else ""
+        console.print(
+            f"[cyan]Resuming clarification with new feedback from {preview}{suffix}[/cyan]"
+        )
+    return merge_steers_into_issue_content(issue_content, steers)
+
+
+def _steer_state_slice(state: Dict[str, Any]) -> Dict[str, Any]:
+    return {key: state[key] for key in STEER_STATE_KEYS if key in state}
+
+
+def append_agentic_progress_steer_note(count: int, preview: str) -> None:
+    """Attach pending-steer metadata to the current interrupt/progress context."""
+    global _agentic_interrupt_context
+    if _agentic_interrupt_context is None:
+        _agentic_interrupt_context = {}
+    _agentic_interrupt_context["pending_steers"] = count
+    _agentic_interrupt_context["steer_preview"] = preview
+
+
+def peek_agentic_progress_steer_metadata() -> Dict[str, Any]:
+    """Return pending-steer fields from interrupt context without clearing it."""
+    global _agentic_interrupt_context
+    if not _agentic_interrupt_context:
+        return {}
+    meta: Dict[str, Any] = {}
+    if "pending_steers" in _agentic_interrupt_context:
+        meta["pending_steers"] = _agentic_interrupt_context["pending_steers"]
+    if "steer_preview" in _agentic_interrupt_context:
+        meta["steer_preview"] = _agentic_interrupt_context["steer_preview"]
+    return meta
 
 
 def detect_control_token(
@@ -355,6 +597,18 @@ MAX_PATH_DISPLAY_LENGTH: int = 200  # Truncation length for PATH in diagnostic m
 MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error messages (Issue #492)
 CLAUDE_CODE_MODE_ENV: str = "PDD_CLAUDE_CODE_MODE"
 CLAUDE_CODE_INTERACTIVE_MODE: str = "interactive"
+# Issue #1365: interactive Claude post-launch auth fast-fail. A revoked or
+# logged-out interactive session surfaces a *synthetic* authentication-failure
+# turn in its --session-id transcript within ~1-4s, then leaves the TUI parked
+# at the prompt forever — burning the full step timeout per dead credential in
+# the cloud OAuth waterfall. The grace window lets a healthy session start a
+# real turn before the first transcript check (a healthy turn never writes a
+# synthetic auth row); the interval throttles those checks inside the PTY loop.
+INTERACTIVE_AUTH_FASTFAIL_GRACE_SECONDS: float = 2.0
+INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS: float = 1.0
+# The model name Claude Code stamps on a turn it generated locally for a failed
+# API call (auth failure, usage cap, transient error) rather than from a model.
+CLAUDE_SYNTHETIC_MODEL: str = "<synthetic>"
 # Issue #1232: max newlines allowed in a leading-"Error:" provider error response.
 # Genuine terse provider errors have 0-2 newlines (single status line, or
 # "Error: ...\nDetails: ..."). Multi-paragraph findings docs have many more
@@ -424,23 +678,26 @@ _PERMANENT_ERROR_CLASSES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ),
     ),
     (
-        # Issue (this PR): Claude Code subscription-tier weekly limit ("You've
-        # hit your limit · resets [TIME]"). Distinct from API-tier 429 because
-        # the reset window is hours-to-days, not seconds-to-minutes — retrying
-        # on the 60s rate-limit floor wastes minutes. Stable token
-        # `credential-limit` lets pdd_cloud's OAuth-token waterfall detect this
-        # and rotate to a different credential instead of retrying the dead one.
+        # Claude Code subscription-tier caps. Covers the weekly/overall limit
+        # ("You've hit your limit · resets [TIME]") AND the 5-hour session limit
+        # and the usage limit ("You've hit your session/usage limit · resets
+        # [TIME]") — all are hours-to-days resets where retrying the same token
+        # is futile. Distinct from API-tier 429 because the reset window is
+        # hours-to-days, not seconds-to-minutes — retrying on the 60s rate-limit
+        # floor wastes minutes. Stable token `credential-limit` lets pdd_cloud's
+        # OAuth-token waterfall detect this and rotate to a different credential
+        # instead of retrying the dead one.
         "credential-limit",
         (
-            # Proximity + time-token guard. Requires "hit your limit" and
-            # "resets" within 40 chars (typical envelope is "... limit ·
-            # resets May 18, 11pm (UTC) ...") AND requires a time-token
-            # OR delimiter immediately after "resets" so distant prose
-            # like "if you hit your limit, nothing resets automatically"
-            # does NOT classify as credential-limit. Without the time
-            # token, any sentence stringing both phrases together would
+            # Proximity + time-token guard. Requires "hit your [session/usage/
+            # weekly/monthly] limit" and "resets" within 40 chars (typical
+            # envelope is "... limit · resets May 18, 11pm (UTC) ...") AND
+            # requires a time-token OR delimiter immediately after "resets" so
+            # distant prose like "if you hit your limit, nothing resets
+            # automatically" does NOT classify as credential-limit. Without the
+            # time token, any sentence stringing both phrases together would
             # short-circuit the rate-limit retry path on benign text.
-            r"hit\s+your\s+limit[^\n]{0,40}?\bresets?\b\s*(?:[·:|\-]|in\s|at\s|on\s|\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+            r"hit\s+your\s+(?:session\s+|usage\s+|weekly\s+|monthly\s+)?limit[^\n]{0,40}?\bresets?\b\s*(?:[·:|\-]|in\s|at\s|on\s|\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
         ),
     ),
     (
@@ -1754,10 +2011,12 @@ def _resolve_opencode_csv_fallback(
 ) -> Optional[str]:
     """Pick an OpenCode model from ``llm_model.csv`` using auth-aware filtering.
 
-    Walks the CSV rows in descending ELO order and returns the first row whose
-    ``api_key`` env vars are all set AND whose ``_translate_to_opencode_model``
-    output has a provider prefix in the configured-provider set. Returns
-    ``None`` when no row qualifies (caller surfaces an actionable error).
+    Walks the CSV rows in descending DeepSWE-first rank order and returns the
+    first row whose ``api_key`` env vars are all set AND whose
+    ``_translate_to_opencode_model`` output has a provider prefix in the
+    configured-provider set. Older/custom CSVs without ``model_rank_score``
+    fall back to raw ``coding_arena_elo``. Returns ``None`` when no row
+    qualifies (caller surfaces an actionable error).
     """
     src = env if env is not None else os.environ
     try:
@@ -1772,7 +2031,14 @@ def _resolve_opencode_csv_fallback(
         return None
 
     try:
-        sorted_df = df.sort_values("coding_arena_elo", ascending=False)
+        rank_df = df.copy()
+        if "model_rank_score" not in rank_df.columns:
+            rank_df["model_rank_score"] = rank_df["coding_arena_elo"]
+        else:
+            rank_df["model_rank_score"] = rank_df["model_rank_score"].fillna(
+                rank_df["coding_arena_elo"]
+            )
+        sorted_df = rank_df.sort_values("model_rank_score", ascending=False)
     except Exception:
         return None
 
@@ -2158,7 +2424,7 @@ def run_agentic_task(
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
     steers: Optional[List[SteerEntry]] = None,
-) -> Tuple[bool, str, float, str]:
+) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
 
@@ -2180,7 +2446,9 @@ def run_agentic_task(
         steers: Optional list of mid-run steering entries to inject into the instruction.
 
     Returns:
-        (success, output_text, cost_usd, provider_used)
+        AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
+        Four-value unpacking remains supported for legacy callers; structured
+        consumers can read ``result.usage`` or ``result[4]``.
     """
     # get_agent_provider_preference() must be called first: for
     # PDD_AGENTIC_PROVIDER=antigravity it sets PDD_GOOGLE_CLI=agy as a side
@@ -2195,7 +2463,7 @@ def run_agentic_task(
         msg = "No agent providers are available (check CLI installation and API keys)"
         if not quiet:
             console.print(f"[bold red]{msg}[/bold red]")
-        return False, msg, 0.0, ""
+        return AgenticTaskResult(False, msg, 0.0, "", None)
 
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
     effective_deadline = deadline if deadline is not None else get_job_deadline()
@@ -2225,7 +2493,10 @@ def run_agentic_task(
             "The following comments arrived during this run. Factor them into this step:\n"
         )
         for steer in steers:
-            steering_section += f"- @{steer.author} ({steer.comment_id}): {steer.body}\n"
+            steering_section += (
+                f"- @{steer.author} ({steer.comment_id}): "
+                f"{_steer_body_for_llm(steer.body)}\n"
+            )
 
     full_instruction = (
         f"{instruction}{feedback_section}{steering_section}\n\n"
@@ -2289,11 +2560,16 @@ def run_agentic_task(
                 if verbose and attempt > 1:
                     console.print(f"[dim]Retry {attempt}/{max_retries} for {provider} (task: {label})[/dim]")
 
-                success, output, cost, actual_model = _run_with_provider(
+                provider_result = _run_with_provider(
                     provider, prompt_path, cwd, attempt_timeout, verbose, quiet,
                     use_playwright=use_playwright,
                     reasoning_time=reasoning_time,
                 )
+                success = bool(provider_result[0])
+                output = str(provider_result[1])
+                cost = float(provider_result[2])
+                actual_model = provider_result[3]
+                usage = provider_result[4] if len(provider_result) > 4 else None
                 last_output = output
                 # Issue #1376: prefer the model the provider actually reported;
                 # fall back to the requested model from env vars when the JSON
@@ -2420,7 +2696,7 @@ def run_agentic_task(
                             model=effective_model,
                             include_bodies=verbose,
                         )
-                        return True, output, cost, provider
+                        return AgenticTaskResult(True, output, cost, provider, usage)
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
                 # Issue #1376 codex round 2: log each failed attempt inside
@@ -2516,7 +2792,13 @@ def run_agentic_task(
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break
 
-        return False, f"All agent providers failed: {'; '.join(provider_errors)}", 0.0, ""
+        return AgenticTaskResult(
+            False,
+            f"All agent providers failed: {'; '.join(provider_errors)}",
+            0.0,
+            "",
+            None,
+        )
 
     finally:
         # Cleanup prompt file
@@ -3053,18 +3335,48 @@ def _find_claude_interactive_session_file(
 def _estimate_claude_interactive_session_cost(
     session_id: str,
     env: Dict[str, str],
-) -> Tuple[float, Optional[str]]:
+) -> Tuple[float, Optional[str], AgenticUsage]:
     """Estimate interactive Claude cost from the persisted session transcript."""
+    usage, latest_model = _extract_claude_interactive_session_usage(session_id, env)
+    if not usage:
+        return 0.0, latest_model, None
+
+    total_cost = 0.0
+    for record in usage.get("claude", []):
+        model_name = str(record.get("model") or latest_model or "claude-sonnet")
+        total_cost += _calculate_anthropic_cost(
+            {
+                "usage": {
+                    "input_tokens": record.get("input_tokens", 0),
+                    "output_tokens": record.get("output_tokens", 0),
+                    "cache_read_input_tokens": record.get("cached_input_tokens", 0),
+                    "cache_creation_input_tokens": record.get(
+                        "cache_creation_input_tokens",
+                        0,
+                    ),
+                },
+                "modelUsage": {model_name: {}},
+            }
+        )
+
+    return total_cost, latest_model, usage
+
+
+def _extract_claude_interactive_session_usage(
+    session_id: str,
+    env: Dict[str, str],
+) -> Tuple[AgenticUsage, Optional[str]]:
+    """Extract JSON-serializable Claude usage from an interactive transcript."""
     session_file = _find_claude_interactive_session_file(session_id, env)
     if session_file is None:
-        return 0.0, None
+        return None, None
 
     per_request_usage: Dict[str, Dict[str, Any]] = {}
     latest_model: Optional[str] = None
     try:
         raw_lines = session_file.read_text(encoding="utf-8").splitlines()
     except OSError:
-        return 0.0, None
+        return None, None
 
     for raw_line in raw_lines:
         try:
@@ -3072,6 +3384,12 @@ def _estimate_claude_interactive_session_cost(
         except json.JSONDecodeError:
             continue
         if item.get("type") != "assistant":
+            continue
+        # Synthetic error turns (auth failure, usage cap, transient API error)
+        # carry the ``<synthetic>`` model and zero usage — never billable and
+        # not a real model name. Skip them so they neither pollute the reported
+        # model (Issue #1365) nor add empty per-request buckets.
+        if _claude_assistant_row_is_synthetic_error(item):
             continue
 
         request_id = item.get("requestId")
@@ -3095,7 +3413,7 @@ def _estimate_claude_interactive_session_cost(
         }
 
     if not per_request_usage:
-        return 0.0, latest_model
+        return None, latest_model
 
     usage_keys = (
         "input_tokens",
@@ -3117,16 +3435,255 @@ def _estimate_claude_interactive_session_cost(
             except (TypeError, ValueError):
                 continue
 
-    total_cost = 0.0
+    usage_records: List[Dict[str, Any]] = []
     for model_name, usage in usage_by_model.items():
-        total_cost += _calculate_anthropic_cost(
+        usage_records.append(
             {
-                "usage": usage,
-                "modelUsage": {model_name: {}},
+                "model": model_name,
+                "input_tokens": int(usage.get("input_tokens", 0)),
+                "output_tokens": int(usage.get("output_tokens", 0)),
+                "cached_input_tokens": int(usage.get("cache_read_input_tokens", 0)),
+                "cache_creation_input_tokens": int(
+                    usage.get("cache_creation_input_tokens", 0)
+                ),
             }
         )
 
-    return total_cost, latest_model
+    return {"claude": usage_records}, latest_model
+
+
+def _claude_assistant_row_is_synthetic_error(item: Dict[str, Any]) -> bool:
+    """True when an ``assistant`` transcript row is a synthetic error turn.
+
+    Claude Code emits these for a turn it could not complete (auth failure,
+    usage cap, transient API error). They carry ``isApiErrorMessage`` and the
+    ``<synthetic>`` model — never produced for genuine model output, which is
+    what makes them a structural discriminator that survives the Issue #1340
+    false-positive class (ordinary output that merely *prints* auth prose).
+
+    ``isApiErrorMessage`` sits at the row top level today; the ``<synthetic>``
+    model sits under ``message``. Both locations are checked so the detector
+    tolerates minor transcript-schema drift across Claude Code versions.
+    """
+    message = item.get("message") or {}
+    if item.get("isApiErrorMessage") is True or message.get("isApiErrorMessage") is True:
+        return True
+    return message.get("model") == CLAUDE_SYNTHETIC_MODEL
+
+
+# Login markers inside a synthetic error turn — distinguishes a genuine
+# logged-out / revoked-OAuth failure ("please run /login") from a non-login
+# auth failure (bad API key, 403 model entitlement) that also classifies as the
+# "auth" class. The returned message is tailored so a non-login auth failure is
+# not mislabeled as oauth/login (which would wrongly tell the caller to rotate
+# OAuth / run /login).
+_INTERACTIVE_LOGIN_MARKER_PATTERN: str = r"not\s+logged\s+in|please\s+run\s+/login"
+
+
+def _interactive_auth_failure_message(detail: str) -> str:
+    """Deterministic, PDD-owned, credential-safe message for an auth failure.
+
+    Re-classifies as ``oauth/login`` only when the synthetic turn actually
+    indicates a login problem; otherwise as the generic ``auth`` class. Never
+    echoes ``detail`` itself (raw provider text can quote credentials).
+    """
+    if re.search(_INTERACTIVE_LOGIN_MARKER_PATTERN, detail.lower()):
+        return (
+            "Claude Code interactive session is not logged in (oauth/login): "
+            "please run /login. PDD detected a synthetic authentication-failure "
+            "turn in the session transcript with no usable reply; fast-failing so "
+            "the caller can rotate credentials instead of waiting for the full "
+            "interactive step timeout."
+        )
+    return (
+        "Claude Code interactive session authentication failed (auth). PDD "
+        "detected a synthetic authentication-failure turn in the session "
+        "transcript with no usable reply; fast-failing so the caller can advance "
+        "instead of waiting for the full interactive step timeout."
+    )
+
+
+def _interactive_credential_limit_message(detail: str) -> str:
+    """Deterministic, PDD-owned, credential-safe message for an interactive
+    subscription/usage cap (``credential-limit``).
+
+    Symmetric to :func:`_interactive_auth_failure_message`. When the latest
+    assistant turn is a synthetic ``credential-limit`` failure — the Claude Code
+    subscription hit its weekly/usage limit mid-run ("You've hit your limit ·
+    resets <time>") — the PTY loop fast-fails with this message instead of
+    parking until the per-step timeout. The stable ``credential-limit`` token
+    lets the pdd_cloud OAuth-token waterfall force-rotate to a fresh credential
+    (the reset window is hours-to-days, so retrying the same token is futile).
+    Kept deliberately distinct from an API-tier 429 so this never lands on the
+    60s rate-limit retry floor. Never echoes ``detail`` (raw provider text can
+    quote the reset time / account info).
+    """
+    return (
+        "Claude Code interactive session reached its Claude subscription cap — "
+        "you've hit your limit · resets at a provider-set time (PDD "
+        "credential-limit). PDD detected a synthetic credential-limit turn in "
+        "the session transcript with no usable reply; fast-failing so the caller "
+        "rotates to the next OAuth credential instead of waiting for the full "
+        "interactive step timeout."
+    )
+
+
+def _claude_assistant_row_text(message: Dict[str, Any]) -> str:
+    """Concatenate the text parts of an assistant message's content."""
+    return " ".join(
+        part.get("text", "")
+        for part in (message.get("content") or [])
+        if isinstance(part, dict) and part.get("type") == "text"
+    )
+
+
+def _auth_state_after_row(state: Optional[str], item: Dict[str, Any]) -> Optional[str]:
+    """Fold one transcript row into the running terminal-auth state (Issue #1365).
+
+    Returns the auth-failure message iff this row makes the session's latest
+    ``assistant`` turn a terminal synthetic auth failure. The latest assistant
+    turn wins: a genuine model turn supersedes an earlier error and returns
+    ``None``. A synthetic auth/oauth-login turn arms the auth fast-fail; a
+    synthetic ``credential-limit`` turn (Claude subscription/usage cap) arms the
+    credential-limit fast-fail so the caller rotates credentials. A transient
+    synthetic error (overload/network/timeout) still returns ``None`` (the
+    caller keeps its retry/timeout fallback).
+    Non-assistant rows (including the per-retry ``system``/``api_error`` rows)
+    leave the state unchanged, so an in-flight, still-retrying turn is never
+    killed mid-retry.
+
+    Captured against Claude Code CLI 2.1.161. The signal degrades gracefully: if
+    a future CLI surfaces auth failures only via system rows, changes the
+    ``<synthetic>`` marker, or alters the content shape, this returns ``None``
+    and the caller falls back to the original timeout (no false positive). The
+    real-CLI manual validation in the PR re-confirms the shape.
+    """
+    if item.get("type") != "assistant":
+        return state
+    if not _claude_assistant_row_is_synthetic_error(item):
+        # Genuine model output: authentication worked; supersede any prior error.
+        return None
+    text = _claude_assistant_row_text(item.get("message") or {})
+    classification = _classify_permanent_error(text)
+    if classification in ("auth", "oauth/login"):
+        return _interactive_auth_failure_message(text)
+    if classification == "credential-limit":
+        # A mid-run subscription/usage cap parks the PTY at the prompt the same
+        # way an auth failure does; arm a credential-limit fast-fail so the
+        # caller rotates to the next OAuth token instead of burning the step
+        # timeout (the cloud waterfall force-rotates on this stable token).
+        return _interactive_credential_limit_message(text)
+    return None
+
+
+def _scan_claude_transcript_for_auth_failure(session_file: Path) -> Optional[str]:
+    """Terminal auth-failure message for a whole transcript, or ``None``.
+
+    One-shot full scan (used by the exit-path check and tests). The PTY loop
+    instead reads incrementally via :func:`_advance_interactive_auth_scan` so a
+    long session does not re-read the growing transcript on every poll (Issue
+    #1365).
+    """
+    try:
+        raw_lines = session_file.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    state: Optional[str] = None
+    for raw_line in raw_lines:
+        try:
+            item = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        state = _auth_state_after_row(state, item)
+    return state
+
+
+def _advance_interactive_auth_scan(
+    session_file: Path,
+    offset: int,
+    buffer: bytes,
+    state: Optional[str],
+) -> Tuple[Optional[str], int, bytes]:
+    """Incrementally fold newly-appended transcript bytes into the auth state.
+
+    Reads only the bytes written since ``offset`` (the JSONL transcript is
+    append-only), so a long healthy session pays O(total transcript) across the
+    whole run rather than O(n) per poll. ``buffer`` carries an incomplete
+    trailing line between calls; ``state`` is the running terminal-auth message
+    from :func:`_auth_state_after_row`. The scan continues for the lifetime of
+    the session, so a later auth failure after an early healthy turn is still
+    caught (Issue #1365). Returns the updated ``(state, offset, buffer)``.
+    """
+    try:
+        size = session_file.stat().st_size
+    except OSError:
+        return state, offset, buffer
+    if size < offset:  # file truncated/rotated — restart the scan
+        offset, buffer, state = 0, b"", None
+    if size <= offset:
+        return state, offset, buffer
+    try:
+        with open(session_file, "rb") as handle:
+            handle.seek(offset)
+            chunk = handle.read()
+            offset = handle.tell()
+    except OSError:
+        return state, offset, buffer
+    parts = (buffer + chunk).split(b"\n")
+    buffer = parts.pop()  # trailing partial line (empty if chunk ended on \n)
+    for raw in parts:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            item = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        state = _auth_state_after_row(state, item)
+    return state, offset, buffer
+
+
+def _interactive_auth_decision(state: Optional[str], buffer: bytes) -> Optional[str]:
+    """Committed auth state, overridden by a complete-but-unterminated last line.
+
+    The incremental scanner only commits newline-terminated lines, but a hung
+    session's final synthetic auth turn may sit in the transcript without its
+    trailing newline yet. If that buffered remainder already parses as a
+    complete JSON row, fold it in for the fast-fail decision (without committing
+    it — it is re-read once its newline arrives). Issue #1365.
+    """
+    tail = buffer.strip()
+    if not tail:
+        return state
+    try:
+        item = json.loads(tail)
+    except json.JSONDecodeError:
+        return state
+    return _auth_state_after_row(state, item)
+
+
+def _detect_claude_interactive_auth_failure(
+    session_id: str,
+    env: Dict[str, str],
+) -> Optional[str]:
+    """Locate the interactive session transcript and scan it (Issue #1365).
+
+    Convenience wrapper (full scan) used by callers that have only the
+    ``session_id`` (the same ``--session-id`` JSONL PDD already reads for cost) —
+    the exit-path check and tests. The PTY runner caches the located path and
+    reads incrementally via :func:`_advance_interactive_auth_scan` instead, to
+    avoid a full-tree search and a full re-read on every poll. A revoked or
+    logged-out interactive session
+    surfaces a synthetic auth turn within a few seconds and then parks the TUI
+    at the prompt forever; detecting it lets the caller fast-fail (and the cloud
+    OAuth waterfall rotate credentials) instead of burning the step timeout.
+    """
+    session_file = _find_claude_interactive_session_file(
+        session_id, env, wait_seconds=0.0
+    )
+    if session_file is None:
+        return None
+    return _scan_claude_transcript_for_auth_failure(session_file)
 
 
 def _terminate_process_group(proc: subprocess.Popen, sig: int) -> None:
@@ -3188,8 +3745,17 @@ def _run_interactive_pty_until_reply(
     timeout: float,
     reply_path: Path,
     job_id: str,
+    session_id: Optional[str] = None,
 ) -> Tuple[bool, str, float, Optional[str]]:
-    """Run an interactive CLI under a PTY until the MCP reply file appears."""
+    """Run an interactive CLI under a PTY until the MCP reply file appears.
+
+    When ``session_id`` is provided, the loop also fast-fails on a post-launch
+    authentication failure (Issue #1365): a revoked or logged-out interactive
+    session writes a synthetic auth-error turn to its transcript and then sits
+    at the prompt forever, so without this check the runner would burn the full
+    ``timeout`` per dead credential. ``session_id`` defaults to ``None`` so
+    non-interactive callers keep the original behaviour.
+    """
     try:
         import pty
         import select
@@ -3213,7 +3779,19 @@ def _run_interactive_pty_until_reply(
         )
         os.close(slave_fd)
         slave_fd = -1
-        deadline = time.time() + timeout
+        start = time.time()
+        deadline = start + timeout
+        # Issue #1365: throttled post-launch auth-failure check. First check is
+        # deferred by a grace window so a healthy session has time to start a
+        # real turn before we inspect its transcript. The transcript path is
+        # located once and cached so a long healthy session does not pay a
+        # full-tree rglob on every poll.
+        next_auth_check = start + INTERACTIVE_AUTH_FASTFAIL_GRACE_SECONDS
+        auth_session_file: Optional[Path] = None
+        auth_offset = 0  # bytes of transcript already scanned (incremental)
+        auth_buffer = b""  # carried incomplete trailing transcript line
+        auth_state: Optional[str] = None  # running terminal-auth message
+        auth_last_size = -1  # transcript size at previous poll (quiescence gate)
 
         while True:
             if reply_path.exists():
@@ -3228,6 +3806,42 @@ def _run_interactive_pty_until_reply(
 
             if proc.poll() is not None:
                 break
+
+            now = time.time()
+            if session_id and now >= next_auth_check:
+                if auth_session_file is None:
+                    auth_session_file = _find_claude_interactive_session_file(
+                        session_id, env, wait_seconds=0.0
+                    )
+                if auth_session_file is not None:
+                    try:
+                        current_size = auth_session_file.stat().st_size
+                    except OSError:
+                        current_size = auth_last_size
+                    # Quiescent = the transcript has not grown since the previous
+                    # poll. (auth_last_size < 0 is the first observation.)
+                    quiescent = auth_last_size >= 0 and current_size == auth_last_size
+                    auth_last_size = current_size
+                    auth_state, auth_offset, auth_buffer = _advance_interactive_auth_scan(
+                        auth_session_file, auth_offset, auth_buffer, auth_state
+                    )
+                    auth_failure = _interactive_auth_decision(auth_state, auth_buffer)
+                    # Fast-fail only when the transcript shows a terminal auth
+                    # error AND has stopped growing — the #1365 "parked at the
+                    # prompt forever" hang. While the session is still writing
+                    # (e.g. a later row that may supersede the auth error is
+                    # mid-append, possibly not yet newline-terminated), defer to
+                    # the next poll so a recovering session is never killed on a
+                    # stale/partial trailing line.
+                    if auth_failure is not None and quiescent:
+                        _terminate_process_group(proc, signal.SIGTERM)
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            _terminate_process_group(proc, signal.SIGKILL)
+                            proc.wait(timeout=5)
+                        return False, auth_failure, 0.0, None
+                next_auth_check = now + INTERACTIVE_AUTH_FASTFAIL_INTERVAL_SECONDS
 
             remaining = deadline - time.time()
             if remaining <= 0:
@@ -3253,6 +3867,15 @@ def _run_interactive_pty_until_reply(
 
         if reply_path.exists():
             return _parse_claude_interactive_reply(reply_path, job_id)
+
+        # Issue #1365: a revoked/logged-out session may EXIT (or exit during the
+        # grace window) after writing the synthetic auth turn rather than hang.
+        # Classify that exit as the same permanent auth failure so the caller
+        # rotates credentials instead of retrying a dead one as a generic error.
+        if session_id:
+            auth_failure = _detect_claude_interactive_auth_failure(session_id, env)
+            if auth_failure is not None:
+                return False, auth_failure, 0.0, None
 
         tail = "".join(output_chunks)[-MAX_ERROR_SNIPPET_LENGTH:]
         returncode = proc.returncode if proc is not None else None
@@ -3287,10 +3910,16 @@ def _run_claude_interactive_with_mcp(
     timeout: float,
     env: Dict[str, str],
     use_playwright: bool = False,
-) -> Tuple[bool, str, float, Optional[str]]:
+) -> _ProviderRunResult:
     """Run Claude Code interactively and collect its result through MCP."""
     if os.name != "posix":
-        return False, "Claude Code interactive mode requires a POSIX platform", 0.0, None
+        return _ProviderRunResult(
+            False,
+            "Claude Code interactive mode requires a POSIX platform",
+            0.0,
+            None,
+            None,
+        )
 
     job_id = uuid.uuid4().hex
     session_id = str(uuid.uuid4())
@@ -3322,14 +3951,21 @@ def _run_claude_interactive_with_mcp(
             timeout=timeout,
             reply_path=reply_path,
             job_id=job_id,
+            session_id=session_id,
         )
-        session_cost, session_model = _estimate_claude_interactive_session_cost(
+        session_cost, session_model, usage = _estimate_claude_interactive_session_cost(
             session_id,
             env,
         )
         if session_cost > 0.0 or cost == 0.0:
             cost = session_cost
-        return success, text, cost, model or session_model or env.get("CLAUDE_MODEL")
+        return _ProviderRunResult(
+            success,
+            text,
+            cost,
+            model or session_model or env.get("CLAUDE_MODEL"),
+            usage,
+        )
 
 
 def _run_with_provider(
@@ -4444,10 +5080,13 @@ def _fetch_issue_comments_via_gh(
     *,
     cwd: Path,
     since: Optional[str] = None,
-) -> List[Dict]:
-    """List issue comments via ``gh api``; returns [] on failure."""
+) -> Tuple[Optional[List[Dict]], Optional[str]]:
+    """List issue comments via ``gh api``.
+
+    Returns ``(comments, None)`` on success and ``(None, reason)`` on failure.
+    """
     if not _find_cli_binary("gh"):
-        return []
+        return None, "gh CLI not found on PATH"
     cmd = _gh_api_list_issue_comments_cmd(
         repo_owner, repo_name, issue_number, since=since
     )
@@ -4459,11 +5098,27 @@ def _fetch_issue_comments_via_gh(
             text=True,
             start_new_session=True,
         )
-    except Exception:
-        return []
+    except Exception as exc:
+        return None, f"gh api error: {exc}"
     if res.returncode != 0:
-        return []
-    return _load_gh_paginated_comments(res.stdout)
+        detail = (res.stderr or res.stdout or "").strip()
+        if len(detail) > 200:
+            detail = detail[:200] + "…"
+        suffix = f": {detail}" if detail else ""
+        return None, f"gh api failed (exit {res.returncode}){suffix}"
+    return _load_gh_paginated_comments(res.stdout), None
+
+
+def _log_steer_seed_skipped(reason: Optional[str], *, quiet: bool) -> None:
+    """Warn when baseline steer cursor seed could not run."""
+    detail = reason or "could not fetch issue comments"
+    msg = (
+        f"Mid-run steering: skipped steer cursor seed ({detail}). "
+        "GitHub issue comments will not be drained until a successful seed."
+    )
+    _steer_logger.warning(msg)
+    if not quiet:
+        console.print(f"[yellow]Warning: {msg}[/yellow]")
 
 
 def seed_issue_steer_cursor(
@@ -4473,6 +5128,7 @@ def seed_issue_steer_cursor(
     state: Dict[str, Any],
     *,
     cwd: Path,
+    quiet: bool = False,
 ) -> bool:
     """Set steer cursor to the current issue comment tail without returning steers.
 
@@ -4481,9 +5137,12 @@ def seed_issue_steer_cursor(
     authors, including bots) so later bot progress comments do not rewind the id
     cursor.
     """
-    comments = _fetch_issue_comments_via_gh(
+    comments, fetch_err = _fetch_issue_comments_via_gh(
         repo_owner, repo_name, issue_number, cwd=cwd
     )
+    if comments is None:
+        _log_steer_seed_skipped(fetch_err, quiet=quiet)
+        return False
     max_id_val = -1
     latest_timestamp: Optional[str] = None
     for comment in comments:
@@ -4508,6 +5167,59 @@ def seed_issue_steer_cursor(
         state["last_steer_at"] = latest_timestamp
     state["steer_cursor_seeded"] = True
     return True
+
+
+def fetch_issue_updated_at(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    *,
+    cwd: Path,
+) -> str:
+    """Return the GitHub issue ``updated_at`` timestamp, or empty string on failure."""
+    if not _find_cli_binary("gh"):
+        return ""
+    try:
+        res = _subprocess_run(
+            [
+                "gh",
+                "api",
+                f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
+                "--jq",
+                ".updated_at",
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            start_new_session=True,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+def ensure_issue_steer_cursor_seeded(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+    quiet: bool = False,
+) -> bool:
+    """Seed the steer cursor at workflow start when not yet established.
+
+    Returns True when ``state`` was updated (caller should persist workflow state).
+    """
+    if not repo_owner or not repo_name or not issue_number:
+        return False
+    if _steer_cursor_initialized(state):
+        return False
+    return seed_issue_steer_cursor(
+        repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
+    )
 
 
 def drain_issue_steers(
@@ -4559,17 +5271,22 @@ def drain_issue_steers(
                     continue
                 if cid_val <= last_id_val:
                     continue
+                raw_body = str(entry.get("body", ""))
                 steers.append(
                     SteerEntry(
                         comment_id=str(cid_val),
                         author=str(entry.get("author", "unknown")),
-                        body=str(entry.get("body", "")),
+                        body=_steer_body_for_llm(raw_body),
                     )
                 )
                 if cid_val > max_id_val:
                     max_id_val = cid_val
             if steers:
                 state["last_steered_comment_id"] = str(max_id_val)
+                state["last_steer_at"] = (
+                    state.get("last_steer_at")
+                    or datetime.now(timezone.utc).isoformat()
+                )
                 state["steer_generation"] = state.get("steer_generation", 0) + 1
                 return steers
 
@@ -4585,13 +5302,15 @@ def drain_issue_steers(
     since = state.get("last_steer_at")
     last_id = state.get("last_steered_comment_id")
 
-    comments = _fetch_issue_comments_via_gh(
+    comments, _fetch_err = _fetch_issue_comments_via_gh(
         repo_owner,
         repo_name,
         issue_number,
         cwd=cwd,
         since=since if since else None,
     )
+    if comments is None:
+        return []
 
     try:
         last_id_val = int(last_id) if last_id is not None else -1
@@ -4636,7 +5355,7 @@ def drain_issue_steers(
             SteerEntry(
                 comment_id=str(cid_val),
                 author=author,
-                body=body.strip(),
+                body=_steer_body_for_llm(body),
             )
         )
 
@@ -4652,6 +5371,32 @@ def drain_issue_steers(
         return new_steers
 
     return []
+
+
+def drain_step_steers(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    state: Dict[str, Any],
+    *,
+    cwd: Path,
+    quiet: bool = False,
+) -> List[SteerEntry]:
+    """Drain pending issue comments for the next orchestrator agentic step.
+
+    No-op when *issue_number* or repo coordinates are missing (e.g. split flows).
+    """
+    if not repo_owner or not repo_name or not issue_number:
+        return []
+    steers = drain_issue_steers(repo_owner, repo_name, issue_number, state, cwd=cwd)
+    if steers and not quiet:
+        preview = ", ".join(f"@{entry.author}" for entry in steers[:3])
+        suffix = f" (+{len(steers) - 3} more)" if len(steers) > 3 else ""
+        console.print(
+            f"[cyan]Incorporating mid-run feedback from {preview}{suffix}[/cyan]"
+        )
+        append_agentic_progress_steer_note(len(steers), preview + suffix)
+    return steers
 
 
 def load_workflow_state(
@@ -4925,6 +5670,9 @@ def post_step_comment_once(
     """
     if step_num in posted_steps:
         return True
+    if os.environ.get("PDD_NO_GITHUB_STATE") == "1":
+        posted_steps.add(step_num)
+        return True
     if not _find_cli_binary("gh"):
         return False
     final_body = _sanitize_comment_body(body)
@@ -5024,6 +5772,8 @@ def post_step_comment(
         True if the comment posted successfully, False otherwise (including
         when ``gh`` is not on PATH).
     """
+    if os.environ.get("PDD_NO_GITHUB_STATE") == "1":
+        return True
     if not _find_cli_binary("gh"):
         return False
 
@@ -5056,20 +5806,35 @@ def post_step_comment(
         )
 
     try:
-        result = subprocess.run(
+        attempts = [
             [
                 "gh", "issue", "comment", str(issue_number),
                 "--repo", f"{repo_owner}/{repo_name}",
                 "--body", final_body,
             ],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
+            [
+                "gh", "api",
+                f"repos/{repo_owner}/{repo_name}/issues/{issue_number}/comments",
+                "--method", "POST",
+                "-f", f"body={final_body}",
+            ],
+        ]
+        errors = []
+        for cmd in attempts:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return True
+            errors.append((result.stderr or result.stdout or "").strip())
+        detail = " | ".join(err for err in errors if err)
+        console.print(
+            f"[yellow]Warning: Failed to post comment for step {step_num}: {detail}[/yellow]"
         )
-        if result.returncode != 0:
-            console.print(f"[yellow]Warning: Failed to post comment for step {step_num}: {result.stderr}[/yellow]")
-            return False
-        return True
+        return False
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to post comment for step {step_num}: {e}[/yellow]")
         return False
@@ -5095,24 +5860,45 @@ def post_pr_comment(
     Returns:
         True if comment was posted successfully, False otherwise
     """
+    if os.environ.get("PDD_NO_GITHUB_STATE") == "1":
+        return True
     if not _find_cli_binary("gh"):
         return False
 
+    sanitized_body = _sanitize_comment_body(body)
+    attempts = [
+        [
+            "gh", "pr", "comment", str(pr_number),
+            "--repo", f"{repo_owner}/{repo_name}",
+            "--body", sanitized_body,
+        ],
+        [
+            "gh", "issue", "comment", str(pr_number),
+            "--repo", f"{repo_owner}/{repo_name}",
+            "--body", sanitized_body,
+        ],
+        [
+            "gh", "api",
+            f"repos/{repo_owner}/{repo_name}/issues/{pr_number}/comments",
+            "--method", "POST",
+            "-f", f"body={sanitized_body}",
+        ],
+    ]
+    errors = []
     try:
-        result = subprocess.run(
-            [
-                "gh", "pr", "comment", str(pr_number),
-                "--repo", f"{repo_owner}/{repo_name}",
-                "--body", body,
-            ],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            console.print(f"[yellow]Warning: Failed to post PR comment: {result.stderr}[/yellow]")
-            return False
-        return True
+        for cmd in attempts:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return True
+            errors.append((result.stderr or result.stdout or "").strip())
+        detail = " | ".join(err for err in errors if err)
+        console.print(f"[yellow]Warning: Failed to post PR comment: {detail}[/yellow]")
+        return False
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to post PR comment: {e}[/yellow]")
         return False

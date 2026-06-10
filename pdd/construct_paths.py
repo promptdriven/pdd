@@ -128,7 +128,8 @@ def _find_nearest_pddrc_for_file(
 
 # Schema for .pddrc validation — see issue #1198.
 # Unknown keys at any level emit a UserWarning rather than being silently ignored.
-_PDDRC_ROOT_KEYS = {"version", "contexts"}
+_PDDRC_ROOT_KEYS = {"version", "contexts", "checkup"}
+_PDDRC_CHECKUP_KEYS = {"prompt_gate"}
 _PDDRC_CONTEXT_KEYS = {"paths", "defaults"}
 _PDDRC_DEFAULTS_KEYS = {
     "generate_output_path",
@@ -141,8 +142,13 @@ _PDDRC_DEFAULTS_KEYS = {
     "temperature",
     "budget",
     "max_attempts",
+    "compressed_context",
     "outputs",
     "auto_deps_csv_path",
+    "context_compression",
+    "compress_examples",
+    "compress_test_context",
+    "compression_fallback",
 }
 
 
@@ -167,6 +173,12 @@ def _validate_pddrc_keys(config: Dict[str, Any]) -> None:
     for key in config.keys():
         if key not in _PDDRC_ROOT_KEYS:
             _warn_unknown_pddrc_key(key, key)
+
+    checkup = config.get("checkup", {})
+    if isinstance(checkup, dict):
+        for key in checkup.keys():
+            if key not in _PDDRC_CHECKUP_KEYS:
+                _warn_unknown_pddrc_key(key, f"checkup.{key}")
 
     contexts = config.get("contexts", {})
     if not isinstance(contexts, dict):
@@ -540,6 +552,10 @@ def _resolve_config_hierarchy(
         'budget': None,
         'max_attempts': None,
         'auto_deps_csv_path': 'PDD_AUTO_DEPS_CSV_PATH',
+        'context_compression': 'PDD_CONTEXT_COMPRESSION',
+        'compress_examples': 'PDD_COMPRESS_EXAMPLES',
+        'compress_test_context': 'PDD_COMPRESS_TEST_CONTEXT',
+        'compression_fallback': 'PDD_COMPRESSION_FALLBACK',
     }
 
     for config_key, env_var in config_keys.items():
@@ -1192,7 +1208,11 @@ def construct_paths(
         for key, value in resolved_config.items():
             if (key.endswith('_output_path') or key == 'auto_deps_csv_path') and key not in context_config:
                 context_config[key] = value
-                
+
+        from .config_resolution import apply_compression_env, effective_compression_config
+
+        apply_compression_env(effective_compression_config(resolved_config))
+
     except Exception as e:
         error_msg = f"Configuration error: {e}"
         console.print(f"[error]{error_msg}[/error]", style="error")
@@ -1439,8 +1459,17 @@ def construct_paths(
         if not file_extension and (language or '').lower() != 'prompt':
             raise ValueError('empty extension')
     except Exception:
-        file_extension = BUILTIN_EXT_MAP.get(language.lower(), f".{language.lower()}" if language else '')
-    
+        # Offline fallback: read the same bundled language_format.csv that sync's
+        # get_extension uses, so generation's written extension stays aligned with
+        # the path sync expects when PDD_PATH is unset (issue #551). Only resort to
+        # BUILTIN_EXT_MAP for languages the bundled CSV does not list.
+        from pdd.language_extensions import bundled_extension
+        _bundled = bundled_extension(language)
+        if _bundled is not None:
+            file_extension = f".{_bundled}" if _bundled else ''
+        else:
+            file_extension = BUILTIN_EXT_MAP.get(language.lower(), f".{language.lower()}" if language else '')
+
     # Handle --format option for commands that support it (e.g., example)
     format_option = command_options.get("format")
     if format_option and command == "example":

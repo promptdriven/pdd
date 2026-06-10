@@ -1,3 +1,16 @@
+<pdd-reason>Repairs verification issues by identifying prompt-intent mismatches and proposing code fixes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "fix_verification_errors", "signature": "(program: str, prompt: str, code: str, output: str, strength: float, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[str, str, str, float, str, int]", "returns": "Tuple[str, str, str, float, str, int]"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a python function, "fix_verification_errors", that will fix issues in a code module identified during verification.
 
 <include>context/python_preamble.prompt</include>
@@ -12,6 +25,7 @@
         'temperature' - A float that is the temperature of the LLM model to use. Default is 0.
         'time' - A float between 0 and 1 that controls the thinking effort for the LLM model, passed to llm_invoke. Default is DEFAULT_TIME.
         'verbose' - A boolean that indicates whether to print out the details of the function. Default is False.
+        'compressed_context' - Optional sync-provided compressed verify context. Ignore when empty; when present, include it in both issue-identification and fix-generation LLM calls as supplemental context.
     Outputs:
         'explanation': A string containing the verification details and the fix explanation, formatted with XML tags: `<verification_details>...</verification_details>\n<fix_explanation>...</fix_explanation>`, or an empty list/None if no issues were found.
         'fixed_program' - A string that is the fixed program.
@@ -54,6 +68,7 @@
             - 'output'
         3b. Crucially, pass the `VerificationOutput` Pydantic model to the `output_pydantic` parameter of `llm_invoke`.
         3c. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
+        3d. If `compressed_context` is provided and non-empty, append its rendered content to the LLM input without replacing the original prompt, code, program, or output fields.
     Step 4. If verbose is True, pretty print the structured result (which will be a `VerificationOutput` object or an error indication from `llm_invoke`).
     Step 5. Analyze the verification result object from `llm_invoke` with fallback parsing:
         5a. If the result is a `VerificationOutput` instance, extract `verification_issues_count` from the `issues_count` field and `verification_details` from the `details` field.
@@ -71,6 +86,7 @@
             - 'issues': The `verification_details` obtained in Step 5.
         6b. Crucially, pass the `FixerOutput` Pydantic model to the `output_pydantic` parameter of `llm_invoke`.
         6c. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
+        6d. Include the same non-empty compressed context in the fix-generation call so the proposed repair sees the same bounded contract/example/prompt evidence as the issue-identification call.
     Step 7. Process the result object from the fix generation `llm_invoke` call with fallback parsing:
         7a. If the result is a `FixerOutput` instance, extract `fixed_program`, `fixed_code`, and `fix_explanation` from the respective fields.
         7b. If the result is a string, use regex to parse XML tags: extract content from `<fixed_program>`, `<fixed_code>`, and `<explanation>`.

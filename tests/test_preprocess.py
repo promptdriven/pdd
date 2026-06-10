@@ -260,19 +260,19 @@ def test_include_js_doubles_curly_braces() -> None:
     assert result == expected
 
 # Test for excluding keys from doubling curly brackets
-def test_exclude_keys_from_doubling() -> None:
+def test_exclude_from_doubling() -> None:
     """Test excluding specific keys from doubling curly brackets."""
     prompt = "This is a test {key} and {exclude} {}"
     expected_output = "This is a test {{key}} and {exclude} {{}}"
 
-    assert preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude']) == expected_output
+    assert preprocess(prompt, recursive=False, double_curly_brackets=True, exclude=['exclude']) == expected_output
 
 
-def test_exclude_keys_requires_exact_match() -> None:
+def test_exclude_requires_exact_match() -> None:
     """Exclude list should only skip doubling when the inner text is an exact match."""
     prompt = "Values {exclude_suffix} and {exclude}"
     expected = "Values {{exclude_suffix}} and {exclude}"
-    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=['exclude'])
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude=['exclude'])
     assert result == expected
 
 # Test for recursive processing
@@ -839,12 +839,12 @@ def test_circular_includes() -> None:
 def test_mixed_excluded_nested_brackets() -> None:
     """Test mix of excluded and nested brackets.
 
-    exclude_keys protects exact {key} matches only. Nested patterns like
+    exclude protects exact {key} matches only. Nested patterns like
     {excluded{inner}} don't match the {excluded} regex, so all braces
     are doubled uniformly.
     """
     prompt = "Mix of {excluded{inner}} nesting"
-    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
+    result = preprocess(prompt, recursive=False, double_curly_brackets=True, exclude=["excluded"])
     # {excluded{inner}} doesn't match \{(excluded)\} regex, so all braces double
     assert result == "Mix of {{excluded{{inner}}}} nesting"
 
@@ -929,9 +929,9 @@ def test_z3_double_curly_brackets():
         concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True)
         assert concrete_output == concrete_expected, f"Concrete test case {i} failed"
 
-def test_z3_exclude_keys():
+def test_z3_exclude():
     """
-    Test that exclude_keys are properly handled when doubling curly brackets.
+    Test that exclude are properly handled when doubling curly brackets.
     """
     solver = create_solver()
     
@@ -956,7 +956,7 @@ def test_z3_exclude_keys():
     
     # Verify with concrete example
     concrete_input = "This is {key} with {excluded}"
-    concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True, exclude_keys=["excluded"])
+    concrete_output = preprocess(concrete_input, recursive=False, double_curly_brackets=True, exclude=["excluded"])
     assert concrete_output == "This is {{key}} with {excluded}", "Concrete exclude keys test failed"
 
 def test_z3_code_block_handling():
@@ -2206,12 +2206,13 @@ def test_process_include_with_content_selector(monkeypatch) -> None:
     
     # Create a mock selector class
     class MockSelector:
-        def select(self, content, selectors, file_path, mode):
+        def select(self, content, selectors, file_path, mode, expand_dependencies=False):
             assert content == mock_file_content
             assert "def:main" in selectors
             assert "class:App" in selectors
             assert "lines:10-20" in selectors
             assert mode == "interface"
+            assert expand_dependencies is False
             return expected_output
             
     # Mock the import of ContentSelector
@@ -2316,8 +2317,66 @@ def test_include_select_multiple_selectors(tmp_path, monkeypatch) -> None:
     assert call_kwargs.kwargs['selectors'] == ['def:a', 'def:b']
 
 
+def test_include_select_pytest_comma_separated(tmp_path, monkeypatch) -> None:
+    """pytest:test_one,test_two must stay one selector (not split on the comma)."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "tests/test_sample.py"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(
+        "def helper():\n    return 1\n\n"
+        "def test_one():\n    assert helper() == 1\n\n"
+        "def test_two():\n    assert True\n"
+    )
+    prompt = '<include select="pytest:test_one,test_two">tests/test_sample.py</include>'
+
+    with patch('pdd.content_selector.ContentSelector') as MockCS:
+        MockCS.return_value.select.return_value = "sliced"
+        preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+    call_kwargs = MockCS.return_value.select.call_args
+    assert call_kwargs.kwargs['selectors'] == ['pytest:test_one,test_two']
+
+
+def test_preprocess_contract_include_real(tmp_path, monkeypatch) -> None:
+    """E2E: preprocess + contract: keeps transitive helpers (no ContentSelector mock)."""
+    monkeypatch.chdir(tmp_path)
+    module = tmp_path / "worker.py"
+    module.write_text(
+        "def _get_job_secrets(job_id):\n"
+        "    return {'id': job_id}\n\n"
+        "def run_worker(job_id):\n"
+        "    return _get_job_secrets(job_id)\n",
+        encoding="utf-8",
+    )
+    prompt = '<include select="contract:run_worker">worker.py</include>'
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert "API Contract Slice" in result
+    assert "def run_worker" in result
+    assert "def _get_job_secrets" in result
+    assert "def test_" not in result
+
+
+def test_preprocess_pytest_include_real(tmp_path, monkeypatch) -> None:
+    """E2E: preprocess + pytest: with comma-grouped test names."""
+    monkeypatch.chdir(tmp_path)
+    test_file = tmp_path / "tests" / "test_sample.py"
+    test_file.parent.mkdir(parents=True, exist_ok=True)
+    test_file.write_text(
+        "def helper():\n    return 1\n\n"
+        "def test_one():\n    assert helper() == 1\n\n"
+        "def test_two():\n    assert True\n",
+        encoding="utf-8",
+    )
+    prompt = '<include select="pytest:test_one,test_two">tests/test_sample.py</include>'
+    result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert "def test_one" in result
+    assert "def test_two" in result
+    assert "def helper" in result
+
+
 def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
     """If ContentSelector can't be imported, fall back to full file content with a warning."""
+    monkeypatch.delenv("PDD_COMPRESSION_FALLBACK", raising=False)
     monkeypatch.chdir(tmp_path)
     src = tmp_path / "module.py"
     full_content = "def foo():\n    return 42\n"
@@ -2334,6 +2393,7 @@ def test_include_select_fallback_on_import_error(tmp_path, monkeypatch) -> None:
 
 def test_include_select_fallback_on_selector_error(tmp_path, monkeypatch) -> None:
     """If ContentSelector raises, fall back to full file content with a warning."""
+    monkeypatch.delenv("PDD_COMPRESSION_FALLBACK", raising=False)
     monkeypatch.chdir(tmp_path)
     src = tmp_path / "module.py"
     full_content = "def foo():\n    return 42\n"

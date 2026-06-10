@@ -308,6 +308,7 @@ def run_agentic_bug(
             issue_number=issue_number,
             issue_author=issue_author,
             issue_title=issue_title,
+            issue_updated_at=issue_data.get("updated_at", "") or "",
             cwd=cwd,
             verbose=verbose,
             quiet=quiet,

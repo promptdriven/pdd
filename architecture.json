@@ -470,7 +470,7 @@
     "dependencies": [],
     "priority": 18,
     "filename": "resurface_check_Python.prompt",
-    "filepath": "extensions/recruiting/resurface_check.py",
+    "filepath": "prompts/resurface_check_Python.prompt",
     "tags": [
       "backend",
       "api",
@@ -742,7 +742,7 @@
     }
   },
   {
-    "reason": "Fixes issues found during functional verification.",
+    "reason": "Repairs verification issues by identifying prompt-intent mismatches and proposing code fixes.",
     "description": "Corrects code that fails verification checks. Addresses logic errors and specification mismatches.",
     "dependencies": [],
     "priority": 20,
@@ -759,11 +759,8 @@
         "functions": [
           {
             "name": "fix_verification_errors",
-            "signature": "(program: str, prompt: str, code: str, output: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, verbose: bool = False, time: float = DEFAULT_TIME) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(program: str, prompt: str, code: str, output: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, verbose: bool = False, time: float = DEFAULT_TIME, compressed_context: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           }
         ]
       }
@@ -1719,7 +1716,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the fix verification command.",
+    "reason": "CLI wrapper for functional verification and verification-fix loops with compressed context.",
     "description": "Command-line interface for fix verification. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [],
     "priority": 48,
@@ -1736,11 +1733,13 @@
         "commands": [
           {
             "name": "run_program",
-            "signature": "(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]"
+            "signature": "(program_path: str, args: List[str] = []) -> Tuple[bool, str, str]",
+            "returns": "Tuple[bool, str, str]"
           },
           {
             "name": "fix_verification_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None) -> Tuple[bool, str, str, int, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, program_file: str, output_results: Optional[str], output_code: Optional[str], output_program: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int = DEFAULT_MAX_ATTEMPTS, budget: float = DEFAULT_BUDGET, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, compressed_context: Optional[Mapping[str, Any]] = None, agentic_fallback_events: Optional[list[dict[str, Any]]] = None) -> Tuple[bool, str, str, int, float, str]",
+            "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -1814,9 +1813,14 @@
     }
   },
   {
-    "reason": "CLI entry point for the preprocess command.",
+    "reason": "CLI wrapper for preprocessing prompts, XML tagging, PDD tag injection, and context snapshots.",
     "description": "Command-line interface for preprocess. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [],
+    "dependencies": [
+      "preprocess_python.prompt",
+      "xml_tagger_python.prompt",
+      "architecture_sync_python.prompt",
+      "context_snapshot_python.prompt"
+    ],
     "priority": 51,
     "filename": "preprocess_main_python.prompt",
     "filepath": "pdd/preprocess_main.py",
@@ -1831,7 +1835,8 @@
         "commands": [
           {
             "name": "preprocess_main",
-            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list) -> Tuple[str, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], xml: bool, recursive: bool, double: bool, exclude: list, pdd_tags: bool = False, snapshot: bool = False) -> Tuple[str, float, str]",
+            "returns": "Tuple[str, float, str]"
           }
         ]
       }
@@ -1963,7 +1968,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the cmd test command.",
+    "reason": "CLI wrapper for generating or enhancing unit tests with optional compressed sync context.",
     "description": "Command-line interface for cmd test. Parses arguments, orchestrates the workflow, and formats output. Before overwriting an existing non-empty test file in either native or agentic generation, applies the shared TestChurnError gate from code_generator_main; high-churn agentic rewrites restore the pre-existing file before raising so broad regression coverage is not discarded.",
     "dependencies": [],
     "priority": 56,
@@ -1980,7 +1985,8 @@
         "commands": [
           {
             "name": "cmd_test_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None = None, language: str | None = None, coverage_report: str | None = None, existing_tests: list[str] | None = None, target_coverage: float | None = None, merge: bool = False, strength: float | None = None, temperature: float | None = None, manual: bool = False, *, repair_directive: str | None = None) -> TestResult"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None = None, language: str | None = None, coverage_report: str | None = None, existing_tests: list[str] | None = None, target_coverage: float | None = None, merge: bool = False, strength: float | None = None, temperature: float | None = None, manual: bool = False, *, repair_directive: str | None = None, compressed_context: Optional[Mapping[str, Any]] = None) -> TestResult",
+            "returns": "TestResult"
           }
         ]
       }
@@ -1991,12 +1997,19 @@
     }
   },
   {
-    "reason": "CLI entry point for the code generator command.",
+    "reason": "Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.",
     "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method — declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter — declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift — annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default). Issue #1012 adds two additional repair-loop gates: (a) PublicSurfaceRegressionError — for mature modules (pre-existing non-empty code file), snapshots top-level functions, classes, recursively-walked nested classes/methods (so a method on `Outer.Inner` is captured as `Outer.Inner.method`), and module-level public `ast.Assign` / bound `ast.AnnAssign` (only when `node.value is not None`; bare annotations like `PUBLIC_NAME: int` don't bind a runtime attribute and are ignored) targets plus `ast.Import`/`ast.ImportFrom` aliases (so removing a re-export like `import git` or a public constant like `PUBLIC_SETTING = ...` surfaces as a regression). When the module declares `__all__` as a clean list/tuple of string constants, that list is AUTHORITATIVE per Python semantics: a name is public iff it appears in `__all__`, even if underscore-prefixed; names NOT in `__all__` are NOT public. Classes listed in `__all__` ALSO contribute their recursively-walked members (methods, nested classes, methods on nested classes at every depth) regardless of underscore prefix — so `__all__ = [\"Service\"]` protects `Service.run`, `Service.Inner`, and `Service.Inner.method`. Computed `__all__` (`sorted(...)`, `X + Y`) or AugAssign extension (`__all__ += [...]`) falls back to the heuristic. Without `__all__`, underscore-prefixed names (including dunders) are excluded at every level; `from X import *` contributes no fixed name and is ignored. The same `__all__` precedence rule (including the class-member recursion) is applied to the parallel `_snapshot_public_signatures` so signature-drift detection sees the same public set. `_snapshot_public_signatures` entries carry a leading kind prefix (`[function]`/`[async_function]`/`[class]` at top level; `[instance]`/`[staticmethod]`/`[classmethod]`/`[property:<roles>]` inside classes; `[assignment]` for module-level rebindings; and `[import]`/`[import:<module>]`/`[import:from <module>]`/`[import:from <module>:<source>]` for re-exports) so a binding-kind flip (e.g. a re-exported `pathlib.Path` replaced by a same-named `def`) diffs even when the parameter list happens to match. For `@dataclass` classes without an explicit `__init__`, `_snapshot_public_signatures` synthesises the constructor signature from class-body `AnnAssign` fields in source order: `@dataclass(kw_only=True)` emits a leading `*` so every field is kw-only; an in-body `_: KW_ONLY` sentinel (`KW_ONLY` Name or `dataclasses.KW_ONLY` Attribute) splits positional vs kw-only fields and is recognised before the underscore-prefix skip; when both decorator and sentinel are present only ONE `*` is emitted (decorator wins); `InitVar[...]` fields ARE included (they are runtime constructor params even though not stored as instance attributes); `ClassVar[...]` fields and `field(init=False, ...)` defaults are excluded; an explicit `__init__` still wins over synthesis. Inherited dataclass fields are collected in REVERSE-MRO order (matching Python's `@dataclass`: `__dataclass_fields__` is populated by walking bases right-to-left so later bases overwrite earlier ones in dict-insertion order) — `class C(A, B)` synthesises `(b, a, c)`. A base decorated with `@dataclass(init=False)` STILL contributes its annotated fields to a derived `@dataclass`'s synth; `init=False` only suppresses the base's OWN `__init__` synthesis. Cross-module bases that resolve to imports rather than same-module `ClassDef`s are marked `[inherited_unresolved]`. When a derived class redeclares a base's field name, the derived annotation/default wins but the field's POSITION matches the base's original slot (insertion-order dict semantics). The gate raises when public symbols are removed/renamed or their callable signature changes unless the prompt body contains an anchored `BREAKING-CHANGE:` directive (regex `^\\s*BREAKING-CHANGE:\\s*` with `re.MULTILINE`) whose tail starts with a `remove`/`delete`/`drop`/`rename` action verb (followed by a comma-separated symbol list) for removals or a `change signature`/`change api`/`change contract` verb pair for signature drift. Buried mid-line marker mentions and bare `BREAKING-CHANGE:` markers do NOT disable the gate. First-time generation is exempt. (b) TestChurnError — when overwriting an existing non-empty test file through code_generator_main or cmd_test_main, computes the stdlib `difflib.unified_diff` churn ratio between pre and post test bodies and raises when the ratio exceeds `PDD_TEST_CHURN_THRESHOLD` (default 0.40, accepts both decimal `0.40` and percent `40%` strings; defensive fallback to default on unparseable values) without an anchored `BREAKING-CHANGE:` directive that pairs an opt-out verb (`rewrite`/`replace`/`regenerate`/`overwrite`/`churn`/`remove`/`drop`) with `tests` as the verb's direct object. Both new exceptions share the existing PDD_REPAIR_DIRECTIVE plumbing so sync_main, sync_orchestration, and agentic_sync_runner route them through the same repair loop. The conformance and public-surface / test-churn gate-call sites in `code_generator_main` gate on `generated_code_content is not None` (NOT a truthy check) so an empty provider response over an existing module / test file still trips PublicSurfaceRegressionError / TestChurnError instead of silently truncating to 0 bytes; for non-Python artifacts the gates cannot inspect (JSON, YAML, prompts, etc.) `code_generator_main` additionally raises `click.UsageError(\"Refusing to overwrite ...\")` immediately before the write when existing content is non-empty and the generated content is empty/whitespace-only. `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape hatch for the rare intentional empty-output case.",
     "dependencies": [
+      "construct_paths_python.prompt",
+      "preprocess_python.prompt",
+      "code_generator_python.prompt",
+      "incremental_code_generator_python.prompt",
+      "core/cloud_python.prompt",
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
-      "_keyring_timeout_python.prompt"
+      "_keyring_timeout_python.prompt",
+      "context_snapshot_python.prompt",
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 57,
     "filename": "code_generator_main_python.prompt",
@@ -2012,37 +2025,42 @@
         "commands": [
           {
             "name": "is_git_repository",
-            "signature": "(path: Optional[str] = None) -> bool"
+            "signature": "(path: Optional[str] = None) -> bool",
+            "returns": "bool"
           },
           {
             "name": "get_git_content_at_ref",
-            "signature": "(file_path: str, git_ref: str = 'HEAD') -> Optional[str]"
+            "signature": "(file_path: str, git_ref: str = \"HEAD\") -> Optional[str]",
+            "returns": "Optional[str]"
           },
           {
             "name": "get_file_git_status",
-            "signature": "(file_path: str) -> str"
+            "signature": "(file_path: str) -> str",
+            "returns": "str"
           },
           {
             "name": "git_add_files",
-            "signature": "(file_paths: List[str], verbose: bool = False) -> bool"
+            "signature": "(file_paths: List[str], verbose: bool = False) -> bool",
+            "returns": "bool"
           },
           {
             "name": "code_generator_main",
-            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False) -> Tuple[str, bool, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False, snapshot_context: bool = False, compressed_context: Optional[Mapping[str, Any]] = None) -> Tuple[str, bool, float, str]",
+            "returns": "Tuple[str, bool, float, str]"
           },
           {
             "name": "ArchitectureConformanceError",
-            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
+            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
             "returns": "ArchitectureConformanceError"
           },
           {
             "name": "PublicSurfaceRegressionError",
-            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
+            "signature": "(prompt_name: str, output_path: str, removed_symbols: List[str], pre_surface_size: int, post_surface_size: int, changed_signatures: Optional[List[str]] = None, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
             "returns": "PublicSurfaceRegressionError"
           },
           {
             "name": "TestChurnError",
-            "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
+            "signature": "(prompt_name: str, output_path: str, churn_ratio: float, threshold: float, pre_line_count: int, post_line_count: int, total_cost: float = 0.0, model_name: str = \"unknown\", repair_directive: Optional[str] = None)",
             "returns": "TestChurnError"
           }
         ]
@@ -2054,17 +2072,9 @@
     }
   },
   {
-    "reason": "Runs crash-fix verification loops with estimate-mode short-circuiting and agentic fallback.",
+    "reason": "Iteratively fixes code crashes until execution succeeds.",
     "description": "Runs crash-fix cycles with retry limits. Executes example code to verify fixes.",
-    "dependencies": [
-      "agentic_crash_python.prompt",
-      "agentic_langtest_python.prompt",
-      "get_language_python.prompt",
-      "fix_code_module_errors_python.prompt",
-      "llm_invoke_python.prompt",
-      "core/cli_python.prompt",
-      "core/cloud_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 58,
     "filename": "fix_code_loop_python.prompt",
     "filepath": "pdd/fix_code_loop.py",
@@ -2079,28 +2089,91 @@
         "functions": [
           {
             "name": "cloud_crash_fix",
-            "signature": "(program, prompt, code, errors, strength, temperature, time, verbose, program_path='', code_path='', language='python') -> Tuple[bool, bool, str, str, str, float, Optional[str]]",
-            "returns": "Tuple[bool, bool, str, str, str, float, Optional[str]]"
+            "signature": "(program: str, prompt: str, code: str, errors: str, strength: float, temperature: float, time: float, verbose: bool, program_path: str = '', code_path: str = '', language: str = 'python') -> Tuple[bool, bool, str, str, str, float, Optional[str]]",
+            "returns": "Tuple[bool, bool, str, str, str, float, Optional[str]]",
+            "sideEffects": [
+              "None"
+            ]
           },
           {
             "name": "run_process_with_output",
-            "signature": "(cmd_args, timeout=300) -> Tuple[int, str, str]",
-            "returns": "Tuple[int, str, str]"
-          },
-          {
-            "name": "_normalize_agentic_result",
-            "signature": "(result) -> Tuple[bool, str, float, str, List[str]]",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
-          },
-          {
-            "name": "_safe_run_agentic_crash",
-            "signature": "(*, prompt_file, code_file, program_file, crash_log_file, cwd=None) -> Tuple[bool, str, float, str, List[str]]",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(cmd_args, timeout = 300)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
           },
           {
             "name": "fix_code_loop",
-            "signature": "(code_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file, verbose=False, time=DEFAULT_TIME, prompt_file='', agentic_fallback=True, use_cloud=False, prior_cost=0.0) -> Tuple[bool, str, str, int, float, Optional[str]]",
-            "returns": "Tuple[bool, str, str, int, float, Optional[str]]"
+            "signature": "(code_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str, verbose: bool = False, time: float = DEFAULT_TIME, prompt_file: str = '', agentic_fallback: bool = True, use_cloud: bool = False) -> Tuple[bool, str, str, int, float, Optional[str]]",
+            "returns": "Tuple[bool, str, str, int, float, Optional[str]]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "__init__",
+            "signature": "(self, returncode, stdout, stderr)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "stream_pipe",
+            "signature": "(pipe, sink, capture_list)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "dummy_fix_code_module_errors",
+            "signature": "(program, prompt, code, errors, strength, temperature, verbose)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "run_agentic_crash",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "get_language",
+            "signature": "(ext)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "default_verify_cmd_for",
+            "signature": "(lang, verification_program)",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "rprint",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "fix_code_module_errors",
+            "signature": "()",
+            "returns": "None",
+            "sideEffects": [
+              "None"
+            ]
           }
         ]
       }
@@ -2111,7 +2184,7 @@
     }
   },
   {
-    "reason": "Iteratively fixes verification failures.",
+    "reason": "Iteratively fixes verification failures with cloud hybrid mode and compressed context support.",
     "description": "Runs verification-fix cycles until code meets specifications or retry limit reached.",
     "dependencies": [],
     "priority": 59,
@@ -2128,19 +2201,13 @@
         "functions": [
           {
             "name": "cloud_verify_fix",
-            "signature": "(program: str, prompt: str, code: str, output: str, strength: float, temperature: float, time_param: float, verbose: bool, language: str = 'python') -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(program: str, prompt: str, code: str, output: str, strength: float, temperature: float, time_param: float, verbose: bool, language: str = \"python\") -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           },
           {
             "name": "fix_verification_errors_loop",
-            "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = 'verification.log', output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(program_file: str, code_file: str, prompt: str, prompt_file: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, verification_log_file: str = \"verification.log\", output_code_path: Optional[str] = None, output_program_path: Optional[str] = None, verbose: bool = False, program_args: Optional[list[str]] = None, llm_time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False, compressed_context: Optional[Mapping[str, Any]] = None, agentic_fallback_events: Optional[list[dict[str, Any]]] = None) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           }
         ]
       }
@@ -2396,8 +2463,7 @@
     "dependencies": [
       "failure_classification_python.prompt",
       "fix_focus_python.prompt",
-      "llm_invoke_python.prompt",
-      "core/cli_python.prompt"
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2413,12 +2479,12 @@
         "functions": [
           {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)",
+            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None, compressed_context=None)",
             "returns": "Tuple[bool, bool, str, str, str, float, str]"
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False)",
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True, no_local_fallback=False, compress_test_context=False, context_compression=None, compression_fallback=None, compressed_context=None, agentic_fallback_events=None)",
             "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
@@ -2508,13 +2574,15 @@
     }
   },
   {
-    "reason": "CLI entry point for the fix command; single-pass cloud/local modes use fix_focus for large dev units and auto-submit short-circuits in cloud executors with a bounded Device Flow JWT call.",
+    "reason": "CLI wrapper for unit-test repair with loop mode, cloud/local execution, and compressed repair context.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates loop and single-pass fix workflows, formats output, and preserves Issue #888 focused repair outside loop mode. In single-pass cloud and local modes, large code/test inputs are reduced through fix_focus.prepare_focused_inputs before the LLM call; focused calls force effective test protection, reconstruct full code with fix_focus.reconstruct_code before validation/writes, validate against the full original test file, and never write returned sliced test content. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
+      "fix_error_loop_python.prompt",
+      "fix_focus_python.prompt",
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
       "core/cloud_python.prompt",
-      "fix_focus_python.prompt"
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
@@ -2530,7 +2598,8 @@
         "commands": [
           {
             "name": "fix_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True) -> Tuple[bool, str, str, int, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, unit_test_file: str, error_file: str, output_test: Optional[str], output_code: Optional[str], output_results: Optional[str], loop: bool, verification_program: Optional[str], max_attempts: int, budget: float, auto_submit: bool, agentic_fallback: bool = True, strength: Optional[float] = None, temperature: Optional[float] = None, protect_tests: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True, compress_test_context: bool | None = None, context_compression: str | None = None, compression_fallback: str | None = None, compressed_context: Mapping[str, Any] | None = None, agentic_fallback_events: list[dict[str, Any]] | None = None) -> Tuple[bool, str, str, int, float, str]",
+            "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -2541,7 +2610,7 @@
     }
   },
   {
-    "reason": "Intelligently determines which sync operations to run.",
+    "reason": "Determines the next sync operation, including isolated replay/repair decisions.",
     "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed.",
     "dependencies": [
       "agentic_langtest_python.prompt"
@@ -2559,164 +2628,19 @@
       "module": {
         "functions": [
           {
-            "name": "get_pdd_dir",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_meta_dir",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_locks_dir",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_extension",
-            "signature": "(language: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
             "name": "get_pdd_file_paths",
-            "signature": "(basename: str, language: str, prompts_dir: str = 'prompts', context_override: Optional[str] = None) -> Dict[str, Path]",
-            "returns": "Dict[str, Path]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "calculate_sha256",
-            "signature": "(file_path: Path) -> Optional[str]",
-            "returns": "Optional[str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "read_fingerprint",
-            "signature": "(basename: str, language: str) -> Optional[Fingerprint]",
-            "returns": "Optional[Fingerprint]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "read_run_report",
-            "signature": "(basename: str, language: str) -> Optional[RunReport]",
-            "returns": "Optional[RunReport]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "calculate_current_hashes",
-            "signature": "(paths: Dict[str, Any]) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_git_diff",
-            "signature": "(file_path: Path) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "estimate_operation_cost",
-            "signature": "(operation: str, language: str = 'python') -> float",
-            "returns": "float",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "validate_expected_files",
-            "signature": "(fingerprint: Optional[Fingerprint], paths: Dict[str, Path]) -> Dict[str, bool]",
-            "returns": "Dict[str, bool]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "check_for_dependencies",
-            "signature": "(prompt_content: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(basename: str, language: str, prompts_dir: str = \"prompts\", context_override: Optional[str] = None) -> Dict[str, Path]",
+            "returns": "Dict[str, Path]"
           },
           {
             "name": "sync_determine_operation",
-            "signature": "(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = 'prompts', skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None, read_only: bool = False) -> SyncDecision",
-            "returns": "SyncDecision",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(basename: str, language: str, target_coverage: float, budget: float = 10.0, log_mode: bool = False, prompts_dir: str = \"prompts\", skip_tests: bool = False, skip_verify: bool = False, context_override: Optional[str] = None, read_only: bool = False, isolated_replay_or_repair: bool = False) -> SyncDecision",
+            "returns": "SyncDecision"
           },
           {
             "name": "analyze_conflict_with_llm",
-            "signature": "(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = 'prompts', context_override: Optional[str] = None) -> SyncDecision",
-            "returns": "SyncDecision",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__init__",
-            "signature": "(self, basename: str, language: str)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__enter__",
-            "signature": "(self)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__exit__",
-            "signature": "(self, exc_type, exc_val, exc_tb)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "acquire",
-            "signature": "(self)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "release",
-            "signature": "(self)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(basename: str, language: str, fingerprint: Fingerprint, changed_files: List[str], prompts_dir: str = \"prompts\", context_override: Optional[str] = None) -> SyncDecision",
+            "returns": "SyncDecision"
           }
         ]
       }
@@ -2811,14 +2735,12 @@
     }
   },
   {
-    "reason": "Coordinates sync workflow execution, state tracking, estimates, and side-effect-safe dry runs.",
+    "reason": "Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.",
     "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits the appropriate build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostic block before re-raising the final failure.",
     "dependencies": [
       "code_generator_main_python.prompt",
       "agentic_sync_runner_python.prompt",
-      "sync_determine_operation_python.prompt",
-      "llm_invoke_python.prompt",
-      "core/cli_python.prompt"
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 70,
     "filename": "sync_orchestration_python.prompt",
@@ -2833,148 +2755,9 @@
       "module": {
         "functions": [
           {
-            "name": "load_sync_log",
-            "signature": "(basename: str, language: str) -> List[Dict[str, Any]]",
-            "returns": "List[Dict[str, Any]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "create_sync_log_entry",
-            "signature": "(decision, budget_remaining: float) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "update_sync_log_entry",
-            "signature": "(entry: Dict[str, Any], result: Dict[str, Any], duration: float) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "append_sync_log",
-            "signature": "(basename: str, language: str, entry: Dict[str, Any])",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "log_sync_event",
-            "signature": "(basename: str, language: str, event: str, details: Dict[str, Any] = None)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "save_run_report",
-            "signature": "(report: Dict[str, Any], basename: str, language: str, atomic_state: Optional['AtomicStateUpdate'] = None)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
             "name": "sync_orchestration",
-            "signature": "(basename: str, target_coverage: float = 90.0, language: str = 'python', prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__init__",
-            "signature": "(self, rc, out, err, basename: str, language: str)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__enter__",
-            "signature": "(self)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__exit__",
-            "signature": "(self, exc_type, exc_val, exc_tb)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "set_run_report",
-            "signature": "(self, report: Dict[str, Any], path: Path)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "set_fingerprint",
-            "signature": "(self, fingerprint: Dict[str, Any], path: Path)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "read_pipe",
-            "signature": "(pipe, chunks)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "get_confirm_callback",
-            "signature": "() -> Optional[Callable[[str, str], bool]]",
-            "returns": "Optional[Callable[[str, str], bool]]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "sync_worker_logic",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "confirming_callback",
-            "signature": "(msg: str, title: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "headless_confirming_callback",
-            "signature": "(msg: str, title: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "__init__",
-            "signature": "(self, rc, out, err)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(basename: str, target_coverage: float = 90.0, language: str = \"python\", prompts_dir: str = \"prompts\", code_dir: str = \"src\", examples_dir: str = \"examples\", tests_dir: str = \"tests\", max_attempts: int = 3, budget: float = 10.0, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time_param: float = 0.25, verbose: bool = False, quiet: bool = False, output_cost: Optional[str] = None, review_examples: bool = False, local: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None, no_steer: bool = False, steer_timeout: float = DEFAULT_STEER_TIMEOUT_S, agentic_mode: bool = False, snapshot_context: bool = False, compressed_context: bool = False) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
           }
         ]
       }
@@ -3082,8 +2865,8 @@
     "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 75,
-    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
+    "filename": "agentic_bug_step5_reproduce_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step5_reproduce_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3204,8 +2987,8 @@
     "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
     "dependencies": [],
     "priority": 80,
-    "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
+    "filename": "agentic_bug_step12_pr_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step12_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3558,30 +3341,6 @@
     },
     "position": {
       "x": 3000,
-      "y": 0
-    }
-  },
-  {
-    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
-    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 95,
-    "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
-    "tags": [
-      "config",
-      "extraction",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 1800,
       "y": 0
     }
   },
@@ -4091,7 +3850,7 @@
     }
   },
   {
-    "reason": "Defines the llm_model.csv catalog schema: provider, pricing, ELO, structured_output, and interactive_only columns.",
+    "reason": "Defines the llm_model.csv catalog schema: provider, pricing, raw Arena ELO, DeepSWE-first rank score, structured_output, and interactive_only columns.",
     "description": "Defines llm model settings and data. Used by runtime modules.",
     "dependencies": [],
     "priority": 115,
@@ -4174,7 +3933,7 @@
     "dependencies": [],
     "priority": 119,
     "filename": "pdd_theme_json.prompt",
-    "filepath": "pdd_theme.json",
+    "filepath": "prompts/pdd_theme_json.prompt",
     "tags": [
       "config"
     ],
@@ -4365,7 +4124,7 @@
     "dependencies": [],
     "priority": 124,
     "filename": "regression_analysis_log.prompt",
-    "filepath": "regression_analysis.log",
+    "filepath": "prompts/regression_analysis_log.prompt",
     "tags": [
       "config"
     ],
@@ -4386,7 +4145,7 @@
     "dependencies": [],
     "priority": 125,
     "filename": "regression_bash.prompt",
-    "filepath": "tests/regression.sh",
+    "filepath": "prompts/regression_bash.prompt",
     "tags": [
       "cli",
       "shell"
@@ -4452,7 +4211,7 @@
     "dependencies": [],
     "priority": 127,
     "filename": "run_generated_python.prompt",
-    "filepath": "utils/run_generated.py",
+    "filepath": "prompts/run_generated_python.prompt",
     "tags": [
       "generation",
       "module",
@@ -5154,7 +4913,7 @@
     "dependencies": [],
     "priority": 143,
     "filename": "prompt_tester_python.prompt",
-    "filepath": "tests/prompt_tester.py",
+    "filepath": "prompts/prompt_tester_python.prompt",
     "tags": [
       "module",
       "python",
@@ -5320,12 +5079,13 @@
     }
   },
   {
-    "reason": "CLI entry point for the unified sync workflow; auto-submit example helper short-circuits in cloud executors and bounds JWT auth so headless environments cannot stall the sync.",
+    "reason": "CLI entry point for the unified sync workflow, handling both single-module and global project-wide synchronization.",
     "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. In one-session mode, the generation phase catches ArchitectureConformanceError, PublicSurfaceRegressionError, and TestChurnError (issue #1012), accumulates failed-attempt total_cost/model_name into pre_cost, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits on repeated failure signatures (missing-symbol set / removed-symbol set / (rounded churn ratio, pre_line_count)) and additionally caps TestChurnError retries at one attempt, reuses the already-resolved .pddrc context_override/strength/temperature/context_config across retries (no mid-loop .pddrc re-resolution), relies on code_generator_main reading the pre-generation code file from disk for the public-surface snapshot, restores the prior environment value, passes only remaining budget after generation into one-session sync, and prints build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error diagnostics before re-raising the final failure. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
     "dependencies": [
       "core/cloud_python.prompt",
       "code_generator_main_python.prompt",
-      "agentic_sync_runner_python.prompt"
+      "agentic_sync_runner_python.prompt",
+      "compressed_sync_context_python.prompt"
     ],
     "priority": 148,
     "filename": "sync_main_python.prompt",
@@ -5341,7 +5101,8 @@
         "commands": [
           {
             "name": "sync_main",
-            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool) -> Tuple[Dict[str, Any], float, str]"
+            "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, snapshot_context: bool = False, compressed_context: Optional[bool] = None) -> Tuple[Dict[str, Any], float, str]",
+            "returns": "Tuple[Dict[str, Any], float, str]"
           }
         ]
       }
@@ -5600,7 +5361,7 @@
     }
   },
   {
-    "reason": "CLI commands for generate/test/example with supported dry-run cost estimates.",
+    "reason": "CLI commands for the Generate Suite: generate, test, and example, with GitHub URL detection for agentic modes.",
     "description": "Implements the pdd generate, test, and example CLI commands. Routes standard prompt-to-code generation, legacy incremental code patching, explicit experimental incremental PRD propagation, full agentic architecture generation, context examples, and agentic/manual test generation while preserving dry-run and GitHub-state guardrails.",
     "dependencies": [
       "agentic_architecture_python.prompt",
@@ -5610,7 +5371,8 @@
       "context_generator_main_python.prompt",
       "operation_log_python.prompt",
       "template_registry_python.prompt",
-      "track_cost_python.prompt"
+      "track_cost_python.prompt",
+      "user_story_tests_python.prompt"
     ],
     "priority": 234,
     "filename": "commands/generate_python.prompt",
@@ -5627,15 +5389,15 @@
         "commands": [
           {
             "name": "generate",
-            "description": "Generate code from a prompt or route agentic/PRD modes; support standard dry-run estimates."
+            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
           },
           {
             "name": "test",
-            "description": "Generate or enhance tests; support manual dry-run estimates."
+            "description": "Generate or enhance unit tests, or generate/link prompt user stories."
           },
           {
             "name": "example",
-            "description": "Generate context examples from prompt and code; support dry-run estimates."
+            "description": "Generate context examples from a prompt and code file."
           }
         ]
       }
@@ -5809,8 +5571,8 @@
     "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
     "dependencies": [],
     "priority": 166,
-    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "filename": "agentic_bug_step7_prompt_classification_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step7_prompt_classification_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5833,8 +5595,8 @@
     "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
     "dependencies": [],
     "priority": 167,
-    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
+    "filename": "agentic_bug_step11_e2e_test_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step11_e2e_test_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5859,7 +5621,8 @@
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt",
-      "git_porcelain_python.prompt"
+      "git_porcelain_python.prompt",
+      "pre_checkup_gate_python.prompt"
     ],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
@@ -6238,12 +6001,13 @@
     }
   },
   {
-    "reason": "Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and cleanup.",
+    "reason": "Orchestrates the 12-step agentic E2E fix workflow including post-push CI validation, code cleanup, and a final PR-mode checkup gate that re-validates CI when it pushes additional fixes.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and final full PR-mode checkup.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
       "agentic_checkup_python.prompt",
-      "ci_validation_python.prompt"
+      "ci_validation_python.prompt",
+      "pre_checkup_gate_python.prompt"
     ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
@@ -6291,14 +6055,25 @@
             ]
           },
           {
+            "name": "_read_review_loop_verified_head_sha",
+            "signature": "(cwd: Path, issue_number: int, pr_number: int) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "Reads verified_head_sha from the final gate's Layer-2 (review-loop) final-state.json via checkup_review_loop.load_final_state(cwd, issue_number, pr_number)",
+              "The review-loop pushes Layer-2 fixes from its OWN worktree, so a Layer-2 push advances the remote PR head past the Layer-1 checkup worktree head; this SHA is the second authoritative 'last verified/pushed' head the provenance check accepts as 'ours'",
+              "Best-effort: returns empty string when no review-loop verdict exists (Layer 2 not run or errored before finalizing)"
+            ]
+          },
+          {
             "name": "_run_final_checkup_on_pr",
             "signature": "(*, issue_url: str, issue_number: int, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], ci_step_template: str, ci_validation_timeout: float) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
-              "Snapshots PR remote head SHA before/after run_agentic_checkup",
-              "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup — fail closed without re-validating CI because Step 7 never saw the new code",
-              "When the worktree HEAD matches the post-checkup remote SHA, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post-checkup SHA>",
-              "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
+              "Runs the canonical two-layer final gate (issue #1406) by calling run_agentic_checkup(..., final_gate=True): Layer 1 = PR-scoped checkup, Layer 2 = review-loop on the resulting head; the returned success is a real ship verdict, not 'report produced'",
+              "Snapshots PR remote head SHA before/after the gate",
+              "When pre and post SHAs differ, the post head is 'ours' (and safe to CI-revalidate) when it equals EITHER the Layer-1 checkup worktree HEAD (_read_checkup_worktree_head_sha) OR the Layer-2 review-loop verified head (_read_review_loop_verified_head_sha); if it matches neither, an external push raced the gate — fail closed without re-validating CI because no reviewer saw the new code",
+              "When the post head matches a verified head, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post head>",
+              "Fails closed when the pre/post head SHAs cannot be fetched, or when NEITHER verified head (checkup worktree, review-loop) is available — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
             ]
           }
         ]
@@ -7162,7 +6937,7 @@
     }
   },
   {
-    "reason": "Provides operation logging and state tracking for PDD commands via @log_operation decorator.",
+    "reason": "Provides sync operation logging, fingerprints, run reports, and compression metadata storage.",
     "description": "Decorator-based operation logging that tracks PDD command executions. Manages fingerprints, run reports, and event logs. Works with Click commands to extract module identity from prompt_file parameter.",
     "dependencies": [],
     "priority": 210,
@@ -7180,10 +6955,17 @@
           {
             "name": "log_operation",
             "signature": "(updates_fingerprint: bool, updates_run_report: bool, clears_run_report: bool) -> Callable",
-            "returns": "Callable (decorator)",
-            "sideEffects": [
-              "Writes to .pdd/meta/ state files"
-            ]
+            "returns": "Callable"
+          },
+          {
+            "name": "append_log_entry",
+            "signature": "(basename: str, language: str, entry: Mapping[str, Any], project_root=None, paths=None) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "log_event",
+            "signature": "(basename: str, language: str, event: str, details: Mapping[str, Any] | None = None, project_root=None, paths=None) -> None",
+            "returns": "None"
           }
         ]
       }
@@ -7446,15 +7228,13 @@
     }
   },
   {
-    "reason": "Runs dependency-aware multi-module sync subprocesses with progress tracking and estimate-mode safety.",
+    "reason": "Parallel dependency-aware sync runner that forwards compressed-context sync settings.",
     "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects three repairable generation failures from per-module sync subprocesses — architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), and test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012) — and retries each up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry forwards the parent's resolved .pddrc context, --strength, and --temperature on the retry command so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block — '=== architecture conformance failure ===', '=== public surface regression ===', or '=== test churn threshold exceeded ===' (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) — plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
       "agentic_test_orchestrator_python.prompt",
-      "sync_order_python.prompt",
-      "llm_invoke_python.prompt",
-      "core/cli_python.prompt"
+      "sync_order_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -7470,7 +7250,7 @@
         "functions": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames, dep_graph, sync_options, github_info, quiet=False, verbose=False, issue_url=None, module_cwds=None, module_targets=None, initial_cost=0.0) -> AsyncSyncRunner",
+            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner",
             "returns": "AsyncSyncRunner"
           },
           {
@@ -7485,7 +7265,7 @@
           },
           {
             "name": "build_dep_graph_from_architecture_data",
-            "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult",
+            "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = \"architecture.json\") -> DepGraphFromArchitectureResult",
             "returns": "DepGraphFromArchitectureResult"
           },
           {
@@ -7554,11 +7334,12 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow — fetches the GitHub issue when one is provided (optional in PR mode), loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
-    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
+    "reason": "Entry point for the agentic checkup workflow; in PR mode the linked issue is optional (own-merits review).",
+    "description": "Accepts an optional GitHub issue URL; when one is provided it fetches issue content and comments, otherwise (PR mode only) it threads empty issue context so the PR is reviewed on its own merits. Loads architecture.json and .pddrc, optionally runs a bounded non-interactive prompt repair loop on changed .prompt files, then invokes the multi-step checkup orchestrator, the PR-mode primary-reviewer/fixer review loop, or (final_gate) the canonical two-layer final PR gate (issue #1406): Layer 1 PR-scoped checkup then Layer 2 review-loop on the resulting head, returning a real ship verdict derived from the review-loop final-state.json. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
-      "checkup_review_loop_python.prompt"
+      "checkup_review_loop_python.prompt",
+      "prompt_repair_python.prompt"
     ],
     "priority": 217,
     "filename": "agentic_checkup_python.prompt",
@@ -7574,10 +7355,13 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: Optional[str] = None, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, review_loop: bool = False, final_gate: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 50.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False, enable_gates: bool = True, gate_timeout: float = 60.0, gate_allow: Tuple[str, ...] = (), start_step_override: Optional[Union[int, float]] = None, cwd: Optional[Path] = None, prompt_repair: str = \"off\", max_prompt_repair_rounds: int = 1, max_prompt_token_growth: int = 1000, max_prompt_repair_seconds: float = 120.0) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
-              "None"
+              "Fetches the GitHub issue (when provided) and PR context via gh api",
+              "Dispatches to the checkup orchestrator and/or the PR review-loop; both may commit and push generated fixes to the PR head branch and post report comments to the issue/PR (suppressed when use_github_state is False)",
+              "For final_gate, clears then re-reads the review-loop final-state.json under .pdd/checkup-review-loop/ to derive the ship verdict",
+              "Posts an error comment on the source issue if the legacy orchestrator raises"
             ]
           },
           {
@@ -7610,6 +7394,22 @@
             "returns": "str",
             "sideEffects": [
               "Reads PR metadata, changed files, PR comments, and PR reviews with gh api"
+            ]
+          },
+          {
+            "name": "_discover_prompt_paths",
+            "signature": "(cwd: Path) -> List[Path]",
+            "returns": "List[Path]",
+            "sideEffects": [
+              "Runs git diff to detect tracked/new .prompt files; falls back to glob"
+            ]
+          },
+          {
+            "name": "_review_loop_ship_verdict",
+            "signature": "(final_state: Optional[Dict[str, Any]], *, has_issue: bool) -> bool",
+            "returns": "bool",
+            "sideEffects": [
+              "None"
             ]
           }
         ]
@@ -7739,8 +7539,8 @@
     }
   },
   {
-    "reason": "Issue #1092: deterministic local gates the review loop runs before honoring any LLM 'clean' verdict.",
-    "description": "Discovers and executes a conservative, allowlisted set of repo-local checks (PR-range git diff --check, prettier --check via package.json, a non-mutating Python syntax check via the builtin compile() builtin per changed .py file, optional ruff/black/mypy when configured in pyproject.toml, optional `npx --no-install tsc --noEmit` when typescript is declared AND node_modules/typescript/bin/tsc is on disk). Per-file gates pass POSIX `--` end-of-options separator so paths cannot be parsed as flags. Each gate runs as a list-form subprocess with bounded timeout, output truncation, PDD_* env scrubbing, sanitized PATH, and secret redaction; gate discovery and changed-file git probes resolve a trusted absolute git binary outside the PR worktree so PATH=.:$PATH cannot run a PR-shipped ./git. Failing gates are converted into synthetic blocker ReviewFinding rows with reviewer prefix 'gate:' so the review loop refuses the clean verdict and routes the deterministic failure through the fixer.",
+    "reason": "Enforces deterministic-gate checks (linter, syntax, and doc-contract gates) in checkup review loops.",
+    "description": "Discovers and executes a conservative, allowlisted set of repo-local checks (PR-range git diff --check, doc-contract, prettier --check via package.json, a non-mutating Python syntax check via the builtin compile() builtin per changed .py file, optional ruff/black/mypy when configured in pyproject.toml, optional `npx --no-install tsc --noEmit` when typescript is declared AND node_modules/typescript/bin/tsc is on disk). The doc-contract gate supports repo-declared `.pdd/doc_contract.json` / `.pdd/doc-contract.json` rules for non-PDD projects; when a base-tree config exists it is authoritative so a reviewed PR cannot weaken its own documentation contract. Per-file gates pass POSIX `--` end-of-options separator so paths cannot be parsed as flags. Each gate runs as a list-form subprocess with bounded timeout, output truncation, PDD_* env scrubbing, sanitized PATH, and secret redaction; gate discovery and changed-file git probes resolve a trusted absolute git binary outside the PR worktree so PATH=.:$PATH cannot run a PR-shipped ./git. Failing gates are converted into synthetic blocker ReviewFinding rows with reviewer prefix 'gate:' so the review loop refuses the clean verdict and routes the deterministic failure through the fixer.",
     "dependencies": [
       "checkup_review_loop_python.prompt"
     ],
@@ -7798,6 +7598,11 @@
             "sideEffects": [
               "None"
             ]
+          },
+          {
+            "name": "run_doc_contract_check",
+            "signature": "(worktree_path: Path, base_ref: Optional[str] = None) -> int",
+            "returns": "int"
           }
         ],
         "dataclasses": [
@@ -8062,7 +7867,7 @@
     }
   },
   {
-    "reason": "Implements pdd fix modes with supported manual dry-run estimates.",
+    "reason": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
     "description": "Implements the pdd fix command with agentic E2E, user story, and manual fix modes.",
     "dependencies": [
       "agentic_e2e_fix_python.prompt",
@@ -8082,7 +7887,7 @@
         "commands": [
           {
             "name": "fix",
-            "description": "Fix code/tests via agentic, story, or manual modes; support manual dry-run estimates."
+            "description": "Iteratively fix code and tests or orchestrate an agentic GitHub issue fix"
           }
         ]
       }
@@ -8216,7 +8021,9 @@
   {
     "reason": "Registers all PDD subcommands with the main CLI group in canonical order, determining `pdd --help` command listing.",
     "description": "Aggregates command functions from sibling modules in pdd/commands and registers them with the Click CLI group. Keeps the main cli.py clean and pins the registration order required by `pdd --help`.",
-    "dependencies": [],
+    "dependencies": [
+      "commands/replay_python.prompt"
+    ],
     "priority": 70,
     "filename": "commands/__init___python.prompt",
     "filepath": "pdd/commands/__init__.py",
@@ -8283,7 +8090,7 @@
     }
   },
   {
-    "reason": "Click commands for split/change/update with guarded dry-run estimates.",
+    "reason": "Click commands for modifying prompts: split (agentic + legacy), change (agentic + manual), and update.",
     "description": "Provides Click commands `split`, `change`, `update` that bridge the CLI to main logic. Split delegates to run_agentic_split (default) or split_main (legacy); change to run_agentic_change or change_main; update to update_main.",
     "dependencies": [
       "split_main_python.prompt",
@@ -8305,15 +8112,15 @@
         "commands": [
           {
             "name": "split",
-            "description": "Split large dev units; reject global estimate mode for multi-step paths."
+            "description": "Split large dev units into smaller ones (agentic default, --legacy for old path)."
           },
           {
             "name": "change",
-            "description": "Modify prompts from a change prompt or issue; reject estimate mode."
+            "description": "Modify prompt based on change prompt or issue."
           },
           {
             "name": "update",
-            "description": "Update prompt files from code changes; support single-file dry-run estimates."
+            "description": "Update prompt file based on code changes."
           }
         ]
       }
@@ -8324,10 +8131,13 @@
     }
   },
   {
-    "reason": "Registers the pdd checkup CLI command for project health checks and lint dispatch.",
+    "reason": "Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.",
     "description": "Defines the checkup Click command including pdd checkup lint dispatch, validate-arch-includes, and agentic checkup integration. In PR mode (--pr) the --issue option is optional (PR reviewed on its own merits when omitted); --pr stays mutually exclusive with the positional TARGET, and --issue without --pr is rejected.",
     "dependencies": [
-      "agentic_checkup_python.prompt"
+      "agentic_checkup_python.prompt",
+      "commands/prompt_python.prompt",
+      "commands/contracts_python.prompt",
+      "commands/gate_python.prompt"
     ],
     "priority": 236,
     "filename": "commands/checkup_python.prompt",
@@ -8972,7 +8782,7 @@
     }
   },
   {
-    "reason": "Defines the main PDDCLI group, global estimate options, result rendering, and duplicate guard.",
+    "reason": "Defines the main PDDCLI click.Group, global CLI options, result callback, and duplicate-guard recording.",
     "description": "Core CLI logic: PDDCLI click.Group, global options, entry function, and result callback that records only successful runs to the duplicate guard store.",
     "dependencies": [
       "dump_python.prompt",
@@ -8999,7 +8809,7 @@
         "functions": [
           {
             "name": "cli",
-            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, estimate, estimate_json, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps)",
+            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps, compress_examples, compress_test_context, context_compression, compression_fallback)",
             "returns": "None"
           },
           {
@@ -9069,8 +8879,8 @@
     }
   },
   {
-    "reason": "Regenerate pdd/data/llm_model.csv from LiteLLM metadata with agent-reviewed Arena scores, pricing overrides, and provider-scoped filtering.",
-    "description": "Deterministic CLI that rebuilds llm_model.csv from LiteLLM metadata plus pdd/data/arena_elo_manifest.json. The manifest is refreshed agentically with reviewed aliases and provenance; Python validates/applies it, falls back to static scores, deduplicates, and Pareto-filters per provider.",
+    "reason": "Regenerate pdd/data/llm_model.csv from LiteLLM metadata with agent-reviewed DeepSWE-first rank scores, raw Arena ELO metadata, pricing overrides, and provider-scoped filtering.",
+    "description": "Deterministic CLI that rebuilds llm_model.csv from LiteLLM metadata plus pdd/data/deepswe_manifest.json (primary model_rank_score source) and pdd/data/arena_elo_manifest.json (raw ELO / rank fallback). The manifests are refreshed agentically with reviewed aliases and provenance; Python validates/applies them, falls back to static scores, deduplicates, and Pareto-filters per provider.",
     "dependencies": [],
     "priority": 5,
     "filename": "generate_model_catalog_python.prompt",
@@ -9086,7 +8896,7 @@
         "functions": [
           {
             "name": "build_rows",
-            "signature": "(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None) -> List[dict]",
+            "signature": "(refresh_elo: bool = False, existing_catalog: Optional[Path] = None, score_manifest: Optional[Path] = None, deepswe_manifest: Optional[Path] = None) -> List[dict]",
             "returns": "List[dict]"
           },
           {
@@ -9233,7 +9043,7 @@
         "functions": [
           {
             "name": "Job",
-            "signature": "(id: str, command: str, args: Dict[str, Any], options: Dict[str, Any], status: JobStatus, result: Optional[Any], error: Optional[str], cost: float, created_at: datetime, started_at: Optional[datetime], completed_at: Optional[datetime], live_stdout: str, live_stderr: str) -> Job",
+            "signature": "dataclass Job(id: str, command: str, args: Dict[str, Any], options: Dict[str, Any], status: JobStatus, result: Optional[Any], error: Optional[str], cost: float, created_at: datetime, started_at: Optional[datetime], completed_at: Optional[datetime], live_stdout: str, live_stderr: str)",
             "returns": "Job"
           },
           {
@@ -9341,7 +9151,7 @@
     }
   },
   {
-    "reason": "Provides unified LLM invocation with provider retries, context checks, and dry-run cost estimates.",
+    "reason": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
     "description": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
     "dependencies": [
       "path_resolution_python.prompt",
@@ -9360,7 +9170,7 @@
         "functions": [
           {
             "name": "llm_invoke",
-            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, estimate_only=None)",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
             "returns": "Dict[str, Any]"
           },
           {
@@ -9837,7 +9647,9 @@
   {
     "reason": "Writes optional per-run JSON evidence manifests, including generation.grounding provenance.",
     "description": "Hashes prompts, includes, outputs, and validation metadata into .pdd/evidence without replacing core dumps. Records generation.grounding provenance when provided.",
-    "dependencies": [],
+    "dependencies": [
+      "context_snapshot_python.prompt"
+    ],
     "priority": 244,
     "filename": "pdd/evidence_manifest_python.prompt",
     "filepath": "pdd/evidence_manifest.py",
@@ -9852,7 +9664,7 @@
         "functions": [
           {
             "name": "write_evidence_manifest",
-            "signature": "def write_evidence_manifest(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False) -> Path",
+            "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path",
             "returns": "Path"
           },
           {
@@ -9862,7 +9674,7 @@
           },
           {
             "name": "resolve_generate_output_paths",
-            "signature": "def resolve_generate_output_paths(prompt_file: str | Path, *, output: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]",
+            "signature": "(prompt_file: str | Path, *, output: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]",
             "returns": "list[str]"
           }
         ]
@@ -9871,6 +9683,311 @@
     "position": {
       "x": 0,
       "y": 0
+    }
+  },
+  {
+    "reason": "AST-based pytest context slicer for precise extraction of test context and dependencies.",
+    "description": "Precisely slices pytest files to include only relevant test context and its transitive closure of dependencies (fixtures, helpers, imports).",
+    "dependencies": [],
+    "priority": 100,
+    "filename": "pytest_slicer_python.prompt",
+    "filepath": "pdd/pytest_slicer.py",
+    "tags": [
+      "module",
+      "python",
+      "testing"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "PytestSlicer.__init__",
+            "signature": "(main_source: str, file_path: str | None = None)",
+            "returns": "None"
+          },
+          {
+            "name": "PytestSlicer.slice",
+            "signature": "(test_names: List[str])",
+            "returns": "Tuple[str, SlicedManifest]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "AST-based API/dependency contract slicing for compressed generation (#875).",
+    "description": "Preserves imported symbols, patch targets, and transitive local helpers/constants when compressing module context.",
+    "dependencies": [],
+    "priority": 99,
+    "filename": "api_contract_slicer_python.prompt",
+    "filepath": "pdd/api_contract_slicer.py",
+    "tags": [
+      "module",
+      "python",
+      "context"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ApiContractSlicer.slice",
+            "signature": "(seeds: List[str])",
+            "returns": "Tuple[str, ContractManifest]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
+    "description": "Deterministic content extraction from files based on line ranges, Python AST structures, Markdown sections, regex patterns, and JSON/YAML path traversal.",
+    "dependencies": [
+      "pytest_slicer_python.prompt",
+      "api_contract_slicer_python.prompt"
+    ],
+    "priority": 101,
+    "filename": "content_selector_python.prompt",
+    "filepath": "pdd/content_selector.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ContentSelector.select",
+            "signature": "(content: str, selectors: list[str] | str, file_path: str | None = None, mode: str = \"full\")",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
+    "description": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
+    "dependencies": [
+      "path_resolution_python.prompt",
+      "content_selector_python.prompt",
+      "include_query_extractor_python.prompt",
+      "context_snapshot_python.prompt"
+    ],
+    "priority": 243,
+    "filename": "preprocess_python.prompt",
+    "filepath": "pdd/preprocess.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "preprocess",
+            "signature": "(prompt, recursive, double_curly_brackets, exclude_keys, _seen)",
+            "returns": "str"
+          },
+          {
+            "name": "get_file_path",
+            "signature": "(file_name)",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Defines miscellaneous CLI commands, including preprocess with snapshot forwarding.",
+    "description": "Defines miscellaneous CLI commands, including preprocess with snapshot forwarding.",
+    "dependencies": [
+      "preprocess_main_python.prompt"
+    ],
+    "priority": 244,
+    "filename": "commands/misc_python.prompt",
+    "filepath": "pdd/commands/misc.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "preprocess",
+            "description": "Preprocess prompt files with optional XML tagging, PDD tag injection, and context snapshots"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Defines frontend TypeScript type contracts for commands, options, architecture, and config.",
+    "description": "Defines frontend TypeScript type contracts for commands, options, architecture, and config.",
+    "dependencies": [],
+    "priority": 246,
+    "filename": "frontend/types_typescript.prompt",
+    "filepath": "pdd/frontend/types.ts",
+    "tags": [
+      "module"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": []
+      }
+    }
+  },
+  {
+    "reason": "Owns durable snapshot and replay primitives for expanded prompt context.",
+    "description": "Owns durable snapshot and replay primitives for expanded prompt context.",
+    "dependencies": [],
+    "priority": 247,
+    "filename": "context_snapshot_python.prompt",
+    "filepath": "pdd/context_snapshot.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "start_snapshot_run",
+            "signature": "(prompt_path: str | Path, *, evidence_root: str | Path | None = None, command: str = \"\")",
+            "returns": "ContextSnapshotRecorder"
+          },
+          {
+            "name": "replay_snapshot",
+            "signature": "(run_artifact: str | Path)",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Implements the top-level replay command for auditing expanded prompt context snapshots.",
+    "description": "Implements the top-level replay command for auditing expanded prompt context snapshots.",
+    "dependencies": [
+      "context_snapshot_python.prompt"
+    ],
+    "priority": 248,
+    "filename": "commands/replay_python.prompt",
+    "filepath": "pdd/commands/replay.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "replay",
+            "description": "Reconstruct and audit expanded prompt context from a snapshot run artifact"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Builds deterministic phase-aware compressed context packages for sync LLM phases.",
+    "dependencies": [
+      "context_snapshot_python.prompt",
+      "contract_ir_python.prompt",
+      "operation_log_python.prompt"
+    ],
+    "priority": 249,
+    "filename": "compressed_sync_context_python.prompt",
+    "filepath": "pdd/compressed_sync_context.py",
+    "tags": [
+      "module",
+      "sync",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "build_compressed_sync_context",
+            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None) -> CompressedSyncContext",
+            "returns": "CompressedSyncContext"
+          },
+          {
+            "name": "render_for_prompt",
+            "signature": "(context: CompressedSyncContext) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Single blocking pre-checkup gate that drift-syncs and build/smoke-verifies a PR before handing off to checkup --pr.",
+    "description": "A blocking pre-checkup quality gate invoked by both the change/feature and fix/bug e2e orchestrators immediately before `pdd checkup --pr`. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block the handoff. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "dependencies": [
+      "checkup_gates_python.prompt",
+      "ci_drift_heal_python.prompt",
+      "metadata_sync_python.prompt",
+      "architecture_sync_python.prompt",
+      "operation_log_python.prompt"
+    ],
+    "priority": 218,
+    "filename": "pre_checkup_gate_python.prompt",
+    "filepath": "pdd/pre_checkup_gate.py",
+    "tags": [
+      "checkup",
+      "ci",
+      "gates",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_pre_checkup_gate",
+            "signature": "(worktree: Path, changed_files: Sequence[str], *, base_ref: Optional[str] = None, repo_owner: str = '', repo_name: str = '', issue_number: Optional[int] = None, strict: Optional[bool] = None, quiet: bool = False, timeout_per_check: float = 300.0) -> Tuple[bool, str, float]",
+            "returns": "Tuple[bool, str, float]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Non-interactive prompt source-set repair orchestrator using the internal change() contract.",
+    "description": "Implements run_prompt_repair_loop(): consumes pdd.prompt_source_set_report.v1 findings and supporting context, synthesizes bounded change instructions, applies the complete prompt through pdd.change.change(), enforces token growth, rebuilds the full source-set report after each round, and writes an audit artifact to .pdd/evidence/prompt_repair/.",
+    "dependencies": [
+      "change_python.prompt",
+      "checkup_prompt_main_python.prompt",
+      "prompt_lint_python.prompt"
+    ],
+    "priority": 250,
+    "filename": "prompt_repair_python.prompt",
+    "filepath": "pdd/prompt_repair.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_prompt_repair_loop",
+            "signature": "(path: Path, config: PromptRepairConfig, *, context: Optional[Dict[str, str]] = None, cwd: Optional[Path] = None) -> RepairResult",
+            "returns": "RepairResult"
+          }
+        ]
+      }
     }
   },
   {

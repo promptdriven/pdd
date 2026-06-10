@@ -236,6 +236,32 @@ def test_sync_success_single_language(mock_project_dir, mock_construct_paths, mo
     assert "my_app_python" in str(mock_construct_paths.call_args_list[1])
 
 
+def test_sync_main_forwards_compress_to_orchestration(
+    mock_project_dir, mock_construct_paths, mock_sync_orchestration
+):
+    """compress=True is passed through to sync_orchestration (#876)."""
+    (mock_project_dir / "prompts" / "demo_python.prompt").touch()
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.0,
+        "model_name": "test",
+        "summary": "ok",
+    }
+    ctx = create_mock_context({"quiet": True})
+    sync_main(
+        ctx,
+        "demo",
+        max_attempts=1,
+        budget=5.0,
+        skip_verify=True,
+        skip_tests=True,
+        target_coverage=90.0,
+        dry_run=False,
+        compress=True,
+    )
+    assert mock_sync_orchestration.call_args.kwargs["compress"] is True
+
+
 def test_sync_success_multiple_languages(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
     """Tests a successful sync for multiple languages, checking budget reduction and result aggregation."""
     (mock_project_dir / "prompts" / "my_lib_python.prompt").touch()
@@ -463,6 +489,9 @@ def test_sync_dry_run_mode(mock_project_dir, mock_construct_paths, mock_sync_orc
             no_steer=False,
             steer_timeout=8.0,
             agentic_mode=False,
+            snapshot_context=False,
+            compress=False,
+            evidence=False,
         ),
         call(
             basename='log_test',
@@ -478,6 +507,9 @@ def test_sync_dry_run_mode(mock_project_dir, mock_construct_paths, mock_sync_orc
             no_steer=False,
             steer_timeout=8.0,
             agentic_mode=False,
+            snapshot_context=False,
+            compress=False,
+            evidence=False,
         ),
     ]
     mock_sync_orchestration.assert_has_calls(calls, any_order=True)

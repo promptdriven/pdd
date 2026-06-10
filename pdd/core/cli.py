@@ -100,17 +100,9 @@ def _restore_captured_streams(ctx: click.Context) -> None:
             sys.stderr = stderr_capture.original_stream
 
 
-def _is_prompt_lint_json_invocation(arguments: List[str]) -> bool:
-    """Return whether this invocation needs prompt-lint machine output."""
-    pairs = set(zip(arguments, arguments[1:]))
-    return "--json" in arguments and (
-        ("checkup", "lint") in pairs
-        or ("checkup", "contract") in pairs
-        or ("checkup", "contracts") in pairs
-        or ("checkup", "coverage") in pairs
-        or ("checkup", "gate") in pairs
-        or ("contracts", "check") in pairs
-    )
+# JSON-invocation detection is shared with the early pre-parse in pdd/cli.py via a
+# stdlib-only leaf module so the two call sites cannot drift apart.
+from ..json_invocation import is_machine_json_invocation as _is_machine_json_invocation
 
 
 def _env_flag_enabled(name: str) -> bool:
@@ -531,6 +523,30 @@ class PDDCLI(click.Group):
     default=10,
     help="Number of core dumps to keep (default: 10, min: 0). Older dumps are garbage collected after each dump write.",
 )
+@click.option(
+    "--compress-examples",
+    is_flag=True,
+    default=None,
+    help="Automatically compress example code in context to signatures only.",
+)
+@click.option(
+    "--compress-test-context",
+    is_flag=True,
+    default=None,
+    help="Automatically compress test context to failing tests only.",
+)
+@click.option(
+    "--context-compression",
+    type=click.Choice(["off", "test", "examples", "contracts", "all"]),
+    default=None,
+    help="Set global context compression mode.",
+)
+@click.option(
+    "--compression-fallback",
+    type=click.Choice(["full", "error"]),
+    default=None,
+    help="Behavior when context compression fails (default: full).",
+)
 @click.version_option(version=__version__, package_name="pdd-cli")
 @click.pass_context
 def cli(
@@ -550,14 +566,17 @@ def cli(
     list_contexts: bool,
     core_dump: bool,
     keep_core_dumps: int,
+    compress_examples: Optional[bool],
+    compress_test_context: Optional[bool],
+    context_compression: Optional[str],
+    compression_fallback: Optional[str],
 ):
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
     # Prompt-lint JSON output is intended for downstream machine consumers.
-    prompt_lint_json_mode = _is_prompt_lint_json_invocation(sys.argv)
     estimate_mode = bool(estimate or estimate_json or _env_flag_enabled("PDD_ESTIMATE"))
-    json_mode = prompt_lint_json_mode or estimate_json
+    json_mode = _is_machine_json_invocation(sys.argv) or estimate_json
     quiet = quiet or json_mode or estimate_mode
     # Estimate mode is a read-only dry-run preview; suppress the diagnostic
     # core dump so previews never write to .pdd/core_dumps.
@@ -628,6 +647,34 @@ def cli(
     if time is not None:
         from ..reasoning import time_to_effort_level
         os.environ["PDD_REASONING_EFFORT"] = time_to_effort_level(time)
+
+    # Context compression options (issue #877)
+    from ..compression_reporting import clear_compression_fallback_events
+    from ..config_resolution import (
+        apply_compression_env,
+        effective_compression_config,
+        set_cli_compression_override,
+    )
+
+    clear_compression_fallback_events()
+    set_cli_compression_override(None)
+    ctx.obj["compress_examples"] = compress_examples
+    ctx.obj["compress_test_context"] = compress_test_context
+    ctx.obj["context_compression"] = context_compression
+    ctx.obj["compression_fallback"] = compression_fallback
+    cli_compression: dict[str, Any] = {}
+    if compress_examples is not None:
+        cli_compression["compress_examples"] = compress_examples
+    if compress_test_context is not None:
+        cli_compression["compress_test_context"] = compress_test_context
+    if context_compression is not None:
+        cli_compression["context_compression"] = context_compression
+    if compression_fallback is not None:
+        cli_compression["compression_fallback"] = compression_fallback
+    set_cli_compression_override(cli_compression if cli_compression else None)
+    if cli_compression:
+        apply_compression_env(effective_compression_config({}))
+
     # Persist context override for downstream calls
     ctx.obj["context"] = context_override
     ctx.obj["core_dump"] = core_dump
@@ -860,6 +907,10 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
 
     if not ctx.obj.get("quiet"):
+        from ..compression_reporting import format_compression_summary_lines
+
+        for line in format_compression_summary_lines():
+            console.print(f"[info]{line}[/info]")
         # Only print total cost if at least one command potentially contributed cost
         if any(res is not None and isinstance(res, tuple) and len(res) == 3 for res in normalized_results):
             console.print(f"[info]Total Estimated Cost:[/info] ${total_cost:.6f}")

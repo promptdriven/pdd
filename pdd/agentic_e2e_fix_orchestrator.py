@@ -33,12 +33,16 @@ from .agentic_common import (
     extract_step_report,
     normalize_step_comments_state,
     post_step_comment_once,
+    drain_step_steers,
+    ensure_issue_steer_cursor_seeded,
+    STEER_STATE_KEYS,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .pytest_output import run_pytest_and_capture_output
 from .ci_validation import _find_open_pr_number, run_ci_validation_loop
+from .pre_checkup_gate import run_pre_checkup_gate
 
 # Constants
 STEP_NAMES = {
@@ -69,7 +73,7 @@ STEP_DESCRIPTIONS = {
     11: "Code cleanup",
 }
 
-# Per-step timeouts for the 11-step agentic e2e fix workflow
+# Per-step timeouts for the 12-step agentic e2e fix workflow
 E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Run unit tests from issue, pdd fix failures
     2: 240.0,   # Run e2e tests, check completion (early exit)
@@ -1635,6 +1639,36 @@ def _read_checkup_worktree_head_sha(cwd: Path, pr_number: int) -> str:
     return rev.stdout.strip()
 
 
+def _read_review_loop_verified_head_sha(
+    cwd: Path, issue_number: int, pr_number: int
+) -> str:
+    """Read the head SHA the final gate's Layer 2 (review-loop) verified+pushed.
+
+    The canonical final gate (issue #1406) runs Layer 1 (the PR-mode checkup
+    orchestrator, which pushes from ``.pdd/worktrees/checkup-pr-{N}/``) and then
+    Layer 2 (the review-loop, which pushes from its OWN worktree and records the
+    verified head in ``.pdd/checkup-review-loop/issue-{I}-pr-{N}/final-state.json``).
+
+    When Layer 2 pushes a fix, the remote PR head advances to the review-loop's
+    verified head, NOT the legacy checkup worktree head. Treating that as an
+    external push (the pre-#1406 single-layer assumption) would falsely fail the
+    gate, so the post-checkup head-provenance check accepts this SHA as "ours"
+    too. ``run_agentic_checkup`` clears the prior ``final-state.json`` before
+    Layer 2, so a value here reflects the current gate run.
+
+    Returns the verified head SHA, or empty string when no review-loop verdict
+    is available (Layer 2 not run, or it errored before finalizing).
+    """
+    try:
+        from .checkup_review_loop import load_final_state  # pylint: disable=import-outside-toplevel
+        final_state = load_final_state(cwd, issue_number, pr_number)
+    except Exception:  # noqa: BLE001 — best-effort; empty means "can't compare"
+        return ""
+    if not isinstance(final_state, dict):
+        return ""
+    return str(final_state.get("verified_head_sha", "") or "")
+
+
 def _run_final_checkup_on_pr(
     *,
     issue_url: str,
@@ -1682,6 +1716,7 @@ def _run_final_checkup_on_pr(
         use_github_state=use_github_state,
         reasoning_time=reasoning_time,
         pr_url=pr_url,
+        final_gate=True,
         cwd=cwd,
     )
 
@@ -1722,41 +1757,58 @@ def _run_final_checkup_on_pr(
     # Round-5 finding: the PR head can advance externally during the
     # final checkup (maintainer push, another bot, etc.). Treating EVERY
     # SHA delta as a checkup push would re-validate CI on code that
-    # Step 7 never saw, green-lighting an unverified head. The checkup
-    # worktree's HEAD is the authoritative "last verified/pushed" SHA;
-    # if it differs from the remote PR head, an external push raced us.
+    # no reviewer saw, green-lighting an unverified head.
+    #
+    # The final gate (issue #1406) has TWO authoritative "last verified/pushed"
+    # heads: Layer 1's checkup worktree HEAD and Layer 2's review-loop verified
+    # head (the review-loop pushes from its own worktree, so a Layer-2 fix
+    # advances the remote head past the Layer-1 worktree). The remote head is
+    # "ours" — and safe to CI-revalidate — when it matches EITHER. If it matches
+    # neither, an external push raced us and we must fail closed.
     checkup_worktree_head_sha = _read_checkup_worktree_head_sha(cwd, pr_number)
-    if not checkup_worktree_head_sha:
+    review_loop_head_sha = _read_review_loop_verified_head_sha(
+        cwd, issue_number, pr_number
+    )
+    verified_heads = {
+        sha for sha in (checkup_worktree_head_sha, review_loop_head_sha) if sha
+    }
+    if not verified_heads:
         return (
             False,
             (
-                "Final checkup completed but the checkup worktree HEAD SHA "
-                "was unavailable; cannot prove the PR remote head matches "
-                "what was verified. Failing closed to avoid green-lighting "
-                "an unverified head."
+                "Final gate completed but neither the checkup worktree HEAD "
+                "SHA nor the review-loop verified head was available; cannot "
+                "prove the PR remote head matches what was verified. Failing "
+                "closed to avoid green-lighting an unverified head."
             ),
             checkup_cost,
             checkup_model,
         )
-    if checkup_worktree_head_sha != post_checkup_head_sha:
+    if post_checkup_head_sha not in verified_heads:
+        verified_preview = ", ".join(sorted(sha[:8] for sha in verified_heads))
         return (
             False,
             (
-                f"PR head advanced to {post_checkup_head_sha[:8]} during "
-                f"final checkup but the checkup worktree last verified "
-                f"{checkup_worktree_head_sha[:8]}. External push during "
-                f"checkup detected — re-run pdd-issue so the new head is "
-                f"verified by Step 7 before CI re-validation."
+                f"PR head advanced to {post_checkup_head_sha[:8]} during the "
+                f"final gate but the gate last verified {verified_preview}. "
+                f"External push during the final gate detected — re-run "
+                f"pdd-issue so the new head is verified before CI "
+                f"re-validation."
             ),
             checkup_cost,
             checkup_model,
         )
 
     if not quiet:
+        verified_by = (
+            "Layer-1 checkup worktree"
+            if post_checkup_head_sha == checkup_worktree_head_sha
+            else "Layer-2 review-loop"
+        )
         console.print(
-            f"[yellow]Final checkup pushed to PR head "
+            f"[yellow]Final gate pushed to PR head "
             f"({pre_checkup_head_sha[:8]}->{post_checkup_head_sha[:8]}, "
-            f"verified by checkup worktree); re-validating CI on new "
+            f"verified by {verified_by}); re-validating CI on new "
             f"head...[/yellow]"
         )
 
@@ -1809,6 +1861,7 @@ def _run_step11_code_cleanup(
     verbose: bool,
     quiet: bool,
     reasoning_time: Optional[float] = None,
+    steers: Optional[List[Any]] = None,
 ) -> Tuple[float, List[str]]:
     """Run Step 11: Code cleanup before CI validation.
 
@@ -1896,6 +1949,7 @@ def _run_step11_code_cleanup(
         label="step11_code_cleanup",
         max_retries=DEFAULT_MAX_RETRIES,
         reasoning_time=reasoning_time,
+        steers=steers,
     )
     total_cost += cleanup_cost
 
@@ -2056,7 +2110,7 @@ def run_agentic_e2e_fix_orchestrator(
     clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrator for the 11-step agentic e2e fix workflow.
+    Orchestrator for the 12-step agentic e2e fix workflow.
     
     Returns:
         Tuple[bool, str, float, str, List[str]]: 
@@ -2076,6 +2130,7 @@ def run_agentic_e2e_fix_orchestrator(
     skipped_steps: Dict[int, str] = {}
     github_comment_id: Optional[int] = None
     step_comments_set: Set[int] = set()
+    steer_state: Dict[str, Any] = {}
     resumed_from_state = False
     # On resume, restore the workflow-start file snapshot so guards that diff
     # against it (e.g. NOT_A_BUG direct-edit suppression) keep working.
@@ -2141,6 +2196,9 @@ def run_agentic_e2e_fix_orchestrator(
             step_comments_set = normalize_step_comments_state(
                 loaded_state.get("step_comments")
             )
+            for _steer_key in STEER_STATE_KEYS:
+                if _steer_key in loaded_state:
+                    steer_state[_steer_key] = loaded_state[_steer_key]
 
             # Issue #1034 (codex P2 follow-up): restore the current cycle's
             # start snapshot so the resume-time cycle-waste-breaker can prove
@@ -2348,6 +2406,62 @@ def run_agentic_e2e_fix_orchestrator(
     import_error_retries = 0  # Global budget: max 1 retry across all cycles
     verification_failure_context = ""  # Injected into Step 1 prompt on retry
 
+    def _steer_state_fields() -> Dict[str, Any]:
+        return {
+            key: steer_state[key]
+            for key in STEER_STATE_KEYS
+            if key in steer_state
+        }
+
+    ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, steer_state, cwd=cwd, quiet=quiet
+    )
+
+    def _issue_step_steers():
+        nonlocal github_comment_id
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            steer_state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if not step_steers:
+            return step_steers
+        steer_payload = {
+            "workflow": workflow_name,
+            "issue_url": issue_url,
+            "issue_number": issue_number,
+            "current_cycle": current_cycle,
+            "last_completed_step": last_completed_step,
+            "step_outputs": step_outputs.copy(),
+            "dev_unit_states": dev_unit_states.copy(),
+            "total_cost": total_cost,
+            "model_used": model_used,
+            "changed_files": changed_files.copy(),
+            "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
+            "last_saved_at": datetime.now().isoformat(),
+            "github_comment_id": github_comment_id,
+            "step_comments": sorted(step_comments_set),
+            "clean_restart": effective_clean_restart,
+            **_steer_state_fields(),
+        }
+        new_gh_id = save_workflow_state(
+            cwd,
+            issue_number,
+            workflow_name,
+            steer_payload,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+        )
+        if new_gh_id:
+            github_comment_id = new_gh_id
+        return step_steers
+
     def _persist_resume_reverification_state() -> None:
         nonlocal github_comment_id
 
@@ -2369,6 +2483,7 @@ def run_agentic_e2e_fix_orchestrator(
             "initial_file_hashes": dict(initial_file_hashes),
             "initial_sha": initial_sha,
             "clean_restart": effective_clean_restart,
+            **_steer_state_fields(),
             # Persist None when the resumed cycle's baseline is unverified
             # (legacy state / pre-snapshot interrupt) — otherwise the next
             # resume would trust the fresh post-edit snapshot and immediately
@@ -2733,8 +2848,8 @@ def run_agentic_e2e_fix_orchestrator(
                     context["next_cycle"] = current_cycle + 1
 
                 # Preprocess to escape curly braces in included content
-                exclude_keys = list(context.keys())
-                prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+                exclude = list(context.keys())
+                prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=exclude)
                 # Safe substitution (Issue #549): un-double template braces first, then substitute.
                 prompt_template = prompt_template.replace("{{", "{").replace("}}", "}")
                 formatted_prompt = prompt_template
@@ -2770,6 +2885,7 @@ def run_agentic_e2e_fix_orchestrator(
                     label=f"cycle{current_cycle}_step{step_num}",
                     max_retries=DEFAULT_MAX_RETRIES,
                     reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
                 )
 
                 # Step 1 timeout retry: retry once with increased timeout
@@ -2790,6 +2906,7 @@ def run_agentic_e2e_fix_orchestrator(
                         label=f"cycle{current_cycle}_step{step_num}_retry1",
                         max_retries=DEFAULT_MAX_RETRIES,
                         reasoning_time=reasoning_time,
+                        steers=_issue_step_steers() or None,
                     )
                     step_cost += retry_cost
 
@@ -2914,6 +3031,7 @@ def run_agentic_e2e_fix_orchestrator(
                             else None
                         )
                     ),
+                    **_steer_state_fields(),
                 }
                 
                 new_gh_id = save_workflow_state(
@@ -3065,6 +3183,7 @@ def run_agentic_e2e_fix_orchestrator(
                             label=f"cycle{current_cycle}_step9_retry",
                             max_retries=DEFAULT_MAX_RETRIES,
                             reasoning_time=reasoning_time,
+                            steers=_issue_step_steers() or None,
                         )
                         total_cost += retry_cost
                         if retry_model:
@@ -3236,6 +3355,7 @@ def run_agentic_e2e_fix_orchestrator(
                     verbose=verbose,
                     quiet=quiet,
                     reasoning_time=reasoning_time,
+                    steers=_issue_step_steers() or None,
                 )
                 # Round-2 of Greg's review: extend trusted step-comment
                 # coverage to the post-loop Step 11 (cleanup) path. The
@@ -3401,6 +3521,58 @@ def run_agentic_e2e_fix_orchestrator(
                 }:
                     final_message = ci_message
 
+                try:
+                    gate_success, gate_message, gate_cost = run_pre_checkup_gate(
+                        worktree=cwd,
+                        changed_files=changed_files,
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        quiet=quiet,
+                        timeout_per_check=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
+                    )
+                except Exception as _exc:  # pylint: disable=broad-except
+                    gate_success = False
+                    gate_message = f"pre_checkup_gate blocked; phase=infrastructure error: {_exc}"
+                    gate_cost = 0.0
+                total_cost += gate_cost
+                if not gate_success:
+                    return False, gate_message, total_cost, model_used, changed_files
+
+                # Issue #1293 (FM2): the gate's drift-sync phase may have healed
+                # the prompt/example to match the fixed code (pdd update / pdd
+                # example). Those edits live only in this local worktree, but
+                # _run_final_checkup_on_pr reviews the PR head in its OWN
+                # checkout (.pdd/worktrees/checkup-pr-N) — so without committing
+                # and pushing them now, checkup would review a tree whose prompts
+                # are out of sync with the code, and the heal would be orphaned.
+                # Reuse _commit_and_push: it stages workflow-changed files vs the
+                # initial snapshot and filters .pdd/** (so the prompt/example
+                # sync lands while .pdd/meta fingerprint finalization stays with
+                # the post-merge sync, per the PR plan). It is a safe no-op
+                # (returns success) when the gate healed nothing.
+                gate_sync_ok, gate_sync_message = _commit_and_push(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    issue_title=issue_title,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    initial_file_hashes=initial_file_hashes,
+                    quiet=quiet,
+                )
+                if not gate_sync_ok:
+                    # A failed push leaves the PR head out of sync with the
+                    # gate's heal; fail closed rather than have checkup review a
+                    # stale tree.
+                    return (
+                        False,
+                        f"pre_checkup_gate drift-sync push failed: {gate_sync_message}",
+                        total_cost,
+                        model_used,
+                        changed_files,
+                    )
+                changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
+
                 checkup_success, checkup_message, checkup_cost, checkup_model = (
                     _run_final_checkup_on_pr(
                         issue_url=issue_url,
@@ -3503,6 +3675,7 @@ def run_agentic_e2e_fix_orchestrator(
                     else None
                 )
             ),
+            **_steer_state_fields(),
         }
         save_workflow_state(
             cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
@@ -3557,6 +3730,7 @@ def run_agentic_e2e_fix_orchestrator(
                         else None
                     )
                 ),
+                **_steer_state_fields(),
             }
             save_workflow_state(
                 cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id

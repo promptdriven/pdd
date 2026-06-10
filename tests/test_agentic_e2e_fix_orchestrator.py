@@ -455,6 +455,16 @@ def test_add():
 from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
 
 
+@pytest.fixture(autouse=True)
+def mock_pre_checkup_gate_default():
+    """Keep legacy e2e-fix tests focused unless they override the new gate."""
+    with patch(
+        "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+        return_value=(True, "pre_checkup_gate passed", 0.0),
+    ):
+        yield
+
+
 @pytest.fixture
 def e2e_fix_mock_dependencies(tmp_path):
     """Mocks external dependencies for the e2e fix orchestrator.
@@ -5488,6 +5498,9 @@ class TestStep11CodeCleanup:
             "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
             return_value="aaaaaaaa",
         ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(True, "pre_checkup_gate passed", 0.0),
+        ) as gate_mock, patch(
             "pdd.agentic_checkup.run_agentic_checkup",
             return_value=(True, "Checkup complete", 0.0, "model"),
         ) as checkup_mock:
@@ -5496,11 +5509,234 @@ class TestStep11CodeCleanup:
             )
 
         assert success is True, msg
+        gate_mock.assert_called_once()
         checkup_mock.assert_called_once()
         assert checkup_mock.call_args.kwargs["pr_url"] == (
             "https://github.com/owner/repo/pull/77"
         )
         assert checkup_mock.call_args.kwargs["no_fix"] is False
+        # Issue #1406: pdd-issue's final verification must route through the
+        # canonical two-layer final gate, not the legacy single-layer checkup.
+        assert checkup_mock.call_args.kwargs["final_gate"] is True
+
+    def test_final_gate_accepts_review_loop_pushed_head(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Issue #1406: when the final gate's Layer 2 (review-loop) pushes a fix,
+        the PR head advances to the review-loop worktree head, NOT the legacy
+        checkup worktree head. The post-checkup head-provenance check must accept
+        the review-loop's verified head as 'ours' and re-validate CI instead of
+        falsely reporting an external push."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ) as revalidate_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=77,
+            create=True,
+        ), patch(
+            # pre-checkup head, then post-checkup head advanced by Layer 2.
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "bbbbbbbb"],
+        ), patch(
+            # Layer 1 (legacy checkup worktree) did not push: still at pre head.
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="aaaaaaaa",
+        ), patch(
+            # Layer 2 (review-loop) verified+pushed the advanced head.
+            "pdd.agentic_e2e_fix_orchestrator._read_review_loop_verified_head_sha",
+            return_value="bbbbbbbb",
+            create=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(True, "pre_checkup_gate passed", 0.0),
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Final gate passed", 0.0, "model"),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, msg
+        assert "external push" not in msg.lower()
+        # CI was re-validated on the Layer-2-advanced head exactly once (the
+        # earlier main CI-validation call has no head-override).
+        override_calls = [
+            c
+            for c in revalidate_mock.call_args_list
+            if c.kwargs.get("expected_head_sha_override") == "bbbbbbbb"
+        ]
+        assert len(override_calls) == 1
+
+    def test_final_gate_external_push_still_fails(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """A head that matches NEITHER the legacy checkup worktree NOR the
+        review-loop verified head is a genuine external push and must fail
+        closed — never green-light CI re-validation on an unverified head."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ) as revalidate_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=77,
+            create=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "cccccccc"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="aaaaaaaa",
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._read_review_loop_verified_head_sha",
+            return_value="bbbbbbbb",
+            create=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(True, "pre_checkup_gate passed", 0.0),
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Final gate passed", 0.0, "model"),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "external push" in msg.lower()
+        # The post-push CI re-validation (head-override call) must NOT fire on a
+        # genuine external push, even though the earlier main CI loop ran.
+        override_calls = [
+            c
+            for c in revalidate_mock.call_args_list
+            if c.kwargs.get("expected_head_sha_override")
+        ]
+        assert override_calls == []
+
+    def test_pre_checkup_gate_blocks_final_checkup(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Mechanical pre-checkup failures must stop before expensive PR checkup."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(False, "pre_checkup_gate blocked: py_compile failed", 0.0),
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Checkup complete", 0.0, "model"),
+        ) as checkup_mock:
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "pre_checkup_gate blocked" in msg
+        checkup_mock.assert_not_called()
+
+    def test_gate_drift_sync_push_failure_blocks_checkup(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Issue #1293 (FM2): on gate pass, the gate's drift-sync heal edits
+        (prompt/example rewritten to match the fixed code) are committed and
+        pushed to the PR BEFORE checkup, so checkup does not review a stale PR
+        head. If that push fails, fail closed — do not run checkup."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate",
+            return_value=(True, "pre_checkup_gate passed", 0.0),
+        ), patch(
+            # First call = the fix commit (succeeds); second = the post-gate
+            # drift-sync push (fails) → must fail closed before checkup.
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            side_effect=[(True, "fix committed"), (False, "push auth failed")],
+        ) as commit_mock, patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Checkup complete", 0.0, "model"),
+        ) as checkup_mock:
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        assert "drift-sync push failed" in msg
+        # The heal commit must have been attempted (a second _commit_and_push).
+        assert commit_mock.call_count >= 2
+        checkup_mock.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -9822,7 +10058,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False, reasoning_time=None):
+                        use_playwright=False, reasoning_time=None, steers=None, **kwargs):
             if "step3" in label:
                 return (
                     True,
@@ -9836,7 +10072,10 @@ class TestTrustedStepCommentPosting:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             return_value=True,
-        ) as mock_post_once:
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
             run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         assert mock_post_once.call_count >= 1
@@ -9852,7 +10091,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False, reasoning_time=None):
+                        use_playwright=False, reasoning_time=None, steers=None, **kwargs):
             if "step3" in label:
                 return (True, "NOT_A_BUG", 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
@@ -9862,7 +10101,10 @@ class TestTrustedStepCommentPosting:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             return_value=True,
-        ) as mock_post_once:
+        ) as mock_post_once, patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
+        ):
             run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
 
         assert mock_post_once.call_count >= 1
@@ -9879,7 +10121,7 @@ class TestTrustedStepCommentPosting:
 
         def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
                         timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
-                        use_playwright=False, reasoning_time=None):
+                        use_playwright=False, reasoning_time=None, steers=None, **kwargs):
             if "step3" in label:
                 return (
                     True,
@@ -9893,6 +10135,9 @@ class TestTrustedStepCommentPosting:
         with patch(
             "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
             side_effect=RuntimeError("simulated gh failure"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.drain_step_steers",
+            return_value=[],
         ):
             # The run completes (success may be False due to NOT_A_BUG), but
             # the helper exception must not propagate.

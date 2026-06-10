@@ -493,6 +493,41 @@ def test_resolve_opencode_csv_fallback_via_auth_json_only(monkeypatch, tmp_path)
     assert resolved.startswith("anthropic/")
 
 
+def test_resolve_opencode_csv_fallback_uses_model_rank_score(monkeypatch, tmp_path):
+    """CSV fallback must follow DeepSWE-first rank, not raw Arena ELO."""
+    import pandas as pd
+    from pdd import agentic_common as ac
+
+    df = pd.DataFrame([
+        {
+            "provider": "OpenAI",
+            "model": "openai/raw-elo-winner",
+            "api_key": "OPENAI_API_KEY",
+            "coding_arena_elo": 2000,
+            "model_rank_score": 1000,
+            "input": 1.0,
+            "output": 1.0,
+        },
+        {
+            "provider": "OpenAI",
+            "model": "openai/deepswe-winner",
+            "api_key": "OPENAI_API_KEY",
+            "coding_arena_elo": 1000,
+            "model_rank_score": 17000,
+            "input": 1.0,
+            "output": 1.0,
+        },
+    ])
+    monkeypatch.setattr(ac, "_load_model_data", lambda _path: df)
+
+    resolved = ac._resolve_opencode_csv_fallback(
+        env={"OPENAI_API_KEY": "sk-test"},
+        cwd=tmp_path,
+    )
+
+    assert resolved == "openai/deepswe-winner"
+
+
 def test_resolve_opencode_csv_fallback_github_copilot_no_key(monkeypatch, tmp_path):
     """github_copilot CSV rows have empty ``api_key`` (device-flow). They
     must still participate when OpenCode has ``github-copilot`` configured."""

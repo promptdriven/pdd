@@ -1096,6 +1096,85 @@ def test_sync_all_prompts_to_architecture():
         assert len(result['results']) == 3
 
 
+def test_sync_all_prompts_to_architecture_only_files_scopes_update_pass():
+    """only_files must scope the per-module UPDATE pass, not just registration.
+
+    Regression for the pre-checkup gate (PR #1327 / issue #1293): passing
+    only_files={touched prompt} must NOT rewrite an unrelated module's
+    architecture.json entry from its prompt, because the gate commits the file
+    and would otherwise sweep repo-wide drift into a feature PR. Greg's exact
+    reproduction: only_files={'a_python.prompt'} updated both a and b before the
+    fix (updated_count == 2).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        # Both prompts carry tags that differ from the stale arch entries, so a
+        # full-scan sync WOULD rewrite both. The scope filter must spare b.
+        (prompts_dir / "a_python.prompt").write_text("<pdd-reason>Fresh A</pdd-reason>")
+        (prompts_dir / "b_python.prompt").write_text("<pdd-reason>Fresh B</pdd-reason>")
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {"filename": "a_python.prompt", "filepath": "a.py", "reason": "Stale A",
+             "description": "DA", "dependencies": [], "priority": 1, "tags": []},
+            {"filename": "b_python.prompt", "filepath": "b.py", "reason": "Stale B",
+             "description": "DB", "dependencies": [], "priority": 2, "tags": []},
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+        b_before = {m["filename"]: m for m in json.loads(arch_file.read_text())}["b_python.prompt"]
+
+        result = sync_all_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+            only_files={"a_python.prompt"},
+        )
+
+        assert result["success"] is True
+        # Exactly one module updated — the in-scope one (not "skip everything").
+        assert result["updated_count"] == 1
+
+        synced = {m["filename"]: m for m in json.loads(arch_file.read_text())}
+        # Touched prompt actually synced from its prompt file...
+        assert synced["a_python.prompt"]["reason"] == "Fresh A"
+        # ...and the unrelated entry is left exactly as it was (no leak).
+        assert synced["b_python.prompt"] == b_before
+        assert synced["b_python.prompt"]["reason"] == "Stale B"
+
+
+def test_sync_all_prompts_to_architecture_only_files_none_full_scan():
+    """only_files=None (default) preserves the full-scan behavior for both prompts."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        prompts_dir = tmppath / "prompts"
+        prompts_dir.mkdir()
+
+        (prompts_dir / "a_python.prompt").write_text("<pdd-reason>Fresh A</pdd-reason>")
+        (prompts_dir / "b_python.prompt").write_text("<pdd-reason>Fresh B</pdd-reason>")
+
+        arch_file = tmppath / "architecture.json"
+        arch_data = [
+            {"filename": "a_python.prompt", "filepath": "a.py", "reason": "Stale A",
+             "description": "DA", "dependencies": [], "priority": 1, "tags": []},
+            {"filename": "b_python.prompt", "filepath": "b.py", "reason": "Stale B",
+             "description": "DB", "dependencies": [], "priority": 2, "tags": []},
+        ]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+
+        result = sync_all_prompts_to_architecture(
+            prompts_dir=prompts_dir,
+            architecture_path=arch_file,
+        )
+
+        assert result["success"] is True
+        assert result["updated_count"] == 2
+        synced = {m["filename"]: m for m in json.loads(arch_file.read_text())}
+        assert synced["a_python.prompt"]["reason"] == "Fresh A"
+        assert synced["b_python.prompt"]["reason"] == "Fresh B"
+
+
 # --- Test validate_dependencies ---
 
 def test_validate_dependencies_valid():

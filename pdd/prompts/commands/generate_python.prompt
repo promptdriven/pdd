@@ -4,8 +4,8 @@
   "type": "cli",
   "cli": {
     "commands": [
-      {"name": "generate", "description": "Generate code from a prompt or route agentic/PRD modes; support standard dry-run estimates."},
-      {"name": "test", "description": "Generate or enhance tests; support manual dry-run estimates."},
+      {"name": "generate", "description": "Generate code from a prompt or trigger agentic architecture from a GitHub issue / route PRD modes; support standard dry-run estimates."},
+      {"name": "test", "description": "Generate or enhance unit tests, or generate/link prompt user stories; support manual dry-run estimates."},
       {"name": "example", "description": "Generate context examples from prompt and code; support dry-run estimates."}
     ]
   }
@@ -19,6 +19,7 @@
 <pdd-dependency>operation_log_python.prompt</pdd-dependency>
 <pdd-dependency>template_registry_python.prompt</pdd-dependency>
 <pdd-dependency>track_cost_python.prompt</pdd-dependency>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
 % You are an expert Python engineer. Your goal is to write `pdd/commands/generate.py`.
 
 % Role & Scope
@@ -28,7 +29,7 @@
 
 % Requirements
   1. **generate**:
-     - **Interface**: `prompt_file` (arg, `click.UNPROCESSED`), `--template`, `-e/--env` (multiple), `--output`, `--original-prompt`, `--incremental` (flag), `--experimental-prd` (flag), `--dry-run` (flag), `--unit-test`, `--exclude-tests` (flag), `--skip-prompts` (flag), `--output-dir`, `--force-single` (flag), `--no-github-state`, `--project-root` (path, optional).
+     - **Interface**: `prompt_file` (arg, `click.UNPROCESSED`), `--template`, `-e/--env` (multiple), `--output`, `--original-prompt`, `--incremental` (flag), `--experimental-prd` (flag), `--dry-run` (flag), `--unit-test`, `--exclude-tests` (flag), `--snapshot-context` (flag), `--skip-prompts` (flag), `--output-dir`, `--force-single` (flag), `--no-github-state`, `--project-root` (path, optional).
      - **`--project-root`**: Optional explicit project root override for agentic and incremental PRD modes. When supplied, this path is used as the resolved project root instead of walking up from cwd to find the nearest project boundary (`.pddrc`/`.pdd/`, `sources/` + PRD/spec markdown, or `.git`). Useful when the cwd is a self-contained pdd project nested inside an unrelated outer git repo. Forwarded as the `project_root` keyword argument to both `run_agentic_architecture` and `run_incremental_architecture`. Standard prompt-file mode does not support `--project-root`; passing it there must raise `click.UsageError` so users learn the flag is mode-specific instead of silently no-opping.
      - **Experimental Incremental PRD Mode**: Only if both `--incremental` and `--experimental-prd` are set and `prompt_file` is a GitHub issue URL, or is a PRD-like file (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`) without code-generation-only options (`--output`, `--original-prompt`, `--env`, `--template`, `--unit-test`, `--exclude-tests`), call `run_incremental_architecture(prd_source=prompt_file, dry_run=dry_run, target_dir=output_dir, use_github_state=not no_github_state, strength=<global strength>, temperature=<global temperature>, time=<global time>, project_root=project_root, ...)`.
      - **Explicit PRD opt-in**: If `--incremental` is set with a GitHub issue URL or PRD-like file that would otherwise route to PRD propagation, but `--experimental-prd` is absent, raise a `click.UsageError` telling the user to use `pdd generate --incremental --experimental-prd <prd-file-or-issue-url>`. Do not silently dispatch based on suffix alone.
@@ -36,6 +37,7 @@
      - In Incremental PRD dry-run output, label returned paths as `Would change files:` instead of `Output files:` because dry-run must not imply files were written.
      - **Agentic Mode**: If `prompt_file` matches a GitHub issue URL without `--incremental`, call `run_agentic_architecture(issue_url=prompt_file, skip_prompts=skip_prompts, target_dir=output_dir, use_github_state=not no_github_state, project_root=project_root, ...)`.
      - **Standard Mode**: Validate `prompt_file` vs `--template` exclusivity. Resolve templates via `load_template`. Parse `env` as `KEY=VALUE` or `KEY` (from `os.environ`).
+     - **Snapshot context**: `--snapshot-context` is valid only in standard prompt-file generation mode for this change. Forward `snapshot_context=True` to `code_generator_main`. If it is combined with agentic GitHub issue mode, incremental PRD mode, or unsupported dry-run routing, raise `click.UsageError` with a clear message instead of silently ignoring it.
      - **Guardrail**: Reject `--dry-run` outside Incremental PRD Mode.
      - **Logic**: Call `code_generator_main` with parsed options.
      - **Estimate Mode**: If global estimate mode is active (`ctx.obj["estimate"]` or `PDD_ESTIMATE=1`), the standard prompt-file path must temporarily force path resolution/overwrite checks (`ctx.obj["force"] = True`) before calling `code_generator_main`, then restore the previous force value. Also temporarily replace `pdd.code_generator_main.incremental_code_generator_func` with a no-op `(None, False, 0.0, "estimate")` fallback so an existing output file does not route the estimate through the multi-call incremental diff/patch helper. Restore the original incremental function in `finally`. Catch `llm_invoke.EstimateOnlyResult` and return its payload as `(payload, 0.0, payload["model"])` before evidence manifests or command output writes occur. Reject only agentic GitHub issue mode and `--incremental --experimental-prd` mode with `click.UsageError` because they dispatch external/multi-step workflows. Keep command-local `generate --dry-run` as the PRD dry-run flag; do not reinterpret it as cost estimation.
@@ -47,10 +49,12 @@
      - **Estimate Mode**: If global estimate mode is active, call `context_generator_main` on the standard path and catch `EstimateOnlyResult`, returning its payload tuple before writing the generated example output. Do not call cloud example generation in estimate mode; rely on the global CLI forcing local estimate execution.
      - **Decorators**: `@log_operation(operation="example", clears_run_report=True, updates_fingerprint=True)`, `@track_cost`. The `clears_run_report=True` flag mirrors the `generate` decorator so a successful `pdd example` invalidates any stale `.pdd/meta/<module>_<language>_run.json` for the affected module; without it, fingerprints would be refreshed while runtime verification state could still describe the pre-mutation example output.
 
-  3. **test**: Supports Agentic (default) and Manual (`--manual`) modes.
+  3. **test**: Supports Agentic issue testing, user-story validation artifacts, and Manual (`--manual`) unit-test generation.
      - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--clean-restart`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`.
      - **Agentic Mode**: Triggered if first arg is a GitHub issue URL and not `--manual`. Exactly 1 arg required. Call `run_agentic_test(issue_url=args[0], timeout_adder=timeout_adder, use_github_state=not no_github_state, clean_restart=clean_restart, ...)`. `--clean-restart` is valid only in this agentic GitHub issue mode and must reject arbitrary HTTP/GitHub non-issue URLs.
-     - **Manual Mode**: Triggered by `--manual`. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
+     - **Story Generation Mode**: Triggered when not `--manual`, `--issue <url|number|issue.md>` is provided, and every positional arg is a `.prompt` file: `pdd test --issue <url|number|issue.md> <*.prompt>`. Generate a reviewable, LLM-authored `user_stories/story__*.md` user story from the resolved issue text via `generate_user_story`, while withholding prompt file content from the story author. The prompt files are used only as linked artifacts in `pdd-story-prompts` metadata for later validation. Honor `--output` and `PDD_USER_STORIES_DIR`, and surface the generated story path plus linked prompts. Missing/unresolvable issue sources or invalid LLM story output must hard-fail with a clear error; do not fall back to prompt-authored or deterministic story generation.
+     - **Story Metadata Linking Mode**: Triggered when not `--manual` and exactly one positional arg is a Markdown story file whose basename starts with `story__`. Call `cache_story_prompt_links` so existing stories receive or refresh `pdd-story-prompts` metadata used by `pdd detect --stories`.
+     - **Manual Unit-Test Mode**: Triggered by `--manual`, or by non-URL non-story inputs that fall through to legacy test generation. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
      - **Estimate Mode**: If global estimate mode is active, reject agentic GitHub issue test mode before dispatch. Reject story-generation and story-metadata-linking modes before dispatch because those helpers write story files or metadata before a safe estimate payload can be produced. Manual mode may call its helper and catch `EstimateOnlyResult`, returning the payload tuple before generated tests are written.
      - **Decorators**: `@log_operation(operation="test", updates_run_report=True)`, `@track_cost`.
 
@@ -63,11 +67,12 @@
   - Use `rich.console.Console` for stylized output in agentic modes.
 
 % Dependencies
-  <include>context/command_logging.prompt</include>
+  <include>context/operation_log_example.py</include>
   <include select="def:code_generator_main">context/code_generator_main_example.py</include>
   <include select="def:run_agentic_architecture,def:run_incremental_architecture">context/agentic_architecture_example.py</include>
   <include>context/context_generator_main_example.py</include>
   <include select="def:cmd_test_main">context/cmd_test_main_example.py</include>
+  <include select="def:generate_user_story,def:cache_story_prompt_links" mode="interface">pdd/user_story_tests.py</include>
   <include>context/agentic_test_example.py</include>
   <include>context/track_cost_example.py</include>
   <utils.auth_service>

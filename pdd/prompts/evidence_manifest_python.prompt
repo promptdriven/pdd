@@ -5,13 +5,15 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "write_evidence_manifest", "signature": "def write_evidence_manifest(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = '', cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, grounding: Optional[Mapping[str, Any]] = None, reviewed: bool = False) -> Path", "returns": "Path"},
-      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False) -> dict", "returns": "dict"},
-      {"name": "resolve_generate_output_paths", "signature": "def resolve_generate_output_paths(prompt_file: str | Path, *, output: Optional[str] = None, context_override: Optional[str] = None, force: bool = True, quiet: bool = True) -> list[str]", "returns": "list[str]"}
+      {"name": "write_evidence_manifest", "signature": "(*, command: str, prompt_file: Optional[str | Path] = None, output_files: Iterable[str | Path] = (), model: str = \"\", cost_usd: float = 0.0, temperature: Optional[float] = None, validation: Optional[Mapping[str, str]] = None, logs: Optional[Mapping[str, Optional[str]]] = None, basename: Optional[str] = None, project_root: Optional[str | Path] = None, context_snapshot: Optional[Mapping[str, Any]] = None, grounding: Optional[Dict[str, Any]] = None, reviewed: bool = False, compression: Optional[Mapping[str, Any]] = None, agentic_fallback: Optional[Mapping[str, Any]] = None, compress: bool = False) -> Path", "returns": "Path"},
+      {"name": "validation_from_sync", "signature": "(sync_result, *, skip_tests, skip_verify, dry_run=False)", "returns": "Mapping[str, str]"},
+      {"name": "resolve_generate_output_paths", "signature": "(prompt_file, *, output=None, ...) -> list[str]", "returns": "list[str]"}
     ]
   }
 }
 </pdd-interface>
+
+<pdd-dependency>context_snapshot_python.prompt</pdd-dependency>
 
 % Write `pdd/evidence_manifest.py`.
 
@@ -20,6 +22,12 @@
 % Requirements
 - Implement `write_evidence_manifest(...)` writing schema v2 JSON under `.pdd/evidence/` (see schema-version requirement below).
 - Hash prompt, outputs, and recursively resolved local includes for `context.includes` and `expanded_sha256`.
+- Deterministic Evidence: For compressed includes, record both the original `source_sha256` and the post-compression `compressed_sha256` in the manifest. Include an `estimated_tokens` field for each compressed block (calculated as `ceil(len(content)/4)`).
+- Add optional schema fields for `context_snapshot`: `enabled`, `manifest_path`, `expanded_prompt_path`, `expanded_sha256`, `uses_nondeterministic_context`, `dynamic_tags`, `redaction_applied`, and per-artifact hashes.
+- Distinguish deterministic include provenance in `context.includes` from durable dynamic snapshot artifacts in `context_snapshot.artifacts`.
+- When snapshot mode is enabled, link prompt/code/test hashes in the evidence manifest to the snapshot run manifest so replay can audit the exact expanded prompt context that produced those hashes.
+- Static-only prompts must explicitly report `uses_nondeterministic_context: false` and must not require snapshot artifacts.
+- Preserve schema v1 compatibility by making snapshot fields optional unless an intentional schema version bump is implemented with backward-compatible readers.
 - Provide `validation_from_sync(sync_result, *, skip_tests, skip_verify, dry_run=False)` mapping real sync outcomes.
 - Never claim `passed` unless the invoking command established that state.
 - Contract enrichment is optional: lazy-import `coverage_contracts` when present.
@@ -30,8 +38,10 @@
   - `excluded`: list of module slugs blocked via `<exclude>`.
   - `reviewed`: bool — `True` only when the invoking command observed a `--review-examples` decision for this run.
 - Preserve the existing top-level `grounding_examples` array for backward compatibility; populate it from `grounding.selected_examples` when present.
-- Bump the manifest `schema_version` metadata from `1` to `2` to reflect the additive `generation.grounding` object; update `pdd/schemas/evidence_manifest.schema.json` so the new object is documented and required at schema v2, while still tolerating the legacy `grounding_examples` field. Update `docs/evidence_manifest.md` so the "Contents" section advertises schema v2 and documents `generation.grounding` alongside the existing fields.
+- Accept optional `compression` and `agentic_fallback` kwargs. Emit backward-compatible `generation.compression` and `generation.agentic_fallback` objects when supplied. `generation.compression` should include enabled/requested/used, phases, source counts, source hashes, compressed hash, budget/size estimates, unavailable reason, and mode. `generation.agentic_fallback` should include attempted/used, phases, reason, and provider/tool metadata when available. Sanitize these metadata blocks before writing by dropping raw prompt/context payload keys such as `content`, `context`, `prompt`, `rendered`, `raw_context`, `compressed_context`, and `compressed_content`; never persist raw compressed context content in the manifest.
+- Bump the manifest `schema_version` metadata from `1` to `2` to reflect the additive `generation.grounding` object; update `pdd/schemas/evidence_manifest.schema.json` so the new object is documented and required at schema v2, while still tolerating the legacy `grounding_examples` field. Update the schema and `docs/evidence_manifest.md` to document optional `generation.compression` and `generation.agentic_fallback` metadata alongside grounding.
 
 % Deliverables
 - Code: `pdd/evidence_manifest.py`
 - Schema: `pdd/schemas/evidence_manifest.schema.json`
+- Docs: `docs/evidence_manifest.md`

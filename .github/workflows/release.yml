@@ -202,23 +202,37 @@ jobs:
       #                                artifact:read, distribution:package,
       #                                distribution:publish). A project-locked
       #                                token (e.g. an e2e profile) will NOT work.
-      #   vars.PDS_CLI_PACKAGE         install spec for the private
-      #                                @promptdriven/pds CLI — an npm spec once
-      #                                published, or an https/tarball URL.
-      #   vars.PDS_API_URL             PDS backend (default the CLI's built-in).
+      #                                Local preflight can only confirm that a
+      #                                token is present; server-side preflight
+      #                                is required to verify scopes/project
+      #                                access. Normal create-mode needs a token
+      #                                that can keep accessing the project it
+      #                                just created, or a backend fix/wildcard
+      #                                token. A project-locked token only works
+      #                                with vars.RELEASE_VIDEO_PROJECT_ID set to
+      #                                that same authorized fixed project.
+      #   vars.PDS_CLI_PACKAGE         install spec for the @promptdriven/pds
+      #                                CLI, for example @promptdriven/pds@latest
+      #                                or a pinned version.
+      #   vars.PDS_API_URL             PDS backend. Defaults to production when
+      #                                the repo variable is unset.
       #   vars.RELEASE_VIDEO_PROJECT_ID  optional stable PDS project to reuse
       #                                across releases (else a per-release
       #                                "PDD <tag> release" project is created).
+      #   vars.RELEASE_VIDEO_SCRIPT_PATH optional checked-out artifact path to
+      #                                reuse when Claude Code quota/auth blocks
+      #                                script generation.
       - name: Create release video and prepend link to notes (best-effort)
         if: env.HAS_PDS == 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
-          PDS_API_URL: ${{ vars.PDS_API_URL }}
+          PDS_API_URL: ${{ vars.PDS_API_URL || 'https://video.promptdriven.ai' }}
           PDS_CLI_PACKAGE: ${{ vars.PDS_CLI_PACKAGE }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           RELEASE_VIDEO_PROJECT_ID: ${{ vars.RELEASE_VIDEO_PROJECT_ID }}
+          RELEASE_VIDEO_SCRIPT_PATH: ${{ vars.RELEASE_VIDEO_SCRIPT_PATH }}
         run: |
           set -uo pipefail
           tag="${{ github.ref_name }}"
@@ -245,7 +259,7 @@ jobs:
               RELEASE_TAG="$tag" \
               RELEASE_GIT_SHA="${{ github.sha }}" \
               ${RELEASE_VIDEO_PROJECT_ID:+RELEASE_VIDEO_PROJECT_ID="$RELEASE_VIDEO_PROJECT_ID"}; then
-            echo "::warning::release video generation failed; release notes left unchanged."
+            echo "::warning::release video step failed; see diagnostics above for Claude script generation vs PDS publish. Release notes left unchanged."
             exit 0
           fi
           resp=".pdd/release-videos/${tag}/pds_response.json"

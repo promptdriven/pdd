@@ -17,6 +17,17 @@ The PDD Prompt Linter analyzes prompt files (`*.prompt`) and user stories (`stor
 
 For day-to-day prompt authoring, use `--llm`. The default scan is deterministic and needs no network access.
 
+For a unified pass across lint, contract, coverage, gate readiness, and snapshot
+policy, use the prompt source-set report:
+
+```bash
+pdd checkup prompts/my_feature_python.prompt
+pdd checkup my_feature
+```
+
+See [checkup_verifier.md](checkup_verifier.md) and
+[checkup_prompt_quality_gate.md](checkup_prompt_quality_gate.md).
+
 ---
 
 ## Out of Scope (Follow-up)
@@ -44,7 +55,11 @@ To achieve maximum velocity and specification quality in Prompt-Driven Developme
 ```mermaid
 graph TD
     A["1. Write Draft Prompt (.prompt)"] --> B["2. Run 'pdd checkup lint'"]
-    B -->|Flagged Ambiguities| C["Refine Prose & Add <vocabulary>"]
+    B -->|"Flagged Ambiguities (repair=off)"| C["Refine Prose & Add <vocabulary>"]
+    B -->|"Flagged Ambiguities (repair=best-effort)"| R["Non-interactive prompt repair"]
+    R --> B2["Re-run checkup lint"]
+    B2 -->|"Still failing"| C
+    B2 -->|"Linter Passes"| D
     C --> B
     B -->|Linter Passes| D["3. Generate Code ('pdd generate')"]
     D --> E["4. Verify Code ('make test')"]
@@ -63,6 +78,8 @@ Run the linter early and often during draft authoring:
 pdd checkup lint prompts/my_feature_python.prompt --llm
 ```
 Review the advisory warnings, refine any vague terms, and build a precise `<vocabulary>` block in the prompt to define what ambiguous terms mean in your domain. Rerun the linter until the scan is clean.
+
+When `prompt_repair = "best-effort"` is set in `pyproject.toml` `[tool.pdd.checkup]` (or `--prompt-repair best-effort` is passed), a failed prompt source-set checkup automatically triggers a bounded, non-interactive repair pass — adding missing vocabulary definitions, normalizing contract rule IDs, filling coverage gaps — before re-running the full source-set check. See [docs/prompt_repair.md](prompt_repair.md) for configuration and safety details.
 
 ### Step 3: Generate Code
 Once the prompt contract is clean and deterministic, generate the initial implementation:

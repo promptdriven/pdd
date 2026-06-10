@@ -132,6 +132,52 @@ def test_write_evidence_manifest_serializes_cloud_grounding(tmp_path: Path) -> N
     assert manifest["generation"]["grounding_examples"] == grounding["selected_examples"]
 
 
+def test_write_evidence_manifest_serializes_compression_and_fallback_metadata(
+    tmp_path: Path,
+) -> None:
+    prompt = tmp_path / "prompts" / "payments_python.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text("Generate payments.\n", encoding="utf-8")
+
+    manifest_path = write_evidence_manifest(
+        command="pdd sync payments",
+        prompt_file=prompt,
+        project_root=tmp_path,
+        compression={
+            "enabled": True,
+            "requested": True,
+            "used": True,
+            "mode": "compressed-sync-context",
+            "phases": ["generate", "fix"],
+            "source_counts": {"tests": 2},
+            "source_hashes": [{"path": "tests/test_payments.py", "sha256": "abc"}],
+            "compressed_sha256": "def",
+            "budget_tokens": 6000,
+            "compressed_content": "raw context must not be persisted",
+        },
+        agentic_fallback={
+            "attempted": True,
+            "used": False,
+            "phases": ["fix"],
+            "reason": "local loop succeeded",
+            "provider": "codex",
+            "tool": "agentic-fix",
+            "raw_context": "raw fallback context must not be persisted",
+        },
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    jsonschema.validate(instance=manifest, schema=_schema())
+    compression = manifest["generation"]["compression"]
+    fallback = manifest["generation"]["agentic_fallback"]
+    assert compression["enabled"] is True
+    assert compression["phases"] == ["generate", "fix"]
+    assert "compressed_content" not in compression
+    assert fallback["attempted"] is True
+    assert fallback["reason"] == "local loop succeeded"
+    assert "raw_context" not in fallback
+
+
 def test_grounding_kwargs_from_ctx_merges_review_decisions() -> None:
     kwargs = grounding_kwargs_from_ctx(
         {
@@ -320,6 +366,45 @@ def test_dynamic_prompt_records_expansion_as_unavailable(tmp_path: Path) -> None
     assert manifest["prompt"]["expanded_sha256"] is None
 
 
+def test_select_include_is_not_nondeterministic(tmp_path: Path) -> None:
+    """select= is deterministic line selection; it must not trigger uses_nondeterministic_tags."""
+    include = tmp_path / "context" / "doc.txt"
+    prompt = tmp_path / "prompts" / "select_python.prompt"
+    include.parent.mkdir(parents=True)
+    prompt.parent.mkdir()
+    include.write_text("line one\nline two\n", encoding="utf-8")
+    prompt.write_text('<include path="context/doc.txt" select="lines:1" />\n', encoding="utf-8")
+
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["prompt"]["uses_nondeterministic_tags"] is False
+
+
+def test_shell_tag_inside_code_fence_is_not_nondeterministic(tmp_path: Path) -> None:
+    """A <shell> tag documented inside a fenced code block must not be flagged."""
+    prompt = tmp_path / "prompts" / "fenced_shell_python.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text(
+        "Example usage:\n```xml\n<shell>date</shell>\n```\n",
+        encoding="utf-8",
+    )
+
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=prompt,
+        project_root=tmp_path,
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+    assert manifest["prompt"]["uses_nondeterministic_tags"] is False
+    assert manifest["prompt"]["expanded_sha256"] is not None
+
+
 def test_preprocessed_expanded_hash_matches_preprocess_helper(tmp_path: Path) -> None:
     prompt = tmp_path / "prompts" / "hash_python.prompt"
     include = tmp_path / "context" / "body.prompt"
@@ -332,6 +417,31 @@ def test_preprocessed_expanded_hash_matches_preprocess_helper(tmp_path: Path) ->
     assert _preprocessed_expanded_sha256(
         prompt_text, tmp_path
     ) == _expected_preprocessed_hash(prompt_text, tmp_path)
+
+
+def test_evidence_manifest_records_snapshot_artifacts(tmp_path: Path) -> None:
+    """Evidence receipts should surface shell/web/query snapshot hashes."""
+    manifest_path = write_evidence_manifest(
+        command="pdd generate",
+        prompt_file=tmp_path / "prompts" / "demo.prompt",
+        project_root=tmp_path,
+        context_snapshot={
+            "expanded_prompt": {"path": "expanded_prompt.txt", "sha256": "abc"},
+            "uses_nondeterministic_context": True,
+            "artifacts": [
+                {"type": "shell", "path": "shell-1.txt", "sha256": "s1"},
+                {"type": "web", "path": "web-1.txt", "sha256": "w1"},
+                {"type": "query_include", "path": "query-1.txt", "sha256": "q1"},
+            ],
+            "grounding_examples": [{"status": "unavailable", "reason": "local"}],
+        },
+    )
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["context"]["shell_snapshots"][0]["sha256"] == "s1"
+    assert manifest["context"]["web_snapshots"][0]["sha256"] == "w1"
+    assert manifest["context"]["query_snapshots"][0]["sha256"] == "q1"
+    assert manifest["generation"]["grounding_examples"][0]["reason"] == "local"
+    assert manifest["context_snapshot"]["enabled"] is True
 
 
 def test_resolve_generate_output_paths_uses_construct_paths(

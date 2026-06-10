@@ -9,12 +9,15 @@ fixes them — one step per LLM call for reliability.
 from __future__ import annotations
 
 import json
+import logging
+import math
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from rich.console import Console
 
+from .agentic_common import post_pr_comment, post_step_comment
 from .agentic_change import (
     _check_gh_cli,
     _escape_format_braces,
@@ -24,16 +27,27 @@ from .agentic_change import (
 )
 from .agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 from .checkup_review_loop import (
+    FINAL_GATE_REPORT_SCHEMA,
     ReviewLoopConfig,
     ReviewLoopContext,
+    clear_final_state,
+    load_final_state,
     parse_reviewers,
     parse_severity_list,
     parse_state_list,
     run_checkup_review_loop,
 )
+from .ci_validation import run_github_checks_gate
 from .agentic_sync import _find_project_root, _load_architecture_json
+from .prompt_repair import (
+    PromptRepairConfig,
+    discover_prompt_paths,
+    format_token_delta_summary,
+    run_prompt_repair_loop,
+)
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
@@ -304,6 +318,257 @@ def _truncate_issue_context(text: str, limit: int) -> str:
     return f"{header.rstrip()}{marker}{comments.rstrip()}{notice}"
 
 
+# Reviewer statuses that count as "this reviewer accepted the PR". The hard
+# not-clean states (failed/degraded/missing) must never satisfy the gate even
+# if a caller widens ``clean_reviewer_states``; the final gate uses the strict
+# "clean" sentinel to stay conservative (a false non-ship is recoverable by a
+# re-run; a false ship is not).
+_SHIP_REVIEWER_STATES = ("clean",)
+
+
+def _markdown_table_cell(value: str) -> str:
+    """Return a one-line markdown table cell."""
+    return (value or "").replace("|", "\\|").replace("\n", " ").strip()
+
+
+def _format_github_checks_gate_failure_report(
+    *,
+    pr_url: str,
+    issue_url: str,
+    github_checks_message: str,
+) -> str:
+    """Render a parseable final-gate failure report before Layer 2 starts."""
+    finding = _markdown_table_cell(
+        "GitHub checks gate failed before Layer 2: "
+        f"{github_checks_message}"
+    )
+    issue_line = issue_url or "none"
+    issue_aligned = "unknown" if issue_url else "n/a"
+    machine_payload = {
+        "schema": FINAL_GATE_REPORT_SCHEMA,
+        "stage": "github-checks",
+        "status": "failed",
+        "reason": github_checks_message,
+        "pr_url": pr_url,
+        "issue_url": issue_url,
+        "issue_aligned": None,
+        "full_suite_source": "github-checks",
+        "layer1_status": "passed",
+        "layer2_status": "skipped",
+        "reviewer_status": {},
+        "fresh_final_status": "missing",
+        "findings": [
+            {
+                "severity": "blocker",
+                "area": "github-checks",
+                "location": "",
+                "finding": f"GitHub checks gate failed before Layer 2: {github_checks_message}",
+                "required_fix": "Fix the failing, stale, pending, or missing GitHub checks on the current PR head.",
+                "status": "open",
+            }
+        ],
+    }
+    return "\n".join(
+        [
+            "## Step 7/8: Final Gate Report",
+            "",
+            f"PR: {pr_url}",
+            f"Issue: {issue_line}",
+            "final-gate-status: failed",
+            "final-gate-stage: github-checks",
+            f"issue_aligned: {issue_aligned}",
+            "",
+            "### Summary",
+            "",
+            "Layer 1 targeted checkup passed, but GitHub checks did not pass on the current PR head. Layer 2 was skipped.",
+            "",
+            "### Machine Verdict",
+            "",
+            "```json",
+            json.dumps(machine_payload, indent=2, sort_keys=True),
+            "```",
+            "",
+            "### Issues Summary",
+            "",
+            "| Severity | Module | Description | Fixed |",
+            "|----------|--------|-------------|-------|",
+            f"| blocker | github-checks | {finding} | No |",
+        ]
+    )
+
+
+def _format_layer1_failure_report(
+    *,
+    pr_url: str,
+    issue_url: str,
+    layer1_message: str,
+    full_suite_source: str,
+) -> str:
+    """Render a parseable final-gate failure report for Layer 1 failures."""
+    reason = (layer1_message or "Layer 1 checkup failed.").strip()
+    payload_reason = reason
+    if len(payload_reason) > 4000:
+        payload_reason = payload_reason[:4000].rstrip() + "...[truncated]"
+    finding = _markdown_table_cell(
+        "Layer 1 checkup failed before Layer 2: "
+        f"{payload_reason}"
+    )
+    issue_line = issue_url or "none"
+    issue_aligned = "unknown" if issue_url else "n/a"
+    machine_payload = {
+        "schema": FINAL_GATE_REPORT_SCHEMA,
+        "stage": "layer1",
+        "status": "failed",
+        "reason": payload_reason,
+        "pr_url": pr_url,
+        "issue_url": issue_url,
+        "issue_aligned": None,
+        "full_suite_source": full_suite_source,
+        "layer1_status": "failed",
+        "layer2_status": "skipped",
+        "reviewer_status": {},
+        "fresh_final_status": "missing",
+        "findings": [
+            {
+                "severity": "blocker",
+                "area": "layer1",
+                "location": "",
+                "finding": f"Layer 1 checkup failed before Layer 2: {payload_reason}",
+                "required_fix": "Resolve the Layer 1 checkup failure or push-guard refusal, then re-run the final gate.",
+                "status": "open",
+            }
+        ],
+    }
+    return "\n".join(
+        [
+            "## Step 7/8: Final Gate Report",
+            "",
+            f"PR: {pr_url}",
+            f"Issue: {issue_line}",
+            "final-gate-status: failed",
+            "final-gate-stage: layer1",
+            f"issue_aligned: {issue_aligned}",
+            "",
+            "### Summary",
+            "",
+            (
+                "Layer 1 PR checkup failed before Layer 2 review loop could run."
+            ),
+            "",
+            "### Machine Verdict",
+            "",
+            "```json",
+            json.dumps(machine_payload, indent=2, sort_keys=True),
+            "```",
+            "",
+            "### Issues Summary",
+            "",
+            "| Severity | Module | Description | Fixed |",
+            "|----------|--------|-------------|-------|",
+            f"| blocker | layer1 | {finding} | No |",
+        ]
+    )
+
+
+def _post_final_gate_report(
+    *,
+    owner: str,
+    repo: str,
+    issue_number: int,
+    pr_owner: str,
+    pr_repo: str,
+    pr_number: int,
+    has_issue: bool,
+    body: str,
+    cwd: Path,
+    use_github_state: bool,
+) -> str:
+    """Best-effort post of a final-gate report to PR and issue threads."""
+    if not use_github_state or not body.strip():
+        return ""
+
+    pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
+    issue_posted = True
+    if has_issue:
+        issue_posted = post_step_comment(
+            repo_owner=owner,
+            repo_name=repo,
+            issue_number=issue_number,
+            step_num=7,
+            total_steps=8,
+            description="Verification & Final Report",
+            output=body,
+            cwd=cwd,
+            body=body,
+        )
+    if pr_posted and issue_posted:
+        return ""
+    failed = []
+    if not pr_posted:
+        failed.append("PR")
+    if not issue_posted:
+        failed.append("issue")
+    return f" Final report post failed for: {', '.join(failed)}."
+
+
+def _review_loop_ship_verdict(
+    final_state: Optional[Dict[str, Any]], *, has_issue: bool
+) -> bool:
+    """Derive a real ship/no-ship verdict from a review-loop ``final-state.json``.
+
+    ``run_checkup_review_loop`` returns ``success=True`` whenever it produces a
+    trustworthy report — even when findings remain — so the boolean alone is NOT
+    a ship gate (the rendered report carries the authoritative markers). The
+    canonical final gate (issue #1406) needs a true pass/fail, so this predicate
+    replicates the canonical ship markers against the persisted verdict:
+
+    - ``fresh_final_status == "clean"`` — the verifier's clean pass survived the
+      stale-head re-check ``_finalize`` performs (issue #1088). A head that
+      advanced after verification is downgraded to ``missing`` there, so this
+      field already encodes "the clean verdict matches the current remote head".
+    - the active reviewer's status is a hard ``clean`` (not failed/degraded/
+      missing/findings).
+    - no finding is still ``open``.
+    - when an issue is in scope, the PR is reported as issue-aligned.
+
+    Fails closed: a missing/unparsable state, or any unmet condition, returns
+    ``False``. A false non-ship is recoverable by re-running; a false ship is
+    not.
+    """
+    if not isinstance(final_state, dict):
+        return False
+    if final_state.get("fresh_final_status") != "clean":
+        return False
+    reviewer_status = final_state.get("reviewer_status")
+    active = final_state.get("active_reviewer")
+    # ``active_reviewer`` must be a real string key; a non-string (or empty)
+    # value is a malformed verdict — fail closed instead of raising on the
+    # unhashable ``dict.get`` lookup below.
+    if not isinstance(reviewer_status, dict) or not isinstance(active, str) or not active:
+        return False
+    if reviewer_status.get(active) not in _SHIP_REVIEWER_STATES:
+        return False
+    # The canonical ``_write_final_state`` ALWAYS serializes ``findings`` as a
+    # list of dicts (``ReviewFinding.to_dict()``) whose ``status`` is a non-empty
+    # string ("open" while unresolved, "fixed" once resolved). The canonical
+    # ship gate blocks on any ``open`` row, so we mirror that; a non-list value,
+    # a non-dict entry, or a missing/non-string/empty ``status`` means the
+    # verdict file is malformed or not from a real run — fail closed rather than
+    # treat the absence of an ``open`` row as "no findings".
+    findings = final_state.get("findings")
+    if not isinstance(findings, list):
+        return False
+    for finding in findings:
+        if not isinstance(finding, dict):
+            return False
+        status = finding.get("status")
+        if not isinstance(status, str) or not status or status == "open":
+            return False
+    if has_issue and str(final_state.get("issue_aligned")).lower() != "true":
+        return False
+    return True
+
+
 def run_agentic_checkup(
     issue_url: Optional[str] = None,
     *,
@@ -315,7 +580,9 @@ def run_agentic_checkup(
     reasoning_time: Optional[float] = None,
     pr_url: Optional[str] = None,
     test_scope: str = "full",
+    full_suite_source: str = "local",
     review_loop: bool = False,
+    final_gate: bool = False,
     review_only: bool = False,
     reviewers: str = "codex,claude",
     reviewer: Optional[str] = None,
@@ -336,6 +603,10 @@ def run_agentic_checkup(
     gate_allow: Tuple[str, ...] = (),
     start_step_override: Optional[Union[int, float]] = None,
     cwd: Optional[Path] = None,
+    prompt_repair: str = "off",
+    max_prompt_repair_rounds: int = 1,
+    max_prompt_token_growth: int = 1000,
+    max_prompt_repair_seconds: float = 120.0,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -356,6 +627,19 @@ def run_agentic_checkup(
             is based on the PR's head branch.
         review_loop: When true in PR mode, run the primary-reviewer/fixer
             loop instead of the legacy single-pass checkup path.
+        full_suite_source: Final-gate full-suite source. ``local`` preserves
+            the historical contract: Layer 1 must run the full local suite.
+            ``github-checks`` makes Layer 1 run targeted local checks and then
+            gates on GitHub checks for the current PR head before Layer 2.
+        final_gate: When true in PR mode, run the canonical two-layer final
+            gate (issue #1406): Layer 1 is the PR-scoped checkup orchestrator
+            (no new PR), Layer 2 is the primary-reviewer/fixer review loop on
+            the resulting PR head. Unlike ``review_loop`` — whose success only
+            means "trustworthy report produced" — the returned ``success`` is
+            a real ship verdict derived from the review-loop's current-run
+            ``final-state.json``. Requires both ``pr_url`` and ``issue_url``.
+            A Layer 1 failure or GitHub-checks gate failure short-circuits
+            before Layer 2; either layer's failure fails the gate.
         review_only: When true with ``review_loop``, run only the primary
             reviewer first pass and do not invoke the fixer or push changes.
         reviewer_fallback: Optional secondary reviewer role to try once when
@@ -468,34 +752,125 @@ def run_agentic_checkup(
     if not quiet:
         console.print("[bold]Running agentic checkup...[/bold]")
 
-    if review_loop:
-        if (
-            not has_issue
-            or pr_url is None
-            or pr_owner is None
-            or pr_repo is None
-            or pr_number is None
-        ):
-            # Review-loop is issue-coupled; review-loop-without-issue is a
-            # deferred follow-up (#1292).
-            return False, "--review-loop requires --pr and --issue.", 0.0, ""
-        loop_issue_content = _truncate_issue_context(raw_full_content, 60000)
-        loop_architecture = _truncate_context(raw_arch_json_str, 40000)
+    full_suite_source = (full_suite_source or "local").strip().lower()
+    if full_suite_source not in {"local", "github-checks"}:
+        return (
+            False,
+            "--full-suite-source must be 'local' or 'github-checks', "
+            f"got {full_suite_source!r}.",
+            0.0,
+            "",
+        )
+
+    # check → repair → recheck cycle for changed prompt files (Issue #1422).
+    # Uses the full pdd.prompt_source_set_report.v1 structured report as the
+    # repair oracle (not just lint), then re-verifies before the orchestrator runs.
+    if prompt_repair != "off":
+        from .checkup_prompt_main import build_prompt_source_set_report  # pylint: disable=import-outside-toplevel
+
+        repair_config = PromptRepairConfig(
+            mode=prompt_repair,
+            max_rounds=max_prompt_repair_rounds,
+            max_token_growth=max_prompt_token_growth,
+            max_seconds=max_prompt_repair_seconds,
+        )
+        # Base context from issue/PR content (oracle enrichment)
+        issue_context: Dict[str, str] = {}
+        if raw_full_content.strip():
+            issue_context["issue"] = raw_full_content
+        if pr_url and pr_owner and pr_repo and pr_number is not None:
+            issue_context["pr"] = _fetch_pr_context(pr_owner, pr_repo, pr_number)
+
+        strict_failures: List[str] = []
+        work_cwd = cwd if cwd is not None else Path.cwd()
+        # Forward strictness so warnings are treated as errors consistently in
+        # all three phases (initial check, repair loop re-checks, post-repair
+        # check).  Mirrors the commands/checkup.py path which passes strict=strict.
+        is_strict = prompt_repair == "strict"
+        for prompt_path in discover_prompt_paths(work_cwd):
+            # Step 1: run the full structured checkup to decide if repair is needed
+            src_report = build_prompt_source_set_report(
+                prompt_path,
+                target=str(prompt_path),
+                project_root=project_root,
+                strict=is_strict,
+            )
+            if src_report.status == "pass":
+                continue  # no repair needed for this prompt
+            # Step 2: repair using the structured report + issue context as oracle
+            repair_context = dict(issue_context)
+            repair_context["source_set_report"] = json.dumps(src_report.as_dict(), indent=2)
+            repair_context["recommended_actions"] = "\n".join(src_report.recommended_actions())
+            repair_result = run_prompt_repair_loop(
+                prompt_path,
+                repair_config,
+                context=repair_context,
+                cwd=project_root,
+                verbose=verbose,
+                quiet=quiet,
+                strict=is_strict,
+            )
+            summary = format_token_delta_summary(repair_result)
+            if summary:
+                logger.info("%s: %s", prompt_path, summary.replace("\n", "; "))
+                if not quiet:
+                    console.print(f"[cyan]{summary}[/cyan]")
+            # Step 3: re-check with the structured report after repair
+            post_report = build_prompt_source_set_report(
+                prompt_path,
+                target=str(prompt_path),
+                project_root=project_root,
+                strict=is_strict,
+            )
+            if post_report.status != "pass" and prompt_repair == "strict":
+                strict_failures.append(str(prompt_path))
+            elif post_report.status != "pass":
+                logger.warning(
+                    "Prompt repair left issues in %s: %s",
+                    prompt_path,
+                    ", ".join(f.code for f in post_report.findings),
+                )
+
+        if strict_failures:
+            paths = ", ".join(strict_failures)
+            return (
+                False,
+                f"Prompt repair strict mode: unresolved issues in {paths}",
+                0.0,
+                "",
+            )
+
+    # Layer 2 (review-loop) runner, shared by ``--review-loop`` (Layer 2 only)
+    # and the canonical ``--final-gate`` (Layer 1 then Layer 2). Defined as a
+    # closure so it captures the already-fetched issue/PR context instead of
+    # re-threading the full config surface. ``pr_content`` is fetched lazily by
+    # default, but the final gate passes a pre-Layer-1 snapshot so Layer 2 does
+    # not ingest Layer 1's own freshly-posted checkup report.
+    def _run_review_loop_layer(
+        pr_content: Optional[str] = None,
+    ) -> Tuple[bool, str, float, str]:
         loop_context = ReviewLoopContext(
             issue_url=issue_url,
-            issue_content=loop_issue_content,
+            issue_content=_truncate_issue_context(raw_full_content, 60000),
             repo_owner=owner,
             repo_name=repo,
             issue_number=issue_number,
             issue_title=raw_title,
-            architecture_json=loop_architecture,
+            architecture_json=_truncate_context(raw_arch_json_str, 40000),
             pddrc_content=raw_pddrc_content,
             pr_url=pr_url,
             pr_owner=pr_owner,
             pr_repo=pr_repo,
             pr_number=pr_number,
             project_root=project_root,
-            pr_content=_fetch_pr_context(pr_owner, pr_repo, pr_number),
+            pr_content=(
+                pr_content
+                if pr_content is not None
+                else _fetch_pr_context(pr_owner, pr_repo, pr_number)
+            ),
+            has_issue=has_issue,
+            full_suite_source=full_suite_source,
+            test_scope=test_scope,
         )
         loop_config = ReviewLoopConfig(
             reviewers=parse_reviewers(reviewers),
@@ -528,7 +903,102 @@ def run_agentic_checkup(
             use_github_state=use_github_state,
         )
 
-    # 5. Invoke orchestrator
+    pr_context_ready = (
+        pr_url is not None
+        and pr_owner is not None
+        and pr_repo is not None
+        and pr_number is not None
+    )
+
+    if final_gate and (not pr_context_ready or not has_issue):
+        # The final gate is the two-layer PR-readiness path; it is PR-scoped,
+        # issue-resolution gate, so it never runs in plain issue mode or
+        # PR-only merit-review mode.
+        return False, "--final-gate requires --pr and --issue.", 0.0, ""
+
+    if final_gate:
+        # The CLI rejects these combinations, but ``run_agentic_checkup`` is the
+        # real contract boundary (the e2e/pdd-issue path and pdd_cloud call it
+        # directly). Enforce the same gate-owned-knobs rule here so a direct
+        # caller cannot run a non-canonical "final gate" — e.g. Layer 1
+        # inheriting ``no_fix`` or a resume override, Layer 2 running with the
+        # deterministic gates disabled, or Layer 1 using a test/full-suite
+        # pairing that is weaker than the selected source — and silently get a
+        # weaker verdict than the canonical gate promises.
+        conflicts = [
+            name
+            for name, set_ in (
+                ("no_fix", no_fix),
+                ("review_only", review_only),
+                ("review_loop", review_loop),
+                ("start_step_override", start_step_override is not None),
+                ("enable_gates=False (--no-gates)", not enable_gates),
+                (
+                    "test_scope!=full (--test-scope targeted)",
+                    full_suite_source == "local" and test_scope != "full",
+                ),
+                (
+                    "test_scope!=targeted (--test-scope full)",
+                    full_suite_source == "github-checks" and test_scope != "targeted",
+                ),
+            )
+            if set_
+        ]
+        if conflicts:
+            return (
+                False,
+                (
+                    "--final-gate cannot be combined with: "
+                    f"{', '.join(conflicts)}; the gate owns the fix/review steps, "
+                    "requires deterministic gates plus a valid full-suite source, "
+                    "and runs the review-loop as Layer 2."
+                ),
+                0.0,
+                "",
+            )
+        # The gate runs the review loop as Layer 2, so its budget knobs must be
+        # valid BEFORE Layer 1 spends cost / mutates the PR — otherwise a direct
+        # caller could push Layer-1 fixes and then have Layer 2 die via a runtime
+        # cap (e.g. "Max review rounds reached: 0"). Mirror the CLI's checks.
+        budget_errors = []
+        # ``max_review_rounds`` is typed ``int`` but a direct library caller is
+        # not bound by the hint: ``1.5``/``nan``/``inf`` all slip past a bare
+        # ``< 1`` (and a float ``max_rounds`` later breaks ``range(1, n + 1)`` in
+        # the loop). Require an actual positive integer — and reject ``bool``,
+        # which is an ``int`` subclass — BEFORE Layer 1 spends cost / mutates.
+        if (
+            isinstance(max_review_rounds, bool)
+            or not isinstance(max_review_rounds, int)
+            or max_review_rounds < 1
+        ):
+            budget_errors.append("max_review_rounds must be a positive integer")
+        if not math.isfinite(max_review_cost) or max_review_cost <= 0:
+            budget_errors.append("max_review_cost must be a finite value > 0")
+        if not math.isfinite(max_review_minutes) or max_review_minutes <= 0:
+            budget_errors.append("max_review_minutes must be a finite value > 0")
+        if budget_errors:
+            return (
+                False,
+                f"--final-gate review budget invalid: {'; '.join(budget_errors)}.",
+                0.0,
+                "",
+            )
+
+    if review_loop and not final_gate:
+        if not pr_context_ready:
+            # Review-loop is issue-coupled; review-loop-without-issue is a
+            # deferred follow-up (#1292).
+            return False, "--review-loop requires --pr and --issue.", 0.0, ""
+        return _run_review_loop_layer()
+
+    # For the final gate, snapshot PR context BEFORE Layer 1 so Layer 2 reviews
+    # the PR's human context without ingesting Layer 1's own posted report.
+    final_gate_pr_content: Optional[str] = None
+    if final_gate:
+        final_gate_pr_content = _fetch_pr_context(pr_owner, pr_repo, pr_number)
+
+    # 5. Invoke orchestrator (Layer 1 of the final gate; the only layer for a
+    #    plain checkup run).
     try:
         orch_success, orch_message, orch_cost, orch_model = run_agentic_checkup_orchestrator(
             issue_url=effective_issue_url,
@@ -561,10 +1031,126 @@ def run_agentic_checkup(
         return False, msg, 0.0, ""
 
     if not orch_success:
+        # Layer 1 failure short-circuits the final gate before Layer 2 runs.
+        if final_gate:
+            assert pr_owner is not None and pr_repo is not None and pr_number is not None
+            report = _format_layer1_failure_report(
+                pr_url=pr_url or "",
+                issue_url=issue_url or "",
+                layer1_message=orch_message,
+                full_suite_source=full_suite_source,
+            )
+            post_suffix = _post_final_gate_report(
+                owner=owner,
+                repo=repo,
+                issue_number=issue_number,
+                pr_owner=pr_owner,
+                pr_repo=pr_repo,
+                pr_number=pr_number,
+                has_issue=has_issue,
+                body=report,
+                cwd=project_root,
+                use_github_state=use_github_state,
+            )
+            return (
+                False,
+                f"Final gate Layer 1 failed: {orch_message}{post_suffix}",
+                orch_cost,
+                orch_model,
+            )
         return False, orch_message, orch_cost, orch_model
 
+    if final_gate:
+        # Layer 2: the maintainer-style reviewer/fixer loop on the (possibly
+        # Layer-1-pushed) PR head. When configured, GitHub checks are the
+        # full-suite source of truth and must pass on the current PR head
+        # before Layer 2 starts. Clear any stale verdict first so the
+        # post-run read reflects THIS run only (a role/setup error returns
+        # before ``_finalize`` writes a fresh one, which then reads as
+        # fail-closed). ``issue_number`` is the PR number when no issue was
+        # given; in that mode the issue-alignment gate is skipped.
+        github_checks_message: Optional[str] = None
+        if full_suite_source == "github-checks":
+            assert pr_owner is not None and pr_repo is not None and pr_number is not None
+            github_success, github_checks_message, _github_head = run_github_checks_gate(
+                project_root,
+                pr_owner,
+                pr_repo,
+                pr_number,
+                quiet=quiet,
+                required_only=False,
+            )
+            if not github_success:
+                report = _format_github_checks_gate_failure_report(
+                    pr_url=pr_url or "",
+                    issue_url=issue_url or "",
+                    github_checks_message=github_checks_message,
+                )
+                post_suffix = _post_final_gate_report(
+                    owner=owner,
+                    repo=repo,
+                    issue_number=issue_number,
+                    pr_owner=pr_owner,
+                    pr_repo=pr_repo,
+                    pr_number=pr_number,
+                    has_issue=has_issue,
+                    body=report,
+                    cwd=project_root,
+                    use_github_state=use_github_state,
+                )
+                return (
+                    False,
+                    f"Final gate GitHub checks gate failed: {github_checks_message}{post_suffix}",
+                    orch_cost,
+                    orch_model,
+                )
+            if not quiet:
+                console.print(f"[green]{github_checks_message}[/green]")
+
+        clear_final_state(project_root, issue_number, pr_number)
+        if load_final_state(project_root, issue_number, pr_number) is not None:
+            # ``clear_final_state`` swallows a non-fatal unlink error; if a stale
+            # verdict still survives, a Layer 2 that exits before finalizing
+            # (e.g. a role error) would let us read the PRIOR run's clean verdict
+            # as this run's. Fail closed rather than risk a false ship.
+            return (
+                False,
+                (
+                    "Final gate could not clear the stale review-loop verdict at "
+                    ".pdd/checkup-review-loop/; refusing to run Layer 2 to avoid "
+                    "trusting a prior run's verdict. Remove the artifact and "
+                    "re-run."
+                ),
+                orch_cost,
+                orch_model,
+            )
+        if not quiet:
+            console.print(
+                "[bold]Final gate Layer 1 (PR checkup) passed; running "
+                "Layer 2 (review-loop)...[/bold]"
+            )
+        loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
+            pr_content=final_gate_pr_content
+        )
+        ship = _review_loop_ship_verdict(
+            load_final_state(project_root, issue_number, pr_number),
+            has_issue=has_issue,
+        )
+        total_cost = orch_cost + loop_cost
+        checks_clause = "GitHub checks gate passed; " if github_checks_message else ""
+        message = (
+            "Final gate: Layer 1 (PR checkup) passed; "
+            f"{checks_clause}"
+            f"Layer 2 (review-loop): {loop_message}"
+        )
+        if not ship and loop_success:
+            # The loop produced a trustworthy report but the verdict is not
+            # shippable; surface that distinctly from a loop that errored.
+            message += " — verdict: not shippable (findings remain or "
+            message += "verification is unverified)."
+        return ship, message, total_cost, (loop_model or orch_model)
+
     # 6. Parse JSON report from step 7 output
-    step7_output = ""
     # The orchestrator returns "Checkup complete" only after enforcing Step 7's
     # structured verdict. In PR mode it owns the final report comment after a
     # successful push/reverify, so callers can trust the return tuple.

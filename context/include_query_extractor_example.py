@@ -31,7 +31,7 @@ def _mock_llm_invoke(*, prompt: str, input_json: dict, strength: str) -> str:
     return "The backend uses Python FastAPI with PostgreSQL."
 
 
-def _mock_preprocess(text, recursive=False, double_curly_brackets=True, exclude_keys=None):
+def _mock_preprocess(text, recursive=False, double_curly_brackets=True, exclude=None):
     """Mock preprocess that returns the template unchanged."""
     return text
 
@@ -76,7 +76,7 @@ def _run_example(tmp_dir):
     # --- 3. First extraction — LLM interaction pattern (Req 2) ---
     # Internally: load_prompt_template("include_query_extractor_LLM")
     #           → preprocess(template, recursive=False, double_curly_brackets=True,
-    #                        exclude_keys=["file_content", "query"])
+    #                        exclude=["file_content", "query"])
     #           → llm_invoke(prompt=..., input_json={...}, strength="strong")
     with patch("pdd.include_query_extractor.llm_invoke", side_effect=_mock_llm_invoke), \
          patch("pdd.include_query_extractor.preprocess", side_effect=_mock_preprocess), \

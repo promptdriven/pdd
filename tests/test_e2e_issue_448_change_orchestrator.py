@@ -20,9 +20,9 @@ This causes Python's str.format() to interpret JSON like {"url": "..."} as forma
 placeholders, resulting in KeyError: '"url"'.
 
 The fix requires adding this pattern before format() at lines 598, 713, 727, 790:
-    exclude_keys = list(context.keys())
+    exclude = list(context.keys())
     prompt_template = preprocess(prompt_template, recursive=True,
-                                  double_curly_brackets=True, exclude_keys=exclude_keys)
+                                  double_curly_brackets=True, exclude=exclude)
 """
 
 import pytest
@@ -93,7 +93,7 @@ class TestIssue448TemplatePreprocessingE2E:
             prompt_template,
             recursive=True,
             double_curly_brackets=False,  # BUG: Should be True
-            exclude_keys=[]
+            exclude=[]
         )
 
         # Verify the processed template contains JSON that triggers the bug
@@ -120,10 +120,13 @@ class TestIssue448TemplatePreprocessingE2E:
         with pytest.raises(KeyError) as exc_info:
             processed_buggy.format(**context)
 
-        # Verify it's the specific error from the bug report
+        # Verify it is a missing placeholder from included literal-brace
+        # content, not one of the real orchestrator context fields. The first
+        # offending include can change as docs evolve.
         error_key = str(exc_info.value)
-        assert '"url"' in error_key or '"name"' in error_key or '"type"' in error_key, \
-            f"Expected KeyError for JSON key, got: {error_key}"
+        assert error_key.strip("'\""), "Expected a non-empty KeyError placeholder"
+        assert error_key.strip("'\"") not in context, \
+            f"Expected KeyError from included literal braces, got context key: {error_key}"
 
     def test_preprocessing_with_double_curly_prevents_keyerror(self):
         """
@@ -160,12 +163,12 @@ class TestIssue448TemplatePreprocessingE2E:
         }
 
         # THE FIX: Preprocess with double_curly_brackets=True and exclude context keys
-        exclude_keys = list(context.keys())
+        exclude = list(context.keys())
         processed_fixed = preprocess(
             prompt_template,
             recursive=True,
             double_curly_brackets=True,  # CORRECT: Escapes literal braces
-            exclude_keys=exclude_keys
+            exclude=exclude
         )
 
         # This should NOT raise KeyError
@@ -220,9 +223,9 @@ class TestIssue448TemplatePreprocessingE2E:
                 "The fix requires:\n"
                 "  1. Add: from pdd.preprocess import preprocess\n"
                 "  2. Before format(), add:\n"
-                "     exclude_keys = list(context.keys())\n"
+                "     exclude = list(context.keys())\n"
                 "     prompt_template = preprocess(prompt_template, recursive=True, "
-                "double_curly_brackets=True, exclude_keys=exclude_keys)\n\n"
+                "double_curly_brackets=True, exclude=exclude)\n\n"
                 "See agentic_architecture_orchestrator.py:299-302 for the correct pattern."
             )
 
@@ -333,7 +336,7 @@ class TestIssue448OrchestratorComparison:
             "Architecture orchestrator should import preprocess"
         assert "double_curly_brackets=True" in source, \
             "Architecture orchestrator should use double_curly_brackets=True"
-        assert "exclude_keys" in source, \
+        assert "exclude" in source, \
             "Architecture orchestrator should exclude context keys from escaping"
 
     def test_both_orchestrators_should_use_same_pattern(self):
@@ -359,6 +362,6 @@ class TestIssue448OrchestratorComparison:
                 "the same preprocessing pattern as agentic_architecture_orchestrator.py.\n\n"
                 "The change orchestrator needs to add:\n"
                 "  preprocess(prompt_template, recursive=True, double_curly_brackets=True, "
-                "exclude_keys=exclude_keys)\n\n"
+                "exclude=exclude)\n\n"
                 "before calling prompt_template.format(**context)"
             )

@@ -32,6 +32,10 @@ from pdd.agentic_common import (
     extract_step_report,
     post_step_comment_once,
     normalize_step_comments_state,
+    drain_step_steers,
+    issue_update_should_clear_workflow_state,
+    apply_clarification_steers_on_resume,
+    ensure_issue_steer_cursor_seeded,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
@@ -47,6 +51,7 @@ from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
+from pdd.pre_checkup_gate import run_pre_checkup_gate
 
 # Initialize console for rich output
 console = Console()
@@ -867,8 +872,9 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
     """Check output for hard stop conditions.
 
     Clarification steps (4, 7) require the explicit STOP_CONDITION: tag.
-    Other steps use case-insensitive substring matching as a fallback.
-    A universal STOP_CONDITION: tag is recognized on any step.
+    Other stop-capable steps use case-insensitive substring matching as a
+    fallback. Step 8 is prompt-change analysis only and must continue to Step 9
+    because code/docs direct edits may still be pending.
     """
     if not output:
         return None
@@ -889,8 +895,8 @@ def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
         if stop_match and "architectural" in stop_match.group(1).lower():
             return "Architectural decision needed"
         return None
-    if step_num == 8 and re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*no changes required", output_lower, re.MULTILINE):
-        return "No changes needed"
+    if step_num == 8:
+        return None
     if step_num == 9:
         if "fail:" in output_lower:
             return "Implementation failed"
@@ -1304,8 +1310,14 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         test_dir = ctx_defaults.get("test_output_path", defaults["test_dir"])
         example_dir = ctx_defaults.get("example_output_path", defaults["example_dir"])
 
-        # Derive ext from language
-        ext = get_extension(language) if language else defaults["ext"]
+        # Derive ext from language; keep parsed .pddrc paths even if extension
+        # lookup cannot resolve local package data in a test or constrained env.
+        try:
+            ext = get_extension(language) if language else defaults["ext"]
+        except Exception:
+            ext = defaults["ext"]
+        if not ext:
+            ext = defaults["ext"]
         if ext.startswith("."):
             ext = ext[1:]  # Remove leading dot if present
 
@@ -1496,12 +1508,31 @@ def run_agentic_change_orchestrator(
     if not clean_restart and state is not None and issue_updated_at:
         stored_updated_at = state.get("issue_updated_at")
         if stored_updated_at and stored_updated_at != issue_updated_at:
-            # Issue was modified - state is stale
-            if not quiet:
-                console.print("[yellow]Issue was updated since last run - starting fresh[/yellow]")
-            clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
-            state = None
-            loaded_gh_id = None
+            if issue_update_should_clear_workflow_state(
+                state,
+                stored_updated_at,
+                issue_updated_at,
+                repo_owner,
+                repo_name,
+                issue_number,
+                cwd=cwd,
+                clarification_step_numbers=_CLARIFICATION_STEPS,
+            ):
+                if not quiet:
+                    console.print(
+                        "[yellow]Issue was updated since last run - starting fresh[/yellow]"
+                    )
+                clear_workflow_state(
+                    cwd, issue_number, "change", state_dir,
+                    repo_owner, repo_name, use_github_state,
+                )
+                state = None
+                loaded_gh_id = None
+            elif not quiet:
+                console.print(
+                    "[cyan]Issue was updated (new comments) — continuing saved workflow[/cyan]"
+                )
+                state["issue_updated_at"] = issue_updated_at
 
     # Initialize variables from state or defaults.
     # Under clean_restart, defensively ignore any state that survived the
@@ -1540,7 +1571,54 @@ def run_agentic_change_orchestrator(
     step_comments_set = normalize_step_comments_state(state.get("step_comments"))
     state["step_comments"] = sorted(step_comments_set)
 
+    if ensure_issue_steer_cursor_seeded(
+        repo_owner, repo_name, issue_number, state, cwd=cwd, quiet=quiet
+    ):
+        seed_save = save_workflow_state(
+            cwd,
+            issue_number,
+            "change",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+            dedupe=effective_clean_restart,
+        )
+        if seed_save:
+            github_comment_id = seed_save
+            state["github_comment_id"] = github_comment_id
+
     pddrc_context = _load_pddrc_context(cwd)
+
+    steer_generation_before = state.get("steer_generation", 0)
+    issue_content = apply_clarification_steers_on_resume(
+        issue_content,
+        state,
+        repo_owner,
+        repo_name,
+        issue_number,
+        _CLARIFICATION_STEPS,
+        cwd=cwd,
+        quiet=quiet,
+    )
+    if state.get("steer_generation", 0) != steer_generation_before:
+        save_result = save_workflow_state(
+            cwd,
+            issue_number,
+            "change",
+            state,
+            state_dir,
+            repo_owner,
+            repo_name,
+            use_github_state,
+            github_comment_id,
+            dedupe=effective_clean_restart,
+        )
+        if save_result:
+            github_comment_id = save_result
+            state["github_comment_id"] = github_comment_id
 
     context = {
         "issue_url": issue_url,
@@ -1555,6 +1633,16 @@ def run_agentic_change_orchestrator(
     
     for s_num, s_out in step_outputs.items():
         context[f"step{s_num}_output"] = s_out
+
+    cached_step6_output = str(context.get("step6_output", ""))
+    if (
+        last_completed_step >= 6
+        and cached_step6_output
+        and not cached_step6_output.startswith("FAILED:")
+    ):
+        context["direct_edit_candidates"] = _parse_direct_edit_candidates(
+            cached_step6_output
+        )
 
     changed_files = []
     
@@ -1663,6 +1751,41 @@ def run_agentic_change_orchestrator(
 
     consecutive_provider_failures = 0
     previous_architecture = None
+
+    def _issue_step_steers():
+        nonlocal github_comment_id
+        step_steers = drain_step_steers(
+            repo_owner,
+            repo_name,
+            issue_number,
+            state,
+            cwd=cwd,
+            quiet=quiet,
+        )
+        if step_steers:
+            refreshed_at = _fetch_issue_updated_at(
+                repo_owner, repo_name, issue_number
+            )
+            if refreshed_at:
+                state["issue_updated_at"] = refreshed_at
+            elif issue_updated_at:
+                state["issue_updated_at"] = issue_updated_at
+            save_result = save_workflow_state(
+                cwd,
+                issue_number,
+                "change",
+                state,
+                state_dir,
+                repo_owner,
+                repo_name,
+                use_github_state,
+                github_comment_id,
+                dedupe=effective_clean_restart,
+            )
+            if save_result:
+                github_comment_id = save_result
+                state["github_comment_id"] = github_comment_id
+        return step_steers
 
     for step_num, name, description in steps_config:
         if step_num < start_step:
@@ -1819,8 +1942,8 @@ def run_agentic_change_orchestrator(
 
         # Preprocess to expand <include> tags and escape curly braces
         # Exclude context keys from escaping so they can be substituted
-        exclude_keys = list(context.keys())
-        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        exclude = list(context.keys())
+        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude=exclude)
 
         formatted_prompt = substitute_template_variables(prompt_template, context)
 
@@ -1834,6 +1957,7 @@ def run_agentic_change_orchestrator(
             label=f"step{step_num}",
             max_retries=DEFAULT_MAX_RETRIES,
             reasoning_time=reasoning_time,
+            steers=_issue_step_steers() or None,
         )
 
         total_cost += step_cost
@@ -1882,7 +2006,18 @@ def run_agentic_change_orchestrator(
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
 
+        # Step 6 can legitimately find no prompt-backed dev units while still
+        # identifying unmanaged direct edit candidates. Parse those before hard
+        # stop detection so direct-edit-only runs can continue to Step 8/9.
+        if step_num == 6:
+            direct_edit_candidates = _parse_direct_edit_candidates(step_output)
+            context["direct_edit_candidates"] = direct_edit_candidates
+            if direct_edit_candidates and not quiet:
+                console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
+
         stop_reason = _check_hard_stop(step_num, step_output)
+        if step_num == 6 and stop_reason and context.get("direct_edit_candidates"):
+            stop_reason = None
         if stop_reason:
             post_step_comment(
                 repo_owner=repo_owner, repo_name=repo_name,
@@ -1903,13 +2038,6 @@ def run_agentic_change_orchestrator(
             state["step_comments"] = sorted(step_comments_set)
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id, dedupe=effective_clean_restart)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
-
-        # Step 6: Extract direct edit candidates (files without prompts that need scoped edits)
-        if step_num == 6:
-            direct_edit_candidates = _parse_direct_edit_candidates(step_output)
-            context["direct_edit_candidates"] = direct_edit_candidates
-            if direct_edit_candidates and not quiet:
-                console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
 
         if step_num == 9:
             extracted_files = _parse_changed_files(step_output)
@@ -2147,12 +2275,12 @@ def run_agentic_change_orchestrator(
             context["review_iteration"] = review_iteration
             context["previous_fixes"] = previous_fixes
             # Preprocess to escape curly braces in included content
-            exclude_keys = list(context.keys())
-            s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+            exclude = list(context.keys())
+            s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude=exclude)
             s11_prompt = substitute_template_variables(s11_template, context)
             timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
             s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
-                instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
+                instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
             # Trusted post for Step 11 (iteration-keyed: iter * 100 + 11)
@@ -2184,12 +2312,12 @@ def run_agentic_change_orchestrator(
             s12_template = load_prompt_template("agentic_change_step12_fix_issues_LLM")
             context["step11_output"] = s11_output
             # Preprocess to escape curly braces in included content
-            exclude_keys = list(context.keys())
-            s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+            exclude = list(context.keys())
+            s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude=exclude)
             s12_prompt = substitute_template_variables(s12_template, context)
             timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
             s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
-                instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
+                instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
             )
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
             # Trusted post for Step 12 (iteration-keyed: iter * 100 + 12)
@@ -2262,6 +2390,69 @@ def run_agentic_change_orchestrator(
 
     context["sync_order_script"] = sync_order_script; context["sync_order_list"] = sync_order_list
 
+    if worktree_path:
+        gate_worktree = worktree_path
+    else:
+        gate_worktree = Path(current_work_dir)
+    if changed_files:
+        try:
+            gate_success, gate_message, gate_cost = run_pre_checkup_gate(
+                worktree=gate_worktree,
+                changed_files=changed_files,
+                base_ref=None,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                quiet=quiet,
+                timeout_per_check=CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder,
+            )
+        except Exception as _exc:  # pylint: disable=broad-except
+            gate_success = False
+            gate_message = f"pre_checkup_gate blocked; phase=infrastructure error: {_exc}"
+            gate_cost = 0.0
+        total_cost += gate_cost
+        state["total_cost"] = total_cost
+        if not gate_success:
+            # Issue #1293: block before checkup. Do NOT create the PR when the
+            # gate finds mechanical breakage or unhealable drift ("block: don't
+            # hand off to checkup until green"; the change/feature path must run
+            # the gate too). The gate already applies the strict/non-strict
+            # distinction internally (per pre_checkup_gate R7: in default mode a
+            # non-fatal drift-sync residual is reported but does NOT flip
+            # gate_success, while build/smoke failures and fatal drift always
+            # do), so the caller hard-blocks whenever gate_success is False — it
+            # must NOT re-check PDD_STRICT_DOC_SYNC and downgrade a real failure
+            # to an advisory MANUAL_REVIEW note that still ships a broken PR.
+            state["step_outputs"]["12.5"] = f"FAILED: {gate_message}"
+            save_workflow_state(
+                cwd, issue_number, "change", state, state_dir,
+                repo_owner, repo_name, use_github_state, github_comment_id,
+                dedupe=effective_clean_restart,
+            )
+            return (
+                False,
+                f"Stopped at step 12.5: {gate_message}",
+                total_cost, model_used, changed_files,
+            )
+        # Issue #1293/#1243: the gate's drift-sync runs run_metadata_sync, which
+        # writes prompt+code-only fingerprints (example/test hashes are null).
+        # Step 13's `git add -A` would otherwise commit those degraded
+        # fingerprints into the PR, arming the #1243 null-hash auto-heal loop.
+        # Restore tracked .pdd/meta so .pdd/meta fingerprint finalization is
+        # deferred to the post-merge sync (#1317) — matching the fix path, which
+        # filters .pdd/** from its commit. The gate's prompt / example /
+        # architecture sync is committed normally (only .pdd/meta is reverted).
+        try:
+            subprocess.run(
+                ["git", "checkout", "--", ".pdd/meta"],
+                cwd=gate_worktree,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        except Exception:  # pylint: disable=broad-except
+            pass
+
     # Identify test files for affected modules (#377 Bug B)
     impacted_tests: List[str] = []
     test_dir_name = pddrc_context.get("test_dir", "tests/").rstrip("/")
@@ -2317,12 +2508,12 @@ def run_agentic_change_orchestrator(
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
         # Preprocess to escape curly braces in included content
-        exclude_keys = list(context.keys())
-        s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
+        exclude = list(context.keys())
+        s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude=exclude)
         s13_prompt = substitute_template_variables(s13_template, context)
         timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
         s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
-            instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
+            instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time, steers=_issue_step_steers() or None,
         )
         total_cost += s13_cost; model_used = s13_model; state["total_cost"] = total_cost
         if not s13_success:

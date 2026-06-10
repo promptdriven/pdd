@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 import sys
 import os
@@ -20,6 +21,11 @@ from ..core.errors import handle_error
 from ..core.utils import echo_model_line
 from ..operation_log import log_operation
 from ..evidence_manifest import write_evidence_manifest
+from ..prompt_gate import (
+    maybe_run_workflow_prompt_gate,
+    parse_prompt_gate_block_exit,
+    resolve_prompt_gate_project_root,
+)
 
 console = Console()
 
@@ -229,6 +235,18 @@ def split(
         "recovering from a stopped or wrong-model run."
     ),
 )
+@click.option(
+    "--prompt-checkup",
+    type=click.Choice(["warn", "strict"]),
+    default=None,
+    help="Automatic prompt checkup after writing .prompt files (warn or strict).",
+)
+@click.option(
+    "--no-prompt-checkup",
+    is_flag=True,
+    default=False,
+    help="Disable automatic prompt checkup for this run.",
+)
 @click.pass_context
 @track_cost
 def change(
@@ -242,6 +260,8 @@ def change(
     no_github_state: bool,
     evidence: bool,
     clean_restart: bool,
+    prompt_checkup: Optional[str],
+    no_prompt_checkup: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Modify an input prompt file based on a change prompt or issue.
@@ -253,6 +273,8 @@ def change(
         pdd change --manual CHANGE_PROMPT_FILE INPUT_CODE_FILE [INPUT_PROMPT_FILE]
     """
     ctx.ensure_object(dict)
+    ctx.obj["prompt_checkup"] = prompt_checkup
+    ctx.obj["no_prompt_checkup"] = no_prompt_checkup
 
     if clean_restart and manual:
         raise click.UsageError(
@@ -318,6 +340,13 @@ def change(
                 use_csv=csv,
                 budget=budget
             )
+            gate_exit = (
+                parse_prompt_gate_block_exit(result)
+                if isinstance(result, str)
+                else None
+            )
+            if gate_exit is not None:
+                raise click.exceptions.Exit(gate_exit)
             if evidence:
                 write_evidence_manifest(
                     command="pdd change",
@@ -340,16 +369,26 @@ def change(
                     "--clean-restart can only be used with an agentic GitHub issue URL."
                 )
 
-            # Call run_agentic_change
-            success, message, cost, model, changed_files = run_agentic_change(
-                issue_url=issue_url,
-                verbose=verbose,
-                quiet=quiet,
-                timeout_adder=timeout_adder,
-                use_github_state=not no_github_state,
-                clean_restart=clean_restart,
-                reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
-            )
+            previous_no_github_state = os.environ.get("PDD_NO_GITHUB_STATE")
+            if no_github_state:
+                os.environ["PDD_NO_GITHUB_STATE"] = "1"
+            try:
+                # Call run_agentic_change
+                success, message, cost, model, changed_files = run_agentic_change(
+                    issue_url=issue_url,
+                    verbose=verbose,
+                    quiet=quiet,
+                    timeout_adder=timeout_adder,
+                    use_github_state=not no_github_state,
+                    clean_restart=clean_restart,
+                    reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
+                )
+            finally:
+                if no_github_state:
+                    if previous_no_github_state is None:
+                        os.environ.pop("PDD_NO_GITHUB_STATE", None)
+                    else:
+                        os.environ["PDD_NO_GITHUB_STATE"] = previous_no_github_state
 
             # Display results using click.echo as requested
             if not quiet:
@@ -365,6 +404,16 @@ def change(
             
             if not success:
                 raise click.exceptions.Exit(1)
+
+            should_continue, gate_exit = maybe_run_workflow_prompt_gate(
+                changed_files,
+                cli_prompt_checkup=prompt_checkup,
+                no_prompt_checkup=no_prompt_checkup,
+                project_root=resolve_prompt_gate_project_root(changed_files or []),
+                quiet=quiet,
+            )
+            if not should_continue:
+                raise click.exceptions.Exit(gate_exit)
 
             if evidence:
                 write_evidence_manifest(

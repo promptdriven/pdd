@@ -137,6 +137,11 @@ This tutorial walks through implementing a GitHub issue using PDD.
 
 Adding a new test case is a great way to improve the robustness of PDD. This guide will walk you through the process of creating **unit tests** - low-level tests that focus on testing individual functions and modules for robustness and functionality.
 
+> **Tip**: When using `pdd generate` or `pdd fix`, you can use the `pytest:` selector (Python only) to include only relevant tests and their dependencies from an existing test file. This is more token-efficient than including the whole file:
+> ```xml
+> <include select="pytest:test_my_feature">tests/test_existing.py</include>
+> ```
+
 > **Note**: This section covers unit tests. For high-level integration testing that validates entire workflows, see the [regression tests section](#how-to-create-a-new-regression-test) below.
 
 ### 1. Prerequisite: Ensure Existing Tests Pass
@@ -527,3 +532,29 @@ If the workflow stops (e.g., PRD needs clarification):
 - Include tech stack preferences explicitly (e.g., "FastAPI + PostgreSQL" vs. leaving it ambiguous)
 - Review the generated `architecture.json` before generating individual module prompts
 - The `context_urls` field in each module entry provides documentation links for code generation
+
+---
+
+## Advanced Sync and Context Compression
+
+For large-scale projects, `pdd sync` supports advanced options to manage context window size and optimize costs.
+
+### Context Compression
+
+When working with complex dependency graphs, you can enable automated compression to reduce the token count of included files while maintaining their behavioral integrity:
+
+- **`--compress-examples`**: Automatically applies `mode="interface"` to example files.
+- **`--compress-test-context`**: Slices test context to include only what's necessary for fixing failures.
+- **`--context-compression contracts`**: Extracts contract rules and architecture metadata from prompt and documentation files.
+- **`--context-compression all`**: Enables all available compression modes.
+
+These flags are particularly useful when you encounter "context window exceeded" errors or want to reduce the cost of large synchronization operations.
+
+### Example: Advanced Sync
+
+```bash
+# Sync with full compression and a higher budget
+# Global flags must precede the subcommand, or use sync-local options:
+pdd --context-compression all --force sync --budget 15.0 my_complex_module
+# pdd sync --context-compression all --force --budget 15.0 my_complex_module
+```

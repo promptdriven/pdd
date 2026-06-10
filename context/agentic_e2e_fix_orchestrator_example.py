@@ -103,6 +103,27 @@ def _read_checkup_worktree_head_sha(cwd: Path, pr_number: int) -> str:
     return rev.stdout.strip()
 
 
+def _read_review_loop_verified_head_sha(
+    cwd: Path, issue_number: int, pr_number: int
+) -> str:
+    """Read the head SHA the final gate's Layer 2 (review-loop) verified+pushed.
+
+    The review-loop pushes Layer-2 fixes from its OWN worktree and records the
+    verified head in .pdd/checkup-review-loop/issue-{I}-pr-{N}/final-state.json,
+    so a Layer-2 push advances the remote head past the Layer-1 checkup worktree
+    head. The final-gate head-provenance check accepts this SHA as "ours" too.
+    Best-effort: empty string when no review-loop verdict exists.
+    """
+    try:
+        from pdd.checkup_review_loop import load_final_state
+        final_state = load_final_state(cwd, issue_number, pr_number)
+    except Exception:  # noqa: BLE001 — best-effort; empty means "can't compare"
+        return ""
+    if not isinstance(final_state, dict):
+        return ""
+    return str(final_state.get("verified_head_sha", "") or "")
+
+
 def _run_final_checkup_on_pr(
     *,
     issue_url: str,
@@ -118,12 +139,17 @@ def _run_final_checkup_on_pr(
     ci_step_template: str,
     ci_validation_timeout: float,
 ) -> tuple[bool, str, float, str]:
-    """Run full PR-mode checkup against the current branch's open PR.
+    """Run the canonical two-layer final gate against the current open PR.
 
-    Closes the post-CI mutation hole: the checkup runs with no_fix=False
-    and may push fixes that advance the PR head past the CI-validated SHA.
-    Snapshot before/after; if the head advanced, re-run CI on the new SHA
-    with max_retries=0 (verify-only). Fail closed when either SHA is empty.
+    Issue #1406: calls run_agentic_checkup(final_gate=True) so Layer 1 (the
+    PR-scoped checkup) runs, then Layer 2 (the review-loop) on the resulting
+    head; the returned success is a REAL ship verdict. Closes the post-CI
+    mutation hole: either layer may push fixes that advance the PR head past
+    the CI-validated SHA. Snapshot before/after; if the head advanced, the
+    post head is "ours" when it matches the Layer-1 checkup worktree head OR
+    the Layer-2 review-loop verified head, and CI is re-run on it with
+    max_retries=0 (verify-only). Fail closed when a SHA is empty or the
+    advanced head matches neither verified head.
     """
     from pdd.agentic_checkup import run_agentic_checkup
     from pdd.agentic_common import run_agentic_task
@@ -150,6 +176,7 @@ def _run_final_checkup_on_pr(
         use_github_state=use_github_state,
         reasoning_time=reasoning_time,
         pr_url=pr_url,
+        final_gate=True,
         cwd=cwd,
     )
 
@@ -184,33 +211,40 @@ def _run_final_checkup_on_pr(
     if post_checkup_head_sha == pre_checkup_head_sha:
         return checkup_success, checkup_message, checkup_cost, checkup_model
 
-    # The PR head moved during the checkup, but we cannot assume the
-    # checkup itself moved it. The worktree HEAD is the authoritative
-    # "last verified/pushed" SHA; if it does not equal the remote PR head,
-    # an external party advanced the PR during the checkup and Step 7
-    # never saw the new code.
+    # The PR head moved during the gate, but we cannot assume the gate itself
+    # moved it. The final gate has TWO authoritative "last verified/pushed"
+    # heads: Layer 1's checkup worktree HEAD and Layer 2's review-loop verified
+    # head (the review-loop pushes from its own worktree). The remote head is
+    # "ours" — and safe to CI-revalidate — when it matches EITHER; matching
+    # neither means an external party advanced the PR and no reviewer saw it.
     checkup_worktree_head_sha = _read_checkup_worktree_head_sha(cwd, pr_number)
-    if not checkup_worktree_head_sha:
+    review_loop_head_sha = _read_review_loop_verified_head_sha(
+        cwd, issue_number, pr_number
+    )
+    verified_heads = {
+        sha for sha in (checkup_worktree_head_sha, review_loop_head_sha) if sha
+    }
+    if not verified_heads:
         return (
             False,
             (
-                "Final checkup completed but the checkup worktree HEAD SHA "
-                "was unavailable; cannot prove the PR remote head matches "
-                "what was verified. Failing closed to avoid green-lighting "
-                "an unverified head."
+                "Final gate completed but neither the checkup worktree HEAD "
+                "SHA nor the review-loop verified head was available; cannot "
+                "prove the PR remote head matches what was verified. Failing "
+                "closed to avoid green-lighting an unverified head."
             ),
             checkup_cost,
             checkup_model,
         )
-    if checkup_worktree_head_sha != post_checkup_head_sha:
+    if post_checkup_head_sha not in verified_heads:
         return (
             False,
             (
-                f"PR head advanced to {post_checkup_head_sha[:8]} during "
-                f"final checkup but the checkup worktree last verified "
-                f"{checkup_worktree_head_sha[:8]}. External push during "
-                f"checkup detected — re-run pdd-issue so the new head is "
-                f"verified by Step 7 before CI re-validation."
+                f"PR head advanced to {post_checkup_head_sha[:8]} during the "
+                f"final gate but the gate last verified a different head. "
+                f"External push during the final gate detected — re-run "
+                f"pdd-issue so the new head is verified before CI "
+                f"re-validation."
             ),
             checkup_cost,
             checkup_model,

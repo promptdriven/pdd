@@ -74,6 +74,7 @@ from pdd.fix_error_loop import (
     run_pytest_on_file,
     format_log_for_output,
     _normalize_agentic_result,
+    _extract_failing_tests,
     escape_brackets
 )
 from pdd.fix_focus import FocusedInputs, FunctionSlice
@@ -1285,6 +1286,18 @@ def test_normalize_agentic_result():
     res = _normalize_agentic_result((False, "fail"))
     assert res == (False, "fail", 0.0, "agentic-cli", [])
 
+
+def test_extract_failing_tests_parses_pytest_ids():
+    output = (
+        "FAILED tests/test_foo.py::test_bar - AssertionError\n"
+        "tests/test_other.py::test_baz FAILED\n"
+    )
+    assert _extract_failing_tests(output) == [
+        "tests/test_foo.py::test_bar",
+        "tests/test_other.py::test_baz",
+    ]
+
+
 # --- Unit Tests for cloud_fix_errors ---
 
 def test_cloud_fix_errors_success(mock_cloud_config, mock_requests):
@@ -1354,6 +1367,37 @@ def test_cloud_fix_errors_uses_fix_code_camel_case_payload(mock_cloud_config, mo
     assert "unit_test" not in payload
     assert "protect_tests" not in payload
     assert "code_file_ext" not in payload
+
+def test_cloud_fix_errors_defaults_none_time(mock_cloud_config, mock_requests):
+    """Loop cloud payload should not send null time when ctx.obj has time=None."""
+    mock_cloud_config.get_jwt_token.return_value = "fake_token"
+    mock_cloud_config.get_endpoint_url.return_value = "http://api/fix"
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "updateUnitTest": False,
+        "updateCode": True,
+        "fixedUnitTest": "test",
+        "fixedCode": "code",
+        "analysis": "fixed",
+        "totalCost": 0.25,
+        "modelName": "cloud-model",
+    }
+    mock_requests.post.return_value = mock_response
+
+    cloud_fix_errors(
+        "test",
+        "code",
+        "prompt",
+        "error",
+        "err_file",
+        0.6,
+        0.2,
+        time=None,
+    )
+
+    payload = mock_requests.post.call_args.kwargs["json"]
+    assert payload["time"] == pdd.DEFAULT_TIME
 
 def test_cloud_fix_errors_no_token(mock_cloud_config):
     """Test error when no JWT token is available."""
@@ -2554,3 +2598,59 @@ def test_assertion_logic_convergence_runs_to_completion(setup_files):
     assert success is True
     assert attempts == 5
     assert mock_fix.call_count == 5
+
+
+def test_fix_error_loop_records_agentic_fallback_events(setup_files):
+    """Agentic fallback telemetry must record attempted vs successful fallback separately."""
+    files = setup_files
+    events: list[dict] = []
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file", return_value=(2, 0, 0, "AssertionError")):
+        with patch("pdd.fix_error_loop._safe_run_agentic_fix", return_value=(False, "fail", 0.0, "agent", [])):
+            fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="dummy_prompt.txt",
+                prompt="Fix it",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=0,
+                budget=1.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=True,
+                agentic_fallback_events=events,
+            )
+
+    assert len(events) == 2
+    assert events[0]["phase"] == "fix"
+    assert events[0]["attempted"] is True
+    assert events[0]["used"] is False
+    assert events[1]["attempted"] is True
+    assert events[1]["used"] is False
+
+
+def test_fix_error_loop_records_agentic_fallback_used_on_success(setup_files):
+    """Successful agentic fix fallback must set used=True on the completion event."""
+    files = setup_files
+    events: list[dict] = []
+
+    with patch("pdd.fix_error_loop.run_pytest_on_file", return_value=(2, 0, 0, "AssertionError")):
+        with patch("pdd.fix_error_loop._safe_run_agentic_fix", return_value=(True, "ok", 0.0, "agent", [])):
+            fix_error_loop(
+                unit_test_file=str(files["test_file"]),
+                code_file=str(files["code_file"]),
+                prompt_file="dummy_prompt.txt",
+                prompt="Fix it",
+                verification_program=str(files["verify_file"]),
+                strength=0.5,
+                temperature=0.0,
+                max_attempts=0,
+                budget=1.0,
+                error_log_file=str(files["error_log"]),
+                agentic_fallback=True,
+                agentic_fallback_events=events,
+            )
+
+    assert len(events) == 2
+    assert events[1]["used"] is True

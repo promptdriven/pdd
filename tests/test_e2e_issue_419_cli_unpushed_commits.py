@@ -147,7 +147,8 @@ def generate():
              patch('pdd.agentic_e2e_fix_orchestrator.clear_workflow_state', side_effect=mock_clear_state), \
              patch('pdd.agentic_e2e_fix_orchestrator._check_e2e_environment', return_value=(True, "")), \
              patch('pdd.agentic_e2e_fix_orchestrator.run_pytest_and_capture_output', return_value=mock_pytest_result), \
-             patch('pdd.agentic_e2e_fix_orchestrator.classify_step_output', return_value=None):
+             patch('pdd.agentic_e2e_fix_orchestrator.classify_step_output', return_value=None), \
+             patch('pdd.agentic_e2e_fix_orchestrator.run_pre_checkup_gate', return_value=(True, "gate mocked (#1293)", 0.0)):
                         from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
 
                         success, message, cost, model, files = run_agentic_e2e_fix_orchestrator(

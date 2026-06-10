@@ -11,7 +11,7 @@ import subprocess
 import requests
 import tempfile
 import sys
-from typing import Optional, Tuple, Dict, Any, List, Set
+from typing import Optional, Tuple, Dict, Any, List, Set, Mapping
 
 import click
 from rich.console import Console
@@ -20,6 +20,7 @@ from rich.text import Text
 
 # Relative imports for PDD package structure
 from . import DEFAULT_STRENGTH, DEFAULT_TIME, EXTRACTION_STRENGTH # Assuming these are in __init__.py
+from .config_resolution import resolve_effective_config
 from .construct_paths import construct_paths
 from .preprocess import preprocess as pdd_preprocess
 from .code_generator import code_generator as local_code_generator_func
@@ -30,6 +31,7 @@ from .architecture_sync import (
     get_architecture_entry_for_prompt,
     has_pdd_tags,
     generate_tags_from_architecture,
+    parse_prompt_tags,
 )
 from .architecture_registry import extract_modules
 from .architecture_include_validation import validate_prompt_contract_context
@@ -41,6 +43,7 @@ from .grounding_provenance import (
     stash_grounding_overrides_on_ctx,
     warn_cloud_examples_not_preapproved,
 )
+from .compressed_sync_context import compressed_context_is_active, render_for_prompt
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -707,7 +710,83 @@ def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
     return state
 
 
-def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
+def _assign_target_matches(target: ast.AST, symbol: str) -> bool:
+    """Return True when *symbol* is bound by an assignment target subtree."""
+    if isinstance(target, ast.Name):
+        return target.id == symbol
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return any(_assign_target_matches(elt, symbol) for elt in target.elts)
+    if isinstance(target, ast.Starred):
+        return _assign_target_matches(target.value, symbol)
+    return False
+
+
+def _symbol_exists_in_module(tree: ast.Module, symbol: str) -> bool:
+    """Return True when *symbol* is defined in *tree* (supports dotted class paths)."""
+    if "." not in symbol:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name == symbol:
+                    return True
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if _assign_target_matches(target, symbol):
+                        return True
+            elif isinstance(node, ast.AnnAssign):
+                if node.value is not None and _assign_target_matches(node.target, symbol):
+                    return True
+        return False
+    cls_name, remainder = symbol.split(".", 1)
+    cls_node = next(
+        (node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == cls_name),
+        None,
+    )
+    if cls_node is None:
+        return False
+    if "." not in remainder:
+        return any(
+            isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == remainder
+            for child in cls_node.body
+        )
+    inner_cls, method_name = remainder.split(".", 1)
+    for child in cls_node.body:
+        if isinstance(child, ast.ClassDef) and child.name == inner_cls:
+            return any(
+                isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and method.name == method_name
+                for method in child.body
+            )
+    return False
+
+
+def _effective_patch_targets(
+    existing_code: str,
+    language: str,
+    file_path: Optional[str],
+) -> Set[str]:
+    """Patch targets referenced by tests that are actually defined in *existing_code*."""
+    candidates = _collect_patch_targets(file_path)
+    if not candidates or (language or "").lower() not in {"python", "py"}:
+        return set()
+    try:
+        tree = ast.parse(existing_code or "")
+    except SyntaxError:
+        return set()
+    return {symbol for symbol in candidates if _symbol_exists_in_module(tree, symbol)}
+
+
+def _collect_patch_targets(file_path: Optional[str]) -> Set[str]:
+    """Return dotted symbol names patched by sibling tests for *file_path*."""
+    from .split_validation import collect_patch_symbols_for_module  # pylint: disable=import-outside-toplevel
+
+    return set(collect_patch_symbols_for_module(file_path))
+
+
+def _snapshot_public_surface(
+    code_text: str,
+    language: str,
+    patch_targets: Optional[Set[str]] = None,
+) -> Set[str]:
     """Collect public top-level functions/classes plus public class methods.
 
     Recurses into public nested classes so a method on ``Outer.Inner`` is
@@ -793,6 +872,8 @@ def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
                 # User opted the whole class into __all__; treat its
                 # members (including underscore-prefixed) as public.
                 _walk_class(class_defs[name], name, include_underscore=True)
+        if patch_targets:
+            names.update(patch_targets)
         return names
 
     def _add_assign_targets(target: ast.AST) -> None:
@@ -855,6 +936,9 @@ def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
                 exposed = alias.asname or alias.name
                 if exposed and not exposed.startswith("_"):
                     names.add(exposed)
+
+    if patch_targets:
+        names.update(patch_targets)
 
     return names
 
@@ -1483,7 +1567,52 @@ def _synthesize_dataclass_init_signature(
     return f"({', '.join(parts)})"
 
 
-def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
+def _patch_target_signature_entry(
+    tree: ast.Module,
+    symbol: str,
+    class_defs: Dict[str, ast.ClassDef],
+) -> Optional[str]:
+    """Return a snapshot signature string for a patched callable *symbol*."""
+    if "." not in symbol:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == symbol:
+                kind = "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function"
+                return f"[{kind}] {_format_python_signature(node)}"
+        return None
+
+    parts = symbol.split(".")
+    cls_name = parts[0]
+    cls_node = class_defs.get(cls_name)
+    if cls_node is None:
+        return None
+
+    if len(parts) == 2:
+        method_name = parts[1]
+        for child in cls_node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method_name:
+                binding_kind = _python_method_binding_kind(child)
+                skip_first = binding_kind != "staticmethod"
+                return f"[{binding_kind}] {_format_python_signature(child, skip_first=skip_first)}"
+        return None
+
+    inner_cls, method_name = parts[1], parts[2]
+    for child in cls_node.body:
+        if isinstance(child, ast.ClassDef) and child.name == inner_cls:
+            for method in child.body:
+                if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)) and method.name == method_name:
+                    binding_kind = _python_method_binding_kind(method)
+                    skip_first = binding_kind != "staticmethod"
+                    return (
+                        f"[{binding_kind}] {_format_python_signature(method, skip_first=skip_first)}"
+                    )
+    return None
+
+
+def _snapshot_public_signatures(
+    code_text: str,
+    language: str,
+    patch_targets: Optional[Set[str]] = None,
+) -> Dict[str, str]:
     """Collect signatures for public top-level functions, classes, and class methods.
 
     Recurses into public nested classes so a method like ``Outer.Inner.method``
@@ -1830,6 +1959,13 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
                     # sufficient to distinguish it from a same-named
                     # ``def Path()`` later in the file.
                     signatures[exposed] = f"[import:from {module}]"
+    if patch_targets:
+        for symbol in sorted(patch_targets):
+            if symbol in signatures:
+                continue
+            entry = _patch_target_signature_entry(tree, symbol, class_defs)
+            if entry is not None:
+                signatures[symbol] = entry
     return signatures
 
 
@@ -1862,8 +1998,20 @@ def _verify_public_surface_regression(
     ):
         return
 
-    before = _snapshot_public_surface(existing_code, language or "python")
-    after = _snapshot_public_surface(generated_code, language or "python")
+    patch_targets = _effective_patch_targets(existing_code, language or "python", output_path)
+    before = _snapshot_public_surface(
+        existing_code,
+        language or "python",
+        patch_targets=patch_targets,
+    )
+    after_patch_targets = _effective_patch_targets(
+        generated_code, language or "python", output_path
+    )
+    after = _snapshot_public_surface(
+        generated_code,
+        language or "python",
+        patch_targets=after_patch_targets,
+    )
     if not before:
         return
     allowed_removed = _prompt_breaking_change_removed_symbols(prompt_content)
@@ -1884,8 +2032,16 @@ def _verify_public_surface_regression(
         for symbol in _diff_public_surface(before, after)
         if symbol not in expanded_allowed
     ]
-    before_signatures = _snapshot_public_signatures(existing_code, language or "python")
-    after_signatures = _snapshot_public_signatures(generated_code, language or "python")
+    before_signatures = _snapshot_public_signatures(
+        existing_code,
+        language or "python",
+        patch_targets=patch_targets,
+    )
+    after_signatures = _snapshot_public_signatures(
+        generated_code,
+        language or "python",
+        patch_targets=after_patch_targets,
+    )
     allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
     changed_set = {
         symbol
@@ -2438,13 +2594,8 @@ def _extract_pdd_interface_signatures(
     if not prompt_content:
         return declarations, False
 
-    # Reuse the canonical parser from architecture_sync (verified non-circular
-    # at module import time).
-    try:
-        from .architecture_sync import parse_prompt_tags
-    except ImportError:
-        return declarations, False
-
+    # parse_prompt_tags is imported at module top level (architecture_sync is a
+    # hard dependency imported there), so it is always available here.
     tags = parse_prompt_tags(prompt_content)
     parse_error = tags.get("interface_parse_error")
     if parse_error:
@@ -2499,6 +2650,41 @@ def _extract_pdd_interface_signatures(
             continue
         declarations.append((name, params))
     return declarations, False
+
+
+def _collect_pdd_interface_names(prompt_content: Optional[str]) -> Set[str]:
+    """Collect declared ``module.functions`` *names* from a prompt's ``<pdd-interface>``.
+
+    Mirrors the architecture.json declared-symbol collection (the function ``name``
+    fields under a ``type: "module"`` interface) but sourced from the prompt, so the
+    camelCase naming exemption honors a name the author declared in the
+    source-of-truth prompt even before ``architecture.json`` is regenerated to match
+    (issue #1446). Unlike :func:`_extract_pdd_interface_signatures`, this keeps
+    description-only declarations (no paren signature), because the exemption keys on
+    the name alone.
+
+    The camelCase guard only ever runs for ``type: "module"`` interfaces (the only
+    shape that populates declared symbols and reaches the guard), so collection is
+    scoped to that type. Returns an empty set when ``prompt_content`` is absent or
+    has no parseable ``<pdd-interface>`` — the exemption is best-effort and never
+    blocks generation (the ``<pdd-interface>`` signature check owns parse-error
+    logging, so we stay silent here to avoid a double warning).
+    """
+    names: Set[str] = set()
+    if not prompt_content:
+        return names
+    tags = parse_prompt_tags(prompt_content)
+    if tags.get("interface_parse_error"):
+        return names
+    interface = tags.get("interface")
+    if not isinstance(interface, dict) or interface.get("type") != "module":
+        return names
+    for func in (interface.get("module") or {}).get("functions") or []:
+        if isinstance(func, dict):
+            name = func.get("name")
+            if isinstance(name, str) and name:
+                names.add(name)
+    return names
 
 
 def _verify_pdd_interface_signatures(
@@ -2724,12 +2910,17 @@ def _verify_architecture_conformance(
     the interface contract, so this check runs even when ``architecture.json``
     has no matching entry.
     """
+    # Names declared in the prompt's <pdd-interface> are also intentional public
+    # API for the camelCase naming check (issue #1446), even when architecture.json
+    # has not yet been regenerated to match — the prompt is the source of truth.
+    camel_exempt_names = _collect_pdd_interface_names(prompt_content)
     entry = _verify_architecture_json_conformance(
         generated_code=generated_code,
         prompt_name=prompt_name,
         arch_path=arch_path,
         language=language,
         output_path=output_path,
+        camel_exempt_names=camel_exempt_names,
     )
 
     # Additionally enforce the prompt's <pdd-interface> signature contract.
@@ -2753,6 +2944,8 @@ def _verify_architecture_json_conformance(
     arch_path: Optional[str],
     language: Optional[str],
     output_path: Optional[str],
+    *,
+    camel_exempt_names: Optional[Set[str]] = None,
 ) -> Optional[Dict[str, Any]]:
     """Pre-existing architecture.json symbol-existence + camelCase check.
 
@@ -2853,8 +3046,20 @@ def _verify_architecture_json_conformance(
     # guard inspects the method segment, not only the class-name prefix.
     if detected_lang in ("python", "py") or prompt_name.endswith("_Python.prompt"):
         camel_pattern = re.compile(r"^[a-z]+[A-Z]")
+        # Exempt declared interface names from the camelCase naming check only:
+        # a name declared in architecture.json (``declared_symbols``) OR in the
+        # prompt's ``<pdd-interface>`` (``camel_exempt_names``, the source of
+        # truth, supplied by the caller) is intentional public API (e.g. Firebase
+        # Cloud Function exports like ``generateCode``), not accidental drift — so
+        # only UNDECLARED camelCase is flagged (issue #1446). This exemption is
+        # scoped to naming and never weakens the missing-symbol check above.
+        exempt_names = set(declared_symbols)
+        if camel_exempt_names:
+            exempt_names |= camel_exempt_names
         camel_exports: List[str] = []
         for s in actual_symbols:
+            if s in exempt_names:
+                continue
             for part in s.split("."):
                 if not part.startswith("_") and camel_pattern.match(part):
                     camel_exports.append(s)
@@ -3047,6 +3252,9 @@ def code_generator_main(
     exclude_tests: bool = False,
     language: Optional[str] = None,
     output_from_config: bool = False,
+    compress: bool = False,
+    snapshot_context: bool = False,
+    compressed_context: Optional[Mapping[str, Any]] = None,
 ) -> Tuple[str, bool, float, str]:
     """
     CLI wrapper for generating code from prompts. Handles full and incremental generation,
@@ -3070,6 +3278,8 @@ def code_generator_main(
             When ``False`` (CLI flag), the explicit path always wins. This
             preserves the documented precedence: CLI > front-matter > .pddrc.
             Defaults to ``False`` so existing callers stay backward compatible.
+        snapshot_context: When True, persist a replayable context snapshot for
+            the expanded prompt used by this generation.
 
     Returns:
         Tuple of (generated_code, was_incremental, total_cost, model_name).
@@ -3087,6 +3297,9 @@ def code_generator_main(
     was_incremental_operation = False
     total_cost = 0.0
     model_name = "unknown"
+    snapshot_recorder = None
+    snapshot_expanded_prompt: Optional[str] = None
+    current_execution_is_local = is_local_execution_preferred
 
     input_file_paths_dict: Dict[str, str] = {"prompt_file": prompt_file}
     if original_prompt_file_path:
@@ -3110,6 +3323,12 @@ def code_generator_main(
 
         if isinstance(ctx.obj, dict):
             stash_grounding_overrides_on_ctx(ctx.obj, prompt_content)
+
+        if snapshot_context:
+            from .context_snapshot import start_snapshot_run
+
+            snapshot_recorder = start_snapshot_run(prompt_file, command="pdd generate")
+            snapshot_recorder.record_prompt_source(prompt_content)
 
         # Determine LLM state early to avoid unnecessary overwrite prompts
         llm_enabled: bool = True
@@ -3143,6 +3362,7 @@ def code_generator_main(
             context_override=ctx.obj.get('context'),
             confirm_callback=cli_params.get('confirm_callback')
         )
+        resolve_effective_config(ctx, resolved_config)
         # Determine final output path: if user passed a directory, use resolved file path
         resolved_output = output_file_paths.get("output")
         if output is None:
@@ -3158,18 +3378,20 @@ def code_generator_main(
                 output_path = output
 
         # --- Unit Test Inclusion Logic ---
+        # When compressed sync context is active, tests are supplied via the
+        # bounded package instead of full <unit_test_content> expansion (#878).
         test_files_to_include: List[str] = []
-        if unit_test_file:
-            test_files_to_include.append(unit_test_file)
-        elif not exclude_tests:
-            # Try to find default test files
-            tests_dir = resolved_config.get("tests_dir")
-            found_tests = _find_default_test_files(tests_dir, output_path)
-            if found_tests:
-                if verbose:
-                    console.print(f"[info]Found default test files: {', '.join(found_tests)}[/info]")
-                test_files_to_include.extend(found_tests)
-        
+        if not compressed_context_is_active(compressed_context):
+            if unit_test_file:
+                test_files_to_include.append(unit_test_file)
+            elif not exclude_tests:
+                tests_dir = resolved_config.get("tests_dir")
+                found_tests = _find_default_test_files(tests_dir, output_path)
+                if found_tests:
+                    if verbose:
+                        console.print(f"[info]Found default test files: {', '.join(found_tests)}[/info]")
+                    test_files_to_include.extend(found_tests)
+
         if test_files_to_include:
             prompt_content += "\n\n<unit_test_content>\n"
             prompt_content += (
@@ -3208,6 +3430,9 @@ def code_generator_main(
                 f"{repair_directive_env.strip()}\n"
                 "</architecture_repair_directive>\n"
             )
+        rendered_compressed_context = render_for_prompt(compressed_context)
+        if rendered_compressed_context:
+            prompt_content += "\n\n" + rendered_compressed_context
 
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
@@ -3615,14 +3840,23 @@ def code_generator_main(
             # source file's docstring from a real failed include (#1354 codex pass-3).
             from .preprocess import compute_user_intent_paths as _cuip
             orig_intent = _cuip(original_prompt_content_for_incremental) | _cuip(_expand_vars(original_prompt_content_for_incremental, env_vars))
-            orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False)
+            orig_proc = pdd_preprocess(original_prompt_content_for_incremental, recursive=True, double_curly_brackets=False, snapshot_recorder=snapshot_recorder)
             orig_proc = _expand_vars(orig_proc, env_vars)
-            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=orig_intent)
+            orig_proc = pdd_preprocess(orig_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=orig_intent, snapshot_recorder=snapshot_recorder)
 
             new_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
-            new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False)
+            new_proc = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, snapshot_recorder=snapshot_recorder)
             new_proc = _expand_vars(new_proc, env_vars)
-            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=new_intent)
+            new_proc = pdd_preprocess(new_proc, recursive=False, double_curly_brackets=True, _user_intent_paths=new_intent, snapshot_recorder=snapshot_recorder)
+            snapshot_expanded_prompt = json.dumps(
+                {
+                    "mode": "incremental",
+                    "original_prompt": orig_proc,
+                    "new_prompt": new_proc,
+                },
+                indent=2,
+                sort_keys=True,
+            )
 
             generated_code_content, was_incremental_operation, total_cost, model_name = incremental_code_generator_func(
                 original_prompt=orig_proc,
@@ -3675,9 +3909,25 @@ def code_generator_main(
                 # include warning against real intent (see #1354 codex pass-3).
                 from .preprocess import compute_user_intent_paths as _cuip
                 _cloud_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
-                processed_prompt_for_cloud = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                processed_prompt_for_cloud = pdd_preprocess(
+                    prompt_content,
+                    recursive=True,
+                    double_curly_brackets=False,
+                    exclude_keys=[],
+                    compress=compress,
+                    snapshot_recorder=snapshot_recorder,
+                )
                 processed_prompt_for_cloud = _expand_vars(processed_prompt_for_cloud, env_vars)
-                processed_prompt_for_cloud = pdd_preprocess(processed_prompt_for_cloud, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_cloud_intent)
+                processed_prompt_for_cloud = pdd_preprocess(
+                    processed_prompt_for_cloud,
+                    recursive=False,
+                    double_curly_brackets=True,
+                    exclude_keys=[],
+                    compress=compress,
+                    _user_intent_paths=_cloud_intent,
+                    snapshot_recorder=snapshot_recorder,
+                )
+                snapshot_expanded_prompt = processed_prompt_for_cloud
                 if verbose: console.print(Panel(Text(processed_prompt_for_cloud, overflow="fold"), title="[cyan]Preprocessed Prompt for Cloud[/cyan]", expand=False))
 
                 # Extract and display pinned example ID if present in prompt
@@ -3704,6 +3954,7 @@ def code_generator_main(
                         "strength": strength,
                         "temperature": temperature,
                         "verbose": verbose,
+                        "compress": compress,
                     }
                     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
                     cloud_url = CloudConfig.get_endpoint_url("generateCode")
@@ -3753,9 +4004,13 @@ def code_generator_main(
                         if examples_used:
                             selected_example_id = examples_used[0].get("id")
                             selected_example_title = examples_used[0].get("title")
+                            if snapshot_recorder:
+                                snapshot_recorder.record_grounding_examples(examples_used)
                         else:
                             selected_example_id = None
                             selected_example_title = None
+                            if snapshot_recorder:
+                                snapshot_recorder.record_grounding_unavailable("cloud_returned_no_examples")
 
                         # Strip markdown code fences if present (cloud API returns fenced JSON)
                         if generated_code_content and isinstance(language, str) and language.strip().lower() == "json":
@@ -3844,9 +4099,27 @@ def code_generator_main(
                 # against real intent (see #1354 codex pass-3).
                 from .preprocess import compute_user_intent_paths as _cuip
                 _local_intent = _cuip(prompt_content) | _cuip(_expand_vars(prompt_content, env_vars))
-                local_prompt = pdd_preprocess(prompt_content, recursive=True, double_curly_brackets=False, exclude_keys=[])
+                local_prompt = pdd_preprocess(
+                    prompt_content,
+                    recursive=True,
+                    double_curly_brackets=False,
+                    exclude_keys=[],
+                    compress=compress,
+                    snapshot_recorder=snapshot_recorder,
+                )
                 local_prompt = _expand_vars(local_prompt, env_vars)
-                local_prompt = pdd_preprocess(local_prompt, recursive=False, double_curly_brackets=True, exclude_keys=[], _user_intent_paths=_local_intent)
+                local_prompt = pdd_preprocess(
+                    local_prompt,
+                    recursive=False,
+                    double_curly_brackets=True,
+                    exclude_keys=[],
+                    compress=compress,
+                    _user_intent_paths=_local_intent,
+                    snapshot_recorder=snapshot_recorder,
+                )
+                snapshot_expanded_prompt = local_prompt
+                if snapshot_recorder:
+                    snapshot_recorder.record_grounding_unavailable("local_generation")
                 # Language already resolved (front matter overrides detection if present)
                 gen_language = language
                 
@@ -3862,6 +4135,7 @@ def code_generator_main(
                     verbose=verbose,
                     preprocess_prompt=False,
                     output_schema=output_schema,
+                    compress=compress,
                 )
                 was_incremental_operation = False
                 if verbose:
@@ -4215,6 +4489,34 @@ def code_generator_main(
                             console.print(f"[yellow]Warning: Could not inject architecture tags: {e}[/yellow]")
 
                 p_output.write_text(final_content, encoding="utf-8")
+                if snapshot_recorder:
+                    snapshot_manifest = snapshot_recorder.finalize(
+                        expanded_prompt=snapshot_expanded_prompt or prompt_content,
+                        prompt_text=prompt_content,
+                        output_files=[p_output],
+                        model=model_name,
+                        provider="local" if current_execution_is_local else "cloud",
+                    )
+                    ctx.ensure_object(dict)
+                    ctx.obj["context_snapshot"] = {
+                        "run_id": snapshot_manifest.get("run_id"),
+                        "manifest_path": snapshot_manifest.get("manifest_path"),
+                        "snapshot_dir": snapshot_manifest.get("snapshot_dir"),
+                        "expanded_prompt": snapshot_manifest.get("expanded_prompt"),
+                        "uses_nondeterministic_context": snapshot_manifest.get(
+                            "uses_nondeterministic_context"
+                        ),
+                        "dynamic_tags": snapshot_manifest.get("dynamic_tags", []),
+                        "declared_dynamic_tags": snapshot_manifest.get("declared_dynamic_tags", []),
+                        "redaction_applied": snapshot_manifest.get("redaction", {}).get(
+                            "applied", False
+                        ),
+                        "redaction": snapshot_manifest.get("redaction"),
+                        "artifacts": snapshot_manifest.get("artifacts", []),
+                        "grounding_examples": snapshot_manifest.get("generation", {}).get(
+                            "grounding_examples", []
+                        ),
+                    }
                 if verbose or not quiet:
                     console.print(f"Generated code saved to: [green]{p_output.resolve()}[/green]")
                 # Post-write: optionally wire exports to parent __init__.py.

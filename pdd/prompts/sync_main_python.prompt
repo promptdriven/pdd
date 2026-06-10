@@ -1,8 +1,20 @@
 <pdd-reason>CLI entry point for the unified sync workflow, handling both single-module and global project-wide synchronization.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "sync_main", "signature": "(ctx: click.Context, basename: str, max_attempts: Optional[int], budget: Optional[float], skip_verify: bool, skip_tests: bool, target_coverage: float, dry_run: bool, no_steer: bool = False, steer_timeout: Optional[float] = None, agentic_mode: bool = False, one_session: bool = False, compress: bool = False, evidence: bool = False, snapshot_context: bool = False, compressed_context: Optional[bool] = None) -> Tuple[Dict[str, Any], float, str]", "returns": "Tuple[Dict[str, Any], float, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
 # sync_main_python.prompt
 
 % You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function handles interface logic (environment variables, parameter validation, path construction) and calls sync_orchestration to perform the actual sync workflow.
@@ -29,6 +41,11 @@
         - `steer_timeout` (Optional[float]): Steering choice timeout in seconds. None = default timeout.
         - `agentic_mode` (bool): When True, Python behaves like non-Python languages (uses agentic path for operations)
         - `one_session` (bool): When True, run example/crash/verify/test/fix in a single agentic session instead of separate steps
+        - `snapshot_context` (bool): When True, capture replayable expanded prompt context for generation in `code_generator_main` and `sync_orchestration`. Default False.
+        - `compressed_context` (Optional[bool]): Tri-state request flag for phase-aware compressed context. `None` means no explicit CLI value was supplied; resolve the effective setting from CLI value when not None, then `.pddrc` default context `defaults.compressed_context`, then `False`. Display the effective setting with other sync settings and never print raw compressed prompt/test/example content.
+        - `compress` (bool): Use AST-based compression (`mode="compressed"`) for Python includes when no explicit include mode is set. Default False.
+        - `evidence` (bool): Write optional per-run JSON evidence manifest. Default False.
+        - Context compression (#877): read global CLI flags on `ctx.obj` (`compress_examples`, `compress_test_context`, `context_compression`, `compression_fallback`) and apply via `resolve_effective_config()` / `apply_compression_env()` before preprocess and fix steps (in addition to `compress` when set).
 
     Outputs:
         - Tuple of (Dict[str, Any] results, float total_cost, str model_name)
@@ -40,7 +57,11 @@
     - Import DEFAULT_STRENGTH, DEFAULT_TIME from package root
     - Import `DEFAULT_STEER_TIMEOUT_S` from `sync_tui`
     - Name context variable `context_override`, time variable `time_param` to avoid shadowing builtins
-    - Configuration hierarchy: CLI value (if not None) > .pddrc value > hardcoded default
+    - Configuration hierarchy: CLI value (if not None) > .pddrc value > hardcoded default. Apply this explicitly to `compressed_context` so an omitted CLI flag can still inherit `.pddrc`, while `--compressed-context` and `--no-compressed-context` override config.
+    - Use `ctx.obj` for shared CLI state (e.g., cost tracking, example review, local mode)
+    - Follow established hierarchy for configuration: CLI value (if not None) > .pddrc value > hardcoded default
+    - Use package-standard constants for default values (strength, time, timeouts)
+    - Ensure local variable names do not shadow Python builtins or package-level imports
 
 2. **Prompt Discovery** (two-stage):
     - **Template-based discovery (primary)**: Search contexts in .pddrc for `outputs.prompt.path` templates. Expand template with basename and common languages until a prompt file is found. Use `_find_pddrc_file`, `_load_pddrc_config`, and `expand_template` from template_expander.
@@ -52,7 +73,7 @@
 3. **Dry-Run Mode**:
     - Display sync analysis for basename, then exit
     - Iterate through each detected language, print header, call sync_orchestration with `dry_run=True`
-    - Pass directory parameters, verbose, quiet, context_override, `no_steer`, and `steer_timeout`
+    - Pass directory parameters, verbose, quiet, context_override, `no_steer`, `steer_timeout`, `compress`, and `evidence`
     - Use `force=True` in construct_paths to avoid interactive prompts
     - Use `DEFAULT_STEER_TIMEOUT_S` when `steer_timeout` is None
     - Return `({}, 0.0, "")` after processing all languages
@@ -89,7 +110,7 @@
     - Mutually exclusive with `skip_tests` and `skip_verify` (raise UsageError if combined)
     - Use `get_pdd_file_paths()` from `sync_determine_operation` to resolve module file paths
     - **Fingerprint check**: If not force mode, call `sync_determine_operation()` to check if module is already synced; skip if operation is "nothing"
-    - **Phase 1 (Generation)**: If code file doesn't exist or `force`, run `code_generator_main()` to generate the code file; track the generation cost as `pre_cost`. Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc` `generate_output_path`), not an explicit user `--output` flag, so front-matter `output:` should still take precedence over the .pddrc default.
+    - **Phase 1 (Generation)**: If code file doesn't exist or `force`, run `code_generator_main()` to generate the code file; track the generation cost as `pre_cost`. Pass `output_from_config=True` — the resolved code path comes from `get_pdd_file_paths()` (which uses `.pddrc` `generate_output_path`), not an explicit user `--output` flag, so front-matter `output:` should still take precedence over the .pddrc default. Forward `snapshot_context` into every generation attempt. When the effective compressed-context request flag is true, build a phase-specific compressed context package immediately before each LLM-backed generation attempt and pass that mapping to `code_generator_main(compressed_context=package)`. Never pass the boolean request flag itself to `code_generator_main`. If package construction fails, pass `None`, continue with full-context behavior, and record `used=false` compression metadata with the failure reason.
     - **Architecture-conformance / public-surface / test-churn retry (#866, #1012)**: Wrap the `code_generator_main()` call in a retry loop bounded by `MAX_CONFORMANCE_ATTEMPTS` (imported from `pdd.agentic_sync_runner`). The loop catches three typed exceptions raised from `code_generator_main`: `ArchitectureConformanceError`, `PublicSurfaceRegressionError`, and `TestChurnError`. For each, add `exc.total_cost` to `pre_cost`, remember `exc.model_name`, set `PDD_REPAIR_DIRECTIVE` to `exc.repair_directive`, and retry only if budget remains.
         - Track the failure signature across attempts: sorted `missing_symbols` for conformance, sorted `removed_symbols` for public-surface, `(round(churn_ratio, 2), pre_line_count)` for test-churn. If the next attempt fails with the **identical** signature, abort the loop (no progress) instead of looping forever. Test-churn additionally caps at ONE repair attempt — the additive-only directive either lands the first try or stays stuck.
         - **`.pddrc` / `strength` stability across retries (#1012)**: in-process retries reuse the same resolved `ctx.obj` (`strength`, `temperature`, `context_override`, `context_config`) that was set up before the first `code_generator_main` call, so retries cannot silently switch model or context. Do NOT re-resolve `.pddrc` mid-loop. (The cross-subprocess pinning needed when `agentic_sync_runner` retries a child process is handled separately in `agentic_sync_runner_python.prompt` Req 9b.)
@@ -99,6 +120,7 @@
         - This keeps the plain `pdd sync <module>` diagnostic in parity with `agentic_sync_runner.py` and matches the `sync_orchestration` `generate` operation. Do **not** drop or simplify this loop when regenerating: it is the source-of-truth contract for #865/#866/#1012.
     - **Phase 2 (One-session sync)**: Call `run_one_session_sync()` from `one_session_sync` to run example/crash/verify/test in a single agent session
     - Merge costs: add `pre_cost` (including failed conformance attempts and the final successful generate attempt) to the one-session result's `total_cost`; pass only `remaining_budget - pre_cost` into the one-session phase.
+    - Include snapshot status and artifact paths from generation in the one-session summary/result when available, without displaying sensitive artifact contents or forbidden detail strings.
     - If code generation fails (code file still missing), return failure without proceeding to one-session
     - **Post-sync**: Save fingerprint via `save_fingerprint()` so next sync sees files as up-to-date
     - **Auto-submit**: On success and not local mode, call `_auto_submit_example()` to submit the example to PDD Cloud
@@ -116,10 +138,12 @@
 
 10. **Multi-Language Processing**:
     - Process each detected language separately via sync_orchestration (or one-session mode)
+    - Forward `snapshot_context` and the resolved boolean compressed-context request flag into each `sync_orchestration()` call in multi-language mode and one-session repair paths. For direct one-session generation retries, convert the request flag to a phase package before calling generation/fix helpers; downstream helpers that type `compressed_context` as `Mapping[str, Any] | None` must never receive the raw boolean flag.
+    - When downstream results include compression or agentic-fallback metadata, include a concise status in language result summaries: requested, used, unavailable reason, phases, and fallback used. Do not print raw compressed prompt, test, example, or contract bodies.
     - Track remaining_budget across languages (reduce after each language's cost)
     - Skip subsequent languages if budget exhausted
     - Aggregate results and costs from all language syncs
-    - Forward steerability controls (`no_steer`, resolved `steer_timeout`) to each sync_orchestration call
+    - Forward steerability controls (`no_steer`, resolved `steer_timeout`), `compress`, `evidence`, and #877 compression flags (`compress_examples`, `compress_test_context`, `context_compression`, `compression_fallback`) to each sync_orchestration call
     - **Auto-submit on success**: After sync_orchestration returns success for a language (and not local mode), call `_auto_submit_example()` to submit the prompt+code pair to PDD Cloud, same as one-session mode. Use `get_pdd_file_paths()` to resolve the module file paths needed for submission. Wrap in try/except and log warnings on failure (do not abort sync).
 
 11. User Feedback (unless quiet=True):
@@ -129,6 +153,7 @@
     - **Robust fallback**: If `summary` is missing, empty, or contains forbidden values ("None", "No details."), use "No sync operations required; selected target is already synchronized." for Success and "Step failed" for Failure (use `error` if available and not a forbidden value).
     - **Forbidden values**: NEVER display the literal strings "None" or "No details." in the Details column, even if they are returned in `summary` or `error` by upstream components.
     - Suppress the 'Model:' line in any execution summary if the model name is empty, 'unknown', or 'N/A' (case-insensitive).
+    - When snapshot context is enabled and upstream returns artifact paths, include a concise snapshot status/path in language result summaries.
     - Total time elapsed, total cost, overall status
 
 % Helper Functions (implement as internal functions):
@@ -219,6 +244,9 @@
 <pdd.code_generator_main>
     <include select="class:ArchitectureConformanceError,class:PublicSurfaceRegressionError,class:TestChurnError,def:code_generator_main">pdd/code_generator_main.py</include>
 </pdd.code_generator_main>
+<pdd.compressed_sync_context>
+    <include optional mode="interface">pdd/compressed_sync_context.py</include>
+</pdd.compressed_sync_context>
 <pdd.agentic_sync_runner>
     <include select="def:build_conformance_hard_failure_from_error,def:build_public_surface_hard_failure_from_error,def:build_test_churn_hard_failure_from_error">pdd/agentic_sync_runner.py</include>
 </pdd.agentic_sync_runner>

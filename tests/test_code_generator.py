@@ -68,7 +68,7 @@ def test_code_generator_valid_input_complete(
     )
 
     # Assertions
-    mock_preprocess.assert_called_once_with("Generate a Python function to add two numbers.", recursive=False, double_curly_brackets=True)
+    mock_preprocess.assert_called_once_with("Generate a Python function to add two numbers.", recursive=False, double_curly_brackets=True, compress=False)
     mock_llm_invoke.assert_called_once_with(
         prompt=MOCK_PROCESSED_PROMPT,
         input_json={},
@@ -122,7 +122,7 @@ def test_code_generator_valid_input_incomplete(
     )
 
     # Assertions
-    mock_preprocess.assert_called_once_with("Generate a Python function to multiply two numbers.", recursive=False, double_curly_brackets=True)
+    mock_preprocess.assert_called_once_with("Generate a Python function to multiply two numbers.", recursive=False, double_curly_brackets=True, compress=False)
     mock_llm_invoke.assert_called_once_with(
         prompt=MOCK_PROCESSED_PROMPT,
         input_json={},

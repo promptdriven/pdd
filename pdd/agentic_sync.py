@@ -1098,6 +1098,7 @@ def run_global_sync(
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
     context_override: Optional[str] = None,
+    compressed_context: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """Run project-wide Tier 1 global sync from architecture.json."""
     project_root = _find_project_root(Path.cwd())
@@ -1191,6 +1192,7 @@ def run_global_sync(
             # Propagate the global --estimate flag so child syncs run as
             # side-effect-free dry-run previews (sub-issue #1359).
             "estimate": _estimate_mode_active(),
+            "compressed_context": compressed_context,
         },
         github_info=None,
         quiet=quiet,
@@ -1898,6 +1900,7 @@ def run_agentic_sync(
     strength: Optional[float] = None,
     temperature: Optional[float] = None,
     context_override: Optional[str] = None,
+    compressed_context: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """
     Run agentic sync workflow: identify modules from a GitHub issue and sync in parallel.
@@ -2230,6 +2233,7 @@ def run_agentic_sync(
         # Propagate the global --estimate flag so child syncs run as
         # side-effect-free dry-run previews (sub-issue #1359).
         "estimate": _estimate_mode_active(),
+        "compressed_context": compressed_context,
     }
 
     github_info = {

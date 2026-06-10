@@ -17,14 +17,17 @@ import pytest
 from pdd.provider_manager import (
     CSV_FIELDNAMES,
     COMPLEX_AUTH_PROVIDERS,
+    _write_csv_atomic,
     _save_key_to_api_env,
     _setup_complex_provider,
     add_custom_provider,
     add_provider_from_registry,
+    api_key_aliases,
     is_multi_credential,
     parse_api_key_vars,
     remove_models_by_provider,
     remove_individual_models,
+    resolve_api_key_from_env,
 )
 
 
@@ -117,6 +120,29 @@ def _read_user_csv(temp_home):
         return list(csv.DictReader(f))
 
 
+def test_write_csv_atomic_preserves_interactive_only(tmp_path):
+    """Provider-manager rewrites must not re-enable device/local rows."""
+    csv_path = tmp_path / "llm_model.csv"
+
+    _write_csv_atomic(csv_path, [
+        {
+            "provider": "OpenAI ChatGPT",
+            "model": "chatgpt/gpt-5.5",
+            "input": "0.0",
+            "output": "0.0",
+            "coding_arena_elo": "1450",
+            "model_rank_score": "17000",
+            "model_rank_source": "deepswe-solve-rate",
+            "api_key": "",
+            "interactive_only": "True",
+        }
+    ])
+
+    rows = list(csv.DictReader(csv_path.open(encoding="utf-8", newline="")))
+    assert "interactive_only" in rows[0]
+    assert rows[0]["interactive_only"] == "True"
+
+
 # ---------------------------------------------------------------------------
 # I. parse_api_key_vars / is_multi_credential
 # ---------------------------------------------------------------------------
@@ -146,6 +172,30 @@ class TestApiKeyParsing:
         assert is_multi_credential("OPENAI_API_KEY") is False
         assert is_multi_credential("") is False
         assert is_multi_credential(None) is False
+
+    def test_api_key_aliases_keep_runtime_only_aliases_out_of_generic_enumeration(self):
+        assert api_key_aliases("ANTHROPIC_API_KEY") == ["ANTHROPIC_API_KEY"]
+        assert api_key_aliases("GEMINI_API_KEY") == [
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+        ]
+
+    def test_resolve_api_key_from_env_accepts_llm_invoke_alias_when_enabled(self):
+        value, resolved_name = resolve_api_key_from_env(
+            "ANTHROPIC_API_KEY",
+            {"PDD_LLM_INVOKE_ANTHROPIC_API_KEY": "sk-ant"},
+            include_llm_invoke_aliases=True,
+        )
+        assert value == "sk-ant"
+        assert resolved_name == "PDD_LLM_INVOKE_ANTHROPIC_API_KEY"
+
+    def test_resolve_api_key_from_env_ignores_llm_invoke_alias_by_default(self):
+        value, resolved_name = resolve_api_key_from_env(
+            "ANTHROPIC_API_KEY",
+            {"PDD_LLM_INVOKE_ANTHROPIC_API_KEY": "sk-ant"},
+        )
+        assert value is None
+        assert resolved_name is None
 
 
 # ---------------------------------------------------------------------------

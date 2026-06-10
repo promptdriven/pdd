@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time as time_module
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 import requests
 from rich import print as rprint
@@ -25,11 +25,15 @@ from .failure_classification import (
     format_signature_hint,
 )
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from .compression_reporting import CompressionFallbackError, record_compression_applied
+from .config_resolution import apply_compression_env
+from .content_selector import slice_test_interface_context
 from .fix_focus import FocusedInputs, is_large, prepare_focused_inputs, reconstruct_code
 from .get_language import get_language
 from .get_test_command import TestCommand, get_test_command_for_file
-from .pytest_output import run_pytest_and_capture_output
+from .pytest_output import _test_context_compression_active, run_pytest_and_capture_output
 from .python_env_detector import detect_host_python_executable
+from .compressed_sync_context import render_for_prompt
 
 console = Console()
 
@@ -238,7 +242,7 @@ def cloud_fix_errors(
     strength: float,
     temperature: float,
     verbose: bool = False,
-    time: float = DEFAULT_TIME,
+    time: float | None = DEFAULT_TIME,
     code_file_ext: str = ".py",
     protect_tests: bool = False,
     failure_classification: str | None = None,
@@ -259,6 +263,7 @@ def cloud_fix_errors(
         raise RuntimeError("Cloud authentication failed: no JWT token available")
     if failure_classification:
         error = f"[PDD failure classification] {failure_classification}\n{error}"
+    request_time = DEFAULT_TIME if time is None else time
     payload = {
         "unitTest": unit_test,
         "code": code,
@@ -267,7 +272,7 @@ def cloud_fix_errors(
         "language": get_language(code_file_ext) or "python",
         "strength": strength,
         "temperature": temperature,
-        "time": time,
+        "time": request_time,
         "verbose": verbose,
         "protectTests": protect_tests,
         "codeFileExt": code_file_ext,
@@ -313,6 +318,24 @@ def _best_is_better(candidate: dict[str, Any], current: dict[str, Any]) -> bool:
     )
 
 
+def _extract_failing_tests(pytest_output: str) -> list[str]:
+    """Extract failing test IDs from pytest output."""
+    clean_output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", pytest_output)
+    failing_tests: list[str] = []
+    seen: set[str] = set()
+    for match in re.finditer(r"FAILED\s+([^\s:]+\.py::[^\s]+)", clean_output):
+        test_id = match.group(1).split()[0]
+        if test_id not in seen:
+            failing_tests.append(test_id)
+            seen.add(test_id)
+    for match in re.finditer(r"([^\s:]+\.py::[^\s]+)\s+FAILED", clean_output):
+        test_id = match.group(1)
+        if test_id not in seen:
+            failing_tests.append(test_id)
+            seen.add(test_id)
+    return failing_tests
+
+
 def fix_error_loop(
     unit_test_file: str,
     code_file: str,
@@ -332,21 +355,50 @@ def fix_error_loop(
     test_files: list[str] | None = None,
     failure_aware_retries: bool = True,
     no_local_fallback: bool = False,
+    compress_test_context: bool = False,
+    context_compression: str | None = None,
+    compression_fallback: str | None = None,
+    compressed_context: Mapping[str, Any] | None = None,
+    agentic_fallback_events: list[dict[str, Any]] | None = None,
 ) -> tuple[bool, str, str, int, float, str]:
     """
     Returns: (success, final_unit_test, final_code, total_attempts, total_cost, model_name)
     """
+    compression_patch: dict[str, Any] = {}
+    if compress_test_context:
+        compression_patch["compress_test_context"] = True
+    if context_compression is not None:
+        compression_patch["context_compression"] = context_compression
+    if compression_fallback is not None:
+        compression_patch["compression_fallback"] = compression_fallback
+    if compression_patch:
+        apply_compression_env(compression_patch)
+
     total_cost = 0.0
     total_attempts = 0
     model_name = ""
+    rendered_compressed_context = render_for_prompt(compressed_context)
+    prompt_for_llm = prompt + ("\n\n" + rendered_compressed_context if rendered_compressed_context else "")
     unit_test_content = ""
     code_content = ""
     last_attempt = 0
+
+    def _record_agentic_fallback(used: bool, detail: str) -> None:
+        if agentic_fallback_events is not None:
+            agentic_fallback_events.append(
+                {
+                    "phase": "fix",
+                    "attempted": True,
+                    "used": used,
+                    "detail": detail,
+                }
+            )
 
     def call_agentic() -> tuple[bool, str, str, int, float, str]:
         nonlocal total_cost, model_name, unit_test_content, code_content, total_attempts
         if not agentic_fallback:
             return False, unit_test_content, code_content, total_attempts, total_cost, model_name
+        _record_agentic_fallback(False, "invoking agentic fix fallback")
         success, _message, cost, agent_model, _changed = _safe_run_agentic_fix(
             prompt_file,
             code_file,
@@ -367,6 +419,10 @@ def fix_error_loop(
                 unit_test_content = content
             else:
                 code_content = content
+        _record_agentic_fallback(
+            success,
+            "agentic fix fallback succeeded" if success else "agentic fix fallback failed",
+        )
         return success, unit_test_content, code_content, total_attempts, total_cost, model_name
 
     if not os.path.isfile(unit_test_file) or not os.path.isfile(code_file):
@@ -441,6 +497,38 @@ def fix_error_loop(
         target_test = focused_inputs.focused_tests if focused_inputs else unit_test_content
         classification = failure_classification_hint(classify_failure(output_log)) if failure_aware_retries else None
         effective_protect_tests = protect_tests or bool(focused_inputs)
+        failing_tests = _extract_failing_tests(output_log)
+        if failing_tests:
+            os.environ["PDD_FAILING_TESTS"] = ",".join(failing_tests)
+        else:
+            os.environ.pop("PDD_FAILING_TESTS", None)
+        if (
+            focused_inputs is None
+            and _test_context_compression_active()
+            and failing_tests
+        ):
+            try:
+                compressed_test = slice_test_interface_context(unit_test_content, unit_test_file)
+            except CompressionFallbackError as exc:
+                console.print(
+                    f"[bold red]Test context compression failed:[/bold red] {escape_brackets(str(exc))}"
+                )
+                with open(error_log_file, "a", encoding="utf-8") as log_file:
+                    log_file.write(
+                        format_log_for_output(attempt, output_log, str(exc), "")
+                    )
+                return (
+                    False,
+                    unit_test_content,
+                    code_content,
+                    total_attempts,
+                    total_cost,
+                    model_name,
+                )
+            if compressed_test and compressed_test != unit_test_content:
+                record_compression_applied(unit_test_file, "test_interface")
+            if compressed_test:
+                target_test = compressed_test
         # Track whether *this* attempt's fix came from the cloud path (vs a
         # local fallback) so the success log line can prove the cloud path.
         attempt_used_cloud = False
@@ -449,7 +537,7 @@ def fix_error_loop(
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
                     target_test,
                     target_code,
-                    prompt,
+                    prompt_for_llm,
                     output_log,
                     error_log_file,
                     strength,
@@ -463,7 +551,7 @@ def fix_error_loop(
                 attempt_used_cloud = True
             else:
                 update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
-                    target_test, target_code, prompt, output_log, error_log_file,
+                    target_test, target_code, prompt_for_llm, output_log, error_log_file,
                     strength=strength,
                     temperature=temperature,
                     time=time,
@@ -483,7 +571,7 @@ def fix_error_loop(
                     update_test, update_code, fixed_test, fixed_code, analysis, cost, model_name = fix_errors_from_unit_tests(
                         unit_test=target_test,
                         code=target_code,
-                        prompt=prompt,
+                        prompt=prompt_for_llm,
                         error=output_log,
                         error_file=error_log_file,
                         strength=strength,
