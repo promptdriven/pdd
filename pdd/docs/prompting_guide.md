@@ -287,7 +287,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 **`<pdd-interface>`**
 - **Purpose**: JSON describing the module's public API (functions, commands, pages)
 - **Maps to**: `architecture.json["interface"]`
-- **Format**: Valid JSON matching one of five interface types (see below)
+- **Format**: Valid JSON matching one of six interface types (see below)
 - **Example**:
   ```xml
   <pdd-interface>
@@ -315,7 +315,7 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 
 ### Interface Types
 
-The `<pdd-interface>` tag supports five interface types, matching the architecture.json schema:
+The `<pdd-interface>` tag supports six interface types, matching the architecture.json schema:
 
 **Module Interface** (Python modules with functions):
 ```json
@@ -364,6 +364,18 @@ The `<pdd-interface>` tag supports five interface types, matching the architectu
   }
 }
 ```
+
+**Config Interface** (modules or prompts driven by configuration/input keys):
+```json
+{
+  "type": "config",
+  "config": {
+    "keys": ["DATABASE_URL", "API_KEY", "LOG_LEVEL"]
+  }
+}
+```
+
+`config.keys` is required: list the configuration or input variable names the module depends on. It may be an empty array (`"keys": []`) when the prompt or module declares no keys yet.
 
 **Entrypoint Interface** (framework bootstrap files that export nothing):
 ```json
