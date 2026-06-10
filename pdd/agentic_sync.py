@@ -65,6 +65,24 @@ def _is_github_issue_url(s: str) -> bool:
     return bool(re.search(r"github\.com/.+/issues/\d+", s))
 
 
+def _estimate_mode_active() -> bool:
+    """Return True when the global ``--estimate`` flag is active.
+
+    Reads the shared state from the active Click context (set by the root CLI),
+    which is the in-process source of truth. The process-wide ``PDD_ESTIMATE``
+    env var is intentionally not consulted, as it can leak across
+    CliRunner-based tests and wrongly enable estimate mode for unrelated runs.
+    """
+    try:
+        import click
+
+        ctx = click.get_current_context(silent=True)
+        obj = getattr(ctx, "obj", None) if ctx is not None else None
+        return bool(isinstance(obj, dict) and obj.get("estimate"))
+    except Exception:
+        return False
+
+
 def _is_runtime_llm_template(basename: str) -> bool:
     """Return True if ``basename`` refers to a runtime ``*_LLM.prompt`` template.
 
@@ -1172,7 +1190,7 @@ def run_global_sync(
             "context": context_override,
             # Propagate the global --estimate flag so child syncs run as
             # side-effect-free dry-run previews (sub-issue #1359).
-            "estimate": os.environ.get("PDD_ESTIMATE") == "1",
+            "estimate": _estimate_mode_active(),
         },
         github_info=None,
         quiet=quiet,
@@ -2211,7 +2229,7 @@ def run_agentic_sync(
         "context": context_override,
         # Propagate the global --estimate flag so child syncs run as
         # side-effect-free dry-run previews (sub-issue #1359).
-        "estimate": os.environ.get("PDD_ESTIMATE") == "1",
+        "estimate": _estimate_mode_active(),
     }
 
     github_info = {

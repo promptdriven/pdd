@@ -1975,9 +1975,12 @@ def _sync_estimate_requested(explicit: bool = False) -> bool:
     """Return True when sync should run in dry-run cost-estimate mode.
 
     Detection order: an explicit caller flag, then the shared ``--estimate``
-    state stored on the active Click context by the root CLI, then the
-    ``PDD_ESTIMATE`` environment fallback the CLI also sets. Any failure to
-    read the context degrades to "not estimating" so normal syncs are never
+    state stored on the active Click context by the root CLI. The in-process
+    Click context is the single source of truth; the process-wide
+    ``PDD_ESTIMATE`` env var is deliberately NOT consulted here because it can
+    persist across CliRunner-based tests and would wrongly short-circuit
+    unrelated direct ``sync_orchestration`` calls. Any failure to read the
+    context degrades to "not estimating" so normal syncs are never
     short-circuited.
     """
     if explicit:
@@ -1991,7 +1994,7 @@ def _sync_estimate_requested(explicit: bool = False) -> bool:
             return True
     except Exception:
         pass
-    return os.environ.get("PDD_ESTIMATE") == "1"
+    return False
 
 
 def sync_orchestration(
