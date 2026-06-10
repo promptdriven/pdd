@@ -41,6 +41,7 @@ import click
 from .checkup_interactive_main import (
     ClickInteractiveSession,
     apply_approved_patches,
+    draft_group_replacement,
     filter_interactive_findings,
     _custom_option,
     _register_dynamic_option,
@@ -116,11 +117,15 @@ class CheckupSession:
         return plan
 
     def decide_group(self, group: FindingGroup) -> str:
-        """Return one of: 'accept', 'skip', 'edit', 'auto'. Default: accept."""
+        """Return one of: 'accept', 'skip', 'edit', 'llm', 'auto'. Default: accept."""
         return "accept"
 
     def ask_definition(self) -> str:
         return ""
+
+    def confirm_draft(self, group: FindingGroup, draft: str) -> bool:
+        """Show an LLM-drafted fix and return whether to keep/apply it."""
+        return False
 
 
 class TerminalCheckupSession(CheckupSession):
@@ -226,6 +231,7 @@ class TerminalCheckupSession(CheckupSession):
             click.echo("[4] Custom fix")
             click.echo("[5] View rationale/details")
             click.echo("[6] Ask a question")
+            click.echo("[7] Let the LLM draft this fix now (costs a model call)")
             click.echo("[a] Auto for remaining groups  [q] Quit")
             answer = click.prompt("Choice", default="1", show_default=False).strip().lower()
             if answer in ("q", "quit"):
@@ -254,10 +260,22 @@ class TerminalCheckupSession(CheckupSession):
                         "an interactive backend."
                     )
                 continue
-            click.echo("Choose 1-6, a, or q.")
+            if answer in ("7", "l", "llm", "draft"):
+                return "llm"
+            click.echo("Choose 1-7, a, or q.")
 
     def ask_definition(self) -> str:
         return click.prompt("Enter your definition / replacement", default="", show_default=False)
+
+    def confirm_draft(self, group: FindingGroup, draft: str) -> bool:
+        if not self.quiet:
+            click.echo("\nLLM draft (review before keeping):")
+            for line in str(draft).splitlines():
+                click.echo(f"  {line}")
+        answer = click.prompt(
+            "Keep and apply this draft? [y/N]", default="n", show_default=False
+        ).strip().lower()
+        return answer in ("y", "yes")
 
 
 class RecordingCheckupSession(CheckupSession):
@@ -270,11 +288,13 @@ class RecordingCheckupSession(CheckupSession):
         custom_plan: Optional[Plan] = None,
         group_decisions: Optional[list[str]] = None,
         definition: str = "observable criteria",
+        confirm_drafts: bool = True,
     ) -> None:
         self._confirm = confirm
         self._custom_plan = custom_plan
         self._group_decisions = list(group_decisions or [])
         self._definition = definition
+        self._confirm_drafts = confirm_drafts
         self.events: list[AgentEvent] = []
 
     def on_event(self, event: AgentEvent) -> None:
@@ -292,6 +312,9 @@ class RecordingCheckupSession(CheckupSession):
 
     def ask_definition(self) -> str:
         return self._definition
+
+    def confirm_draft(self, group: FindingGroup, draft: str) -> bool:
+        return self._confirm_drafts
 
     def events_of_kind(self, kind: str) -> list[AgentEvent]:
         return [e for e in self.events if e.kind == kind]
@@ -311,10 +334,13 @@ class CheckupAgent:
         session: CheckupSession,
         *,
         repair_session_factory: Optional[Callable[[], _SessionType]] = None,
+        repair_drafter: Optional[Callable[..., tuple]] = None,
     ) -> None:
         self.planner = planner
         self.session = session
         self.repair_session_factory = repair_session_factory
+        # Injectable so tests (and offline runs) never hit a real model.
+        self.repair_drafter = repair_drafter or draft_group_replacement
 
     # ------------------------------------------------------------------
 
@@ -444,6 +470,12 @@ class CheckupAgent:
         # "custom" (operator edit).
         disposition: dict[str, str] = {}
         _auto = mode == MODE_AUTO
+        # LLM-drafted, operator-approved patches (menu option 7). Applied
+        # separately from the bulk --apply path because each was explicitly
+        # confirmed in-session.
+        llm_patches: list[ApprovedPatch] = []
+        total_cost = 0.0
+        last_model = ""
 
         for group in groups:
             risk = group.risk
@@ -477,6 +509,23 @@ class CheckupAgent:
                         AgentEvent("mode_switch", {"from": "interactive", "to": "auto"})
                     )
                     decision = "accept"
+
+            if decision == "llm":
+                cost_inc, model_inc, handled = self._draft_group(
+                    group=group,
+                    prompt_text=prompt_text,
+                    root=root,
+                    disposition=disposition,
+                    llm_patches=llm_patches,
+                )
+                total_cost += cost_inc
+                if model_inc:
+                    last_model = model_inc
+                if handled:
+                    continue
+                # Draft unavailable (offline/no key) or declined → fall back to
+                # the deterministic save-for-review path.
+                decision = "accept"
 
             definition = ""
             if decision == "edit":
@@ -531,6 +580,34 @@ class CheckupAgent:
             acc.patches_queued = sum(
                 1 for d in disposition.values() if d in ("low", "manual_low")
             )
+
+        # 5b. Apply operator-approved LLM drafts (menu option 7). These were each
+        # explicitly confirmed in-session, so they apply regardless of the bulk
+        # --apply flag — but still honor --dry-run/--preview.
+        if llm_patches:
+            llm_finding_ids = [fid for fid, d in disposition.items() if d == "llm"]
+            if dry_run:
+                acc.patches_queued += len(llm_patches)
+            else:
+                code = apply_approved_patches(
+                    llm_patches,
+                    dry_run=False,
+                    quiet=True,
+                    project_root=root,
+                    original_target=target,
+                    strict=strict,
+                    choices_by_finding={p.finding_id: 7 for p in llm_patches},
+                )
+                if code == 0:
+                    applied = True
+                    acc.drafted_by_llm = len(llm_finding_ids)
+                    acc.patches_applied += len(llm_patches)
+                    if verification is None:
+                        verification = self._verify(
+                            prompt_path, target, root, strict, groups, quiet
+                        )
+                else:
+                    acc.patches_failed += len(llm_patches)
 
         # 6. Artifacts (only when there is something to write)
         artifacts = write_artifacts(
@@ -592,11 +669,86 @@ class CheckupAgent:
             if not quiet:
                 click.echo(f"\n{message}")
             raise click.exceptions.Exit(2)
-        return message, 0.0, ""
+        return message, total_cost, last_model
 
     # ------------------------------------------------------------------
     # helpers
     # ------------------------------------------------------------------
+
+    # Map a finding's source check to an allowlisted patch kind for the apply
+    # path (see ALLOWED_PATCH_KINDS in checkup_prompt_apply).
+    _LLM_PATCH_KIND_BY_SOURCE = {
+        "lint": "vocab_definition",
+        "contract": "contract_rule",
+        "coverage": "coverage_line",
+        "gate": "waiver",
+        "snapshot": "contract_rule",
+    }
+
+    def _draft_group(
+        self,
+        *,
+        group: FindingGroup,
+        prompt_text: str,
+        root: Path,
+        disposition: dict,
+        llm_patches: list,
+    ) -> tuple[float, str, bool]:
+        """Draft an LLM fix for one group, confirm it, and queue it for apply.
+
+        Returns ``(cost, model, handled)``. ``handled`` is False when no draft is
+        available (offline / no key) or the operator declines, so the caller
+        falls back to the deterministic save-for-review path.
+        """
+        snippet, cost, model = self.repair_drafter(group, prompt_text=prompt_text)
+        if not snippet:
+            self.session.on_event(
+                AgentEvent("llm_draft", {"code": group.code, "status": "unavailable"})
+            )
+            if not getattr(self.session, "quiet", False):
+                click.echo(
+                    "\nLLM draft unavailable (no credential / offline / out of credits) "
+                    "— saving for review instead."
+                )
+            return cost, model, False
+
+        confirmed = self.session.confirm_draft(group, snippet)
+        self.session.on_event(
+            AgentEvent(
+                "llm_draft",
+                {
+                    "code": group.code,
+                    "status": "kept" if confirmed else "discarded",
+                    "model": model,
+                    "cost": cost,
+                },
+            )
+        )
+        if not confirmed:
+            return cost, model, False
+
+        rep = group.findings[0]
+        source_path = rep.file
+        if not source_path.is_absolute():
+            source_path = Path(root) / source_path
+        try:
+            target = source_path.resolve().relative_to(Path(root).resolve())
+        except ValueError:
+            target = rep.file
+        kind = self._LLM_PATCH_KIND_BY_SOURCE.get(group.source_check, "vocab_definition")
+        # Empty anchor line → appended at end of file (see _apply_patch_content).
+        llm_patches.append(
+            ApprovedPatch(
+                kind=kind,
+                target=target,
+                anchor={"finding_id": rep.finding_id, "line": ""},
+                replacement=snippet,
+                finding_id=rep.finding_id,
+            )
+        )
+        for finding in group.findings:
+            disposition[finding.finding_id] = "llm"
+        return cost, model, True
 
     def _record_group(
         self,

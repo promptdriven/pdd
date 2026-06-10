@@ -864,3 +864,145 @@ class TestDirectoryDiscoveryAndDryRun:
 
         assert mock_run.call_args.kwargs["dry_run"] is True
         assert mock_run.call_args.kwargs["apply"] is True
+
+
+# ---------------------------------------------------------------------------
+# Menu option 7 — LLM draft (live, operator-approved). Offline-safe via an
+# injected fake drafter; no real model is ever called in tests.
+# ---------------------------------------------------------------------------
+
+
+class TestLLMDraftOption:
+    def _drafter(self, snippet, cost=0.01, model="fake/model"):
+        # Mirror the real drafter, which prepends a clear "LLM draft" marker.
+        def drafter(group, *, prompt_text):
+            if snippet is None:
+                return None, cost, model
+            return f"<!-- LLM draft (pdd checkup) — review -->\n{snippet}", cost, model
+        return drafter
+
+    def test_confirmed_draft_is_applied_and_counted(self, tmp_path):
+        report = _medium_report(tmp_path, n=2)
+        session = RecordingCheckupSession(group_decisions=["llm"], confirm_drafts=True)
+        agent = CheckupAgent(
+            DeterministicPlanner(),
+            session,
+            repair_drafter=self._drafter(
+                '<vocabulary>\n  <term name="term0">observable</term>\n</vocabulary>'
+            ),
+        )
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            msg, cost, model = agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                mode="interactive",
+            )
+
+        # The real draft content was written into the prompt file (not a TODO).
+        text = report.prompt_path.read_text(encoding="utf-8")
+        assert "<vocabulary>" in text
+        assert "LLM draft" in text  # the labelled marker
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 2  # both findings in the group resolved
+        assert acc["patches_applied"] >= 1
+        assert cost == pytest.approx(0.01)  # one model call per group (1 grouped call)
+        assert model == "fake/model"
+
+    def test_declined_draft_falls_back_to_save_for_review(self, tmp_path):
+        report = _medium_report(tmp_path, n=2)
+        original = report.prompt_path.read_text(encoding="utf-8")
+        session = RecordingCheckupSession(group_decisions=["llm"], confirm_drafts=False)
+        agent = CheckupAgent(
+            DeterministicPlanner(),
+            session,
+            repair_drafter=self._drafter("<vocabulary/>"),
+        )
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent.run(str(report.prompt_path), project_root=tmp_path, quiet=True, mode="interactive")
+
+        assert report.prompt_path.read_text(encoding="utf-8") == original  # nothing written
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 0
+        assert acc["saved_for_review"] == 2
+
+    def test_unavailable_draft_falls_back_without_crash(self, tmp_path):
+        report = _medium_report(tmp_path, n=2)
+        original = report.prompt_path.read_text(encoding="utf-8")
+        session = RecordingCheckupSession(group_decisions=["llm"], confirm_drafts=True)
+        agent = CheckupAgent(
+            DeterministicPlanner(),
+            session,
+            repair_drafter=self._drafter(None, cost=0.0, model=""),  # offline / no key
+        )
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent.run(str(report.prompt_path), project_root=tmp_path, quiet=True, mode="interactive")
+
+        assert report.prompt_path.read_text(encoding="utf-8") == original
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 0
+        assert acc["saved_for_review"] == 2  # deterministic fallback
+
+    def test_dry_run_confirmed_draft_writes_nothing(self, tmp_path):
+        report = _medium_report(tmp_path, n=2)
+        original = report.prompt_path.read_text(encoding="utf-8")
+        session = RecordingCheckupSession(group_decisions=["llm"], confirm_drafts=True)
+        agent = CheckupAgent(
+            DeterministicPlanner(),
+            session,
+            repair_drafter=self._drafter("<vocabulary/>"),
+        )
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                mode="interactive",
+                dry_run=True,
+            )
+
+        assert report.prompt_path.read_text(encoding="utf-8") == original
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 0
+        assert acc["patches_queued"] >= 1
+
+
+def test_draft_group_replacement_is_offline_safe():
+    """A failing/None-returning model must yield None, not raise."""
+    from pdd.checkup_interactive_main import draft_group_replacement
+    from pdd.checkup_report import group_findings
+
+    finding = SourceSetFinding(
+        finding_id="lint-v-0", source_check="lint", severity="warn",
+        file=Path("p.prompt"), message='Vague term "x"', code="VAGUE_TERM_UNDEFINED",
+        recommended_action="Define x",
+    )
+    group = group_findings([finding])[0]
+
+    def boom(**kwargs):
+        raise RuntimeError("no network")
+
+    snippet, cost, model = draft_group_replacement(group, prompt_text="% p", llm=boom)
+    assert snippet is None
+    assert cost == 0.0
+
+
+def test_draft_group_replacement_labels_and_cleans_snippet():
+    from pdd.checkup_interactive_main import draft_group_replacement
+    from pdd.checkup_report import group_findings
+
+    finding = SourceSetFinding(
+        finding_id="lint-v-0", source_check="lint", severity="warn",
+        file=Path("p.prompt"), message='Vague term "x"', code="VAGUE_TERM_UNDEFINED",
+        recommended_action="Define x",
+    )
+    group = group_findings([finding])[0]
+
+    def fake_llm(**kwargs):
+        return {"result": "```\n<vocabulary/>\n```", "cost": 0.005, "model_name": "m"}
+
+    snippet, cost, model = draft_group_replacement(group, prompt_text="% p", llm=fake_llm)
+    assert snippet.startswith("<!-- LLM draft")
+    assert "```" not in snippet      # code fences stripped
+    assert "<vocabulary/>" in snippet
+    assert cost == 0.005 and model == "m"
