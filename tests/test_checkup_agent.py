@@ -710,20 +710,21 @@ class TestAutoMode:
         assert acc["patches_queued"] == 2
         assert acc["patches_applied"] == 0
 
-    def test_non_explicit_interactive_scopes_to_clarification_only(self, tmp_path):
-        """run(explicit_interactive=False) must honor the flag and only bring
-        clarification-required findings into scope (not hardcode True)."""
+    def test_agent_scopes_all_findings_not_just_clarification(self, tmp_path):
+        """The agent groups/risk-gates EVERY finding so auto mode and --llm-repair
+        act on coverage/contract findings, not only clarification ones. (The
+        clarification-only filter belongs to the workflow-gate path.)"""
         prompt_file = tmp_path / "mixed.prompt"
         prompt_file.write_text("% Mixed\nDo something.\n", encoding="utf-8")
         findings = [
             SourceSetFinding(
-                finding_id="lint-style-1",
-                source_check="lint",
+                finding_id="cov-1",
+                source_check="coverage",
                 severity="warn",
                 file=prompt_file,
                 line="2",
-                message="Style issue",
-                code="STYLE_1",  # not clarification
+                message="Unchecked rule",
+                code="UNCHECKED",  # not clarification, but must be in scope
             ),
             SourceSetFinding(
                 finding_id="lint-vague-1",
@@ -740,7 +741,10 @@ class TestAutoMode:
             project_root=tmp_path,
             target=str(prompt_file),
             findings=findings,
-            checks=[{"name": "lint", "status": "warn"}],
+            checks=[
+                {"name": "coverage", "status": "warn"},
+                {"name": "lint", "status": "warn"},
+            ],
         )
         session = RecordingCheckupSession()
         planner = DeterministicPlanner()
@@ -755,9 +759,9 @@ class TestAutoMode:
                 explicit_interactive=False,
             )
 
-        # Only the clarification finding is in scope; the STYLE_1 finding is not.
+        # Both findings are in scope (coverage + vague), not just the clarification one.
         acc = session.events_of_kind("session_done")[0].data["accounting"]
-        assert acc["total"] == 1
+        assert acc["total"] == 2
 
     def test_switch_to_auto_mid_session(self, tmp_path):
         """Choosing 'auto' on a group switches the rest of the session to auto."""
