@@ -63,6 +63,7 @@ from .checkup_report import (
     RISK_MEDIUM,
     CheckupAccounting,
     FindingGroup,
+    decision_for,
     descriptive_plan_lines,
     group_findings,
     humanize_group_summary,
@@ -486,7 +487,13 @@ class CheckupAgent:
             k: _relpath(v, root) for k, v in artifacts.items()
         }
 
-        # 7. Final summary
+        # 7. Lifecycle decision: can the next PDD step proceed?
+        blocking = report.deterministic_exit_code(strict=strict) >= 2
+        decision_text, can_continue = decision_for(
+            report.status, strict=strict, blocking=blocking
+        )
+
+        # 8. Final summary
         self.session.on_event(
             AgentEvent(
                 kind="session_done",
@@ -496,7 +503,12 @@ class CheckupAgent:
                     "artifacts": artifacts_display,
                     "applied": applied,
                     "verification": verification,
-                    "summary_lines": acc.summary_lines(report.status, artifacts_display),
+                    "decision": decision_text,
+                    "can_continue": can_continue,
+                    "blocking": blocking,
+                    "summary_lines": acc.summary_lines(
+                        report.status, artifacts_display, decision=decision_text
+                    ),
                     # legacy keys kept for older tests / callers
                     "total_findings": acc.total,
                     "skipped": acc.skipped_by_user,
@@ -509,8 +521,15 @@ class CheckupAgent:
         message = (
             f"Checkup complete: {report.status} "
             f"({acc.total} findings, {acc.fixed_automatically} fixed, "
-            f"{acc.skipped_by_user} skipped, {acc.remaining} remaining)"
+            f"{acc.skipped_by_user} skipped, {acc.remaining} remaining) "
+            f"— {decision_text}"
         )
+        # Act as a gate: block (non-zero exit) so the next PDD step can be
+        # skipped by callers / CI when the prompt is not ready.
+        if not can_continue:
+            if not quiet:
+                click.echo(f"\n{message}")
+            raise click.exceptions.Exit(2)
         return message, 0.0, ""
 
     # ------------------------------------------------------------------

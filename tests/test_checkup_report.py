@@ -19,6 +19,7 @@ from pdd.checkup_report import (
     RISK_LOW,
     RISK_MEDIUM,
     CheckupAccounting,
+    decision_for,
     descriptive_plan_lines,
     group_findings,
     humanize_group_summary,
@@ -172,6 +173,69 @@ def test_descriptive_plan_lines_compact():
 
 
 # ---------------------------------------------------------------------------
+# Decision (pass/warn → continue, strict → block)
+# ---------------------------------------------------------------------------
+
+
+class TestDecision:
+    def test_pass_continues(self):
+        text, cont = decision_for("pass", strict=False, blocking=False)
+        assert cont is True
+        assert "pass → continue" == text
+
+    def test_warn_continues_with_note(self):
+        text, cont = decision_for("warn", strict=False, blocking=False)
+        assert cont is True
+        assert "continue" in text
+
+    def test_strict_blocking_blocks(self):
+        text, cont = decision_for("fail", strict=True, blocking=True)
+        assert cont is False
+        assert "strict failure → block" == text
+
+    def test_nonstrict_blocking_blocks(self):
+        text, cont = decision_for("fail", strict=False, blocking=True)
+        assert cont is False
+        assert "block" in text
+
+    def test_summary_includes_decision(self):
+        acc = CheckupAccounting(total=1, saved_for_review=1)
+        text = "\n".join(acc.summary_lines("warn", None, decision="warn → continue"))
+        assert "Decision:" in text
+        assert "warn → continue" in text
+
+
+class TestAgentDecision:
+    def test_warn_does_not_block(self, tmp_path):
+        f = _finding("a", code="VAGUE_TERM_UNDEFINED", clar=True, section="requirements")
+        report = _report_with(tmp_path, [f], [{"name": "lint", "status": "warn"}])
+        session = RecordingCheckupSession()
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            CheckupAgent(DeterministicPlanner(), session).run(
+                str(report.prompt_path), project_root=tmp_path, quiet=True, mode="review"
+            )
+        done = session.events_of_kind("session_done")[0].data
+        assert done["can_continue"] is True
+        assert "continue" in done["decision"]
+
+    def test_strict_warn_blocks(self, tmp_path):
+        import click
+
+        f = _finding("a", code="VAGUE_TERM_UNDEFINED", clar=True, section="requirements")
+        report = _report_with(tmp_path, [f], [{"name": "lint", "status": "warn"}])
+        session = RecordingCheckupSession()
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            with pytest.raises(click.exceptions.Exit):
+                CheckupAgent(DeterministicPlanner(), session).run(
+                    str(report.prompt_path), project_root=tmp_path, quiet=True,
+                    mode="review", strict=True,
+                )
+        done = session.events_of_kind("session_done")[0].data
+        assert done["can_continue"] is False
+        assert "strict failure → block" == done["decision"]
+
+
+# ---------------------------------------------------------------------------
 # Artifacts
 # ---------------------------------------------------------------------------
 
@@ -260,21 +324,28 @@ class TestAgentIntegration:
         assert (tmp_path / ".pdd" / "checkup").exists()
 
     def test_high_risk_not_auto_applied(self, tmp_path):
+        import click
+
         f = _finding("a", source="coverage", severity="error", code="failed")
         report = _report_with(tmp_path, [f], [{"name": "coverage", "status": "fail"}])
         session = RecordingCheckupSession()
         with patch(
             "pdd.checkup_agent.build_prompt_source_set_report", return_value=report
         ), patch("pdd.checkup_agent.apply_approved_patches", return_value=0) as mock_apply:
-            CheckupAgent(DeterministicPlanner(), session).run(
-                str(report.prompt_path), project_root=tmp_path, quiet=True,
-                auto=True, apply=True,
-            )
+            # An error-severity finding blocks → the agent exits non-zero (gate).
+            with pytest.raises(click.exceptions.Exit):
+                CheckupAgent(DeterministicPlanner(), session).run(
+                    str(report.prompt_path), project_root=tmp_path, quiet=True,
+                    auto=True, apply=True,
+                )
         # high-risk finding → manual TODO, no patch applied
         mock_apply.assert_not_called()
-        acc = session.events_of_kind("session_done")[0].data["accounting"]
-        assert acc["manual_todo"] == 1
-        assert acc["fixed_automatically"] == 0
+        done = session.events_of_kind("session_done")[0].data
+        assert done["accounting"]["manual_todo"] == 1
+        assert done["accounting"]["fixed_automatically"] == 0
+        # blocking decision recorded
+        assert done["blocking"] is True
+        assert done["can_continue"] is False
 
     def test_verification_runs_after_applied_fixes(self, tmp_path):
         f = _finding("a", source="lint", code="STYLE")  # low risk

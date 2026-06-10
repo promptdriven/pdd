@@ -184,6 +184,23 @@ def _wrap_terms(terms: Sequence[str], per_line: int = 5) -> str:
 # ---------------------------------------------------------------------------
 
 
+def decision_for(status: str, *, strict: bool, blocking: bool) -> tuple[str, bool]:
+    """Map a checkup result to a lifecycle decision.
+
+    Returns ``(text, can_continue)`` where ``text`` is shown after ``Decision:``
+    and ``can_continue`` is False only when the workflow must block (so the next
+    PDD step — code generation / modification — should not proceed).
+    """
+    if blocking:
+        reason = "strict failure" if strict else "blocking findings"
+        return f"{reason} → block", False
+    if status == "warn":
+        return "warn → continue with review note", True
+    if status == "fail":
+        return "fail → continue with review note", True
+    return "pass → continue", True
+
+
 @dataclass
 class CheckupAccounting:
     """Single source of truth for the final-summary numbers."""
@@ -203,7 +220,12 @@ class CheckupAccounting:
         done = self.fixed_manually + self.fixed_automatically + self.skipped_by_user
         return max(0, self.total - done)
 
-    def summary_lines(self, status: str, artifacts: Optional[dict] = None) -> list[str]:
+    def summary_lines(
+        self,
+        status: str,
+        artifacts: Optional[dict] = None,
+        decision: Optional[str] = None,
+    ) -> list[str]:
         applied_mode = self.patches_applied > 0
         lines = [f"Checkup complete: {status}", ""]
         lines.append("Findings:")
@@ -227,6 +249,10 @@ class CheckupAccounting:
                 lines.append(f"  Patch preview: {artifacts['patch']}")
             if artifacts.get("report"):
                 lines.append(f"  Report: {artifacts['report']}")
+        if decision:
+            lines.append("")
+            lines.append("Decision:")
+            lines.append(f"  {decision}")
         return lines
 
 
