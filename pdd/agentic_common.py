@@ -977,8 +977,16 @@ def _format_utc(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _resolve_reset_tz(name: Optional[str]) -> tzinfo:
-    """Resolve a parenthesized timezone token to a ``tzinfo`` (UTC fallback)."""
+def _resolve_reset_tz(name: Optional[str]) -> Optional[tzinfo]:
+    """Resolve a parenthesized timezone token to a ``tzinfo``.
+
+    Returns ``timezone.utc`` when no timezone was given (the conservative,
+    documented default for unzoned reset text), a resolved zone for ``UTC``/
+    ``GMT``/``Z`` or a recognized IANA name (e.g. ``America/Los_Angeles``), and
+    ``None`` when an *explicit* timezone token is present but unrecognized — the
+    caller then treats the reset as unparseable rather than emitting a
+    confidently-wrong UTC timestamp (e.g. reading ``3:30pm (PDT)`` as 15:30Z).
+    """
     if not name:
         return timezone.utc
     if name.upper() in ("UTC", "GMT", "Z"):
@@ -986,7 +994,7 @@ def _resolve_reset_tz(name: Optional[str]) -> tzinfo:
     try:
         return ZoneInfo(name)
     except Exception:
-        return timezone.utc
+        return None
 
 
 def _reset_hour_to_24h(hour: int, ampm: Optional[str]) -> Optional[int]:
@@ -1024,6 +1032,8 @@ def _dated_reset_to_datetime(match: "re.Match[str]", now: datetime) -> Optional[
     if month is None or hour is None or not 1 <= day <= 31 or not 0 <= minute <= 59:
         return None
     tz = _resolve_reset_tz(match.group("tz"))
+    if tz is None:  # explicit but unrecognized timezone -> unparseable
+        return None
     for year in (now.year, now.year + 1):
         try:
             local = datetime(year, month, day, hour, minute, tzinfo=tz)
@@ -1042,6 +1052,8 @@ def _time_only_reset_to_datetime(match: "re.Match[str]", now: datetime) -> Optio
     if hour is None or not 0 <= minute <= 59:
         return None
     tz = _resolve_reset_tz(match.group("tz"))
+    if tz is None:  # explicit but unrecognized timezone -> unparseable
+        return None
     local_now = now.astimezone(tz)
     candidate = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
     if candidate.astimezone(timezone.utc) < now:
@@ -1113,7 +1125,10 @@ def _provider_limit_marker(
 
     Every field is constrained to a fixed enum (or a normalized UTC timestamp
     for ``reset_at``); out-of-range inputs are coerced to conservative defaults
-    so the marker can never carry untrusted text.
+    so the marker can never carry untrusted text. An unmappable provider is
+    reported as the literal ``unknown`` (a fixed token, never the raw string) —
+    in practice unreachable because the emission seam always passes a known
+    provider, but it keeps the marker safe if a future caller does not.
     """
     if provider not in _MARKER_PROVIDERS:
         provider = "unknown"
@@ -1181,8 +1196,17 @@ def _classify_provider_limit(
             reset_source=reset_source,
         )
     if permanent_class is None and _is_rate_limited(error_message):
+        # Generic transient 429: usually carries no reset metadata
+        # (-> reset_at= reset_source=none), but capture it when the body does
+        # expose a parseable reset (e.g. a Retry-After rendered as
+        # "resets <ISO>") so cloud can schedule precisely instead of guessing.
+        reset_at, reset_source = _parse_reset_at(error_message, now=now)
         return _provider_limit_marker(
-            provider=provider, status="429", reason="rate_limit"
+            provider=provider,
+            status="429",
+            reason="rate_limit",
+            reset_at=reset_at,
+            reset_source=reset_source,
         )
     return None
 
@@ -1210,13 +1234,19 @@ def _emit_provider_limit_marker(
 
     Printed on plain stdout — deliberately unstyled and NOT quiet-gated — so the
     cloud scheduler can parse it even when human diagnostics are suppressed.
+
+    Best-effort telemetry: any failure while building/printing the marker is
+    swallowed so a marker bug can never break the agentic run it annotates.
     """
-    marker = _classify_provider_limit(
-        _marker_provider_label(provider, env), error_message
-    )
-    if marker is not None:
-        print(marker, flush=True)
-    return marker
+    try:
+        marker = _classify_provider_limit(
+            _marker_provider_label(provider, env), error_message
+        )
+        if marker is not None:
+            print(marker, flush=True)
+        return marker
+    except Exception:  # pragma: no cover - defensive: marker must never crash the run
+        return None
 
 
 def _codex_auth_failure_message(error_detail: str) -> Optional[str]:

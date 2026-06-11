@@ -7542,6 +7542,16 @@ class TestProviderLimitMarker:
         assert reset_at == ""
         assert source == "none"
 
+    def test_parse_reset_explicit_unknown_tz_is_unparseable_not_silent_utc(self):
+        """An explicit but unrecognized timezone token must NOT be silently
+        read as UTC — that would emit a confidently-wrong timestamp and make
+        cloud retry too early. Degrade to unparseable instead."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 3:30pm (PDT)", now=self.NOW)
+        assert reset_at == ""
+        assert source == "none"
+
     def test_parse_reset_absent_keyword_yields_empty_none(self):
         from pdd.agentic_common import _parse_reset_at
 
@@ -7613,6 +7623,21 @@ class TestProviderLimitMarker:
         assert marker == (
             "PDD_PROVIDER_LIMIT provider=google status=429 reason=rate_limit "
             "reset_at= reset_source=none"
+        )
+
+    def test_classify_generic_429_captures_reset_when_body_exposes_one(self):
+        """A generic 429 that DOES carry a parseable reset (e.g. a Retry-After
+        rendered into the body) should surface it rather than discard it."""
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "openai",
+            "Error: 429 rate limit exceeded; resets 2026-06-11T15:00:00Z",
+            now=self.NOW,
+        )
+        assert marker == (
+            "PDD_PROVIDER_LIMIT provider=openai status=429 reason=rate_limit "
+            "reset_at=2026-06-11T15:00:00Z reset_source=parsed_text"
         )
 
     # ----- _classify_provider_limit: false positives / non-limits -----
