@@ -1,0 +1,59 @@
+<pdd-reason>Reports per-source token attribution for a hydrated prompt so users can audit context-window cost before generation, displayed by default as a Claude-Code /context-style usage box.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {"name": "context", "description": "Show context-window usage by source for a preprocessed prompt"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>commands/replay_python.prompt</pdd-dependency>
+<pdd-dependency>context_audit_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/commands/context.py` module.
+
+% Role & Scope
+Implement the user-facing `pdd context <prompt_path>` command: a thin CLI over the shared `pdd.context_audit` core. The command preprocesses a prompt file the same way generation does (via the core) and reports token attribution broken down by source (prompt body, each `<include>`, grounding). By default it renders a Claude-Code `/context`-style usage box; `--table` shows the raw per-source attribution table and `--json` emits machine-readable output. No LLM call is made.
+
+This is a **top-level** command (not a subcommand or a flag of `generate`/`sync`) by design: a context audit is a standalone, deterministic, no-LLM preflight that CI pipelines and agents must be able to run on its own to budget-gate context-window cost *without* triggering generation, sync, or the cloud session a grouped surface would imply. The CLI already has a global `--context` option (unrelated: it selects extra context for generation, not an audit), `pdd connect` exposes context usage interactively, and this command is the scriptable CI-facing counterpart that shares the same `pdd.context_audit` core as that endpoint so both always agree.
+
+% Requirements
+1. Define a Click command named `context` with a required `prompt_path` argument (path to the prompt file to audit).
+2. Provide options:
+   - `--model`: model name used for context-limit lookup (default: value of `PDD_MODEL_DEFAULT` env var, or `"gpt-4o"` if unset).
+   - `--json`: emit machine-readable output (JSON) to stdout instead of the usage box.
+   - `--table`: show the per-source token-attribution table instead of the usage box.
+   - `--threshold`: integer percentage (0–100, default 80) above which to exit with code 2 to signal context budget exceeded; set to 0 to disable the threshold check.
+3. Delegate ALL token attribution to the shared core: resolve the model default, then call `pdd.context_audit.audit_prompt_file(prompt_path, resolved_model)` to obtain a `ContextAudit` (model, total_tokens, context_limit, percent_used, rows, warnings). Do NOT re-implement hydration, per-include attribution, unresolved-include detection, or dynamic-tag handling here — that business logic lives in `pdd.context_audit` so this command and the `pdd connect` context-audit endpoint give identical answers. No LLM call is made.
+4. Compute the budget decision with `pdd.context_audit.threshold_exceeded(audit.percent_used, threshold)`; the command owns the exit-code policy (exit code 2 when exceeded), the core only reports facts.
+9. Sort/order of rows comes from the core (largest consumer first); render rows in the order the core returns them.
+10. Default usage-box output (Claude-Code `/context` style):
+    - Print a `Context Usage` header.
+    - Render a grid of cells where used context-window space is split by category (one distinct glyph per source row) against free space (`⛶`), proportional to each source's share of the context limit. Omit the grid when the context limit is unknown.
+    - Print the model name, the `total/limit tokens (percent%)` summary (or total tokens with a "context limit unknown" note when the limit is unknown).
+    - Under `Estimated usage by category`, print one line per source with its glyph, source label, token count, and percent of the context limit; append the grounding `WARN` note where present.
+    - Print a `Free space` line with the unused token count and percent when the context limit is known.
+11. Table output (`--table`):
+    - Print a header with total tokens, model name, context-limit tokens, and percentage used.
+    - Print a table with columns: Source, Tokens, % of total.
+12. After non-JSON output, print each warning from `audit.warnings` (deferred/unresolved) to stderr. When `threshold_exceeded` is true, print a warning line to stderr and exit with code 2.
+13. JSON output (`--json`):
+    - Emit a single JSON object with keys: `total_tokens`, `context_limit`, `percent_used`, `model`, `rows`, `warnings` (list of warning strings), `threshold_exceeded` (bool). The top-level keys are stable for CI/agent callers.
+    - Each row is `{source, tokens, percent, status, note}` where `percent` is the row's share of `total_tokens` (via `row_percent`), `status` is one of `resolved | unresolved | deferred | unavailable | body`, and `note` is an optional human string. Rows are in the core's order (largest tokens first). The `status` field lets callers determine row state without parsing `note`/`warnings` strings.
+    - Exit with code 2 when `threshold_exceeded` is true.
+14. Use existing command error-handling conventions: re-raise `click.Abort`, `click.UsageError`, and `click.exceptions.Exit`; use `handle_error` for other exceptions.
+15. Do not require an LLM call for any portion of the audit.
+16. Import the audit core from `pdd.context_audit` (`audit_prompt_file`, `percent`, `row_percent`, `threshold_exceeded`, and the `ContextAudit`/`AuditRow` types) and `handle_error` from the existing command error utilities. The command must NOT import token counting or preprocessing directly — that is the core's responsibility.
+
+% Dependencies
+<replay_prompt><include>prompts/commands/replay_python.prompt</include></replay_prompt>
+
+% Deliverables
+- Code: `pdd/commands/context.py`

@@ -68,19 +68,24 @@ def _is_github_issue_url(s: str) -> bool:
 def _estimate_mode_active() -> bool:
     """Return True when the global ``--estimate`` flag is active.
 
-    Reads the shared state from the active Click context (set by the root CLI),
-    which is the in-process source of truth. The process-wide ``PDD_ESTIMATE``
-    env var is intentionally not consulted, as it can leak across
-    CliRunner-based tests and wrongly enable estimate mode for unrelated runs.
+    Prefers the shared state on the active Click context (set by the root CLI),
+    then falls back to the process-wide ``PDD_ESTIMATE`` env var — matching the
+    other command wrappers so estimate detection no longer depends on which
+    command path is taken. Consulting the env var is safe because the root CLI
+    now snapshots and restores it on context teardown (see ``pdd/core/cli.py``),
+    so it can no longer leak across CliRunner-based tests and wrongly enable
+    estimate mode for unrelated runs.
     """
     try:
         import click
 
         ctx = click.get_current_context(silent=True)
         obj = getattr(ctx, "obj", None) if ctx is not None else None
-        return bool(isinstance(obj, dict) and obj.get("estimate"))
+        if isinstance(obj, dict) and obj.get("estimate"):
+            return True
     except Exception:
-        return False
+        pass
+    return os.getenv("PDD_ESTIMATE", "").lower() in {"1", "true", "yes", "on"}
 
 
 def _is_runtime_llm_template(basename: str) -> bool:

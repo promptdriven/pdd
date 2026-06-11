@@ -1976,14 +1976,17 @@ def _display_sync_log(
 def _sync_estimate_requested(explicit: bool = False) -> bool:
     """Return True when sync should run in dry-run cost-estimate mode.
 
-    Detection order: an explicit caller flag, then the shared ``--estimate``
-    state stored on the active Click context by the root CLI. The in-process
-    Click context is the single source of truth; the process-wide
-    ``PDD_ESTIMATE`` env var is deliberately NOT consulted here because it can
-    persist across CliRunner-based tests and would wrongly short-circuit
-    unrelated direct ``sync_orchestration`` calls. Any failure to read the
-    context degrades to "not estimating" so normal syncs are never
-    short-circuited.
+    Detection order, consistent with the other command wrappers
+    (``generate``/``fix``/``analysis``/``modify``): an explicit caller flag,
+    then the shared ``--estimate`` state stored on the active Click context by
+    the root CLI, then the process-wide ``PDD_ESTIMATE`` env var. The env var is
+    the cross-process signal the root CLI exports so library-level calls and
+    spawned ``pdd`` subprocesses inherit the intent. Consulting it here is safe
+    because the root CLI now snapshots and restores it on context teardown (see
+    ``pdd/core/cli.py``), so it can no longer persist across CliRunner-based
+    tests and wrongly short-circuit an unrelated direct ``sync_orchestration``
+    call. Any failure to read the context degrades to the env check, so behavior
+    no longer depends on which command path reached estimate mode.
     """
     if explicit:
         return True
@@ -1996,7 +1999,7 @@ def _sync_estimate_requested(explicit: bool = False) -> bool:
             return True
     except Exception:
         pass
-    return False
+    return os.getenv("PDD_ESTIMATE", "").lower() in {"1", "true", "yes", "on"}
 
 
 def sync_orchestration(

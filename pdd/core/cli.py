@@ -320,6 +320,15 @@ class PDDCLI(click.Group):
     def invoke(self, ctx):
         exception_to_handle = None
         user_abort = False  # Flag for user cancellation (fix for issue #186)
+        # Capture the real invocation tokens (subcommand + its args) before Click
+        # consumes them while resolving the subcommand. The group callback needs
+        # these to decide whether to enter machine-output (quiet) mode, and
+        # ``sys.argv`` is unreliable for that under Click's test runner. ``meta``
+        # is shared with the same context the callback receives.
+        try:
+            ctx.meta["pdd_cli_tokens"] = list(ctx.protected_args) + list(ctx.args)
+        except Exception:
+            ctx.meta["pdd_cli_tokens"] = list(getattr(ctx, "args", []) or [])
         try:
             result = super().invoke(ctx)
         except click.Abort:
@@ -604,9 +613,20 @@ def cli(
     """
     Main entry point for the PDD CLI. Handles global options and initializes context.
     """
-    # Prompt-lint JSON output is intended for downstream machine consumers.
+    # Machine-JSON output is intended for downstream consumers, so stdout must
+    # stay payload-only. ``sys.argv`` covers the real CLI, but under Click's test
+    # runner it is the pytest argv — so also check the invocation tokens captured
+    # in ``PDDCLI.invoke`` (subcommand + its args). Both feed the same shared
+    # detector that ``pdd/cli.py``'s early pre-parse uses, so they cannot drift.
+    # Estimate mode (--estimate/--estimate-json/PDD_ESTIMATE) is a read-only
+    # dry-run preview that must also stay quiet and payload-only.
     estimate_mode = bool(estimate or estimate_json or _env_flag_enabled("PDD_ESTIMATE"))
-    json_mode = _is_machine_json_invocation(sys.argv) or estimate_json
+    cli_tokens = ctx.meta.get("pdd_cli_tokens", []) if hasattr(ctx, "meta") else []
+    json_mode = (
+        _is_machine_json_invocation(sys.argv)
+        or _is_machine_json_invocation(cli_tokens)
+        or estimate_json
+    )
     quiet = quiet or json_mode or estimate_mode
     # Estimate mode is a read-only dry-run preview; suppress the diagnostic
     # core dump so previews never write to .pdd/core_dumps.
@@ -649,11 +669,20 @@ def cli(
     # Snapshot the pre-invocation values and restore them when this context tears
     # down, so an externally exported PDD_ESTIMATE=1 still survives while a value
     # we set internally does not.
+    #
+    # The set must cover EVERY env var this block mutates, not just PDD_ESTIMATE:
+    # estimate mode also clears PDD_OUTPUT_COST_PATH (so a preview never appends
+    # to the cost log) and forces PDD_FORCE_LOCAL=1. Omitting those leaks the same
+    # class of bug — a later in-process command would stay forced-local and would
+    # have lost an existing cost-log path. PDD_FORCE_LOCAL is likewise set by a
+    # plain --local run; snapshotting it keeps that invocation-scoped too.
     _estimate_env_keys = (
         "PDD_ESTIMATE",
         "PDD_ESTIMATE_JSON",
         "PDD_LLM_ATTRIBUTION_PROCESS_LOG",
         "PDD_LLM_ATTRIBUTION_STDOUT",
+        "PDD_OUTPUT_COST_PATH",
+        "PDD_FORCE_LOCAL",
     )
     _estimate_env_snapshot = {key: os.environ.get(key) for key in _estimate_env_keys}
 
@@ -896,7 +925,11 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         _write_result_core_dump(ctx, normalized_results, invoked_subcommands, 0.0)
         return
 
-    if not ctx.obj.get("quiet"):
+    suppress_result_summary = bool(
+        isinstance(ctx.obj, dict) and ctx.obj.get("_suppress_result_summary")
+    )
+
+    if not ctx.obj.get("quiet") and not suppress_result_summary:
         console.print("\n[info]--- Command Execution Summary ---[/info]")
 
     for i, result_tuple in enumerate(normalized_results):
@@ -905,7 +938,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
         # Check if the command failed (returned None)
         if result_tuple is None:
-            if not ctx.obj.get("quiet"):
+            if not ctx.obj.get("quiet") and not suppress_result_summary:
                 # Check if it was install_completion (which normally returns None)
                 if command_name == "install_completion":
                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
@@ -922,7 +955,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         elif isinstance(result_tuple, tuple) and len(result_tuple) == 3:
             result_data, cost, model_name = result_tuple
             total_cost += cost
-            if not ctx.obj.get("quiet"):
+            if not ctx.obj.get("quiet") and not suppress_result_summary:
                 # Special handling for preprocess success message (check actual command name)
                 actual_command_name = invoked_subcommands[i] if i < num_commands else None # Get actual name if possible
                 if actual_command_name == "preprocess" and cost == 0.0 and model_name == "local":
@@ -949,7 +982,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
         # Handle dicts with examplesUsed (e.g. from commands not using track_cost but returning metadata)
         elif isinstance(result_tuple, dict) and result_tuple.get("examplesUsed"):
-            if not ctx.obj.get("quiet"):
+            if not ctx.obj.get("quiet") and not suppress_result_summary:
                 console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
                 console.print("    Examples used:")
                 for ex in result_tuple["examplesUsed"]:
@@ -959,12 +992,12 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
         else:
             # Handle unexpected return types if necessary
-            if not ctx.obj.get("quiet"):
+            if not ctx.obj.get("quiet") and not suppress_result_summary:
                 # Provide more detail on the unexpected type
                 console.print(f"  [warning]Step {i+1} ({command_name}):[/warning] Unexpected result format: {type(result_tuple).__name__} - {str(result_tuple)[:50]}...")
 
 
-    if not ctx.obj.get("quiet"):
+    if not ctx.obj.get("quiet") and not suppress_result_summary:
         from ..compression_reporting import format_compression_summary_lines
 
         for line in format_compression_summary_lines():
@@ -982,7 +1015,8 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
     )
 
     # Finally, write a core dump if requested
-    _write_result_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
+    if not (isinstance(ctx.obj, dict) and ctx.obj.get("_suppress_core_dump")):
+        _write_result_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
     fatal = ctx.obj.get("_fatal_exception") if isinstance(ctx.obj, dict) else None
     if fatal:
         ctx.exit(1)

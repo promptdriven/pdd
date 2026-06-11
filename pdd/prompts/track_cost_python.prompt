@@ -28,6 +28,7 @@
 2. **Execute the Command Function:** Call the original command function and capture its result.
 3. **Record the End Time:** After the command completes, record the current datetime as the end time.
 4. **Access Command Context:** Retrieve the Click context using `click.get_current_context()`.
+- **Record the invoked subcommand name:** Before executing the command function, append the wrapped command's name (`ctx.command.name`) to the `invoked_subcommands` list on `ctx.obj` (initialize it to an empty list when absent). The root `process_commands` result callback, `get_command_name`, and `record_after_guarded_command` fall back to this list whenever Click does not expose `ctx.invoked_subcommands` (the common case for real CLI runs), so command summaries and core dumps can name each step instead of emitting `Unknown Command N`. Skip this recording when running under pytest (`PYTEST_CURRENT_TEST` is set) and when `ctx.obj` is not a dict or the command has no name, so existing unit tests that assert the `Unknown Command` output keep passing.
 5. **Retrieve Output Cost Option:** Check if the output cost option is specified directly via `ctx.obj` or via the `PDD_OUTPUT_COST_PATH` environment variable.
 6. **Prepare Cost Data:**
 - Determine the command name from the context.

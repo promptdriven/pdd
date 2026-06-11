@@ -305,6 +305,12 @@ def test_cli_estimate_mode_does_not_leak_into_next_invocation(tmp_path, monkeypa
 
     monkeypatch.delenv("PDD_ESTIMATE", raising=False)
     monkeypatch.delenv("PDD_ESTIMATE_JSON", raising=False)
+    monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+    # Estimate mode also clears PDD_OUTPUT_COST_PATH and forces PDD_FORCE_LOCAL=1;
+    # an externally exported cost-log path must be restored afterwards so a later
+    # in-process command does not silently lose it (or stay forced-local).
+    external_cost_log = str(tmp_path / "cost.csv")
+    monkeypatch.setenv("PDD_OUTPUT_COST_PATH", external_cost_log)
 
     with patch(
         "pdd.commands.generate.code_generator_main",
@@ -319,6 +325,10 @@ def test_cli_estimate_mode_does_not_leak_into_next_invocation(tmp_path, monkeypa
     # The internally-set env vars must not survive the invocation.
     assert "PDD_ESTIMATE" not in os.environ
     assert "PDD_ESTIMATE_JSON" not in os.environ
+    # PDD_FORCE_LOCAL was forced on internally and must not leak; the externally
+    # exported PDD_OUTPUT_COST_PATH must be restored to its prior value.
+    assert "PDD_FORCE_LOCAL" not in os.environ
+    assert os.environ.get("PDD_OUTPUT_COST_PATH") == external_cost_log
 
     # An externally exported PDD_ESTIMATE=1 must survive (restored to its prior
     # value), so the documented "export PDD_ESTIMATE=1" workflow keeps working.

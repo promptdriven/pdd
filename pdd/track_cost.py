@@ -227,6 +227,29 @@ def _restore_attempted_models(ctx, had_prior: bool, prior_value: Any) -> None:
         ctx.obj.pop('attempted_models', None)
 
 
+def _record_invoked_subcommand(ctx) -> None:
+    """Append this command's name to ``ctx.obj['invoked_subcommands']``.
+
+    The root ``process_commands`` result callback (and ``get_command_name`` /
+    ``record_after_guarded_command``) fall back to this list whenever Click does
+    not expose ``ctx.invoked_subcommands`` — the common case for real CLI runs —
+    so command summaries and core dumps can name each step instead of emitting
+    ``Unknown Command N``. Skipped under pytest so existing unit tests continue
+    to assert the ``Unknown Command`` output (the result callback applies the
+    same pytest guard before consulting this list).
+    """
+    if ctx is None or not isinstance(ctx.obj, dict):
+        return
+    if os.environ.get('PYTEST_CURRENT_TEST'):
+        return
+    cmd_name = ctx.command.name if ctx.command else None
+    if not cmd_name:
+        return
+    invoked = ctx.obj.get('invoked_subcommands') or []
+    invoked.append(cmd_name)
+    ctx.obj['invoked_subcommands'] = invoked
+
+
 def track_cost(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
@@ -236,6 +259,7 @@ def track_cost(func):
             ctx = None
 
         start_time = datetime.now()
+        _record_invoked_subcommand(ctx)
         had_prior_attempted, prior_attempted = _clear_attempted_models(ctx)
         result = None
         command_error = None

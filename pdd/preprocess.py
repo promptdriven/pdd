@@ -31,6 +31,11 @@ def _is_quiet_mode() -> bool:
     return os.getenv("PDD_QUIET") == "1"
 
 
+def _is_context_audit_no_query_fallback() -> bool:
+    """Return True when context audit must defer semantic query fallbacks."""
+    return os.getenv("PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK") == "1"
+
+
 def _warn_selector_fallback(
     file_path: str,
     mode: str,
@@ -146,7 +151,7 @@ def _extract_inline_code_spans(text: str) -> List[Tuple[int, int]]:
     """Return list of (start, end) spans for inline code (backticks)."""
     spans: List[Tuple[int, int]] = []
     try:
-        for m in re.finditer(r"(?<!`)(`+)([^\n]*?)\1", text):
+        for m in re.finditer(r"(?<!`)(`++)([^\n]*?)\1", text):
             spans.append((m.start(), m.end()))
     except Exception:
         pass
@@ -188,7 +193,7 @@ def _scan_risky_placeholders(text: str) -> Tuple[List[Tuple[int, str]], List[Tup
                 line_no = text.count("\n", 0, m.start()) + 1
                 single_brace.append((line_no, m.group(0)))
         # JavaScript template placeholders like ${...}
-        for m in re.finditer(r"\$\{[^\}]+\}", text):
+        for m in re.finditer(r"\$\{[^\}]++\}", text):
             if not _is_inside_any_span(m.start(), fence_spans):
                 line_no = text.count("\n", 0, m.start()) + 1
                 template_brace.append((line_no, m.group(0)))
@@ -231,8 +236,8 @@ def compute_user_intent_paths(text: str) -> set:
     # body form (with optional attrs) and self-closing form. Both forms can
     # carry a `path="..."` attribute, which takes precedence over body content.
     include_pattern = (
-        r'<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>'
-        r'|<include(?P<attrs_self>\s+[^>]*?)\s*/>'
+        r'<include(?P<attrs>\s[^>]*+)?>(?P<content>.*?)</include>'
+        r'|<include(?P<attrs_self>\s[^>]*?)/>'
     )
     for m in re.finditer(include_pattern, text, flags=re.DOTALL):
         attrs = _parse_attrs(m.group('attrs') or m.group('attrs_self') or "")
@@ -241,12 +246,12 @@ def compute_user_intent_paths(text: str) -> set:
         p = (path_attr or body).strip()
         if p:
             paths.add(p)
-    for m in re.finditer(r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', text, flags=re.DOTALL):
+    for m in re.finditer(r'<include-many(?:\s[^>]*+)?>(.*?)</include-many>', text, flags=re.DOTALL):
         inner = m.group(1)
         for raw in [s.strip() for part in inner.splitlines() for s in part.split(',')]:
             if raw:
                 paths.add(raw)
-    for m in re.finditer(r"```<([^>]*?)>```", text):
+    for m in re.finditer(r"```<([^>]*+)>```", text):
         p = m.group(1).strip()
         if p:
             paths.add(p)
@@ -484,7 +489,7 @@ def process_backtick_includes(
     if _seen is None:
         _seen = set()
     # More specific pattern that doesn't match nested > characters
-    pattern = r"```<([^>]*?)>```"
+    pattern = r"```<([^>]*+)>```"
     def replace_include(match):
         file_path = match.group(1).strip()
         try:
@@ -521,7 +526,11 @@ def process_backtick_includes(
                         snapshot_recorder=snapshot_recorder,
                     )
                 if snapshot_recorder is not None:
-                    snapshot_recorder.record_include(source_path=full_path, content=content)
+                    snapshot_recorder.record_include(
+                        source_path=full_path,
+                        content=content,
+                        include_depth=len(_seen),
+                    )
                 _dbg(f"Included via backticks: {file_path} (len={len(content)})")
                 return f"```{content}```"
         except FileNotFoundError:
@@ -600,7 +609,7 @@ def process_xml_tags(
         user_intent_many_paths: Optional[set] = _user_intent_paths
     elif _failed is not None:
         user_intent_many_paths = set()
-        for m in re.finditer(r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', text, flags=re.DOTALL):
+        for m in re.finditer(r'<include-many(?:\s[^>]*+)?>(.*?)</include-many>', text, flags=re.DOTALL):
             inner = m.group(1)
             for raw in [s.strip() for part in inner.splitlines() for s in part.split(',')]:
                 if raw:
@@ -671,7 +680,7 @@ def process_include_tags(
     if _seen is None:
         _seen = set()
     # Support both <include>path</include> and <include path="path" attrs... />
-    pattern = r'<include(?P<attrs>\s+[^>]*?)?>(?P<content>.*?)</include>|<include(?P<attrs_self>\s+[^>]*?)\s*/>'
+    pattern = r'<include(?P<attrs>\s[^>]*+)?>(?P<content>.*?)</include>|<include(?P<attrs_self>\s[^>]*?)/>'
 
     def replace_include(match):
         attrs_str = match.group('attrs') or match.group('attrs_self') or ""
@@ -858,6 +867,9 @@ def process_include_tags(
                                 raise
                             except ImportError as e:
                                 fallback_query = attrs.get('query')
+                                if fallback_query and _is_context_audit_no_query_fallback():
+                                    _dbg(f"Deferred query fallback during context audit for {file_path}")
+                                    return match.group(0)
                                 if fallback_query:
                                     try:
                                         from pdd.include_query_extractor import IncludeQueryExtractor
@@ -881,6 +893,9 @@ def process_include_tags(
                                 _warn_selector_fallback(file_path, mode, e, selectors=selectors_str)
                             except SelectorError as e:
                                 fallback_query = attrs.get('query')
+                                if fallback_query and _is_context_audit_no_query_fallback():
+                                    _dbg(f"Deferred query fallback during context audit for {file_path}")
+                                    return match.group(0)
                                 if fallback_query:
                                     try:
                                         from pdd.include_query_extractor import IncludeQueryExtractor
@@ -907,6 +922,9 @@ def process_include_tags(
                                 if fallback_strategy == "error":
                                     raise CompressionFallbackError(str(e)) from e
                                 fallback_query = attrs.get('query')
+                                if fallback_query and _is_context_audit_no_query_fallback():
+                                    _dbg(f"Deferred query fallback during context audit for {file_path}")
+                                    return match.group(0)
                                 if fallback_query:
                                     try:
                                         from pdd.include_query_extractor import IncludeQueryExtractor
@@ -956,7 +974,11 @@ def process_include_tags(
                             snapshot_recorder=snapshot_recorder,
                         )
                     if snapshot_recorder is not None:
-                        snapshot_recorder.record_include(source_path=full_path, content=content)
+                        snapshot_recorder.record_include(
+                            source_path=full_path,
+                            content=content,
+                            include_depth=len(_seen),
+                        )
                     _dbg(f"Included via XML tag: {file_path} (len={len(content)})")
                     return content
         except FileNotFoundError:
@@ -1046,7 +1068,7 @@ def process_include_tags(
     return current_text
 
 def process_pdd_tags(text: str) -> str:
-    pattern = r'<pdd>.*?</pdd>'
+    pattern = r'<pdd>(?:(?!</pdd>)[\s\S])*+</pdd>'
     # Replace pdd tags with an empty string first
     processed = re.sub(pattern, '', text, flags=re.DOTALL)
     # If there was a replacement and we're left with a specific test case, handle it specially
@@ -1055,7 +1077,7 @@ def process_pdd_tags(text: str) -> str:
     return processed
 
 def process_shell_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any] = None) -> str:
-    pattern = r'<shell>(.*?)</shell>'
+    pattern = r'<shell>((?:(?!</shell>)[\s\S])*+)</shell>'
     def replace_shell(match):
         command = match.group(1).strip()
         if recursive:
@@ -1143,7 +1165,7 @@ def process_shell_tags(text: str, recursive: bool, snapshot_recorder: Optional[A
     return re.sub(pattern, replace_shell_with_spans, text, flags=re.DOTALL)
 
 def process_web_tags(text: str, recursive: bool, snapshot_recorder: Optional[Any] = None) -> str:
-    pattern = r'<web>(.*?)</web>'
+    pattern = r'<web>((?:(?!</web>)[\s\S])*+)</web>'
     def replace_web(match):
         url = match.group(1).strip()
         if recursive:
@@ -1285,7 +1307,9 @@ def process_include_many_tags(
     include's source contains literal `<include-many>...</include-many>` syntax in
     a docstring or regex string.
     """
-    pattern = r'<include-many(?P<attrs>\s+[^>]*?)?>(?P<inner>.*?)</include-many>'
+    if _seen is None:
+        _seen = set()
+    pattern = r'<include-many(?P<attrs>\s[^>]*+)?>(?P<inner>.*?)</include-many>'
     def replace_many(match):
         attrs = _parse_attrs(match.group('attrs') or "")
         inner = match.group('inner')
@@ -1317,7 +1341,11 @@ def process_include_many_tags(
                     )
                     contents.append(content)
                 if snapshot_recorder is not None:
-                    snapshot_recorder.record_include(source_path=full_path, content=content)
+                    snapshot_recorder.record_include(
+                        source_path=full_path,
+                        content=content,
+                        include_depth=len(_seen),
+                    )
                 _dbg(f"Included (many): {p}")
             except FileNotFoundError:
                 _dbg(f"Missing include-many: {p}")
@@ -1370,7 +1398,7 @@ def double_curly(
     text = re.sub(r"\$\{[A-Za-z_][A-Za-z0-9_]*\}", _protect_var, text)
 
     # First, protect any existing double curly braces
-    text = re.sub(r'\{\{([^{}]*)\}\}', r'__ALREADY_DOUBLED__\1__END_ALREADY__', text)
+    text = re.sub(r'\{\{([^{}]*+)\}\}', r'__ALREADY_DOUBLED__\1__END_ALREADY__', text)
     
     # Process excluded keys
     for key in exclude_keys:
@@ -1381,10 +1409,10 @@ def double_curly(
     text = text.replace("{", "{{").replace("}", "}}")
     
     # Restore excluded keys
-    text = re.sub(r'__EXCLUDED__(.*?)__END_EXCLUDED__', r'{\1}', text)
+    text = re.sub(r'__EXCLUDED__((?:(?!__END_EXCLUDED__).)*+)__END_EXCLUDED__', r'{\1}', text)
     
     # Restore already doubled brackets
-    text = re.sub(r'__ALREADY_DOUBLED__(.*?)__END_ALREADY__', r'{{\1}}', text)
+    text = re.sub(r'__ALREADY_DOUBLED__((?:(?!__END_ALREADY__).)*+)__END_ALREADY__', r'{{\1}}', text)
 
     # Restore protected ${IDENT} placeholders as ${{IDENT}}
     def _restore_var(m):
@@ -1403,7 +1431,7 @@ def double_curly(
     text = re.sub(r"__PDD_VAR_(\d+)__", _restore_var, text)
     
     # Special handling for code blocks
-    code_block_pattern = r'```([\w\s]*)\n([\s\S]*?)```'
+    code_block_pattern = r'```([\w \t\r\f\v]*)\n((?:(?!```)[\s\S])*)```'
     
     def process_code_block(match):
         lang = match.group(1).strip()
