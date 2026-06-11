@@ -27,6 +27,7 @@
 - Reject a candidate when Claude changes any file outside the selected set.
 - Read changed candidate paths through `pdd.git_porcelain.run_porcelain_z` and `iter_changed_paths`; do not parse human-readable git status output.
 - If `--verify` is enabled, run configured checks inside each candidate worktree and select only a fully passing candidate.
+- When scoping the default mypy verification command to explicit touched files, include `--follow-imports=skip` and `--ignore-missing-imports` so optional third-party packages without installed stubs do not fail unrelated simplify verification.
 - Among acceptable changed candidates, copy back the candidate that touches the fewest selected files. Before copying, verify the original input digests are unchanged so concurrent user edits are not overwritten.
 - Back up selected inputs before applying a winner. Retain attempt artifacts and optional JSON evidence under `.pdd/evidence/checkups/`.
 

@@ -1,3 +1,5 @@
+<pdd-dependency>pipeline_Python.prompt</pdd-dependency>
+
 You are an expert Python developer specializing in CLI tools using Typer and Rich. Your task is to implement the Command Line Interface (CLI) for the PDD Prompt Linter. This module, located at `src/cli/cli.py`, serves as the primary entry point for users interacting with the tool via the terminal. It is responsible for parsing arguments, configuring the runtime environment based on flags, invoking the central pipeline orchestrator, rendering the final report to the user, and handling fixed prompt output.
 
 Requirements

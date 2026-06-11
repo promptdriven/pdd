@@ -18,6 +18,7 @@ _CHECKUP_JSON_SUBCOMMANDS = (
     "coverage",
     "gate",
     "drift",
+    "snapshot",
 )
 
 # Subcommands that are NOT a unified source-set prompt target; used to keep
@@ -47,21 +48,26 @@ def is_checkup_subcommand_json_invocation(arguments: List[str]) -> bool:
 
 
 def is_checkup_source_set_json_invocation(arguments: List[str]) -> bool:
-    """Return True for ``pdd checkup <prompt-target> --json`` machine output."""
+    """Return True for ``pdd checkup <prompt-target> --json`` machine output.
+
+    Click accepts the parent ``--json`` option in either position, so the prompt
+    target may appear *after* ``--json`` (e.g. ``pdd checkup --json foo.prompt``).
+    Scan past any leading option-like tokens after ``checkup`` to find the first
+    positional argument and decide from there; ``pdd checkup --json`` with no
+    target stays False.
+    """
     if "--json" not in arguments:
         return False
     try:
         checkup_idx = arguments.index("checkup")
     except ValueError:
         return False
-    if checkup_idx + 1 >= len(arguments):
-        return False
-    next_arg = arguments[checkup_idx + 1]
-    if next_arg.startswith("-"):
-        return False
-    if next_arg in _CHECKUP_NON_SOURCE_SET_SUBCOMMANDS:
-        return False
-    return True
+    for token in arguments[checkup_idx + 1:]:
+        if token.startswith("-"):
+            continue
+        # First positional after ``checkup`` is the target (or a subcommand).
+        return token not in _CHECKUP_NON_SOURCE_SET_SUBCOMMANDS
+    return False
 
 
 def is_context_json_invocation(arguments: List[str]) -> bool:

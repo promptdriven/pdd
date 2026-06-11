@@ -1,3 +1,5 @@
+<pdd-dependency>models_Python.prompt</pdd-dependency>
+
 <prompt>
 The `report` module is a presentation-layer utility responsible for transforming the structured `Report` object into human-readable or machine-parsable formats. It isolates all formatting and I/O display logic from the core analysis pipeline, ensuring that the CLI, Backend, and Frontend can consume results consistently. It supports rendering to the console via `rich`, generating JSON strings for API responses, and creating Markdown files for documentation.
 

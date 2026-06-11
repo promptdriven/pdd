@@ -1,0 +1,44 @@
+<pdd-reason>Interactive prompt checkup orchestration for explicit `pdd checkup --interactive` repair sessions.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {"name": "ClickInteractiveSession", "kind": "class"}
+    ],
+    "functions": [
+      {"name": "filter_interactive_findings", "signature": "(report: PromptSourceSetReport, *, explicit_interactive: bool) -> list[SourceSetFinding]", "returns": "list[SourceSetFinding]"},
+      {"name": "build_repair_options_for_finding", "signature": "(finding: SourceSetFinding) -> list[RepairOption]", "returns": "list[RepairOption]"},
+      {"name": "run_interactive_checkup", "signature": "(target: str, *, apply: bool = False, dry_run: bool = False, project_root: Optional[Path] = None, strict: bool = False, quiet: bool = False, explicit_interactive: bool = True, session_factory: Optional[Callable[[], InteractiveRepairSession]] = None) -> Optional[tuple[str, float, str]]", "returns": "Optional[tuple[str, float, str]]"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>checkup_interactive_session_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_prompt_apply_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_prompt_main_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/checkup_interactive_main.py`.
+
+% Requirements
+- Run only for explicit interactive prompt-checkup intent.
+- Build a deterministic source-set report, seed an interactive repair session, present each in-scope finding, and optionally apply approved patches.
+- Present repair choices as Option A, Option B, keep current / skip, custom fix, and rationale/details affordances.
+- Non-explicit repair routing may include only findings where `requires_clarification=True`; explicit interactive mode may include all findings.
+- Do not call an LLM in tests; use deterministic session factories and patch objects.
+- Surface rejected patch application results truthfully in CLI output and return the applicator exit code.
+
+<contract_rules>
+R1 - Explicit interactive gate
+This module is an interactive repair path and MUST NOT be the default for bare `pdd checkup <prompt>`.
+
+R2 - Option affordances
+The user-visible flow MUST offer Option A, Option B, keep current / skip, custom fix, and rationale/details.
+
+R3 - Honest apply result
+Rejected approved patches MUST be reported to the terminal and MUST propagate a non-zero result.
+</contract_rules>
+
+% Deliverables
+- Code: `pdd/checkup_interactive_main.py`

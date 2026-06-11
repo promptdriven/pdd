@@ -63,6 +63,8 @@ For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/cov
 
 For non-interactive bounded prompt repair after a failed prompt source-set checkup, see [docs/prompt_repair.md](docs/prompt_repair.md).
 
+For the deterministic prompt source-set quality gate and its `pdd.prompt_source_set_report.v1` JSON schema (including the per-finding `requires_clarification` / `clarification_reason` clarification signal), see [docs/checkup_prompt_quality_gate.md](docs/checkup_prompt_quality_gate.md).
+
 ## Installation
 
 ### Prerequisites for macOS

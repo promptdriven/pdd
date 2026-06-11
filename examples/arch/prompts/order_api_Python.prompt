@@ -1,0 +1,12 @@
+<pdd-dependency>order_models_Python.prompt</pdd-dependency>
+<pdd-reason>Core API endpoints for order management operations.</pdd-reason>
+
+% Goal
+Define the order API prompt fixture used by the architecture include validator.
+
+% Requirements
+- The implementation MUST expose authenticated order endpoints.
+- The implementation MUST use the order model contracts.
+
+% Deliverable
+- `src/api/orders.py`
