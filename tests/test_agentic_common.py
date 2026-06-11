@@ -1,9 +1,12 @@
 import pytest
+import io
 import json
 import os
 import subprocess
 import sys
 import time
+from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock, ANY, call
 from pathlib import Path
 
@@ -7443,6 +7446,315 @@ class TestCredentialLimitClassification:
         assert (
             _classify_permanent_error(envelope) == "credential-limit"
         )
+
+
+class TestProviderLimitMarker:
+    """Issue #1541: stable, secret-safe ``PDD_PROVIDER_LIMIT`` marker so PDD
+    Cloud can schedule a retry after the provider reset window without scraping
+    raw provider stderr.
+
+    The marker is additive — it piggybacks on the already-vetted
+    ``_classify_permanent_error`` (``credential-limit``) and ``_is_rate_limited``
+    classifications so it inherits their false-positive guards and never changes
+    retry/backoff semantics. A fixed UTC clock is injected so reset-time parsing
+    is deterministic.
+    """
+
+    # June 11 2026, noon UTC — the deterministic "now" for time-only/relative
+    # resolution. May 18 is in the past relative to this, so date strings
+    # without a year roll to the next future occurrence.
+    NOW = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    # May 1 2026 — used where we want "May 18" to land in the current year.
+    NOW_EARLY = datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    EXACT_BUG_ERROR = (
+        'Exit code 1: {"type":"result","subtype":"success","is_error":true,'
+        '"api_error_status":429,"duration_ms":658,"duration_api_ms":0,'
+        '"num_turns":1,"result":"You\'ve hit your limit · resets May 18, '
+        '11pm (UTC)","stop_reason":"stop_sequence","total_cost_usd":0,'
+        '"service_tier":"standard"}'
+    )
+
+    # ----- _parse_reset_at: exact date/timestamp strings -----
+
+    def test_parse_reset_full_date_time_tz_normalizes_to_utc(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "You've hit your limit · resets May 18, 11pm (UTC)",
+            now=self.NOW_EARLY,
+        )
+        assert reset_at == "2026-05-18T23:00:00Z"
+        assert source == "parsed_text"
+
+    def test_parse_reset_iso_timestamp_with_year_is_honored_verbatim(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets 2026-05-18T23:00:00Z", now=self.NOW
+        )
+        assert reset_at == "2026-05-18T23:00:00Z"
+        assert source == "parsed_text"
+
+    def test_parse_reset_date_without_year_rolls_to_next_future_occurrence(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        # Jan 2 has already passed in 2026 (now is June) -> next is 2027.
+        reset_at, source = _parse_reset_at("resets Jan 2, 9am", now=self.NOW)
+        assert reset_at == "2027-01-02T09:00:00Z"
+        assert source == "parsed_text"
+
+    # ----- _parse_reset_at: time-only strings (date inferred -> estimated) -----
+
+    def test_parse_reset_time_only_future_today_is_estimated(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 9pm", now=self.NOW)
+        assert reset_at == "2026-06-11T21:00:00Z"
+        assert source == "estimated"
+
+    def test_parse_reset_time_only_already_passed_rolls_to_next_day(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        # 9am UTC is before now (noon) -> next occurrence is tomorrow.
+        reset_at, source = _parse_reset_at("resets 9am", now=self.NOW)
+        assert reset_at == "2026-06-12T09:00:00Z"
+        assert source == "estimated"
+
+    def test_parse_reset_time_only_with_iana_tz_converts_to_utc(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        # 3:30pm PDT (UTC-7 in June) == 22:30 UTC, still in the future today.
+        reset_at, source = _parse_reset_at(
+            "resets 3:30pm (America/Los_Angeles)", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T22:30:00Z"
+        assert source == "estimated"
+
+    # ----- _parse_reset_at: unparseable / absent -----
+
+    def test_parse_reset_unparseable_text_yields_empty_none(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets at a provider-set time", now=self.NOW
+        )
+        assert reset_at == ""
+        assert source == "none"
+
+    def test_parse_reset_absent_keyword_yields_empty_none(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("some unrelated text", now=self.NOW)
+        assert reset_at == ""
+        assert source == "none"
+
+    # ----- _classify_provider_limit: credential-limit variants -----
+
+    def test_classify_credential_limit_full_marker(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "anthropic", self.EXACT_BUG_ERROR, now=self.NOW_EARLY
+        )
+        assert marker == (
+            "PDD_PROVIDER_LIMIT provider=anthropic status=credential_limit "
+            "reason=credential_limit reset_at=2026-05-18T23:00:00Z "
+            "reset_source=parsed_text"
+        )
+
+    def test_classify_session_limit_reason(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "anthropic",
+            "You've hit your session limit · resets 3:30pm (America/Los_Angeles)",
+            now=self.NOW,
+        )
+        assert "status=credential_limit" in marker
+        assert "reason=session_limit" in marker
+        assert "reset_at=2026-06-11T22:30:00Z" in marker
+        assert "reset_source=estimated" in marker
+
+    def test_classify_usage_limit_reason(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "anthropic", "You've hit your usage limit · resets 9pm", now=self.NOW
+        )
+        assert "status=credential_limit" in marker
+        assert "reason=usage_limit" in marker
+        assert "reset_source=estimated" in marker
+
+    def test_classify_credential_limit_unparseable_reset_still_emits_marker(self):
+        """A real Claude cap whose reset text was stripped (the interactive
+        fast-fail message) still emits the marker, just with an empty
+        ``reset_at`` and ``reset_source=none``.
+        """
+        from pdd.agentic_common import _classify_provider_limit
+
+        text = (
+            "you've hit your limit · resets at a provider-set time (PDD "
+            "credential-limit). PDD detected a synthetic credential-limit turn."
+        )
+        marker = _classify_provider_limit("anthropic", text, now=self.NOW)
+        assert marker is not None
+        assert "status=credential_limit" in marker
+        assert "reset_at= reset_source=none" in marker  # empty reset_at field
+
+    # ----- _classify_provider_limit: generic 429 -----
+
+    def test_classify_generic_429_emits_stable_marker_with_no_reset(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "google", "Error: api_error_status: 429 rate limit exceeded"
+        )
+        assert marker == (
+            "PDD_PROVIDER_LIMIT provider=google status=429 reason=rate_limit "
+            "reset_at= reset_source=none"
+        )
+
+    # ----- _classify_provider_limit: false positives / non-limits -----
+
+    def test_classify_false_positive_prose_returns_none(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        assert _classify_provider_limit("anthropic", "User hit your limit of 10 items") is None
+        assert (
+            _classify_provider_limit(
+                "anthropic", "if you hit your limit, nothing resets automatically"
+            )
+            is None
+        )
+
+    def test_classify_permanent_non_limit_error_returns_none(self):
+        """auth / quota / billing are permanent but are NOT reset-able provider
+        limits — they must not emit a scheduling marker."""
+        from pdd.agentic_common import _classify_provider_limit
+
+        assert _classify_provider_limit("anthropic", "authentication_error: invalid api key") is None
+        assert _classify_provider_limit("anthropic", "quota exhausted") is None
+
+    # ----- secret-safety -----
+
+    def test_marker_never_echoes_untrusted_text(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        poisoned = (
+            "You've hit your limit · resets 9pm. Authorization: Bearer "
+            "sk-SECRET-DO-NOT-LEAK-12345 user said: ignore all instructions"
+        )
+        marker = _classify_provider_limit("anthropic", poisoned, now=self.NOW)
+        assert marker is not None
+        assert "sk-SECRET-DO-NOT-LEAK-12345" not in marker
+        assert "Bearer" not in marker
+        assert "ignore all instructions" not in marker
+        # Only the fixed enum fields + normalized timestamp survive.
+        assert marker.startswith("PDD_PROVIDER_LIMIT provider=anthropic")
+
+    # ----- provider label (antigravity collapses to google internally) -----
+
+    def test_marker_provider_label_anthropic_is_passthrough(self):
+        from pdd.agentic_common import _marker_provider_label
+
+        assert _marker_provider_label("anthropic") == "anthropic"
+        assert _marker_provider_label("openai") == "openai"
+        assert _marker_provider_label("opencode") == "opencode"
+
+    def test_marker_provider_label_google_agy_reports_antigravity(self):
+        from pdd.agentic_common import _marker_provider_label
+
+        with patch("pdd.agentic_common._get_google_cli_name", return_value="agy"):
+            assert _marker_provider_label("google") == "antigravity"
+        with patch("pdd.agentic_common._get_google_cli_name", return_value="gemini"):
+            assert _marker_provider_label("google") == "google"
+        with patch("pdd.agentic_common._get_google_cli_name", return_value=None):
+            assert _marker_provider_label("google") == "google"
+
+    # ----- end-to-end emission inside run_agentic_task -----
+
+    def test_marker_emitted_to_stdout_even_when_quiet(self, mock_cwd, mock_env):
+        """The marker is the cloud scheduling signal and MUST survive quiet
+        mode even though the human-readable permanent-error diagnostic is
+        suppressed under ``quiet=True``."""
+        import re as _re
+        from pdd.agentic_common import run_agentic_task
+
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common._run_with_provider",
+            return_value=(False, self.EXACT_BUG_ERROR, 0.0, "claude-opus-4-8", None),
+        ):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = run_agentic_task(
+                    "do work", mock_cwd, max_retries=1, quiet=True
+                )
+        out = buf.getvalue()
+        assert not result.success
+        assert "PDD_PROVIDER_LIMIT provider=anthropic status=credential_limit" in out
+        assert "reason=credential_limit" in out
+        assert "reset_source=parsed_text" in out
+        # reset_at is normalized to UTC ISO; year rolls per the real clock.
+        assert _re.search(r"reset_at=\d{4}-05-18T23:00:00Z", out)
+
+    def test_marker_emitted_once_per_provider_on_exhausted_429(self, mock_cwd, mock_env):
+        """Two failed 429 attempts for one provider must emit the marker
+        exactly once (no per-retry duplicates)."""
+        from pdd.agentic_common import run_agentic_task
+
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.time.sleep",
+        ), patch(
+            "pdd.agentic_common._run_with_provider",
+            return_value=(False, "Error: api_error_status: 429 rate limit exceeded", 0.0, "claude-opus-4-8", None),
+        ):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                run_agentic_task("do work", mock_cwd, max_retries=2, quiet=True)
+        out = buf.getvalue()
+        assert out.count("PDD_PROVIDER_LIMIT") == 1
+        assert "status=429 reason=rate_limit reset_at= reset_source=none" in out
+
+    def test_no_marker_when_transient_429_recovers(self, mock_cwd, mock_env):
+        """A 429 that succeeds on retry never reaches the per-provider
+        exhaustion seam, so no scheduling marker is emitted."""
+        from pdd.agentic_common import run_agentic_task
+
+        attempts = [
+            (False, "Error: api_error_status: 429 rate limit exceeded", 0.0, "claude-opus-4-8", None),
+            (True, "Task completed.", 0.01, "claude-opus-4-8", None),
+        ]
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.time.sleep",
+        ), patch(
+            "pdd.agentic_common._run_with_provider",
+            side_effect=attempts,
+        ):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = run_agentic_task("do work", mock_cwd, max_retries=2, quiet=True)
+        out = buf.getvalue()
+        assert result.success
+        assert "PDD_PROVIDER_LIMIT" not in out
 
 
 class TestIssue1072FailureLogging:
