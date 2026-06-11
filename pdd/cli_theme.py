@@ -13,6 +13,8 @@ for the role -> color mapping and rationale.
 
 from __future__ import annotations
 
+import os
+
 from rich.console import Console
 from rich.theme import Theme
 
@@ -99,23 +101,66 @@ PDD_THEME = Theme(SEMANTIC_STYLES)
 # box, where one glyph occupies one cell) rather than routing through a Rich
 # console. These helpers let those surfaces derive every escape sequence from
 # the one brand palette above, so no module hand-writes its own color codes.
-# They are pure functions: no environment access, no import-time side effects.
 # ---------------------------------------------------------------------------
 ANSI_RESET = "\033[0m"
 ANSI_FAINT = "\033[2m"
 
+# The 6 levels each channel takes in the xterm-256 6x6x6 color cube.
+_CUBE_LEVELS = (0, 95, 135, 175, 215, 255)
+
+
+def _supports_truecolor() -> bool:
+    """Whether the terminal renders 24-bit ``38;2;r;g;b`` foreground color.
+
+    24-bit color has no terminfo capability, so the convention is the ``COLORTERM``
+    opt-in (``truecolor`` / ``24bit``), which truecolor terminals (iTerm2, modern
+    xterms, VS Code) set. Apple Terminal.app — which supports 16/256 color but not
+    truecolor — leaves it unset, so we fall back to 256-color there rather than
+    emitting sequences it silently drops (the result being *no* color). When unsure
+    we downgrade: 256-color renders correctly everywhere truecolor does.
+    """
+    return os.environ.get("COLORTERM", "").strip().lower() in ("truecolor", "24bit")
+
+
+def _rgb_to_xterm256(r: int, g: int, b: int) -> int:
+    """Nearest xterm-256 palette index for an RGB triple.
+
+    Chooses whichever is closer: the best 6x6x6 color-cube cell (16-231) or the
+    24-step grayscale ramp (232-255), by squared RGB distance — so brand hues keep
+    their character and near-grays don't get a color cast.
+    """
+    def nearest_level(v: int) -> int:
+        return min(range(6), key=lambda i: abs(_CUBE_LEVELS[i] - v))
+
+    ri, gi, bi = nearest_level(r), nearest_level(g), nearest_level(b)
+    cube_rgb = (_CUBE_LEVELS[ri], _CUBE_LEVELS[gi], _CUBE_LEVELS[bi])
+    cube_idx = 16 + 36 * ri + 6 * gi + bi
+
+    gray_step = min(23, max(0, round((round((r + g + b) / 3) - 8) / 10)))
+    gray_level = 8 + gray_step * 10
+    gray_idx = 232 + gray_step
+
+    def dist(c: tuple) -> int:
+        return (c[0] - r) ** 2 + (c[1] - g) ** 2 + (c[2] - b) ** 2
+
+    return gray_idx if dist((gray_level,) * 3) < dist(cube_rgb) else cube_idx
+
 
 def hex_to_ansi(hex_color: str) -> str:
-    """Return the 24-bit ANSI foreground SGR prefix for a ``#RRGGBB`` color.
+    """Return the ANSI foreground SGR prefix for a ``#RRGGBB`` brand color.
 
-    Example: ``hex_to_ansi(ELECTRIC_CYAN)`` -> ``"\\033[38;2;0;216;255m"``. Pair
-    the result with :data:`ANSI_RESET`. Truecolor keeps the rendered hue exactly
-    on-brand where the terminal supports it; terminals that don't simply ignore
-    the sequence.
+    Emits 24-bit truecolor (``\\033[38;2;r;g;bm``) on terminals that support it so
+    the rendered hue is exactly on-brand, and degrades to the nearest xterm-256
+    color (``\\033[38;5;nm``) elsewhere — e.g. Apple Terminal.app, which drops
+    truecolor sequences and would otherwise show no color at all. Pair the result
+    with :data:`ANSI_RESET`. The choice is read from the environment (see
+    :func:`_supports_truecolor`); whether to color at all is the caller's decision.
     """
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"\033[38;2;{r};{g};{b}m"
+    if _supports_truecolor():
+        return f"\033[38;2;{r};{g};{b}m"
+    return f"\033[38;5;{_rgb_to_xterm256(r, g, b)}m"
 
 
 def get_console(**kwargs) -> Console:

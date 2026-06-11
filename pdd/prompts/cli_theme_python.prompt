@@ -89,16 +89,24 @@
      (e.g. the `pdd context` usage box) instead of going through a Rich console,
      so those surfaces still derive every escape from this one palette:
        - `ANSI_RESET = "\033[0m"` and `ANSI_FAINT = "\033[2m"`.
-       - `hex_to_ansi(hex_color: str) -> str`: return the 24-bit ANSI foreground
-         SGR prefix for a `#RRGGBB` color, e.g.
-         `hex_to_ansi(ELECTRIC_CYAN)` -> `"\033[38;2;0;216;255m"`. Tolerate an
-         optional leading `#`. Pair the result with `ANSI_RESET`.
-       These are pure functions: no environment access, no import-time effects.
+       - `hex_to_ansi(hex_color: str) -> str`: return the ANSI foreground SGR
+         prefix for a `#RRGGBB` color, adapting to the terminal's color depth.
+         Emit 24-bit truecolor (`\033[38;2;r;g;bm`, e.g.
+         `hex_to_ansi(ELECTRIC_CYAN)` -> `"\033[38;2;0;216;255m"`) ONLY when the
+         terminal supports it — detected via the `COLORTERM` env var being
+         `truecolor` or `24bit`; OTHERWISE degrade to the nearest xterm-256 color
+         (`\033[38;5;nm`) so terminals that lack truecolor (e.g. Apple Terminal.app,
+         which silently drops `38;2` sequences and would show no color) still render
+         the hue. Pick the 256 index by nearest of the 6x6x6 color cube (16-231) or
+         the 24-step grayscale ramp (232-255) by RGB distance. Tolerate an optional
+         leading `#`. Pair the result with `ANSI_RESET`. `hex_to_ansi` reads
+         `COLORTERM` to choose the depth; the other helpers are pure.
   9. Define `__all__` listing the palette constants, BRAND_PALETTE,
      SEMANTIC_STYLES, PDD_THEME, ANSI_RESET, ANSI_FAINT, hex_to_ansi,
      get_console, style, and console.
-  10. No side effects beyond constructing the shared `console`. No environment
-     access, no printing at import time.
+  10. No side effects beyond constructing the shared `console`. No printing at
+     import time, and no environment access at import time — the only env read is
+     `hex_to_ansi` checking `COLORTERM` when it is called.
 
 % Deliverables
   - Code: `pdd/cli_theme.py`
