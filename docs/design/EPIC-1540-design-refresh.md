@@ -17,6 +17,12 @@ All visual decisions derive from the **PromptDriven.ai Brand Guidelines
 (v1.4, May 2026)** — see `docs/design/color-system.md` for the CLI color
 mapping distilled from §3 (Color Palette) and §7 (ASCII & Terminal Assets).
 
+## Demos
+
+Terminal captures of the merged workstreams (PRs 1–3) live in
+[`docs/design/demos/`](./demos/README.md), regenerable from this branch via
+`docs/design/demos/generate_demos.py`.
+
 ## Workstream status
 
 | # | Workstream | PR | Status |
