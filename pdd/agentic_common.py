@@ -957,21 +957,38 @@ _RESET_ISO_RE = re.compile(
     r"(?:Z|[+-]\d{2}:?\d{2})?)",
     re.IGNORECASE,
 )
-# `ampm` accepts plain and dotted forms (am, pm, a.m., p.m.); `tz` captures any
-# parenthesized suffix immediately after the time so an unrecognized zone is
-# rejected (-> unparseable) instead of silently defaulting to UTC.
+# Optional trailing timezone, tried after the time. `tz` is a parenthesized
+# token ("(UTC)", "(America/Los_Angeles)"); `tzbare` is an *unparenthesized*
+# zone ("11pm PST", "3:30pm UTC-08:00"), matched case-sensitively as an
+# UPPERCASE abbreviation or numeric offset so it catches real zone tokens
+# without swallowing ordinary trailing prose (a lowercase word like "today" is
+# left alone). Either token is routed through `_resolve_reset_tz`, so an
+# unrecognized zone — parenthesized OR bare — degrades to unparseable instead of
+# being silently read as UTC. The uppercase-only bound on `tzbare` is
+# deliberate: it treats an all-caps non-zone word as a possible unknown zone
+# (-> unparseable) rather than emit a confidently-wrong UTC timestamp.
+_TZ_TAIL = (
+    r"(?:\s*\((?P<tz>[^)\n]{1,40})\)"
+    r"|\s+(?P<tzbare>(?-i:[A-Z]{2,5}(?:[+-]\d{1,2}(?::?\d{2})?)?|[+-]\d{2}:?\d{2})))?"
+)
+# `ampm` accepts plain and dotted forms (am, pm, a.m., p.m.). The date matcher
+# also accepts an explicit 4-digit `year` and an optional "at" connector between
+# the day and the time, so "June 11, 2026, 3:30pm" is not misread as hour=20 and
+# "June 11 at 3:30pm" is not dropped as unparseable.
 _RESET_DATE_RE = re.compile(
     r"resets?\b[^\n]{0,12}?"
     r"(?P<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
     r"(?P<day>\d{1,2})(?:,)?\s+"
+    r"(?:(?P<year>\d{4})(?:,)?\s+)?"
+    r"(?:at\s+)?"
     r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
-    r"(?:\s*\((?P<tz>[^)\n]{1,40})\))?",
+    + _TZ_TAIL,
     re.IGNORECASE,
 )
 _RESET_TIME_RE = re.compile(
     r"resets?\b(?P<gap>[^\n]{0,12}?)"
     r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
-    r"(?:\s*\((?P<tz>[^)\n]{1,40})\))?",
+    + _TZ_TAIL,
     re.IGNORECASE,
 )
 
@@ -1047,18 +1064,37 @@ def _iso_reset_to_utc(raw: str) -> Optional[datetime]:
     return dt
 
 
+def _match_tz(match: "re.Match[str]") -> Optional[str]:
+    """Return the timezone token from a reset match, preferring a parenthesized
+    token (``tz``) and falling back to a bare trailing abbreviation/offset
+    (``tzbare``) so an unparenthesized zone like ``11pm PST`` is not silently
+    dropped and read as UTC."""
+    groups = match.groupdict()
+    return groups.get("tz") or groups.get("tzbare")
+
+
 def _dated_reset_to_datetime(match: "re.Match[str]", now: datetime) -> Optional[datetime]:
-    """Build a reset datetime from a month/day/time match, inferring the year as
-    the next future occurrence (a date already past this year rolls forward)."""
+    """Build a reset datetime from a month/day/time match.
+
+    An explicit 4-digit year, when captured, is honored verbatim — even if it
+    lies in the past (the provider stated it, so a past reset reads as "retry
+    now"). Otherwise the year is inferred as the next future occurrence (a date
+    already past this year rolls forward)."""
     month = _MONTHS.get(match.group("month").lower()[:3])
     hour = _reset_hour_to_24h(int(match.group("hour")), match.group("ampm"))
     minute = int(match.group("minute") or 0)
     day = int(match.group("day"))
     if month is None or hour is None or not 1 <= day <= 31 or not 0 <= minute <= 59:
         return None
-    tz = _resolve_reset_tz(match.group("tz"))
+    tz = _resolve_reset_tz(_match_tz(match))
     if tz is None:  # explicit but unrecognized timezone -> unparseable
         return None
+    year_token = match.groupdict().get("year")
+    if year_token:
+        try:
+            return datetime(int(year_token), month, day, hour, minute, tzinfo=tz)
+        except ValueError:
+            return None
     # Anchor year inference to the reset *timezone's* local year, not the UTC
     # year: near a New Year boundary `now` can already be in the next year in
     # UTC while still in the previous year in the reset zone (or vice versa), so
@@ -1082,7 +1118,7 @@ def _time_only_reset_to_datetime(match: "re.Match[str]", now: datetime) -> Optio
     minute = int(match.group("minute") or 0)
     if hour is None or not 0 <= minute <= 59:
         return None
-    tz = _resolve_reset_tz(match.group("tz"))
+    tz = _resolve_reset_tz(_match_tz(match))
     if tz is None:  # explicit but unrecognized timezone -> unparseable
         return None
     local_now = now.astimezone(tz)

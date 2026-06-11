@@ -7606,6 +7606,85 @@ class TestProviderLimitMarker:
         assert reset_at == ""
         assert source == "none"
 
+    # ----- _parse_reset_at: format-robustness regressions -----
+
+    def test_parse_reset_explicit_year_is_honored_not_misread_as_hour(self):
+        """A 4-digit year between the day and the time ("June 11, 2026, 3:30pm")
+        must be honored as the year, NOT consumed as the hour — the latter drops
+        the real time and emits a confidently-wrong 20:00Z (from "2026"). An
+        explicit year is taken from the text verbatim, not inferred."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets June 11, 2026, 3:30pm (UTC)", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T15:30:00Z"
+        assert source == "parsed_text"
+
+        # A year that differs from now's proves it is read from the text, not
+        # inferred from the clock.
+        reset_at, source = _parse_reset_at(
+            "resets Jan 2, 2099, 9am (UTC)", now=self.NOW
+        )
+        assert reset_at == "2099-01-02T09:00:00Z"
+        assert source == "parsed_text"
+
+    def test_parse_reset_date_with_at_connector_is_parsed(self):
+        """An "at" between the date and the time ("June 11 at 3:30pm") must not
+        make an otherwise-exact reset unparseable; it parses identically to the
+        comma-separated form (with or without an explicit year)."""
+        from pdd.agentic_common import _parse_reset_at
+
+        for text in (
+            "resets June 11 at 3:30pm (UTC)",
+            "resets June 11, 2026, at 3:30pm (UTC)",
+        ):
+            reset_at, source = _parse_reset_at(text, now=self.NOW)
+            assert reset_at == "2026-06-11T15:30:00Z", text
+            assert source == "parsed_text", text
+
+    def test_parse_reset_bare_unparenthesized_unknown_tz_is_unparseable(self):
+        """An explicit but UNparenthesized zone ("11pm PST") must degrade to
+        unparseable exactly like the parenthesized "(PDT)" case
+        (test_parse_reset_explicit_unknown_tz_is_unparseable_not_silent_utc) —
+        not be silently read as UTC, which would resume ~8h early."""
+        from pdd.agentic_common import _parse_reset_at
+
+        for text in ("resets 11pm PST", "resets 3:30pm PDT", "resets 9pm CST"):
+            reset_at, source = _parse_reset_at(text, now=self.NOW)
+            assert reset_at == "", text
+            assert source == "none", text
+
+    def test_parse_reset_bare_unparenthesized_recognized_tz_resolves(self):
+        """A recognized unparenthesized zone (bare UTC / numeric offset) resolves
+        just like its parenthesized form rather than being ignored."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 3:30pm UTC", now=self.NOW)
+        assert reset_at == "2026-06-11T15:30:00Z"
+        assert source == "estimated"
+
+        # 3:30pm at UTC-08:00 == 23:30Z, still in the future today.
+        reset_at, source = _parse_reset_at("resets 3:30pm UTC-08:00", now=self.NOW)
+        assert reset_at == "2026-06-11T23:30:00Z"
+        assert source == "estimated"
+
+    def test_parse_reset_trailing_word_is_not_mistaken_for_timezone(self):
+        """The bare-zone capture is bounded to UPPERCASE tokens so ordinary
+        trailing prose does not suppress a valid time: a lowercase word
+        ("9pm today") leaves the time intact, while an all-caps token is treated
+        as a possible unknown zone and degrades to unparseable rather than
+        emitting a confidently-wrong UTC time. The asymmetry is deliberate."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 9pm today", now=self.NOW)
+        assert reset_at == "2026-06-11T21:00:00Z"
+        assert source == "estimated"
+
+        reset_at, source = _parse_reset_at("resets 9pm SOON", now=self.NOW)
+        assert reset_at == ""
+        assert source == "none"
+
     # ----- _classify_provider_limit: credential-limit variants -----
 
     def test_classify_credential_limit_full_marker(self):
