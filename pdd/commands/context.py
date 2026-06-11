@@ -38,13 +38,23 @@ from ..context_audit import (
 )
 from ..core.errors import handle_error
 
-# Distinct glyphs let sources be told apart even with color off, mirroring the
-# colored squares of Claude Code's ``/context`` display. ``⛶`` marks free
-# (unused) context-window space.
-_CATEGORY_GLYPHS = ("⛁", "⛀", "⛂", "▩", "▦", "▧", "▤", "▥", "▣", "▢")
+# Color — not glyph — distinguishes the *counted* categories (body, resolved,
+# deferred, unresolved), mirroring the colored squares of Claude Code's
+# ``/context`` display: every counted cell uses the one ``_USED_GLYPH`` and reads
+# its category from color alone. Unavailable and free space keep their own
+# distinct glyphs (and stay faint) so they remain legible even where color is
+# the same. ``_glyph_for`` is the single place that picks a row's glyph.
+_USED_GLYPH = "⛁"
+_UNAVAILABLE_GLYPH = "▨"
 _FREE_GLYPH = "⛶"
 _BOX_COLS = 27
 _BOX_ROWS = 5
+
+
+def _glyph_for(status: str) -> str:
+    """Glyph for a row's ``status``: a distinct one for ``unavailable``, the
+    shared ``_USED_GLYPH`` for every counted category (color tells them apart)."""
+    return _UNAVAILABLE_GLYPH if status == "unavailable" else _USED_GLYPH
 
 # --- Token coloring rules (one place; no scattered ANSI codes) --------------
 #
@@ -116,10 +126,11 @@ def _render_usage_box(  # pylint: disable=too-many-locals
 ) -> str:
     """Render a Claude-Code ``/context``-style usage box for the attribution.
 
-    The grid shows used context-window space split by category (one glyph per
-    source, colored by the source's category) against free space (``⛶``),
-    followed by the model, the total/limit/percent summary, and a per-category
-    breakdown. ``paint`` is the coloring seam; when omitted, output is uncolored.
+    The grid shows used context-window space colored by category — every counted
+    cell uses the shared ``_USED_GLYPH`` and is told apart by color — against
+    free space (``⛶``), followed by the model, the total/limit/percent summary,
+    and a per-category breakdown. ``paint`` is the coloring seam; when omitted,
+    output is uncolored.
     """
     if paint is None:
         paint = _make_painter(False)
@@ -128,8 +139,8 @@ def _render_usage_box(  # pylint: disable=too-many-locals
     if context_limit:
         total_cells = _BOX_COLS * _BOX_ROWS
         cells: List[str] = []
-        for idx, row in enumerate(rows):
-            glyph = _CATEGORY_GLYPHS[idx % len(_CATEGORY_GLYPHS)]
+        for row in rows:
+            glyph = _glyph_for(row.status)
             count = int(round(row.tokens / context_limit * total_cells))
             cells.extend([paint(row.status, glyph)] * count)
         cells = cells[:total_cells]
@@ -151,8 +162,8 @@ def _render_usage_box(  # pylint: disable=too-many-locals
     lines.append("  Estimated usage by category")
 
     share_basis = context_limit if context_limit else total_tokens
-    for idx, row in enumerate(rows):
-        glyph = _CATEGORY_GLYPHS[idx % len(_CATEGORY_GLYPHS)]
+    for row in rows:
+        glyph = _glyph_for(row.status)
         share = percent(row.tokens, share_basis)
         share_text = f"{share}%" if share is not None else "-"
         note = f"  (WARN: {row.note})" if row.note else ""
