@@ -8,7 +8,9 @@ By centralizing auth logic here, we ensure consistent behavior across interfaces
 """
 from __future__ import annotations
 
+import base64
 import json
+import os
 import time
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
@@ -31,6 +33,133 @@ def _refresh_token_service_names() -> Tuple[str, ...]:
     return (KEYRING_SERVICE_NAME, *LEGACY_KEYRING_SERVICE_NAMES)
 
 
+def _get_expected_jwt_audience() -> Optional[str]:
+    """Return the Firebase project audience expected for the active PDD env."""
+    explicit_aud = os.environ.get("PDD_JWT_EXPECTED_AUD")
+    if explicit_aud:
+        return explicit_aud
+
+    env = (os.environ.get("PDD_ENV") or "").strip().lower()
+    if not env or env == "local":
+        return None
+    if env in ("prod", "production"):
+        return "prompt-driven-development"
+    if env == "staging":
+        return os.environ.get("STAGING_PROJECT_ID") or "prompt-driven-development-stg"
+
+    return os.environ.get("PDD_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+
+
+def _get_jwt_audience(jwt: str) -> Optional[str]:
+    """Extract the Firebase audience claim without verifying the JWT signature."""
+    try:
+        parts = jwt.split(".")
+        if len(parts) < 2:
+            return None
+
+        # Add proper base64 padding
+        payload_part = parts[1]
+        padding = 4 - (len(payload_part) % 4)
+        if padding and padding != 4:
+            payload_part += "=" * padding
+
+        payload_bytes = base64.urlsafe_b64decode(payload_part)
+        payload = json.loads(payload_bytes.decode("utf-8"))
+
+        # Check nested firebase aud first, then root aud
+        firebase_claim = payload.get("firebase")
+        if isinstance(firebase_claim, dict) and "aud" in firebase_claim:
+            return firebase_claim["aud"]
+
+        return payload.get("aud")
+    except Exception:
+        return None
+
+
+def _cached_jwt_matches_expected_audience(jwt: Optional[str]) -> bool:
+    """Return whether a cached JWT belongs to the current configured environment."""
+    expected_aud = _get_expected_jwt_audience()
+    if not expected_aud:
+        return True
+    if not jwt:
+        return False
+
+    actual_aud = _get_jwt_audience(jwt)
+    if actual_aud == expected_aud:
+        return True
+
+    # If it's a mismatch, clear the file
+    try:
+        JWT_CACHE_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return False
+
+
+def _has_unexpired_raw_jwt() -> bool:
+    """Return True if the cache file contains a non-expired JWT, ignoring audience.
+
+    This is used to distinguish between "no JWT at all" and "JWT exists but
+    wrong environment" so that get_auth_status can avoid a refresh-token
+    fallback when the token is simply from a different PDD environment.
+    """
+    if not JWT_CACHE_FILE.exists():
+        return False
+    try:
+        with open(JWT_CACHE_FILE, "r") as f:
+            cache = json.load(f)
+        expires_at = cache.get("expires_at", 0)
+        if not isinstance(expires_at, (int, float)):
+            return False
+        if expires_at > time.time() + 300:
+            jwt = cache.get("id_token") or cache.get("jwt")
+            return bool(jwt)
+    except Exception:
+        pass
+    return False
+
+
+def _has_unexpired_jwt_with_confirmed_audience_mismatch() -> bool:
+    """Return True if the cache has a parseable JWT whose audience is confirmed
+    to differ from the expected environment audience, regardless of expiry.
+
+    The expiry check has been intentionally removed: an expired JWT with a
+    wrong-environment audience is equally indicative of a mismatched refresh
+    token (the refresh token is environment-specific too and must not be used
+    in the current env).  Checking only unexpired tokens would let an expired
+    production JWT plus a production refresh token slip through to the
+    authenticated=True path while running staging, recreating the split-brain
+    this guard is meant to prevent.
+
+    Returns False when the JWT is malformed or unparseable so that a corrupt
+    cache does not incorrectly trigger the audience-mismatch path in
+    get_auth_status(). Malformed JWTs should fall through to the
+    refresh-token flow rather than causing it to be cleared.
+    """
+    expected_aud = _get_expected_jwt_audience()
+    if not expected_aud:
+        return False
+
+    if not JWT_CACHE_FILE.exists():
+        return False
+
+    try:
+        with open(JWT_CACHE_FILE, "r") as f:
+            cache = json.load(f)
+        jwt = cache.get("id_token") or cache.get("jwt")
+        if not jwt:
+            return False
+        actual_aud = _get_jwt_audience(jwt)
+        # Only a confirmed mismatch: audience was parsed but belongs to a
+        # different environment.  If actual_aud is None the token is
+        # malformed; do not treat that as an audience mismatch.
+        return actual_aud is not None and actual_aud != expected_aud
+    except Exception:
+        pass
+
+    return False
+
+
 def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
     """
     Check JWT cache file for valid token.
@@ -49,9 +178,12 @@ def get_jwt_cache_info() -> Tuple[bool, Optional[float]]:
         # Handle null/None expires_at defensively (Issue #379)
         if not isinstance(expires_at, (int, float)):
             return False, None
+
         # Check if token is still valid (with 5 minute buffer)
         if expires_at > time.time() + 300:
-            return True, expires_at
+            jwt = cache.get("id_token") or cache.get("jwt")
+            if _cached_jwt_matches_expected_audience(jwt):
+                return True, float(expires_at)
     except (json.JSONDecodeError, IOError, KeyError, TypeError, AttributeError):
         pass
 
@@ -75,10 +207,13 @@ def get_cached_jwt() -> Optional[str]:
         # Handle null/None expires_at defensively (Issue #379)
         if not isinstance(expires_at, (int, float)):
             return None
+
         # Check if token is still valid (with 5 minute buffer)
         if expires_at > time.time() + 300:
             # Check both 'id_token' (new) and 'jwt' (legacy) keys for backwards compatibility
-            return cache.get("id_token") or cache.get("jwt")
+            jwt = cache.get("id_token") or cache.get("jwt")
+            if _cached_jwt_matches_expected_audience(jwt):
+                return jwt
     except (json.JSONDecodeError, IOError, KeyError, TypeError, AttributeError):
         pass
 
@@ -230,13 +365,36 @@ def get_auth_status() -> Dict[str, Any]:
         - cached: bool - True if using cached JWT (vs refresh token)
         - expires_at: Optional[float] - JWT expiration timestamp if cached
     """
-    # First check JWT cache
+    # Check whether the cache holds an unexpired JWT with a *confirmed* audience
+    # mismatch before the audience-aware read below may delete the file.
+    # Using the confirmed-mismatch check (rather than the raw-JWT check) means
+    # malformed/unparseable JWTs do NOT trigger this path — they fall through to
+    # the refresh-token flow instead of incorrectly clearing it.
+    jwt_audience_mismatch = _has_unexpired_jwt_with_confirmed_audience_mismatch()
+
+    # First check JWT cache (audience-aware)
     cache_valid, expires_at = get_jwt_cache_info()
     if cache_valid:
         return {
             "authenticated": True,
             "cached": True,
             "expires_at": expires_at,
+        }
+
+    # If the cached JWT had a confirmed audience mismatch (parseable token for
+    # the wrong environment), do NOT fall back to the refresh token.  The
+    # refresh token is environment-specific too and cannot produce a valid JWT
+    # for this environment, so reporting authenticated=True here would create a
+    # split-brain frontend state.  Also clear the refresh token so that repeated
+    # status checks remain unauthenticated: without this, the second call sees
+    # jwt_audience_mismatch=False (the JWT file was deleted above) and falls
+    # through to the refresh token, recreating the split-brain state.
+    if jwt_audience_mismatch:
+        clear_refresh_token()
+        return {
+            "authenticated": False,
+            "cached": False,
+            "expires_at": None,
         }
 
     # Check for refresh token in keyring
@@ -290,7 +448,6 @@ async def verify_auth() -> Dict[str, Any]:
         username = None
         if JWT_CACHE_FILE.exists():
             try:
-                import base64
                 data = json.load(open(JWT_CACHE_FILE, "r"))
                 token = data.get("id_token")
                 if token:
@@ -332,7 +489,6 @@ async def verify_auth() -> Dict[str, Any]:
             TokenError,
             RateLimitError,
         )
-        import os
 
         # Load Firebase API key
         api_key = os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY")
@@ -364,12 +520,20 @@ async def verify_auth() -> Dict[str, Any]:
         id_token = await firebase_auth._refresh_firebase_token(refresh_token)
 
         if id_token:
+            if not _cached_jwt_matches_expected_audience(id_token):
+                clear_refresh_token()
+                return {
+                    "valid": False,
+                    "error": "Refreshed token audience does not match current PDD environment",
+                    "needs_reauth": True,
+                    "username": None,
+                }
+
             _cache_jwt(id_token)
 
             # Extract username from new token
             username = None
             try:
-                import base64
                 parts = id_token.split(".")
                 if len(parts) == 3:
                     payload = parts[1]
