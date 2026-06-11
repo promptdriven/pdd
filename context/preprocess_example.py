@@ -1,49 +1,57 @@
+from __future__ import annotations
+
 import os
-import sys
+import shutil
 from pathlib import Path
+from rich.console import Console
 from pdd.preprocess import preprocess
 
+console = Console()
+
 def main() -> None:
-    """
-    Example showing how to use the preprocess module to resolve tags 
-    like <include>, <shell>, and handle template curly braces.
-    """
-    # Setup output directory for our example files
+    """Run the preprocessing example demonstrating file inclusion and brace doubling."""
+    # Create the output directory relative to the current working directory
     output_dir = Path("./output")
-    output_dir.mkdir(exist_ok=True)
-    
-    # Create a dummy Python file to include
-    dummy_file = output_dir / "dummy.py"
-    dummy_file.write_text("def hello():\n    return 'Hello from included file!'\n", encoding="utf-8")
-    
-    # Define a prompt with XML-like tags and template variables
-    prompt_template = """\
-Please review the following code:
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-<include>{dummy_file_path}</include>
+    # Create a dummy helper file to include in our prompt
+    helper_file = output_dir / "helper.py"
+    helper_content = """def greet(name: str) -> str:\n    return f\"Hello, {name}!\"\n"""
+    helper_file.write_text(helper_content, encoding="utf-8")
 
-Run result:
-<shell>echo "Shell execution works!"</shell>
+    # Define a prompt with XML-like include tags and single curly braces
+    # that we want to double (to avoid template conflicts later)
+    prompt_template = f"""Below is our helper utility code:
 
-Note: {This should be doubled to prevent PromptTemplate errors}
+<include>{str(helper_file)}</include>
+
+Ensure you implement the client using the following JSON schema:
+{{
+    \"username\": \"string\",
+    \"active\": \"boolean\"
+}}
 """
-    # Format the prompt to inject the actual path
-    raw_prompt = prompt_template.format(dummy_file_path=str(dummy_file))
-    
-    print("--- Raw Prompt ---")
-    print(raw_prompt)
-    
-    # Process the prompt
-    # recursive=False means we do a single pass and execute shell tags immediately.
-    # double_curly_brackets=True means single braces will be doubled (e.g., for LangChain templates).
+
+    console.print("[bold blue]Original Prompt Template:[/bold blue]")
+    console.print(prompt_template)
+
+    # Run the preprocessor
+    # - double_curly_brackets=True doubles single '{' and '}' (except inside specified exclusions)
+    # - compress=False keeps the full included file content
     processed_prompt = preprocess(
-        prompt=raw_prompt,
+        prompt=prompt_template,
         recursive=False,
-        double_curly_brackets=True
+        double_curly_brackets=True,
+        exclude_keys=None,
+        compress=False,
     )
-    
-    print("--- Processed Prompt ---")
-    print(processed_prompt)
+
+    console.print("[bold green]Preprocessed Prompt Output:[/bold green]")
+    console.print(processed_prompt)
+
+    # Clean up - use rmtree to handle any auxiliary files (e.g. __pycache__)
+    if output_dir.exists():
+        shutil.rmtree(output_dir, ignore_errors=True)
 
 if __name__ == "__main__":
     main()

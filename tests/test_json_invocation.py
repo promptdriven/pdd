@@ -18,9 +18,15 @@ from pdd.json_invocation import is_machine_json_invocation
         # Unified source-set prompt target.
         (["pdd", "checkup", "prompts/foo_python.prompt", "--json"], True),
         (["pdd", "checkup", "refund_payment", "--json"], True),
+        # `pdd context --json` audit payload must keep stdout machine-clean.
+        (["pdd", "context", "foo.prompt", "--json"], True),
+        (["context", "foo.prompt", "--json"], True),  # tokens from Click test runner
         # No --json => not machine output.
         (["pdd", "checkup", "prompts/foo_python.prompt"], False),
         (["pdd", "generate", "foo.prompt", "--json"], False),
+        (["pdd", "context", "foo.prompt"], False),
+        # `context` as the value of the global --context option, not the subcommand.
+        (["pdd", "--context", "context", "generate", "foo.prompt", "--json"], False),
         # checkup with no target.
         (["pdd", "checkup", "--json"], False),
     ],

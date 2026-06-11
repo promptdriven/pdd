@@ -41,6 +41,11 @@
    - `TokenMetrics { token_count, context_limit, context_usage_percent, cost_estimate:CostEstimate|null }`
    - `PromptAnalyzeRequest { path, model?, preprocess?, content? }`
    - `PromptAnalyzeResponse { raw_content, processed_content:string|null, raw_metrics, processed_metrics:TokenMetrics|null, preprocessing_succeeded, preprocessing_error:string|null }`
+   - Context-audit types (per-source context-window attribution served by `POST /api/v1/prompts/context-audit`, backed by the same `pdd.context_audit` core the `pdd context` CLI uses, so API and CLI never drift):
+     - `type ContextAuditRowStatus = 'resolved' | 'unresolved' | 'deferred' | 'unavailable' | 'body'`
+     - `ContextAuditRow { source, tokens, percent, status:ContextAuditRowStatus, note:string|null }` — `note` is a human reason; callers must read `status`, never parse `note`, for state.
+     - `ContextAuditRequest { path, model?, threshold?, content? }` — `threshold` is a budget percent (0 disables); `content` audits unsaved editor content instead of the file on disk.
+     - `ContextAuditResponse { total_tokens, context_limit:number|null, percent_used:number|null, model, rows:ContextAuditRow[], warnings:string[], threshold_exceeded }`
    - `type SyncStatusType = 'in_sync' | 'prompt_changed' | 'code_changed' | 'conflict' | 'never_synced'`
    - `SyncStatus { status:SyncStatusType, last_sync_timestamp:string|null, last_sync_command:string|null, prompt_modified, code_modified, fingerprint_exists, prompt_exists, code_exists }`
    - `ModelInfo { model, provider, input_cost, output_cost, elo, context_limit, max_thinking_tokens, reasoning_type, structured_output }`
@@ -125,6 +130,7 @@
    - `listPrompts()` -> GET `/api/v1/files/prompts`
    - `getChangedPrompts(baseBranch='main')` -> GET `/api/v1/files/prompts/changed?base_branch=${encodeURIComponent(baseBranch)}`
    - `analyzePrompt(request)` -> POST `/api/v1/prompts/analyze`
+   - `contextAudit(request:ContextAuditRequest)` -> POST `/api/v1/prompts/context-audit`, returns `ContextAuditResponse`
    - `getSyncStatus(basename, language)` -> GET `/api/v1/prompts/sync-status?...`
    - `getModels()` -> GET `/api/v1/prompts/models`
    - `analyzeDiff(request)` -> POST `/api/v1/prompts/diff-analysis`
