@@ -500,3 +500,62 @@ def test_signature_entries_both_unresolvable_same_text_still_compatible():
         )
         is True
     )
+
+
+# ---------------------------------------------------------------------------
+# Module-scope binding analysis (issue #1558): a parameter default reads the
+# MODULE global, so only a binding that can change that global disqualifies a
+# constant. A name reused inside a function/class/comprehension scope is local
+# and must NOT defeat the constant, while every form that reaches the module
+# global must still fail closed.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "module_source",
+    [
+        # A function-local variable reusing the name is a different binding.
+        "_LIMIT = 25000\ndef g():\n    _LIMIT = 1\n    return _LIMIT\n",
+        # A function PARAMETER reusing the name is local too.
+        "_LIMIT = 25000\ndef g(_LIMIT=1):\n    return _LIMIT\n",
+        # A class attribute ``C._LIMIT`` is not the module global ``_LIMIT``.
+        "_LIMIT = 25000\nclass C:\n    _LIMIT = 1\n",
+        # A comprehension loop variable is comprehension-local in Python 3.
+        "_LIMIT = 25000\n_xs = [_LIMIT for _LIMIT in range(3)]\n",
+        # A nested-function local also does not touch the module global.
+        "_LIMIT = 25000\ndef outer():\n    def inner():\n        _LIMIT = 1\n        return _LIMIT\n    return inner\n",
+    ],
+)
+def test_module_constant_survives_inner_scope_shadow(module_source):
+    symbols = build_module_default_symbols(module_source)
+    assert symbols.get("_LIMIT") == ("int", 25000)
+
+
+@pytest.mark.parametrize(
+    "module_source",
+    [
+        # ``global X`` + an assignment inside a function rebinds the module global.
+        "X = 25000\ndef g():\n    global X\n    X = 1\n",
+        # ...even when the global-declaring assignment is nested deeper.
+        "X = 25000\ndef g():\n    global X\n    if cond:\n        X = 1\n",
+        # A walrus in a MODULE-level comprehension leaks X to module scope.
+        "X = 25000\n_ys = [(X := i) for i in range(3)]\n",
+        # A walrus in a function default arg is evaluated in the enclosing scope.
+        "X = 25000\ndef g(a=(X := 1)):\n    return a\n",
+        # A module-level ``for`` target rebinds X.
+        "X = 25000\nfor X in range(3):\n    pass\n",
+        # ``except ... as X`` at module scope rebinds X.
+        "X = 25000\ntry:\n    pass\nexcept Exception as X:\n    pass\n",
+        # Augmented assignment nested inside a module-level ``if``.
+        "X = 25000\nif cond:\n    X += 1\n",
+        # ``match`` capture patterns at module scope bind X.
+        "X = 25000\nmatch obj:\n    case [X]:\n        pass\n",
+        "X = 25000\nmatch obj:\n    case {'k': X}:\n        pass\n",
+        "X = 25000\nmatch obj:\n    case [*X]:\n        pass\n",
+    ],
+)
+def test_module_global_rebind_forms_still_disqualify(module_source):
+    symbols = build_module_default_symbols(module_source)
+    assert "X" not in symbols
+    assert (
+        compare_default_sources("25000", "X", symbols)
+        is DefaultCompatibility.UNKNOWN
+    )

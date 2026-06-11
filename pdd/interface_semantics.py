@@ -398,17 +398,20 @@ def compare_default_sources(
 def build_module_default_symbols(module_source: Optional[str]) -> dict:
     """Map module-level constant names to normalized safe-literal values.
 
-    A name qualifies ONLY when it is bound exactly once anywhere in the module
-    AND that single binding is a top-level ``X = <literal>`` /
-    ``X: T = <literal>`` assignment to a safe literal/container. Any second
-    binding of the name — reassignment, augmented assignment, a conditional
-    override inside ``if``/``try``/``TYPE_CHECKING``, a tuple-unpacking rebind,
-    or a ``def``/``class``/``import`` that shadows it — disqualifies it, because
-    the value a caller would observe is then not statically knowable. Such
-    names stay out of the table and resolve as ``UNKNOWN`` (fail closed).
-    Counting is whole-module and name-only (no scope analysis), so a
-    function-local variable reusing a constant's name also disqualifies it —
-    conservative, but only ever toward ``UNKNOWN``, never a false match.
+    A name qualifies ONLY when it is bound exactly once at MODULE scope AND that
+    single binding is a top-level ``X = <literal>`` / ``X: T = <literal>``
+    assignment to a safe literal/container. Any second module-scope binding of
+    the name — reassignment, augmented assignment, a conditional override inside
+    ``if``/``try``/``TYPE_CHECKING``, a tuple-unpacking rebind, or a
+    ``def``/``class``/``import`` that shadows it — disqualifies it, because the
+    value a caller would observe is then not statically knowable. Such names stay
+    out of the table and resolve as ``UNKNOWN`` (fail closed). Counting is
+    module-scope-aware (see :func:`_count_module_bindings`): a name reused inside
+    a function/class/comprehension scope is local and does NOT disqualify the
+    module constant, but every binding that can reach the module global — a
+    second module-level binding, or a nested ``global X`` / walrus leak — still
+    does. Over-eviction only ever moves a constant toward ``UNKNOWN``, never a
+    false match.
     Name-to-name aliases are not resolved transitively — the right-hand side is
     normalized with an empty table — so ``B = A`` never enters the table. A
     ``from x import *`` anywhere in the module empties the whole table, since it
@@ -491,45 +494,93 @@ def _is_immutable_default(normalized: tuple) -> bool:
     return True
 
 
-def _count_module_bindings(tree: ast.Module) -> dict:
-    """Count how many times each name is bound anywhere in ``tree``.
+# Nodes that open a new lexical scope. A name bound inside their body is local
+# to that scope and cannot rebind a module global (a ``def``/``class`` is handled
+# separately because its NAME does bind in the enclosing scope). Sub-expressions
+# that run in the ENCLOSING scope (decorator/default-arg expressions, a
+# comprehension's outermost iterable) and any ``global``/walrus that leaks out of
+# them are handled by the whole-tree scan in :func:`_count_module_bindings`.
+_NEW_SCOPE_NODES = (
+    ast.Lambda,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
 
-    A constant is trusted only if its name is bound exactly once (see
-    :func:`build_module_default_symbols`). ``ast.Name`` in ``Store`` context
-    covers assignment / augmented / annotated / ``for`` / ``with`` / walrus /
-    tuple-unpacking targets at any depth, but ``def``/``class``/``import``
-    bind a name WITHOUT a ``Store`` node, so they are counted explicitly —
-    otherwise ``X = 25000`` shadowed by ``import x as X`` would be admitted as
-    ``25000`` even though the running module rebinds ``X`` to the import.
-    ``except ... as X`` and ``match`` capture patterns are the remaining
-    no-``Store`` binding forms and are counted too. Over-counting (e.g. a
-    function-local reuse of the name) only evicts a constant toward ``UNKNOWN``;
-    it can never produce a false match.
+
+def _count_module_bindings(tree: ast.Module) -> dict:
+    """Count how many times each name is bound in the MODULE (global) scope.
+
+    A constant is trusted only if its name is bound exactly once at module scope
+    (see :func:`build_module_default_symbols`). A parameter default
+    ``def f(x=_LIMIT)`` reads ``_LIMIT`` from the module globals, so only a
+    binding that can change that global counts. A name bound inside a
+    ``def``/``async def``/``class``/``lambda``/comprehension body is local to
+    that scope and does NOT rebind the module global, so those bodies are not
+    descended into. Counting recurses by DEFAULT through everything else
+    (module-level ``if``/``for``/``while``/``with``/``try``/``match`` blocks, and
+    any node not explicitly handled), so an unfamiliar construct still has its
+    ``Store`` names counted — fail closed, never a missed rebind.
+
+    ``ast.Name`` in ``Store`` context covers assignment / augmented / annotated /
+    ``for`` / ``with`` / tuple-unpacking targets; ``def``/``class``/``import``
+    bind a name WITHOUT a ``Store`` node and are counted explicitly (otherwise
+    ``X = 25000`` shadowed by ``import x as X`` would be wrongly admitted), as
+    are ``except ... as X`` and ``match`` capture patterns. The only two STATIC
+    ways a nested scope can still rebind a module global — a function that
+    declares ``global X`` and assigns it, and a walrus ``X := ...`` that leaks to
+    an enclosing scope — are caught by a conservative whole-tree scan that counts
+    an extra binding for every name they touch. Over-counting (e.g. a walrus that
+    is really function-local) only evicts a constant toward ``UNKNOWN``; it can
+    never produce a false match.
     """
     counts: dict[str, int] = {}
 
-    def _bump(name: Optional[str]) -> None:
+    def _bump(name: Optional[str], amount: int = 1) -> None:
         if name:
-            counts[name] = counts.get(name, 0) + 1
+            counts[name] = counts.get(name, 0) + amount
 
-    for sub in ast.walk(tree):
-        if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
-            _bump(sub.id)
-        elif isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            _bump(sub.name)
-        elif isinstance(sub, ast.Import):
-            for alias in sub.names:
+    def _count_in_global_scope(node: ast.AST) -> None:
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Store):
+                _bump(node.id)
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            _bump(node.name)  # the def/class name binds in the enclosing scope...
+            return  # ...but its body opens a new scope — do not descend into it.
+        if isinstance(node, _NEW_SCOPE_NODES):
+            return  # lambda / comprehension body is a new scope; no module binding.
+        if isinstance(node, ast.Import):
+            for alias in node.names:
                 _bump(alias.asname or alias.name.split(".", 1)[0])
-        elif isinstance(sub, ast.ImportFrom):
-            for alias in sub.names:
+            return
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
                 if alias.name != "*":
                     _bump(alias.asname or alias.name)
-        elif isinstance(sub, ast.ExceptHandler):
-            _bump(sub.name)  # ``except E as X`` (``name`` is None for bare except)
-        elif isinstance(sub, (ast.MatchAs, ast.MatchStar)):
-            _bump(sub.name)  # ``case ... as X`` / ``case [*X]`` (None for ``_``)
-        elif isinstance(sub, ast.MatchMapping):
-            _bump(sub.rest)  # ``case {**X}``
+            return
+        if isinstance(node, ast.ExceptHandler):
+            _bump(node.name)  # ``except E as X`` (``name`` is None for bare except)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
+            _bump(node.name)  # ``case ... as X`` / ``case [*X]`` (None for ``_``)
+        elif isinstance(node, ast.MatchMapping):
+            _bump(node.rest)  # ``case {**X}``
+        for child in ast.iter_child_nodes(node):
+            _count_in_global_scope(child)
+
+    _count_in_global_scope(tree)
+
+    # Conservative whole-tree leak scan: ``global X`` (paired with an assignment
+    # the analyzer need not verify) and a walrus ``X := ...`` are the only static
+    # forms that bind a module/enclosing-scope name from within a nested scope, so
+    # disqualify every name they touch with an extra binding (fail closed).
+    for sub in ast.walk(tree):
+        if isinstance(sub, ast.Global):
+            for name in sub.names:
+                _bump(name, 2)
+        elif isinstance(sub, ast.NamedExpr) and isinstance(sub.target, ast.Name):
+            _bump(sub.target.id, 2)
     return counts
 
 

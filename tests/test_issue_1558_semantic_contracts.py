@@ -195,6 +195,22 @@ class TestPublicSurfaceSemanticDefaults:
                 before, after, PROMPT, OUT, "python", "Drop usage field."
             )
 
+    def test_literal_to_constant_passes_despite_function_local_shadow(self):
+        """The literal -> same-module-constant refactor must still be recognized
+        when an unrelated function reuses the constant's name as a local: the
+        parameter default reads the module global ``_LIMIT`` (25000), not the
+        function-local one, so the contract is unchanged and the gate must not
+        flag it."""
+        before = "def f(max_chars=25000):\n    return max_chars\n"
+        after = (
+            "_LIMIT = 25000\n"
+            "def f(max_chars=_LIMIT):\n    return max_chars\n"
+            "def g():\n    _LIMIT = 1\n    return _LIMIT\n"
+        )
+        _verify_public_surface_regression(
+            before, after, PROMPT, OUT, "python", "Hoist default into a constant."
+        )
+
 
 # ---------------------------------------------------------------------------
 # <pdd-interface> / architecture-conformance gate (prompt -> generated-code).
@@ -305,3 +321,15 @@ class TestInterfaceSemanticDefaults:
         with pytest.raises(ArchitectureConformanceError) as exc:
             _verify_pdd_interface_signatures(code, prompt, PROMPT, OUT, {})
         assert "f.max_chars" in exc.value.missing_symbols
+
+    def test_function_local_shadow_does_not_defeat_constant_resolution(self):
+        """A function-local variable reusing the constant's name must not push
+        the generated default to UNKNOWN: the declared literal and the module
+        constant ``_LIMIT`` (25000) still match, so conformance passes."""
+        prompt = _iface_prompt("(max_chars: int = 25000)")
+        code = (
+            "_LIMIT = 25000\n"
+            "def f(max_chars: int = _LIMIT):\n    return max_chars\n"
+            "def g():\n    _LIMIT = 1\n    return _LIMIT\n"
+        )
+        _verify_pdd_interface_signatures(code, prompt, PROMPT, OUT, {})
