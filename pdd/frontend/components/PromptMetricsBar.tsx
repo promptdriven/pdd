@@ -1,5 +1,5 @@
 import React from 'react';
-import { TokenMetrics, ModelInfo } from '../api';
+import { TokenMetrics, ModelInfo, ContextAuditResponse } from '../api';
 import { formatCost } from '../lib/format';
 
 interface PromptMetricsBarProps {
@@ -31,6 +31,9 @@ interface PromptMetricsBarProps {
   showPreview?: boolean;
   onTogglePreview?: () => void;
   onShowDiff?: () => void;
+  // Optional per-source context-window audit (POST /api/v1/prompts/context-audit).
+  // When provided, a compact breakdown of where the context budget goes is shown.
+  contextAudit?: ContextAuditResponse | null;
 }
 
 const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
@@ -58,6 +61,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
   showPreview,
   onTogglePreview,
   onShowDiff,
+  contextAudit,
 }) => {
   const currentMetrics = viewMode === 'processed' ? processedMetrics : rawMetrics;
 
@@ -379,6 +383,48 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
               </span>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Per-source context-window breakdown (optional; from the shared
+          context-audit core — the same data `pdd context` reports). */}
+      {contextAudit && contextAudit.rows.length > 0 && (
+        <div className="px-3 sm:px-4 pb-2">
+          <div className="text-[10px] sm:text-xs text-surface-400 mb-1">
+            Context usage by source
+            {contextAudit.threshold_exceeded && (
+              <span className="ml-2 text-red-400">budget exceeded</span>
+            )}
+          </div>
+          <div className="flex flex-col gap-0.5">
+            {contextAudit.rows.map((row, idx) => (
+              <div
+                key={`${row.source}-${idx}`}
+                className={`flex items-center justify-between gap-2 text-[10px] sm:text-xs font-mono ${
+                  row.status === 'resolved' || row.status === 'body'
+                    ? 'text-surface-300'
+                    : 'text-surface-500'
+                }`}
+                title={row.note ?? row.status}
+              >
+                <span className="truncate">
+                  {row.source}
+                  {row.status !== 'resolved' && row.status !== 'body' && (
+                    <span className="ml-1 text-surface-500">({row.status})</span>
+                  )}
+                </span>
+                <span className="flex-shrink-0">
+                  {formatTokens(row.tokens)} ({row.percent.toFixed(1)}%)
+                </span>
+              </div>
+            ))}
+          </div>
+          {contextAudit.warnings.length > 0 && (
+            <div className="mt-1 text-[9px] sm:text-[10px] text-orange-400/80">
+              {contextAudit.warnings.length} deferred/unresolved warning
+              {contextAudit.warnings.length === 1 ? '' : 's'}
+            </div>
+          )}
         </div>
       )}
     </div>

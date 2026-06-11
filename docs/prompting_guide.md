@@ -2162,6 +2162,7 @@ Before merging a prompt change, check the contract, story, test, context, and ev
 - [ ] Are critical dependencies included explicitly?
 - [ ] Are large files included with targeted excerpts or interface mode?
 - [ ] Are dynamic `<shell>`, `<web>`, or semantic-query includes avoided for contract-critical context?
+- [ ] Has `pdd context <prompt>` been run to confirm total hydrated tokens are within the model's context budget?
 
 ### Evidence
 
