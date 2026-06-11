@@ -19,10 +19,68 @@ canonical on-disk template at `user_stories/story__template.md` aligned with the
 generator and with `docs/prompting_guide.md` (template uses `## Negative Cases`;
 the guide may say `## Forbidden Outcomes` — same intent).
 
-**Template sections (in order):** `## Covers`, `## Story`, `## Context`,
-`## Acceptance Criteria`, `## Oracle`, `## Non-Oracle`, `## Negative Cases`,
-`## Non-Goals`, `## Notes`. Do not emit `## Prompt Scope`; list scoped prompts in
-`## Context` and in `<!-- pdd-story-prompts: ... -->` metadata.
+**Two-file model (human-verified Story file + AI contract file).** A user story
+is split across TWO files so the human's job is tiny and the machine's job is
+precise:
+- The human-verified Story lives at `user_stories/story__<slug>.md` and holds
+  ONLY the `## Story` sentence (persona/capability/benefit) plus the
+  `<!-- pdd-story-prompts: ... -->` link. This is the source of truth — a person
+  reads and signs off on it, and `_REQUIRED_STORY_SECTIONS` requires only
+  `## Story`.
+- The machine-checkable contract is GENERATED from the human Story + the original
+  issue and lives at `user_stories/contracts/<slug>.contract.md`. It carries the
+  top-level (`##`) sections `## Covers`, `## Context`, `## Acceptance Criteria`,
+  `## Oracle`, `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`,
+  `## Candidate Prompts`, `## Notes` (`_REQUIRED_CONTRACT_SECTIONS`), under a
+  `<!-- pdd-story-contract derived-from-story="..." story-hash="..."
+  issue-ref="..." -->` header used for sync.
+
+`generate_user_story()` writes both files: it authors the human Story with the
+`generate_user_story_LLM` meta-prompt, then authors the contract with the
+`generate_story_contract_LLM` meta-prompt (given the Story, the issue, and a
+scan of the repo's other prompts for the `## Candidate Prompts` list). Contract
+failure is non-blocking — the human Story is still written and the contract can
+be generated later.
+
+`sync_user_story_contract()` keeps the two aligned: it hashes the human Story; if
+the hash differs from the contract header's `story-hash`, it regenerates the
+contract from the edited Story + the issue recorded in the `issue-ref` header
+(absolutized at generation time so it re-resolves from any cwd). An unchanged
+Story is a no-op.
+
+Validation (`run_user_story_tests` / `detect_change`) uses the human Story AND
+its contract combined as the oracle. `discover_story_files()` only matches
+top-level `story__*.md`, so contract files under `contracts/` are never treated
+as separate stories. Do not emit `## Prompt Scope`; list scoped prompts in the
+contract `## Context` and in `<!-- pdd-story-prompts: ... -->` metadata.
+
+**Durability.** The generator must instruct the model to describe behavior by the
+user's stable goal and observable outcome, NEVER by comparison to a specific
+external product / tool / brand / UI (e.g. "like Claude Code's UI", "matches
+Codex") and never anchored to time- or version-sensitive facts ("the current
+best model", "as of 2026") unless the issue itself pins that exact version. When
+an issue mentions an external product only to ILLUSTRATE behavior, extract the
+durable observable structure (e.g. "a usage box with a per-source breakdown")
+rather than copying the comparison. Brittle exclusions (resemblance to any
+third-party tool's UI, which provider is currently "best", cosmetic styling)
+belong in the contract's `## Non-Oracle` so a story does not rot into a false
+failure as the ecosystem changes.
+
+**Readable, plain language.** The generator must keep stories readable by a
+newcomer who does not know PDD/LLM internals. The `## Story` sentence must be
+jargon-free, and internal vocabulary must be translated to plain words even when
+the issue uses it (e.g. "hydrated prompt" -> "your fully assembled prompt"). Real
+interface terms (command names, flags like `--json`, exit codes) are kept because
+they are the user's own vocabulary, not jargon.
+
+**Quick to verify, firm but not harsh.** The human-verified Story is one sentence
+that is faster to check than reading the prompt — never push acceptance detail
+into it, and keep the Contract lean (only what catches a real regression). The
+Contract must be strong enough to fail on a genuine user-visible regression
+(`## Oracle` / `## Negative Cases`) yet loose enough that healthy development —
+refactors, renamed internals, an equivalent UI redesign, a better model — still
+passes. Test the user-facing outcome, not the mechanism; anything that legitimately
+varies during normal development goes in `## Non-Oracle`.
 
 **`generate_user_story()` / `_llm_generate_story_markdown()`**
 - Invoked from `pdd/commands/generate.py` when `pdd test` receives `.prompt` files
@@ -43,18 +101,20 @@ the guide may say `## Forbidden Outcomes` — same intent).
   is missing, `generate_user_story()` fails with a clear message rather than falling
   back to prompt-derived authoring. When the issue source cannot be resolved, it fails
   without an LLM call.
-- **Required-section validation, no deterministic fallback.** Accept the LLM output
-  only when it contains the FULL canonical section set required by issue #1356 —
-  `## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
-  `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, and `## Notes` — (strip a
-  wrapping ``` ``` ``` fence first) and it does not contain unresolved placeholders
-  such as `<persona>`, `<capability>`, `<benefit>`, `<detail>`, `<state>`, or
-  `<action>`. A response carrying only `## Story` and `## Acceptance Criteria` is
-  rejected so an incomplete LLM story is never written. When the LLM is unavailable
-  (no provider key, offline, error) OR the output is empty, missing any required
-  canonical section, or placeholder-filled, `_llm_generate_story_markdown()`
-  returns `(None, cost, model)` and `generate_user_story()` returns failure without
-  writing a story file. Do not use any deterministic prompt-content renderer or
+- **Required-section validation, no deterministic fallback.** The human story
+  generator (`_llm_generate_story_markdown`) accepts the LLM output only when it
+  contains `## Story` (`_REQUIRED_STORY_SECTIONS`) and no unresolved placeholders
+  such as `<persona>`, `<capability>`, or `<benefit>` (strip a wrapping
+  ``` ``` ``` fence first). The contract generator (`_llm_generate_story_contract`)
+  accepts only when its output carries the full `_REQUIRED_CONTRACT_SECTIONS` set
+  (`## Covers`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
+  `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Candidate Prompts`,
+  `## Notes`) and no placeholders. When the LLM is unavailable (no provider key,
+  offline, error) OR the output is empty, missing a required section, or
+  placeholder-filled, the generator returns `(None, cost, model)`. A human-story
+  failure makes `generate_user_story()` fail without writing anything; a contract
+  failure is non-blocking (the Story is still written, the contract is generated
+  later via sync). Do not use any deterministic prompt-content renderer or
   template path for the story body. A deterministic story can be too shallow and
   pass `pdd detect --stories` after meaningful prompt drift, so `pdd test <*.prompt>`
   must require a valid LLM-authored story.
@@ -121,12 +181,12 @@ the guide may say `## Forbidden Outcomes` — same intent).
      (`gh issue view <n> --repo <owner/repo> --json title,body`), inferring the repo
      from the `origin` remote for bare numbers. Returns `(None, None, None)` on
      failure. All subprocess/network errors are caught.
-   - `generate_user_story` writes the body via `_llm_generate_story_markdown` (LLM,
-     issue #1356) and returns failure without writing a story when the LLM is
-     unavailable or returns markdown missing any required canonical section
-     (`## Covers`, `## Story`, `## Context`, `## Acceptance Criteria`, `## Oracle`,
-     `## Non-Oracle`, `## Negative Cases`, `## Non-Goals`, `## Notes`), or leaves
-     template placeholders in the output.
+   - `generate_user_story` writes the human Story file via
+     `_llm_generate_story_markdown` (requires `## Story`) and then the contract
+     file via `_generate_and_write_contract` / `_llm_generate_story_contract`
+     (requires the `_REQUIRED_CONTRACT_SECTIONS` set incl. `## Candidate Prompts`).
+     It returns failure without writing anything when the human story is
+     unavailable/invalid; a contract failure is non-blocking.
    - `_llm_generate_story_markdown` takes the resolved issue text/ref (NOT prompt
      content), loads the `generate_user_story_LLM` meta-prompt (`load_prompt_template`),
      escapes it via `preprocess(double_curly_brackets=True,

@@ -34,7 +34,7 @@ from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 pytestmark = pytest.mark.timeout(450)
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths, _generate_user_story_artifacts_for_change, _resolve_story_policy, _find_linked_stories_for_prompts
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -50,10 +50,507 @@ def mock_pre_checkup_gate_default():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _default_story_policy_and_validation(monkeypatch):
+    """Default story-policy tests to `warn` and stub linked-subset validation so
+    they never hit the network (#1454). Tests that assert validation/strict
+    behavior re-patch ``run_user_story_tests`` inside their own ``with`` block."""
+    monkeypatch.delenv("PDD_STORY_POLICY", raising=False)
+    with patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        return_value=(True, [], 0.0, ""),
+    ):
+        yield
+
+
 @pytest.fixture
 def temp_cwd(tmp_path):
     """Returns a temporary directory path to use as cwd."""
     return tmp_path
+
+
+def test_generate_user_story_artifacts_for_change_mentions_story_in_pr_summary(tmp_path):
+    """Generated stories must be staged and described for the Step 13 PR body."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content must not author the story", encoding="utf-8")
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        assert kwargs["issue"] == "https://github.com/x/y/issues/1454"
+        assert kwargs["prompt_files"] == [str(prompt_file)]
+        assert kwargs["stories_dir"] == str(tmp_path / "user_stories")
+        assert kwargs["prompts_dir"] == str(prompts_dir)
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n"
+            "## Story\nAs a user...\n",
+            encoding="utf-8",
+        )
+        return (
+            True,
+            f"Generated story file: {story_file}",
+            0.25,
+            "story-model",
+            str(story_file),
+            ["upload_python.prompt"],
+        )
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert story_files == ["user_stories/story__upload.md"]
+    assert "### User Stories" in summary
+    assert "`user_stories/story__upload.md`" in summary
+    assert "`upload_python.prompt`" in summary
+    assert cost == 0.25
+    assert model == "story-model"
+    assert block is None
+
+
+def test_generate_user_story_artifacts_stages_generated_contract(tmp_path):
+    """Two-file model integration: when generate_user_story also writes the
+    sibling AI contract, the change hook must stage the contract too so it
+    travels with the change PR (not left as an untracked local file)."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content", encoding="utf-8")
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+    contract_file = tmp_path / "user_stories" / "contracts" / "upload.contract.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nAs a user...\n",
+            encoding="utf-8",
+        )
+        contract_file.parent.mkdir(parents=True, exist_ok=True)
+        contract_file.write_text(
+            "<!-- pdd-story-contract derived-from-story=\"../story__upload.md\" -->\n\n"
+            "## Covers\n- AC1: x\n",
+            encoding="utf-8",
+        )
+        return (
+            True,
+            f"Generated story file: {story_file}. Generated contract file: {contract_file}.",
+            0.25,
+            "story-model",
+            str(story_file),
+            ["upload_python.prompt"],
+        )
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    # Both the human story and the generated contract are staged.
+    assert story_files == [
+        "user_stories/story__upload.md",
+        "user_stories/contracts/upload.contract.md",
+    ]
+    assert "`user_stories/contracts/upload.contract.md`" in summary
+    assert "machine-checkable contract" in summary
+    assert block is None
+
+
+def test_generate_user_story_artifacts_skips_runtime_llm_prompts(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "runtime_LLM.prompt").write_text("runtime", encoding="utf-8")
+
+    with patch("pdd.agentic_change_orchestrator.generate_user_story") as mock_generate:
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/runtime_LLM.prompt", "src/code.py"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert story_files == []
+    assert summary == "None"
+    assert cost == 0.0
+    assert model == ""
+    assert block is None
+    mock_generate.assert_not_called()
+
+
+def test_generate_user_story_artifacts_is_non_blocking_on_exception(tmp_path):
+    """An unexpected exception in generation must not abort the change workflow.
+
+    Regression for PR #1489 review: story generation runs after the pre-PR gate
+    and before Step 13, so a raised exception (issue resolution, provider code,
+    file I/O) would otherwise abort the run instead of degrading to a warning.
+    """
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content", encoding="utf-8")
+
+    def boom(**kwargs):
+        raise RuntimeError("provider exploded")
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=boom,
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    # No artifacts staged, but the call returns cleanly (no exception raised).
+    assert story_files == []
+    assert "### User Stories" in summary
+    assert "skipped" in summary
+    assert "provider exploded" in summary
+    assert "`upload_python.prompt`" in summary
+    assert cost == 0.0
+    assert model == ""
+    # warn policy: a generation failure leaves the prompt uncovered but never blocks.
+    assert block is None
+
+
+# -----------------------------------------------------------------------------
+# Issue #1454 review (PR #1501): policy controls, reuse, and linked-subset
+# validation for the agentic-change prompt-story workflow.
+# -----------------------------------------------------------------------------
+
+def _make_prompt(tmp_path, name="upload_python.prompt"):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    prompt_file = prompts_dir / name
+    prompt_file.write_text("Prompt content", encoding="utf-8")
+    return prompt_file
+
+
+def test_resolve_story_policy_default_and_overrides(monkeypatch):
+    monkeypatch.delenv("PDD_STORY_POLICY", raising=False)
+    assert _resolve_story_policy() == "warn"
+    for value, expected in [
+        ("off", "off"), ("OFF", "off"), ("warn", "warn"),
+        ("strict", "strict"), ("STRICT", "strict"), ("bogus", "warn"), ("", "warn"),
+    ]:
+        monkeypatch.setenv("PDD_STORY_POLICY", value)
+        assert _resolve_story_policy() == expected
+
+
+def test_find_linked_stories_matches_by_metadata(tmp_path):
+    prompt_file = _make_prompt(tmp_path)
+    stories_dir = tmp_path / "user_stories"
+    stories_dir.mkdir()
+    (stories_dir / "story__upload.md").write_text(
+        "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+        encoding="utf-8",
+    )
+    other = _make_prompt(tmp_path, "other_python.prompt")
+
+    prompt_to_stories, uncovered = _find_linked_stories_for_prompts(
+        [prompt_file, other], stories_dir
+    )
+    assert prompt_to_stories[prompt_file] == [stories_dir / "story__upload.md"]
+    assert uncovered == [other]
+
+
+def test_story_policy_off_skips_creation_and_checking(tmp_path, monkeypatch):
+    _make_prompt(tmp_path)
+    monkeypatch.setenv("PDD_STORY_POLICY", "off")
+
+    with patch("pdd.agentic_change_orchestrator.generate_user_story") as mock_gen, \
+         patch("pdd.agentic_change_orchestrator.run_user_story_tests") as mock_tests:
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert story_files == []
+    assert "off" in summary
+    assert block is None
+    mock_gen.assert_not_called()
+    mock_tests.assert_not_called()
+
+
+def test_story_reuses_existing_linked_story_without_generating(tmp_path):
+    _make_prompt(tmp_path)
+    stories_dir = tmp_path / "user_stories"
+    stories_dir.mkdir()
+    existing = stories_dir / "story__upload.md"
+    existing.write_text(
+        "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nexisting\n",
+        encoding="utf-8",
+    )
+
+    with patch("pdd.agentic_change_orchestrator.generate_user_story") as mock_gen, \
+         patch(
+             "pdd.agentic_change_orchestrator.run_user_story_tests",
+             return_value=(True, [{"story": str(existing), "passed": True}], 0.0, ""),
+         ) as mock_tests:
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    # Existing coverage is reused -- no new story generated, no duplicate staged.
+    mock_gen.assert_not_called()
+    assert story_files == []
+    assert "reused existing linked story" in summary
+    assert block is None
+    # Validation ran on the reused subset.
+    assert mock_tests.call_args[1]["story_files"] == [existing]
+
+
+def test_story_warn_reports_validation_failure_without_blocking(tmp_path):
+    prompt_file = _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        return_value=(False, [{"story": str(story_file), "passed": False}], 0.0, ""),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert story_files == ["user_stories/story__upload.md"]
+    assert "❌" in summary
+    assert "Warning (non-blocking)" in summary
+    # warn never blocks even when the linked story fails.
+    assert block is None
+
+
+def test_story_strict_blocks_on_failing_validation(tmp_path, monkeypatch):
+    monkeypatch.setenv("PDD_STORY_POLICY", "strict")
+    prompt_file = _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        return_value=(False, [{"story": str(story_file), "passed": False}], 0.0, ""),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert block is not None
+    assert "strict story policy" in block
+    assert "Blocking (strict policy)" in summary
+
+
+def test_story_strict_blocks_when_validation_cannot_run(tmp_path, monkeypatch):
+    # Regression: strict policy must NOT fail open when the validator itself
+    # raises. Without a passing linked-story check, coverage is unproven, so
+    # strict has to block before Step 13 rather than silently proceed.
+    monkeypatch.setenv("PDD_STORY_POLICY", "strict")
+    _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        side_effect=RuntimeError("validator down"),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert block is not None
+    assert "strict story policy" in block
+    assert "validation failed/skipped: validator down" in block
+    assert "Blocking (strict policy)" in summary
+
+
+def test_story_warn_does_not_block_when_validation_cannot_run(tmp_path, monkeypatch):
+    # Counterpart to the strict case: under warn the same validator exception
+    # is reported but never blocks.
+    monkeypatch.setenv("PDD_STORY_POLICY", "warn")
+    _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        side_effect=RuntimeError("validator down"),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert block is None
+    assert "Validation skipped: validator down" in summary
+
+
+def test_story_strict_blocks_when_generation_leaves_prompt_uncovered(tmp_path, monkeypatch):
+    monkeypatch.setenv("PDD_STORY_POLICY", "strict")
+    _make_prompt(tmp_path)
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        return_value=(False, "no issue context", 0.0, "", "", []),
+    ), patch("pdd.agentic_change_orchestrator.run_user_story_tests") as mock_tests:
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    # Nothing got linked, so validation has no subset to run and strict blocks.
+    mock_tests.assert_not_called()
+    assert block is not None
+    assert "no linked story" in block
+
+
+def test_step13_prompt_renders_user_story_summary(tmp_path):
+    """The Step 13 prompt must substitute {user_story_summary}, not leave the
+    literal placeholder.
+
+    Regression for PR #1489 review change #1: the orchestrator sets
+    context["user_story_summary"], so rendering the Step 13 template with the
+    same preprocess + substitution pipeline the orchestrator uses must inject
+    the value into the PR-body section.
+    """
+    from pdd.agentic_common import substitute_template_variables
+    from pdd.load_prompt_template import load_prompt_template
+    from pdd.preprocess import preprocess
+
+    template = load_prompt_template("agentic_change_step13_create_pr_LLM")
+    assert template is not None, "Step 13 template should load"
+    # The template must contain a real substitution input, not only prose
+    # mentioning the <user_story_summary> tag.
+    assert "{user_story_summary}" in template
+
+    summary_value = (
+        "### User Stories\n"
+        "- `user_stories/story__upload.md` — issue-derived story linked to: "
+        "`upload_python.prompt`"
+    )
+    context = {
+        "issue_url": "https://github.com/x/y/issues/1454",
+        "repo_owner": "x",
+        "repo_name": "y",
+        "issue_number": "1454",
+        "issue_title": "t",
+        "worktree_path": str(tmp_path),
+        "base_branch": "main",
+        "files_to_stage": "prompts/upload_python.prompt",
+        "sync_order_script": "",
+        "sync_order_list": "",
+        "clean_restart": "false",
+        "issue_content": "issue body",
+        "step8_output": "summary",
+        "manual_review_lines": "None",
+        "user_story_summary": summary_value,
+    }
+    exclude = list(context.keys())
+    rendered_template = preprocess(
+        template, recursive=True, double_curly_brackets=True, exclude=exclude
+    )
+    rendered = substitute_template_variables(rendered_template, context)
+
+    assert summary_value in rendered
+    assert "user_stories/story__upload.md" in rendered
+    # The substitution input must be consumed, not left as a literal token.
+    assert "{user_story_summary}" not in rendered
+
 
 @pytest.fixture
 def mock_dependencies(temp_cwd):

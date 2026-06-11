@@ -2,51 +2,28 @@
 
 # User Story: <name>
 
-## Covers
-
-- R1: <contract rule name>
-- R2: <contract rule name>
-
 ## Story
 
 As a <persona>,
 I want <behavior>,
 so that <value>.
 
-## Context
+<!--
+This file is the HUMAN-VERIFIED user story, and the source of truth. It holds
+ONLY the one-sentence Story above — keep it plain and durable:
+  - describe the user's stable goal and what they can do/see;
+  - no flags, exit codes, or internals (those go in the contract);
+  - never pin it to a specific external product/tool/UI ("like Claude Code's
+    UI") or a time-/version-sensitive fact, so it survives the ecosystem
+    changing.
 
-Describe relevant state, assumptions, fixtures, users, records, external services, or dependencies.
-
-## Acceptance Criteria
-
-1. Given ..., when ..., then ...
-2. Given ..., when ..., then ...
-
-## Oracle
-
-These details matter for pass/fail:
-- error type
-- state transition
-- absence/presence of external call
-- emitted event
-- returned value shape
-
-## Non-Oracle
-
-These details should not matter:
-- private helper names
-- internal class structure
-- exact wording of non-user-facing messages
-- deterministic but irrelevant ordering
-
-## Negative Cases
-
-List forbidden outcomes this story protects against.
-
-## Non-Goals
-
-What this story explicitly does not cover.
-
-## Notes
-
-Links, edge cases, fixtures, rationale, or implementation hints.
+The machine-checkable contract (acceptance criteria, oracle, candidate prompts)
+is generated FROM this Story plus the issue and lives in a separate file:
+  user_stories/contracts/<name>.contract.md
+If you edit this Story, re-align the contract with the sync_user_story_contract()
+library function in pdd/user_story_tests.py. There is no `pdd sync` user-story
+command on this branch — `pdd sync` handles prompt code/test/example/contract
+sync, not story contracts. Do not hand-edit the contract; but do review the
+generated contract for false or over-broad oracle claims before relying on it,
+since it is the actual oracle used by `pdd detect --stories` and `pdd fix`.
+-->

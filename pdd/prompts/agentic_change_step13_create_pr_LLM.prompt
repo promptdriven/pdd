@@ -36,6 +36,17 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
 {manual_review_lines}
 </manual_review_lines>
 
+% User Story Coverage (from issue-derived story generation)
+
+The orchestrator generated an issue-derived user story for the existing,
+non-runtime prompts changed by this workflow and staged it for this PR. The
+summary below is the exact PR-body section to render. If the value is the
+literal ``None``, no story was generated and the section must be omitted.
+
+<user_story_summary>
+{user_story_summary}
+</user_story_summary>
+
 % Your Task
 
 1. **Stage all changes**
@@ -80,6 +91,7 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
    - Reference the original issue
    - Summarize the prompt changes made
    - List files modified
+   - Mention generated user-story artifacts when `<user_story_summary>` is not `None`
    - Include next steps for reviewer
 
 5. **Link PR to issue**
@@ -118,6 +130,11 @@ Closes #{issue_number}
 
 ### Documentation Updated
 - `README.md` - [brief description]
+
+Render the contents of ``<user_story_summary>`` here. If the value is the
+literal ``None``, omit this section entirely. Otherwise include it verbatim as a
+PR-body section so reviewers can see which issue-derived user story was generated
+and which prompt metadata it links to.
 
 ## ⚠️ Manual Review Required
 
