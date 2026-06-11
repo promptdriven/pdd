@@ -409,9 +409,9 @@ def build_module_default_symbols(module_source: Optional[str]) -> dict:
     module-scope-aware (see :func:`_count_module_bindings`): a name reused inside
     a function/class/comprehension scope is local and does NOT disqualify the
     module constant, but every binding that can reach the module global — a
-    second module-level binding, or a nested ``global X`` / walrus leak — still
-    does. Over-eviction only ever moves a constant toward ``UNKNOWN``, never a
-    false match.
+    second module-level binding, a nested ``global X``-plus-assignment, or a
+    walrus that leaks to module scope — still does. Over-eviction only ever moves
+    a constant toward ``UNKNOWN``, never a false match.
     Name-to-name aliases are not resolved transitively — the right-hand side is
     normalized with an empty table — so ``B = A`` never enters the table. A
     ``from x import *`` anywhere in the module empties the whole table, since it
@@ -527,13 +527,15 @@ def _count_module_bindings(tree: ast.Module) -> dict:
     ``for`` / ``with`` / tuple-unpacking targets; ``def``/``class``/``import``
     bind a name WITHOUT a ``Store`` node and are counted explicitly (otherwise
     ``X = 25000`` shadowed by ``import x as X`` would be wrongly admitted), as
-    are ``except ... as X`` and ``match`` capture patterns. The only two STATIC
-    ways a nested scope can still rebind a module global — a function that
-    declares ``global X`` and assigns it, and a walrus ``X := ...`` that leaks to
-    an enclosing scope — are caught by a conservative whole-tree scan that counts
-    an extra binding for every name they touch. Over-counting (e.g. a walrus that
-    is really function-local) only evicts a constant toward ``UNKNOWN``; it can
-    never produce a false match.
+    are ``except ... as X`` and ``match`` capture patterns. Two forms rebind a
+    module global from a place this walk skips and are detected separately: a
+    function that BOTH declares ``global X`` and assigns it, and a walrus
+    ``X := ...`` evaluated at module scope (directly or inside a module-level
+    comprehension — comprehension scopes are transparent to walrus). A read-only
+    ``global`` and a walrus inside a function/lambda body bind nothing at module
+    scope, so neither disqualifies the constant. Where attribution is imprecise it
+    errs toward an extra binding, which can only evict a constant toward
+    ``UNKNOWN`` — never a false match.
     """
     counts: dict[str, int] = {}
 
@@ -571,16 +573,60 @@ def _count_module_bindings(tree: ast.Module) -> dict:
 
     _count_in_global_scope(tree)
 
-    # Conservative whole-tree leak scan: ``global X`` (paired with an assignment
-    # the analyzer need not verify) and a walrus ``X := ...`` are the only static
-    # forms that bind a module/enclosing-scope name from within a nested scope, so
-    # disqualify every name they touch with an extra binding (fail closed).
-    for sub in ast.walk(tree):
-        if isinstance(sub, ast.Global):
-            for name in sub.names:
-                _bump(name, 2)
-        elif isinstance(sub, ast.NamedExpr) and isinstance(sub.target, ast.Name):
-            _bump(sub.target.id, 2)
+    # Two forms rebind a module global from a location the scope walk above
+    # skips. Detect each PRECISELY: a construct that binds nothing at module scope
+    # must NOT be treated as a rebind, or the gate reports drift on code that did
+    # not change the default (the false sync failure #1558 exists to remove).
+    #
+    # (1) ``global X`` rebinds the module global only when the SAME function also
+    # assigns X; a read-only ``global`` rebinds nothing. Intersect each function's
+    # ``global`` declarations with the names it stores. ``ast.walk`` also sees a
+    # nested function's stores, but over-attributing one only over-evicts toward
+    # UNKNOWN (safe) — never a false match.
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        declared_global = {
+            name
+            for sub in ast.walk(fn)
+            if isinstance(sub, ast.Global)
+            for name in sub.names
+        }
+        if not declared_global:
+            continue
+        stored = {
+            sub.id
+            for sub in ast.walk(fn)
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)
+        }
+        for name in declared_global & stored:
+            _bump(name, 2)
+
+    # (2) A walrus ``X := ...`` rebinds the module global only when evaluated at
+    # module scope. Comprehension scopes are TRANSPARENT to walrus — a walrus in a
+    # module-level comprehension leaks to the module and MUST disqualify — so only
+    # a ``def``/``async def``/``lambda`` BODY hides a walrus from module scope.
+    # Decorator, default-argument and annotation expressions run in the enclosing
+    # scope (so a walrus there at module level still counts); a walrus inside a
+    # function/lambda body binds a local and is ignored.
+    def _count_module_walrus(node: ast.AST, in_func: bool) -> None:
+        if isinstance(node, ast.NamedExpr) and isinstance(node.target, ast.Name):
+            if not in_func:
+                _bump(node.target.id, 2)
+            _count_module_walrus(node.value, in_func)
+            return
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            body = node.body if isinstance(node.body, list) else [node.body]
+            body_ids = {id(stmt) for stmt in body}
+            for child in ast.iter_child_nodes(node):
+                # Body statements open the function scope; decorators, defaults,
+                # annotations and type params run in the enclosing scope.
+                _count_module_walrus(child, in_func or id(child) in body_ids)
+            return
+        for child in ast.iter_child_nodes(node):
+            _count_module_walrus(child, in_func)
+
+    _count_module_walrus(tree, False)
     return counts
 
 

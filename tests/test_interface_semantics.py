@@ -522,6 +522,11 @@ def test_signature_entries_both_unresolvable_same_text_still_compatible():
         "_LIMIT = 25000\n_xs = [_LIMIT for _LIMIT in range(3)]\n",
         # A nested-function local also does not touch the module global.
         "_LIMIT = 25000\ndef outer():\n    def inner():\n        _LIMIT = 1\n        return _LIMIT\n    return inner\n",
+        # A walrus inside a FUNCTION body binds a function-local, not the module
+        # global (comprehension scopes leak, but function bodies do not).
+        "_LIMIT = 25000\ndef g():\n    return (_LIMIT := 1)\n",
+        # ``global _LIMIT`` that only READS the global rebinds nothing.
+        "_LIMIT = 25000\ndef g():\n    global _LIMIT\n    return _LIMIT\n",
     ],
 )
 def test_module_constant_survives_inner_scope_shadow(module_source):
@@ -559,3 +564,23 @@ def test_module_global_rebind_forms_still_disqualify(module_source):
         compare_default_sources("25000", "X", symbols)
         is DefaultCompatibility.UNKNOWN
     )
+
+
+@pytest.mark.parametrize(
+    "module_source",
+    [
+        # A def captures its default at DEFINITION time, so the value here is the
+        # first binding (25000) regardless of the later reassignment...
+        "_LIMIT = 25000\ndef f(x=_LIMIT):\n    return x\n_LIMIT = 5000\n",
+        # ...and likewise the first of two bindings that both precede the def.
+        "_LIMIT = 5000\n_LIMIT = 25000\ndef f(x=_LIMIT):\n    return x\n",
+    ],
+)
+def test_multiply_bound_constant_stays_conservative(module_source):
+    # Documented limitation, NOT a false match: a name bound more than once at
+    # module scope resolves UNKNOWN even when definition-time semantics make the
+    # default determinate. The single per-module name->value table cannot carry a
+    # position-dependent value, and a constant reassigned around the def that
+    # defaults to it is a code smell a generator essentially never emits, so the
+    # gate fails closed here rather than add position-aware resolution.
+    assert "_LIMIT" not in build_module_default_symbols(module_source)

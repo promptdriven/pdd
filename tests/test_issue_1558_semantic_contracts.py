@@ -211,6 +211,20 @@ class TestPublicSurfaceSemanticDefaults:
             before, after, PROMPT, OUT, "python", "Hoist default into a constant."
         )
 
+    def test_literal_to_constant_passes_despite_function_local_walrus(self):
+        """A function-local walrus reusing the constant's name binds a local, not
+        the module global, so the literal->constant refactor must still pass (it
+        previously failed closed on the over-broad whole-tree walrus scan)."""
+        before = "def f(max_chars=25000):\n    return max_chars\n"
+        after = (
+            "_LIMIT = 25000\n"
+            "def f(max_chars=_LIMIT):\n    return max_chars\n"
+            "def g():\n    return (_LIMIT := 1)\n"
+        )
+        _verify_public_surface_regression(
+            before, after, PROMPT, OUT, "python", "Hoist default; unrelated walrus."
+        )
+
 
 # ---------------------------------------------------------------------------
 # <pdd-interface> / architecture-conformance gate (prompt -> generated-code).
