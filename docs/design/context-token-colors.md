@@ -6,9 +6,12 @@ token visualization."
 `pdd context` renders a Claude-Code `/context`-style usage box (and a `--table`
 view) that attributes a hydrated prompt's tokens by source. This workstream
 upgrades that view from a single-colored, glyph-only indicator to a readable,
-**multi-color** one: color now distinguishes token *categories* at a glance,
-while every count, ordering, glyph, and the machine-readable `--json` output
-stay exactly the same.
+**multi-color** one: **color** now distinguishes token *categories* at a glance.
+The counted categories (`body`/`resolved`/`deferred`/`unresolved`) all share one
+glyph and are told apart by color alone; `unavailable` and free space keep their
+own distinct glyphs so they stay legible regardless of color. Every count,
+ordering, and the machine-readable `--json` output stay exactly the same — only
+the glyph *scheme* changed.
 
 ## Categories → color (one place)
 
@@ -35,6 +38,18 @@ Color flows through a single `paint(category, text)` seam: in the grid each cell
 glyph is painted by its source's category (free cells use `free`); in the legend
 the `glyph + source` marker is painted; in `--table` only the width-padded
 `Source` cell is painted, so column alignment is unaffected by escape bytes.
+
+## Glyphs: shared for counted, distinct for the rest
+
+The counted categories (`body`/`resolved`/`deferred`/`unresolved`) all use one
+shared glyph (`_USED_GLYPH`) and rely on **color** to tell them apart — the same
+way Claude Code's `/context` uses one colored-square shape. `unavailable` uses
+its own glyph and free space keeps `⛶`, so those two non-usage rows stay legible
+even where color is unavailable. `_glyph_for(status)` is the single place that
+picks a row's glyph; all grid glyphs share one display width so the grid stays
+aligned. (Trade-off: with `--no-color`/`NO_COLOR`, counted categories are no
+longer distinguishable *in the grid* by symbol — the legend labels still name
+each one, and `--table` is unaffected.)
 
 ## Color detection (`--color` / `--no-color` / auto)
 

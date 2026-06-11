@@ -28,7 +28,11 @@ import importlib
 
 context_mod = importlib.import_module("pdd.commands.context")
 from pdd.commands.context import (
+    _FREE_GLYPH,
+    _UNAVAILABLE_GLYPH,
+    _USED_GLYPH,
     _color_enabled,
+    _glyph_for,
     _make_painter,
     _render_usage_box,
     context,
@@ -248,3 +252,53 @@ def test_painter_enabled_wraps_known_category_only():
     assert paint("body", "x") == f"{hex_to_ansi(ELECTRIC_CYAN)}x{ANSI_RESET}"
     # Unknown category falls back to plain text rather than emitting a bad code.
     assert paint("does-not-exist", "x") == "x"
+
+
+# --------------------------------------------------------------------------- #
+# Glyph scheme: counted categories share ONE glyph (color tells them apart);
+# unavailable and free space keep their own distinct glyphs.
+# --------------------------------------------------------------------------- #
+def test_glyph_for_scheme():
+    # Every counted category collapses to the one shared glyph.
+    for status in ("body", "resolved", "deferred", "unresolved"):
+        assert _glyph_for(status) == _USED_GLYPH
+    # unavailable is the lone status with its own glyph.
+    assert _glyph_for("unavailable") == _UNAVAILABLE_GLYPH
+    # The three glyphs that can appear are mutually distinct.
+    assert len({_USED_GLYPH, _UNAVAILABLE_GLYPH, _FREE_GLYPH}) == 3
+
+
+def _audit_with_unavailable():
+    rows = [
+        AuditRow(source="prompt_body", tokens=200, status="body"),
+        AuditRow(source="context/a.txt", tokens=80, status="resolved"),
+        AuditRow(source="context/b.txt", tokens=20, status="resolved"),
+        AuditRow(source="grounding", tokens=0, status="unavailable", note="requires cloud"),
+    ]
+    return ContextAudit(
+        model="gpt-4o", total_tokens=300, context_limit=1000, percent_used=30.0, rows=rows
+    )
+
+
+def test_counted_categories_share_glyph_in_legend():
+    audit = _audit_with_unavailable()
+    box = _render_usage_box(
+        audit.rows, audit.total_tokens, audit.context_limit, audit.model, audit.percent_used
+    )
+    # body + two resolved rows all lead with the same shared glyph...
+    for label in ("prompt_body", "context/a.txt", "context/b.txt"):
+        line = next(ln for ln in box.splitlines() if f"{label}:" in ln)
+        assert line.strip().startswith(_USED_GLYPH)
+    # ...while unavailable and free keep their own.
+    unavail = next(ln for ln in box.splitlines() if "grounding:" in ln)
+    free = next(ln for ln in box.splitlines() if "Free space:" in ln)
+    assert unavail.strip().startswith(_UNAVAILABLE_GLYPH)
+    assert free.strip().startswith(_FREE_GLYPH)
+
+
+def test_color_distinguishes_the_shared_glyph(patched, prompt_file):
+    """Same glyph, different category → different color in front of it."""
+    out = _invoke(["--color"], prompt_file).output
+    # body (cyan) and resolved (purple) both wear _USED_GLYPH, told apart by color.
+    assert f"{hex_to_ansi(ELECTRIC_CYAN)}{_USED_GLYPH}" in out
+    assert f"{hex_to_ansi(LUMEN_PURPLE)}{_USED_GLYPH}" in out
