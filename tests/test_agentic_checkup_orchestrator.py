@@ -27,6 +27,8 @@ from pdd.agentic_checkup_orchestrator import (
     _parse_expansion_items,
     _parse_failure_signal_block,
     _pr_base_tracking_ref,
+    _run_step5_shell_first_evidence,
+    _select_step5_python_tests,
     _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
 )
@@ -65,6 +67,65 @@ STEP5_CLEAN_OUTPUT = (
     "  42 passed in 0.42s\n"
     "```"
 )
+
+
+class TestStep5ShellFirstEvidence:
+    def test_selects_existing_python_tests_from_changed_modules(self, tmp_path):
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "widget.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_widget.py").write_text(
+            "def test_widget(): pass\n",
+            encoding="utf-8",
+        )
+
+        selected = _select_step5_python_tests(tmp_path, ["pdd/widget.py"])
+
+        assert selected == ["tests/test_widget.py"]
+
+    def test_persists_failed_pytest_evidence(self, tmp_path):
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "widget.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_widget.py").write_text(
+            "def test_widget(): pass\n",
+            encoding="utf-8",
+        )
+        context = {
+            "pr_mode": "true",
+            "pr_scope_changed_files": "Base: refs/remotes/pdd-checkup/pr-1/base\n"
+            "- M: pdd/widget.py",
+        }
+        completed = subprocess.CompletedProcess(
+            args=["python", "-m", "pytest", "-q", "tests/test_widget.py"],
+            returncode=1,
+            stdout="FAILED tests/test_widget.py::test_breaks\n",
+            stderr="",
+        )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            return_value=completed,
+        ) as run_mock:
+            evidence = _run_step5_shell_first_evidence(
+                context,
+                tmp_path,
+                tmp_path,
+                pr_number=1,
+                iteration=2,
+                quiet=True,
+            )
+
+        assert evidence is not None
+        assert evidence["status"] == "failed"
+        assert evidence["selected_tests"] == ["tests/test_widget.py"]
+        assert "tests/test_widget.py::test_breaks" in evidence["output"]
+        assert "step5_shell_evidence" in context
+        artifact = tmp_path / ".pdd" / "checkup-pr-1" / "layer1-step5-evidence.json"
+        assert artifact.is_file()
+        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        assert payload["status"] == "failed"
+        assert run_mock.call_args.args[0][-1] == "tests/test_widget.py"
 
 
 # ---------------------------------------------------------------------------

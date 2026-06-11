@@ -28,6 +28,7 @@ from pdd.agentic_checkup import (
     _review_loop_ship_verdict,
     run_agentic_checkup,
 )
+from pdd.agentic_checkup_orchestrator import STEP5_SHELL_EVIDENCE_SCHEMA
 from pdd.checkup_review_loop import _artifacts_dir
 from pdd.commands.checkup import checkup
 
@@ -61,6 +62,33 @@ def _write_final_state(tmp_path: Path, *, issue_number: int, pr_number: int, pay
     artifacts = _artifacts_dir(tmp_path, issue_number, pr_number)
     artifacts.mkdir(parents=True, exist_ok=True)
     path = artifacts / "final-state.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _write_layer1_step5_evidence(
+    tmp_path: Path,
+    *,
+    pr_number: int = 1,
+    status: str = "failed",
+) -> Path:
+    path = (
+        tmp_path
+        / ".pdd"
+        / f"checkup-pr-{pr_number}"
+        / "layer1-step5-evidence.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": STEP5_SHELL_EVIDENCE_SCHEMA,
+        "iteration": 1,
+        "status": status,
+        "command": "python -m pytest -q tests/test_widget.py",
+        "exit_code": 1 if status == "failed" else 0,
+        "selected_tests": ["tests/test_widget.py"],
+        "artifact_path": ".pdd/checkup-pr-1/layer1-step5-evidence.json",
+        "output": "FAILED tests/test_widget.py::test_breaks",
+    }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
@@ -249,6 +277,48 @@ class TestFinalGateLibrary:
         orch_mock.assert_called_once()
         loop_mock.assert_not_called()
         assert cost == 0.5
+
+    def test_layer1_step5_failure_continues_to_layer2(
+        self, tmp_path: Path
+    ) -> None:
+        _write_layer1_step5_evidence(tmp_path)
+
+        def loop(*_a, **kwargs):
+            context = kwargs["context"]
+            assert "tests/test_widget.py::test_breaks" in context.layer1_step5_evidence
+            _write_final_state(
+                tmp_path,
+                issue_number=2,
+                pr_number=1,
+                payload=_clean_final_state(),
+            )
+            return (True, "review ok", 1.5, "codex")
+
+        (result, orch_mock, loop_mock) = _run_final_gate(
+            tmp_path,
+            orch_return=(False, "Step 5 tests failed", 0.5, "model"),
+            loop_side_effect=loop,
+        )
+        success, msg, cost, model = result
+        assert success is True
+        assert "Layer 1 Step 5 shell-first tests failed" in msg
+        assert cost == 2.0
+        assert model == "codex"
+        orch_mock.assert_called_once()
+        loop_mock.assert_called_once()
+
+    def test_layer1_non_actionable_step5_evidence_still_skips_layer2(
+        self, tmp_path: Path
+    ) -> None:
+        _write_layer1_step5_evidence(tmp_path, status="not_found")
+        (result, _orch_mock, loop_mock) = _run_final_gate(
+            tmp_path,
+            orch_return=(False, "layer1 blew up", 0.5, "model"),
+        )
+        success, msg, _cost, _model = result
+        assert success is False
+        assert "Final gate Layer 1 failed" in msg
+        loop_mock.assert_not_called()
 
     def test_github_checks_gate_runs_between_layer1_and_layer2(self, tmp_path: Path) -> None:
         order: list[str] = []

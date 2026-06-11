@@ -70,6 +70,52 @@ def _json(status: str, findings: List[Dict[str, str]] | None = None) -> str:
     )
 
 
+class TestLayer1Step5EvidenceHandoff:
+    def test_failed_shell_evidence_becomes_fixer_finding(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _layer1_step5_evidence_findings
+
+        ctx = _ctx(tmp_path)
+        ctx.layer1_step5_evidence = json.dumps(
+            {
+                "schema": "pdd.checkup.layer1_step5_evidence.v1",
+                "status": "failed",
+                "command": "python -m pytest -q tests/test_widget.py",
+                "exit_code": 1,
+                "selected_tests": ["tests/test_widget.py"],
+                "artifact_path": ".pdd/checkup-pr-1/layer1-step5-evidence.json",
+                "output": "FAILED tests/test_widget.py::test_breaks",
+            }
+        )
+
+        findings = _layer1_step5_evidence_findings(ctx)
+
+        assert len(findings) == 1
+        finding = findings[0]
+        assert finding.reviewer == "layer1:step5"
+        assert finding.area == "test"
+        assert finding.severity == "critical"
+        assert finding.location == "tests/test_widget.py"
+        assert "python -m pytest -q tests/test_widget.py" in finding.evidence
+        assert "tests/test_widget.py::test_breaks" in finding.evidence
+        assert "equivalent targeted check" in finding.required_fix
+
+    def test_non_actionable_shell_evidence_is_not_fixer_input(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _layer1_step5_evidence_findings
+
+        ctx = _ctx(tmp_path)
+        for status in ("passed", "not_found", "skipped"):
+            ctx.layer1_step5_evidence = json.dumps(
+                {
+                    "schema": "pdd.checkup.layer1_step5_evidence.v1",
+                    "status": status,
+                    "command": "python -m pytest -q tests/test_widget.py",
+                }
+            )
+            assert _layer1_step5_evidence_findings(ctx) == []
+
+
 class TestCheckupReviewLoopCli:
     def test_review_loop_flags_reach_agentic_checkup_without_forcing_no_fix(
         self,

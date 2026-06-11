@@ -25,7 +25,11 @@ from .agentic_change import (
     _parse_pr_url,
     _run_gh_command,
 )
-from .agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+from .agentic_checkup_orchestrator import (
+    STEP5_SHELL_EVIDENCE_FILENAME,
+    STEP5_SHELL_EVIDENCE_SCHEMA,
+    run_agentic_checkup_orchestrator,
+)
 from .checkup_review_loop import (
     FINAL_GATE_CATEGORY_FULL_SUITE,
     FINAL_GATE_CATEGORY_GITHUB_CHECKS,
@@ -624,6 +628,65 @@ def _review_loop_ship_verdict(
     return True
 
 
+_LAYER1_STEP5_ACTIONABLE_STATUSES = {"failed", "error", "timeout_partial"}
+
+
+def _load_layer1_step5_evidence(
+    project_root: Path,
+    pr_number: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """Load the Layer 1 shell-first Step 5 evidence artifact, if present."""
+    if pr_number is None:
+        return None
+    path = (
+        project_root
+        / ".pdd"
+        / f"checkup-pr-{pr_number}"
+        / STEP5_SHELL_EVIDENCE_FILENAME
+    )
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema") != STEP5_SHELL_EVIDENCE_SCHEMA:
+        return None
+    payload = dict(payload)
+    payload.setdefault("artifact_file", str(path))
+    return payload
+
+
+def _layer1_step5_evidence_is_actionable(
+    evidence: Optional[Dict[str, Any]],
+) -> bool:
+    """Return True when shell-first Step 5 evidence should drive Layer 2."""
+    if not isinstance(evidence, dict):
+        return False
+    return (
+        str(evidence.get("status", "")).strip().lower()
+        in _LAYER1_STEP5_ACTIONABLE_STATUSES
+    )
+
+
+def _layer1_step5_evidence_for_review(
+    evidence: Optional[Dict[str, Any]],
+) -> str:
+    """Render bounded JSON for ReviewLoopContext."""
+    if not isinstance(evidence, dict):
+        return ""
+    payload = dict(evidence)
+    output = str(payload.get("output") or "")
+    if len(output) > 12000:
+        payload["output"] = (
+            output[:5950].rstrip()
+            + "\n...[layer1 step5 evidence output truncated]...\n"
+            + output[-5950:].lstrip()
+        )
+        payload["output_truncated"] = True
+    return json.dumps(payload, indent=2, sort_keys=True)
+
+
 def run_agentic_checkup(
     issue_url: Optional[str] = None,
     *,
@@ -903,6 +966,7 @@ def run_agentic_checkup(
     # not ingest Layer 1's own freshly-posted checkup report.
     def _run_review_loop_layer(
         pr_content: Optional[str] = None,
+        layer1_step5_evidence: str = "",
     ) -> Tuple[bool, str, float, str]:
         loop_context = ReviewLoopContext(
             issue_url=issue_url,
@@ -926,6 +990,7 @@ def run_agentic_checkup(
             has_issue=has_issue,
             full_suite_source=full_suite_source,
             test_scope=test_scope,
+            layer1_step5_evidence=layer1_step5_evidence,
         )
         loop_config = ReviewLoopConfig(
             reviewers=parse_reviewers(reviewers),
@@ -1085,10 +1150,55 @@ def run_agentic_checkup(
         _post_error_comment(owner, repo, issue_number, msg)
         return False, msg, 0.0, ""
 
+    layer1_step5_evidence = (
+        _load_layer1_step5_evidence(project_root, pr_number) if final_gate else None
+    )
+    layer1_step5_evidence_for_review = (
+        _layer1_step5_evidence_for_review(layer1_step5_evidence)
+        if _layer1_step5_evidence_is_actionable(layer1_step5_evidence)
+        else ""
+    )
+
     if not orch_success:
-        # Layer 1 failure short-circuits the final gate before Layer 2 runs.
         if final_gate:
             assert pr_owner is not None and pr_repo is not None and pr_number is not None
+            if layer1_step5_evidence_for_review:
+                clear_final_state(project_root, issue_number, pr_number)
+                if load_final_state(project_root, issue_number, pr_number) is not None:
+                    return (
+                        False,
+                        (
+                            "Final gate could not clear the stale review-loop verdict at "
+                            ".pdd/checkup-review-loop/; refusing to run Layer 2 to avoid "
+                            "trusting a prior run's verdict. Remove the artifact and re-run."
+                        ),
+                        orch_cost,
+                        orch_model,
+                    )
+                if not quiet:
+                    console.print(
+                        "[bold]Final gate Layer 1 found Step 5 shell test failures; "
+                        "running Layer 2 fixer with that evidence...[/bold]"
+                    )
+                loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
+                    pr_content=final_gate_pr_content,
+                    layer1_step5_evidence=layer1_step5_evidence_for_review,
+                )
+                ship = _review_loop_ship_verdict(
+                    load_final_state(project_root, issue_number, pr_number),
+                    has_issue=has_issue,
+                )
+                total_cost = orch_cost + loop_cost
+                message = (
+                    "Final gate: Layer 1 Step 5 shell-first tests failed; "
+                    f"Layer 2 (review-loop): {loop_message}"
+                )
+                if not ship and loop_success:
+                    message += " — verdict: not shippable (findings remain or "
+                    message += "verification is unverified)."
+                return ship, message, total_cost, (loop_model or orch_model)
+
+            # Non-actionable Layer 1 failures still short-circuit before Layer 2.
             report = _format_layer1_failure_report(
                 pr_url=pr_url or "",
                 issue_url=issue_url or "",
@@ -1125,7 +1235,7 @@ def run_agentic_checkup(
         # fail-closed). ``issue_number`` is the PR number when no issue was
         # given; in that mode the issue-alignment gate is skipped.
         github_checks_message: Optional[str] = None
-        if full_suite_source == "github-checks":
+        if full_suite_source == "github-checks" and not layer1_step5_evidence_for_review:
             assert pr_owner is not None and pr_repo is not None and pr_number is not None
             github_success, github_checks_message, _github_head = run_github_checks_gate(
                 project_root,
@@ -1185,7 +1295,8 @@ def run_agentic_checkup(
                 "Layer 2 (review-loop)...[/bold]"
             )
         loop_success, loop_message, loop_cost, loop_model = _run_review_loop_layer(
-            pr_content=final_gate_pr_content
+            pr_content=final_gate_pr_content,
+            layer1_step5_evidence=layer1_step5_evidence_for_review,
         )
         ship = _review_loop_ship_verdict(
             load_final_state(project_root, issue_number, pr_number),
