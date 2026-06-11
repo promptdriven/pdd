@@ -919,6 +919,7 @@ def _is_permanent_error(error_message: str) -> bool:
 # normalized UTC timestamp, never a slice of the (untrusted) provider text.
 
 PDD_PROVIDER_LIMIT_MARKER: str = "PDD_PROVIDER_LIMIT"
+_provider_limit_logger = logging.getLogger(__name__ + ".provider_limit")
 
 # Allowed enum values. Anything outside these is coerced to a conservative
 # default by the formatter so a classifier bug can never widen the marker into
@@ -1275,7 +1276,10 @@ def _emit_provider_limit_marker(
         if marker is not None:
             print(marker, flush=True)
         return marker
-    except Exception:  # pragma: no cover - defensive: marker must never crash the run
+    except Exception as exc:  # pragma: no cover - defensive: marker must never crash the run
+        _provider_limit_logger.debug(
+            "Provider-limit marker emission failed for %s: %s", provider, exc
+        )
         return None
 
 
