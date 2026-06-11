@@ -953,23 +953,31 @@ _RESET_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 # the anchor and the time token. Tried most-specific first.
 _RESET_ISO_RE = re.compile(
     r"resets?\b[^\n]{0,12}?"
-    r"(?P<iso>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?"
+    r"(?P<iso>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?"
     r"(?:Z|[+-]\d{2}:?\d{2})?)",
     re.IGNORECASE,
 )
 # Optional trailing timezone, tried after the time. `tz` is a parenthesized
 # token ("(UTC)", "(America/Los_Angeles)"); `tzbare` is an *unparenthesized*
-# zone ("11pm PST", "3:30pm UTC-08:00"), matched case-sensitively as an
-# UPPERCASE abbreviation or numeric offset so it catches real zone tokens
-# without swallowing ordinary trailing prose (a lowercase word like "today" is
-# left alone). Either token is routed through `_resolve_reset_tz`, so an
-# unrecognized zone — parenthesized OR bare — degrades to unparseable instead of
-# being silently read as UTC. The uppercase-only bound on `tzbare` is
-# deliberate: it treats an all-caps non-zone word as a possible unknown zone
-# (-> unparseable) rather than emit a confidently-wrong UTC timestamp.
+# zone, captured in two structurally-anchored shapes so it catches real zone
+# tokens without swallowing ordinary trailing prose:
+#   * an IANA "Area/Location" name ("America/Los_Angeles") anchored on the closed
+#     set of IANA area prefixes — the required area + "/" can't match prose like
+#     "and/or"; tried first so "US/Pacific" is not truncated to the "US" abbrev;
+#   * an UPPERCASE abbreviation or numeric offset ("PST", "UTC-08:00"), matched
+#     case-sensitively so a lowercase word like "today" is left alone.
+# Every token (parenthesized OR bare) is routed through `_resolve_reset_tz`, so
+# an unrecognized zone degrades to unparseable instead of being silently read as
+# UTC. The uppercase-only bound on the abbreviation branch is deliberate: it
+# treats an all-caps non-zone word as a possible unknown zone (-> unparseable)
+# rather than emit a confidently-wrong UTC timestamp.
 _TZ_TAIL = (
     r"(?:\s*\((?P<tz>[^)\n]{1,40})\)"
-    r"|\s+(?P<tzbare>(?-i:[A-Z]{2,5}(?:[+-]\d{1,2}(?::?\d{2})?)?|[+-]\d{2}:?\d{2})))?"
+    r"|\s+(?P<tzbare>"
+    r"(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Brazil|Canada"
+    r"|Chile|Europe|Indian|Mexico|Pacific|US|Etc)/[\w+/-]+"
+    r"|(?-i:[A-Z]{2,5}(?:[+-]\d{1,2}(?::?\d{2})?)?|[+-]\d{2}:?\d{2})"
+    r"))?"
 )
 # `ampm` accepts plain and dotted forms (am, pm, a.m., p.m.). The date matcher
 # also accepts an explicit 4-digit `year` and an optional "at" connector between

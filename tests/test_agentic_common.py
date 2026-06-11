@@ -7693,6 +7693,58 @@ class TestProviderLimitMarker:
         assert reset_at == ""
         assert source == "none"
 
+    def test_parse_reset_iso_with_fractional_seconds_keeps_offset(self):
+        """Fractional-second ISO timestamps must not be partially matched: the
+        fractional part is common in real APIs and truncating it drops the
+        trailing offset, emitting a confidently-wrong 15:00Z (7h early) instead
+        of 22:00Z. Sub-second precision is dropped from the normalized result;
+        the offset is honored."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets 2026-06-11T15:00:00.123-07:00", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T22:00:00Z"
+        assert source == "parsed_text"
+
+        # Fractional + Z keeps the (already-UTC) value, just drops sub-seconds.
+        reset_at, source = _parse_reset_at(
+            "resets 2026-06-11T15:00:00.123456Z", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T15:00:00Z"
+        assert source == "parsed_text"
+
+    def test_parse_reset_bare_iana_zone_converts_to_utc(self):
+        """An unparenthesized IANA zone ("3:30pm America/Los_Angeles") must
+        convert to UTC like its parenthesized form, not silently default to UTC
+        and emit 15:30Z. The area-anchored capture also accepts legacy aliases
+        ("US/Pacific") without truncating them to a bare abbreviation."""
+        from pdd.agentic_common import _parse_reset_at
+
+        # Dated form keeps the high-confidence parsed_text source.
+        reset_at, source = _parse_reset_at(
+            "resets June 11, 2026, 3:30pm America/Los_Angeles", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T22:30:00Z"
+        assert source == "parsed_text"
+
+        for text in ("resets 3:30pm America/Los_Angeles", "resets 3:30pm US/Pacific"):
+            reset_at, source = _parse_reset_at(text, now=self.NOW)
+            assert reset_at == "2026-06-11T22:30:00Z", text
+            assert source == "estimated", text
+
+    def test_parse_reset_bare_iana_capture_does_not_eat_prose(self):
+        """The IANA capture is anchored on the closed set of IANA area prefixes,
+        so a slash-containing prose token ("and/or") is NOT mistaken for a zone
+        and does not suppress an otherwise-valid time."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets 9pm and/or contact support", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T21:00:00Z"
+        assert source == "estimated"
+
     # ----- _classify_provider_limit: credential-limit variants -----
 
     def test_classify_credential_limit_full_marker(self):
