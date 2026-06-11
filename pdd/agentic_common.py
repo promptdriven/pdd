@@ -1059,7 +1059,13 @@ def _dated_reset_to_datetime(match: "re.Match[str]", now: datetime) -> Optional[
     tz = _resolve_reset_tz(match.group("tz"))
     if tz is None:  # explicit but unrecognized timezone -> unparseable
         return None
-    for year in (now.year, now.year + 1):
+    # Anchor year inference to the reset *timezone's* local year, not the UTC
+    # year: near a New Year boundary `now` can already be in the next year in
+    # UTC while still in the previous year in the reset zone (or vice versa), so
+    # using `now.year` would skip the correct candidate and land a full year off
+    # (e.g. "resets Dec 31, 11:45pm (America/Los_Angeles)" at 2026-01-01T07:30Z).
+    base_year = now.astimezone(tz).year
+    for year in (base_year, base_year + 1):
         try:
             local = datetime(year, month, day, hour, minute, tzinfo=tz)
         except ValueError:

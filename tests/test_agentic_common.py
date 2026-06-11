@@ -7504,6 +7504,23 @@ class TestProviderLimitMarker:
         assert reset_at == "2027-01-02T09:00:00Z"
         assert source == "parsed_text"
 
+    def test_parse_reset_dated_year_inferred_from_reset_zone_not_utc(self):
+        """Year inference must anchor on the reset timezone's local year, not the
+        UTC year. At 2026-01-01T07:30Z it is still 2025-12-31 23:30 in Pacific,
+        so "resets Dec 31, 11:45pm" is 15 minutes away (2026-01-01T07:45Z), NOT a
+        full year out — using ``now.year`` (2026) would skip the valid 2025
+        candidate and land on 2027."""
+        from pdd.agentic_common import _parse_reset_at
+
+        near_new_year = datetime(2026, 1, 1, 7, 30, 0, tzinfo=timezone.utc)
+        for tz_token in ("America/Los_Angeles", "UTC-08:00"):
+            reset_at, source = _parse_reset_at(
+                f"You've hit your limit · resets Dec 31, 11:45pm ({tz_token})",
+                now=near_new_year,
+            )
+            assert reset_at == "2026-01-01T07:45:00Z", tz_token
+            assert source == "parsed_text", tz_token
+
     # ----- _parse_reset_at: time-only strings (date inferred -> estimated) -----
 
     def test_parse_reset_time_only_future_today_is_estimated(self):
