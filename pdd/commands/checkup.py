@@ -3,6 +3,7 @@ Checkup command — GitHub issue-driven project health check, or local diagnosti
 """
 # pylint: disable=unknown-option-value
 import math
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -385,6 +386,27 @@ def _forward_subcommand_json(
     help="Wall-clock timeout for the prompt repair loop in seconds (default: 120).",
 )
 @click.option(
+    "--interactive",
+    "interactive",
+    is_flag=True,
+    default=False,
+    help="With .prompt targets: enter interactive per-finding repair session.",
+)
+@click.option(
+    "--apply",
+    "apply",
+    is_flag=True,
+    default=False,
+    help="With --interactive: apply selected repairs. Requires --interactive.",
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    default=False,
+    help="With --interactive --apply: preview changes without writing any files.",
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -415,6 +437,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     validate_arch_includes: bool,
     project_root: Optional[Path],
     strict: bool,
+    interactive: bool,
+    apply: bool,
+    dry_run: bool,
     as_json: bool,
     explain: bool,
     no_fix: bool,
@@ -566,6 +591,8 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     if target == "simplify":
         simplify_args = list(ctx.args)
+        if apply:
+            simplify_args.insert(0, "--apply")
         if show_help:
             simplify_args.append("--help")
         exit_code = checkup_simplify.main(
@@ -671,6 +698,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     if ctx.args:
         raise click.UsageError(f"Got unexpected extra arguments ({' '.join(ctx.args)})")
 
+    if apply and not interactive:
+        raise click.UsageError("--apply requires --interactive.")
+
+    if interactive and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        raise click.UsageError("--interactive requires a TTY (stdin and stdout must be a terminal).")
+
     if validate_arch_includes:
         if target is not None or pr_url is not None or issue_url_opt is not None:
             raise click.BadParameter(
@@ -687,6 +720,18 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         target,
         project_root=project_root,
     ):
+        if interactive and target.endswith(".prompt"):
+            from ..checkup_interactive_main import run_interactive_checkup  # pylint: disable=import-outside-toplevel
+
+            return run_interactive_checkup(
+                target,
+                apply=apply,
+                dry_run=dry_run,
+                project_root=project_root,
+                strict=strict,
+                quiet=ctx.obj.get("quiet", False),
+            )
+
         import json as _json  # pylint: disable=import-outside-toplevel
 
         quiet = ctx.obj.get("quiet", False)
