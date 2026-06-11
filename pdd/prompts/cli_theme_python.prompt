@@ -17,11 +17,14 @@
       {"name": "BREAK_RED", "type": "str"},
       {"name": "BRAND_PALETTE", "type": "dict"},
       {"name": "SEMANTIC_STYLES", "type": "dict"},
-      {"name": "PDD_THEME", "type": "rich.theme.Theme"}
+      {"name": "PDD_THEME", "type": "rich.theme.Theme"},
+      {"name": "ANSI_RESET", "type": "str"},
+      {"name": "ANSI_FAINT", "type": "str"}
     ],
     "functions": [
       {"name": "get_console", "signature": "(**kwargs) -> rich.console.Console"},
-      {"name": "style", "signature": "(role: str, text: str) -> str"}
+      {"name": "style", "signature": "(role: str, text: str) -> str"},
+      {"name": "hex_to_ansi", "signature": "(hex_color: str) -> str"}
     ]
   }
 }
@@ -82,9 +85,19 @@
   6. Provide `style(role: str, text: str) -> str` that wraps `text` in Rich markup
      for the given role, e.g. `style("command", "pdd sync")` -> "[command]pdd sync[/command]".
   7. Provide a module-level convenience `console = get_console()`.
-  8. Define `__all__` listing the palette constants, BRAND_PALETTE,
-     SEMANTIC_STYLES, PDD_THEME, get_console, style, and console.
-  9. No side effects beyond constructing the shared `console`. No environment
+  8. Provide raw-ANSI helpers for surfaces that paint character cells directly
+     (e.g. the `pdd context` usage box) instead of going through a Rich console,
+     so those surfaces still derive every escape from this one palette:
+       - `ANSI_RESET = "\033[0m"` and `ANSI_FAINT = "\033[2m"`.
+       - `hex_to_ansi(hex_color: str) -> str`: return the 24-bit ANSI foreground
+         SGR prefix for a `#RRGGBB` color, e.g.
+         `hex_to_ansi(ELECTRIC_CYAN)` -> `"\033[38;2;0;216;255m"`. Tolerate an
+         optional leading `#`. Pair the result with `ANSI_RESET`.
+       These are pure functions: no environment access, no import-time effects.
+  9. Define `__all__` listing the palette constants, BRAND_PALETTE,
+     SEMANTIC_STYLES, PDD_THEME, ANSI_RESET, ANSI_FAINT, hex_to_ansi,
+     get_console, style, and console.
+  10. No side effects beyond constructing the shared `console`. No environment
      access, no printing at import time.
 
 % Deliverables

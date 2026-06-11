@@ -92,6 +92,32 @@ SEMANTIC_STYLES = {
 PDD_THEME = Theme(SEMANTIC_STYLES)
 
 
+# ---------------------------------------------------------------------------
+# Raw-ANSI helpers.
+#
+# A few surfaces paint character cells directly (e.g. the ``pdd context`` usage
+# box, where one glyph occupies one cell) rather than routing through a Rich
+# console. These helpers let those surfaces derive every escape sequence from
+# the one brand palette above, so no module hand-writes its own color codes.
+# They are pure functions: no environment access, no import-time side effects.
+# ---------------------------------------------------------------------------
+ANSI_RESET = "\033[0m"
+ANSI_FAINT = "\033[2m"
+
+
+def hex_to_ansi(hex_color: str) -> str:
+    """Return the 24-bit ANSI foreground SGR prefix for a ``#RRGGBB`` color.
+
+    Example: ``hex_to_ansi(ELECTRIC_CYAN)`` -> ``"\\033[38;2;0;216;255m"``. Pair
+    the result with :data:`ANSI_RESET`. Truecolor keeps the rendered hue exactly
+    on-brand where the terminal supports it; terminals that don't simply ignore
+    the sequence.
+    """
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"\033[38;2;{r};{g};{b}m"
+
+
 def get_console(**kwargs) -> Console:
     """Return a Rich ``Console`` pre-configured with the PDD theme.
 
@@ -130,6 +156,9 @@ __all__ = [
     "BRAND_PALETTE",
     "SEMANTIC_STYLES",
     "PDD_THEME",
+    "ANSI_RESET",
+    "ANSI_FAINT",
+    "hex_to_ansi",
     "get_console",
     "style",
     "console",
