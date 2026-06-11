@@ -2324,8 +2324,8 @@ def _write_step5_shell_evidence(
     safe_evidence = _storage_safe_step5_shell_evidence(evidence)
     # Required local artifact for the final-gate Layer 2 handoff. The payload is
     # recursively scrubbed above; CodeQL does not model this project scrubber.
-    # codeql[py/clear-text-storage-sensitive-data]
     artifact.write_text(
+        # codeql[py/clear-text-storage-sensitive-data]
         json.dumps(safe_evidence, indent=2, sort_keys=True),
         encoding="utf-8",
     )
