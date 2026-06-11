@@ -1,0 +1,91 @@
+<pdd-reason>Centralizes the PDD CLI color system so every command renders commands, tags, labels, and states with one consistent, brand-derived palette instead of ad-hoc per-module colors.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "constants": [
+      {"name": "ELECTRIC_CYAN", "type": "str"},
+      {"name": "DEEP_NAVY", "type": "str"},
+      {"name": "LUMEN_PURPLE", "type": "str"},
+      {"name": "PROMPT_MAGENTA", "type": "str"},
+      {"name": "LIGHT_SLEET", "type": "str"},
+      {"name": "GRAPHITE_900", "type": "str"},
+      {"name": "BUILD_GREEN", "type": "str"},
+      {"name": "BUILD_GREEN_700", "type": "str"},
+      {"name": "DIFF_YELLOW", "type": "str"},
+      {"name": "BREAK_RED", "type": "str"},
+      {"name": "BRAND_PALETTE", "type": "dict"},
+      {"name": "SEMANTIC_STYLES", "type": "dict"},
+      {"name": "PDD_THEME", "type": "rich.theme.Theme"}
+    ],
+    "functions": [
+      {"name": "get_console", "signature": "(**kwargs) -> rich.console.Console"},
+      {"name": "style", "signature": "(role: str, text: str) -> str"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write `pdd/cli_theme.py`.
+
+% Role & Scope
+  This module is the single source of truth for color across the PDD CLI. Every
+  command should obtain its console from here and style output by semantic role
+  (command, tag, label, success, warning, error, ...) rather than picking raw
+  colors. Colors must communicate meaning, not decoration.
+
+  All values come from the PromptDriven.ai Brand Guidelines v1.4 — §3 Color
+  Palette and §7 ASCII & Terminal Assets. Do not invent colors outside that
+  palette.
+
+% Requirements
+  1. Define the brand palette as module constants, hex strings exactly as in the
+     guidelines:
+       - ELECTRIC_CYAN   = "#00D8FF"   (Primary)
+       - DEEP_NAVY       = "#0A0A23"   (Ink / Fill)
+       - LUMEN_PURPLE    = "#8C47FF"   (Accent 1)
+       - PROMPT_MAGENTA  = "#FF2AA6"   (Accent 2)
+       - LIGHT_SLEET     = "#F5F7FA"   (Surface-Light)
+       - GRAPHITE_900    = "#1A1B26"   (Surface-Dark)
+       - BUILD_GREEN     = "#18C07A"   (Success)
+       - BUILD_GREEN_700 = "#0FA86A"   (Success tint)
+       - DIFF_YELLOW     = "#FBBB35"   (Warning)
+       - BREAK_RED       = "#F34842"   (Error)
+  2. Define `BRAND_PALETTE`: a dict mapping the human brand name (e.g.
+     "Electric-Cyan") to its hex value, covering all ten colors above.
+  3. Define `SEMANTIC_STYLES`: a dict mapping semantic role names to Rich style
+     strings, built from the palette constants. Roles, and the rule behind each:
+       - Commands are the hero, so they take the primary color:
+           "command" -> ELECTRIC_CYAN, "command.strong" -> f"bold {ELECTRIC_CYAN}",
+           "heading" -> f"bold {ELECTRIC_CYAN}", "info" -> ELECTRIC_CYAN.
+       - Tags / labels / keys take Accent 1 so they read distinctly from commands:
+           "tag" -> LUMEN_PURPLE, "tag.strong" -> f"bold {LUMEN_PURPLE}",
+           "label" -> LUMEN_PURPLE.
+       - Selections / highlights / CTAs take Accent 2 (use sparingly):
+           "accent" -> PROMPT_MAGENTA, "selector" -> f"bold {PROMPT_MAGENTA}".
+       - State colors:
+           "success" -> BUILD_GREEN, "success.strong" -> f"bold {BUILD_GREEN}",
+           "version" -> BUILD_GREEN_700,
+           "warning" -> DIFF_YELLOW, "warning.strong" -> f"bold {DIFF_YELLOW}",
+           "error" -> f"bold {BREAK_RED}", "danger" -> BREAK_RED.
+       - Neutral helpers:
+           "path" -> f"dim {ELECTRIC_CYAN}", "value" -> ELECTRIC_CYAN,
+           "muted" -> "dim".
+     Keep the keys `info`, `warning`, `error`, `success`, `path`, and `selector`
+     present and resolvable so existing modules that already use those style
+     names keep working when they switch to this theme.
+  4. Define `PDD_THEME = Theme(SEMANTIC_STYLES)` using `rich.theme.Theme`.
+  5. Provide `get_console(**kwargs) -> Console` that returns a `rich.console.Console`
+     constructed with `theme=PDD_THEME`, forwarding any extra keyword arguments
+     (e.g. `stderr=True`). It must not cache in a way that breaks per-call kwargs.
+  6. Provide `style(role: str, text: str) -> str` that wraps `text` in Rich markup
+     for the given role, e.g. `style("command", "pdd sync")` -> "[command]pdd sync[/command]".
+  7. Provide a module-level convenience `console = get_console()`.
+  8. Define `__all__` listing the palette constants, BRAND_PALETTE,
+     SEMANTIC_STYLES, PDD_THEME, get_console, style, and console.
+  9. No side effects beyond constructing the shared `console`. No environment
+     access, no printing at import time.
+
+% Deliverables
+  - Code: `pdd/cli_theme.py`
