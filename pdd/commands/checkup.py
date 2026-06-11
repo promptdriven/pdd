@@ -460,7 +460,8 @@ def _forward_subcommand_json(
         "pass. Preview by default — the rewrite is written to the prompt files "
         "only with --apply (also honors --dry-run/--preview). v1 has no "
         "auto-apply-by-confidence. Offline / no key falls back to deterministic "
-        "review. (The interactive [5]/[f] options apply after in-session approval.)"
+        "review. (The interactive [5]/[f] options select a draft in-session but "
+        "also write only with --apply.)"
     ),
 )
 @click.option(

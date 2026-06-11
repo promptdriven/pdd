@@ -993,7 +993,30 @@ class TestLLMDraftOption:
             return f"<!-- LLM draft (pdd checkup) — review -->\n{snippet}", cost, model
         return drafter
 
-    def test_confirmed_draft_is_applied_and_counted(self, tmp_path):
+    def test_confirmed_draft_without_apply_is_preview_only(self, tmp_path):
+        """[5] confirmed + apply=False must leave the prompt unchanged and record
+        a queued/saved preview (the write gate holds for interactive too)."""
+        report = _medium_report(tmp_path, n=2)
+        original = report.prompt_path.read_text(encoding="utf-8")
+        session = RecordingCheckupSession(group_decisions=["llm"], confirm_drafts=True)
+        agent = CheckupAgent(
+            DeterministicPlanner(),
+            session,
+            repair_drafter=self._drafter("<vocabulary/>"),
+        )
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent.run(
+                str(report.prompt_path), project_root=tmp_path, quiet=True, mode="interactive",
+            )  # no apply
+
+        assert report.prompt_path.read_text(encoding="utf-8") == original  # unchanged
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 0
+        assert acc["patches_applied"] == 0
+        assert acc["patches_queued"] >= 1  # saved preview state
+
+    def test_confirmed_draft_with_apply_writes_and_postflights(self, tmp_path):
+        """[5] confirmed + apply=True writes the draft and re-verifies."""
         report = _medium_report(tmp_path, n=2)
         session = RecordingCheckupSession(group_decisions=["llm"], confirm_drafts=True)
         agent = CheckupAgent(
@@ -1004,21 +1027,23 @@ class TestLLMDraftOption:
             ),
         )
         with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
-            msg, cost, model = agent.run(
+            _, cost, model = agent.run(
                 str(report.prompt_path),
                 project_root=tmp_path,
                 quiet=True,
                 mode="interactive",
+                apply=True,
             )
 
-        # The real draft content was written into the prompt file (not a TODO).
         text = report.prompt_path.read_text(encoding="utf-8")
         assert "<vocabulary>" in text
         assert "LLM draft" in text  # the labelled marker
         acc = session.events_of_kind("session_done")[0].data["accounting"]
-        assert acc["drafted_by_llm"] == 2  # both findings in the group resolved
+        assert acc["drafted_by_llm"] == 2
         assert acc["patches_applied"] >= 1
-        assert cost == pytest.approx(0.01)  # one model call per group (1 grouped call)
+        # postflight verification ran
+        assert session.events_of_kind("verifying")
+        assert cost == pytest.approx(0.01)
         assert model == "fake/model"
 
     def test_declined_draft_falls_back_to_save_for_review(self, tmp_path):
@@ -1078,9 +1103,7 @@ class TestLLMDraftOption:
         assert acc["drafted_by_llm"] == 0
         assert acc["patches_queued"] >= 1
 
-    def test_llm_auto_fixes_all_remaining_in_one_rewrite(self, tmp_path):
-        """Pressing [f] (llm_auto) fixes every group in ONE coherent rewrite (the
-        same mechanism as --auto --llm-repair), not group-by-group."""
+    def _two_group_report(self, tmp_path):
         prompt_file = tmp_path / "two.prompt"
         prompt_file.write_text("% two\nDo something.\n", encoding="utf-8")
         findings = [
@@ -1095,30 +1118,58 @@ class TestLLMDraftOption:
                 code="CONTRACT_WORDING", recommended_action="tighten wording",
             ),
         ]
-        report = PromptSourceSetReport(
+        return PromptSourceSetReport(
             prompt_path=prompt_file, project_root=tmp_path, target=str(prompt_file),
             findings=findings,
             checks=[{"name": "lint", "status": "warn"}, {"name": "contract", "status": "warn"}],
         )
 
+    def test_llm_auto_without_apply_is_preview_only(self, tmp_path):
+        """[f] full rewrite + apply=False must leave the prompt unchanged."""
+        report = self._two_group_report(tmp_path)
+        original = report.prompt_path.read_text(encoding="utf-8")
+
         def full(groups, *, prompt_text):
             return "% two\n<vocabulary>fixed</vocabulary>\n", 0.04, "fake/model"
 
-        # Decide [f] on the first group → one rewrite fixes everything.
+        session = RecordingCheckupSession(group_decisions=["llm_auto"])
+        agent = CheckupAgent(DeterministicPlanner(), session, repair_drafter_full=full)
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent.run(
+                str(report.prompt_path), project_root=tmp_path, quiet=True, mode="interactive",
+            )  # no apply
+
+        assert report.prompt_path.read_text(encoding="utf-8") == original  # unchanged
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 0
+        assert acc["patches_applied"] == 0
+        assert acc["patches_queued"] >= 1
+        assert any(e.data.get("to") == "llm-auto"
+                   for e in session.events_of_kind("mode_switch"))
+
+    def test_llm_auto_with_apply_writes_and_postflights(self, tmp_path):
+        """[f] full rewrite + apply=True writes one rewrite and re-verifies."""
+        report = self._two_group_report(tmp_path)
+
+        def full(groups, *, prompt_text):
+            return "% two\n<vocabulary>fixed</vocabulary>\n", 0.04, "fake/model"
+
         session = RecordingCheckupSession(group_decisions=["llm_auto"])
         agent = CheckupAgent(DeterministicPlanner(), session, repair_drafter_full=full)
         with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
             _, cost, _ = agent.run(
-                str(report.prompt_path), project_root=tmp_path, quiet=True, mode="interactive"
+                str(report.prompt_path), project_root=tmp_path, quiet=True,
+                mode="interactive", apply=True,
             )
 
-        assert prompt_file.read_text(encoding="utf-8") == "% two\n<vocabulary>fixed</vocabulary>\n"
+        assert report.prompt_path.read_text(encoding="utf-8") == "% two\n<vocabulary>fixed</vocabulary>\n"
         acc = session.events_of_kind("session_done")[0].data["accounting"]
         assert acc["drafted_by_llm"] == 2       # both groups resolved
         assert acc["patches_applied"] == 1      # one full-rewrite patch
-        assert cost == pytest.approx(0.04)      # exactly one model call
-        switches = session.events_of_kind("mode_switch")
-        assert any(e.data.get("to") == "llm-auto" for e in switches)
+        assert session.events_of_kind("verifying")  # postflight ran
+        assert cost == pytest.approx(0.04)
+        assert any(e.data.get("to") == "llm-auto"
+                   for e in session.events_of_kind("mode_switch"))
 
 
 def test_draft_group_replacement_is_offline_safe():

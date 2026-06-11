@@ -184,8 +184,8 @@ class TerminalCheckupSession(CheckupSession):
         to = data.get("to", "auto")
         click.echo(f"\nMode changed: {frm} -> {to}")
         if to == "llm-auto":
-            click.echo("Letting the LLM draft and apply a fix for every remaining group.")
-            click.echo("Each group costs a model call; offline groups are saved for review.")
+            click.echo("Letting the LLM draft a fix for every remaining group in one pass.")
+            click.echo("Costs a model call; written only with --apply (preview otherwise).")
         else:
             click.echo("Auto-applying low-risk fixes for remaining findings.")
             click.echo("Risky or ambiguous fixes will be left for review.")
@@ -235,9 +235,9 @@ class TerminalCheckupSession(CheckupSession):
             click.echo("[2] Option B: Save an alternative repair proposal")
             click.echo("[3] Keep current / skip")
             click.echo("[4] Custom fix")
-            click.echo("[5] Let the LLM draft this fix now (costs a model call)")
+            click.echo("[5] Let the LLM draft this fix now (costs a model call; writes with --apply)")
             click.echo("[a] Auto for remaining — deterministic (apply low-risk, save the rest)")
-            click.echo("[f] Let the LLM fix ALL remaining — auto, applies real fixes")
+            click.echo("[f] Let the LLM draft fixes for ALL remaining (one pass; writes with --apply)")
             click.echo("[q] Quit")
             answer = click.prompt("Choice", default="1", show_default=False).strip().lower()
             if answer in ("q", "quit"):
@@ -267,7 +267,9 @@ class TerminalCheckupSession(CheckupSession):
             for line in str(draft).splitlines():
                 click.echo(f"  {line}")
         answer = click.prompt(
-            "Keep and apply this draft? [y/N]", default="n", show_default=False
+            "Keep this draft? [y/N] (written only with --apply)",
+            default="n",
+            show_default=False,
         ).strip().lower()
         return answer in ("y", "yes")
 
@@ -475,11 +477,6 @@ class CheckupAgent:
         # separately from the bulk --apply path because each was explicitly
         # confirmed in-session.
         llm_patches: list[ApprovedPatch] = []
-        # True when the queued LLM patch came from the HEADLESS --auto --llm-repair
-        # path, which has no in-session approval and so honors the --apply write
-        # gate (preview unless --apply). The interactive [5]/[f] paths are already
-        # approved in-session and write without --apply.
-        _llm_apply_gated = False
         total_cost = 0.0
         last_model = ""
 
@@ -511,10 +508,7 @@ class CheckupAgent:
             total_cost += cost_inc
             if model_inc:
                 last_model = model_inc
-            if auto_llm_done:
-                # Headless path: subject to the --apply write gate.
-                _llm_apply_gated = True
-            elif not quiet:
+            if not auto_llm_done and not quiet:
                 click.echo(
                     "\nLLM repair unavailable (no credential / offline / out of credits) "
                     "— falling back to per-finding review."
@@ -654,19 +648,20 @@ class CheckupAgent:
                 1 for d in disposition.values() if d in ("low", "manual_low")
             )
 
-        # 5b. Apply LLM drafts. Interactive [5]/[f] drafts are approved in-session
-        # and apply regardless of the bulk --apply flag; the headless
-        # --auto --llm-repair draft (_llm_apply_gated) honors the --apply write gate
-        # so a material write never happens without explicit approval. Both honor
-        # --dry-run/--preview.
+        # 5b. Apply LLM drafts ([5]/[f]/--llm-repair). An in-session choice
+        # selects/approves a draft, but the actual disk write is ALWAYS gated by
+        # --apply (per the #1423 contract: --interactive without --apply leaves
+        # files unchanged). Without --apply the draft is queued as a preview;
+        # --dry-run also previews.
         if llm_patches:
             llm_finding_ids = [fid for fid, d in disposition.items() if d == "llm"]
-            _preview_only = dry_run or (_llm_apply_gated and not apply)
+            _preview_only = dry_run or not apply
             if _preview_only:
+                # Selected but not written → record as a queued/saved preview.
                 acc.patches_queued += len(llm_patches)
-                if _llm_apply_gated and not apply and not dry_run and not quiet:
+                if not apply and not dry_run and not quiet:
                     click.echo(
-                        "\nLLM repair drafted but not written — re-run with --apply to "
+                        "\nLLM draft selected but not written — re-run with --apply to "
                         "apply it, or --dry-run to preview."
                     )
             else:
