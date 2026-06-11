@@ -411,12 +411,38 @@ def _symbols_from_module_ast(tree: ast.Module) -> dict:
             # Attribute/subscript/unpacking target — not a simple constant.
             continue
         normalized = _normalize_default_node(value, {})
-        if normalized is None:
+        # Only IMMUTABLE values are trusted. A constant bound to a list/set/dict
+        # can be mutated in place after binding (``_ITEMS = []`` then
+        # ``_ITEMS.append(x)`` at import time), so the value a parameter default
+        # ``=_ITEMS`` would observe is not the empty container we see here. Such
+        # method-call mutations leave no ``Store`` node, so the binding count
+        # cannot catch them — we conservatively keep mutable-container constants
+        # out of the table (they resolve as UNKNOWN — fail closed).
+        if normalized is None or not _is_immutable_default(normalized):
             continue
         for name in plain_names:
             if binding_counts.get(name, 0) == 1:
                 table[name] = normalized
     return table
+
+
+_MUTABLE_DEFAULT_TAGS = frozenset({"list", "set", "dict"})
+
+
+def _is_immutable_default(normalized: tuple) -> bool:
+    """Return True when a normalized default cannot be mutated in place.
+
+    ``list``/``set``/``dict`` are mutable; a ``tuple`` is immutable only when
+    every element is (``(1, [2])`` is not, because the inner list can change).
+    """
+    if not normalized:
+        return False
+    tag = normalized[0]
+    if tag in _MUTABLE_DEFAULT_TAGS:
+        return False
+    if tag == "tuple":
+        return all(_is_immutable_default(item) for item in normalized[1])
+    return True
 
 
 def _count_module_bindings(tree: ast.Module) -> dict:
@@ -492,8 +518,9 @@ def _normalize_default_node(
 
     Returns ``None`` for anything that cannot be resolved without executing
     code. The leading type tag keeps equality both value- AND type-exact so
-    ``("int", 1)`` != ``("bool", True)`` and ``("int", 25000)`` !=
-    ``("float", 25000.0)``.
+    ``("int", 1)`` != ``("bool", True)`` and an ``int`` never equals a
+    ``float`` of the same magnitude. Floats are keyed by ``repr`` so ``-0.0``
+    stays distinct from ``0.0``.
     """
     if isinstance(node, ast.Constant):
         return _tag_constant(node.value)
@@ -502,12 +529,21 @@ def _normalize_default_node(
         if operand is None or len(operand) != 2:
             return None
         tag, value = operand
-        if isinstance(node.op, ast.USub) and tag in {"int", "float", "complex"}:
-            return (tag, -value)
-        if isinstance(node.op, ast.UAdd) and tag in {"int", "float", "complex"}:
-            return (tag, +value)
-        if isinstance(node.op, ast.Invert) and tag == "int":
-            return ("int", ~value)
+        if tag == "int":
+            if isinstance(node.op, ast.USub):
+                return ("int", -value)
+            if isinstance(node.op, ast.UAdd):
+                return ("int", +value)
+            if isinstance(node.op, ast.Invert):
+                return ("int", ~value)
+            return None
+        if tag == "float" and isinstance(node.op, (ast.USub, ast.UAdd)):
+            # ``value`` is the ``repr`` string (see ``_tag_constant``); round-
+            # trip it through ``float`` to apply the sign, then re-tag so
+            # ``-0.0`` stays distinct from ``0.0``.
+            number = float(value)
+            number = -number if isinstance(node.op, ast.USub) else +number
+            return ("float", repr(number))
         return None
     if isinstance(node, ast.Name):
         return symbols.get(node.id)
@@ -539,9 +575,15 @@ def _tag_constant(value: object) -> Optional[tuple]:
     if isinstance(value, int):
         return ("int", value)
     if isinstance(value, float):
-        return ("float", value)
+        # ``repr`` is the shortest round-tripping form, so it canonicalizes
+        # equal floats written differently (``1e3`` and ``1000.0`` both ->
+        # ``'1000.0'``) while keeping ``-0.0`` distinct from ``0.0`` (their
+        # reprs differ). Signed zero is behaviorally observable
+        # (``math.copysign``, ``1 / -0.0``, formatting), so the two must NOT
+        # compare equal — fail closed toward reporting drift.
+        return ("float", repr(value))
     if isinstance(value, complex):
-        return ("complex", value)
+        return ("complex", repr(value))
     if isinstance(value, str):
         return ("str", value)
     if isinstance(value, bytes):

@@ -183,6 +183,9 @@ def test_new_keyword_param_with_existing_kwargs_is_a_regression(
         ("-1", "-1"),  # unary minus folds
         ("{1, 2}", "{2, 1}"),  # set membership is order-insensitive
         ("{'a': 1, 'b': 2}", "{'b': 2, 'a': 1}"),  # dict key order irrelevant
+        ("1e3", "1000.0"),  # equal floats written differently
+        ("0.0", "0.0"),
+        ("-0.0", "-0.0"),  # same signed zero
     ],
 )
 def test_equivalent_defaults_are_compatible(declared, actual):
@@ -200,6 +203,10 @@ def test_equivalent_defaults_are_compatible(declared, actual):
         ("(1, 2)", "[1, 2]"),  # tuple is not the list
         ("'a'", "'b'"),
         ("-1", "1"),
+        # Signed zero is behaviorally observable (copysign/division/format),
+        # so -0.0 and 0.0 must NOT be treated as the same default.
+        ("-0.0", "0.0"),
+        ("0.0", "-0.0"),
     ],
 )
 def test_provably_different_defaults_are_incompatible(declared, actual):
@@ -305,6 +312,51 @@ def test_star_import_empties_the_whole_constant_table():
     assert (
         compare_default_sources("25000", "MAX", poisoned)
         is DefaultCompatibility.UNKNOWN
+    )
+
+
+@pytest.mark.parametrize(
+    "module_source",
+    [
+        "_ITEMS = []\n",
+        "_M = {1: 2}\n",
+        "_S = {1, 2}\n",
+        # An immutable-looking tuple that holds a mutable element is itself
+        # not safe — the inner list can still be mutated.
+        "_T = (1, [2])\n",
+    ],
+)
+def test_mutable_container_module_constants_are_not_trusted(module_source):
+    # A constant bound to a mutable container can be mutated in place after
+    # binding (e.g. ``_ITEMS.append(x)`` at import time), so its def-time value
+    # is not the empty/initial container we see statically. Keep it out of the
+    # table so a default ``=_ITEMS`` resolves UNKNOWN (fail closed) instead of
+    # matching the literal it was initialized with.
+    symbols = build_module_default_symbols(module_source)
+    assert symbols == {}
+
+
+def test_immutable_module_constants_are_still_trusted():
+    # The fix for mutable containers must not stop trusting immutable values.
+    symbols = build_module_default_symbols(
+        "_LIMIT = 25000\n_NAME = 'x'\n_PAIR = (1, 2)\n_FLAG = False\n"
+    )
+    assert symbols["_LIMIT"] == ("int", 25000)
+    assert symbols["_PAIR"] == ("tuple", (("int", 1), ("int", 2)))
+    assert (
+        compare_default_sources("(1, 2)", "_PAIR", symbols)
+        is DefaultCompatibility.COMPATIBLE
+    )
+
+
+def test_signed_zero_default_change_is_a_regression_on_public_surface():
+    # ``0.0`` -> ``-0.0`` on a public parameter default is behaviorally
+    # observable, so the public-surface gate must flag it, not wave it through.
+    assert (
+        signature_entries_compatible(
+            "[function] (x=0.0)", "[function] (x=-0.0)"
+        )
+        is False
     )
 
 

@@ -8697,6 +8697,67 @@ class TestPddInterfaceSignatureConformance:
             )
         assert "extract_step_report" in excinfo.value.missing_symbols
 
+    def test_signed_zero_default_change_raises_drift(self, tmp_path):
+        """``0.0`` -> ``-0.0`` is behaviorally observable (copysign, division,
+        formatting), so the comparator must NOT treat it as equivalent — the
+        conformance gate must still raise."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, ratio: float = 0.0)"}]}}'
+            "</pdd-interface>\n"
+        )
+        generated_code = "def update_main(ctx, ratio: float = -0.0):\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert "update_main.ratio" in excinfo.value.missing_symbols
+
+    def test_mutable_module_constant_default_is_not_silently_accepted(self, tmp_path):
+        """A default factored into a MUTABLE module constant could be mutated
+        in place after binding, so the gate must not silently accept it as
+        equal to the declared literal — it stays UNKNOWN and raises (fail
+        closed)."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "agentic_common_python.prompt"
+        arch_path = self._write_custom_arch(
+            tmp_path, prompt_filename, ["_sanitize_comment_body"]
+        )
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"_sanitize_comment_body",'
+            '"signature":"(body: str, items=[])"}]}}'
+            "</pdd-interface>\n"
+        )
+        generated_code = (
+            "_DEFAULT_ITEMS = []\n\n"
+            "def _sanitize_comment_body(body: str, items=_DEFAULT_ITEMS):\n"
+            "    return items\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert "_sanitize_comment_body.items" in excinfo.value.missing_symbols
+
     def test_annotation_aliases_do_not_raise_conformance_error(self, tmp_path):
         """Equivalent Python annotation spellings must not trip drift."""
         prompt_filename = "update_main_python.prompt"
