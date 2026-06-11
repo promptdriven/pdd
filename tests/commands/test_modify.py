@@ -179,6 +179,7 @@ def test_change_agentic_success(runner, mock_run_agentic_change):
     assert "Status: Success" in result.output
     assert "Cost: $1.0000" in result.output
 
+
 def test_change_agentic_invalid_args(runner, mock_run_agentic_change, mock_handle_error):
     """Test agentic mode fails with wrong number of arguments."""
     # 0 arguments - UsageError propagates directly to Click (exit code 2)
