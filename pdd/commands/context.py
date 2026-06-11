@@ -40,16 +40,17 @@ from ..context_audit import (
 )
 from ..core.errors import handle_error
 
-# Glyphs are plain, universally-rendered shapes (Geometric Shapes / Block
-# Elements) so they never show up as missing-glyph boxes the way the older
-# ``⛁``/``⛶`` symbols did in common terminal fonts (Menlo, SF Mono, …). Color —
-# not glyph — distinguishes the *counted* sources: every counted cell is the same
-# solid square ``■`` and reads its source from color alone. Free space is a faint
-# light-shade ``░`` and the cloud-only ``unavailable`` row a faint ``▨``, both
-# legible without color. ``_glyph_for`` is the single place that picks a glyph.
-_USED_GLYPH = "■"          # U+25A0 BLACK SQUARE — a colored token cell
+# Glyphs mirror Claude Code's ``/context`` usage box — the view this command is
+# modeled on: ``⛁`` (U+26C1) for a used token cell and ``⛶`` (U+26F6) for free
+# space. On macOS, Terminal.app's CoreText font fallback (Apple Symbols) renders
+# both as single narrow cells, so the grid stays aligned. Color — not glyph —
+# distinguishes the *counted* sources: every counted cell is the same ``⛁`` and
+# reads its source from color alone. The cloud-only ``unavailable`` row uses a
+# faint ``▨`` and free space a faint ``⛶``, both legible without color.
+# ``_glyph_for`` is the single place that picks a glyph.
+_USED_GLYPH = "⛁"          # U+26C1 — a used token cell (Claude /context style)
 _UNAVAILABLE_GLYPH = "▨"   # U+25A8 — faint, distinct (requires PDD Cloud)
-_FREE_GLYPH = "░"          # U+2591 LIGHT SHADE — faint, reads as empty space
+_FREE_GLYPH = "⛶"          # U+26F6 — faint, reads as empty space
 _BOX_COLS = 27
 _BOX_ROWS = 5
 

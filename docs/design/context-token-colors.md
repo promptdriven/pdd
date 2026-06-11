@@ -49,15 +49,16 @@ is unaffected by escape bytes.
 
 ## Glyphs: shared for counted, distinct for the rest
 
-Glyphs no longer carry per-source identity (color does that now), so they're kept
-to plain, universally-rendered shapes — **Geometric Shapes / Block Elements** —
-that never show up as missing-glyph boxes the way the earlier `⛁`/`⛶` symbols did
-in common terminal fonts (Menlo, SF Mono). The counted categories
-(`body`/`resolved`/`deferred`/`unresolved`) all use one solid square `■`
-(`_USED_GLYPH`); `unavailable` uses a faint `▨` and free space a faint light-shade
-`░`, so those two non-usage rows stay legible even without color.
-`_glyph_for(status)` is the single place that picks a row's glyph; all grid glyphs
-share one display width so the grid stays aligned.
+Glyphs no longer carry per-source identity (color does that now), so the view can
+use the **same glyphs as Claude Code's `/context`** that it's modeled on: `⛁`
+(U+26C1) for a used cell and `⛶` (U+26F6) for free space. On macOS, Terminal.app's
+CoreText font fallback (Apple Symbols) renders these as single narrow cells, so
+they display reliably rather than as missing-glyph boxes. The counted categories
+(`body`/`resolved`/`deferred`/`unresolved`) all use one `⛁` (`_USED_GLYPH`) and are
+told apart by color; `unavailable` uses a faint `▨` and free space a faint `⛶`, so
+those two non-usage rows stay legible even without color. `_glyph_for(status)` is
+the single place that picks a row's glyph; all grid glyphs share one display width
+so the grid stays aligned.
 
 ## Color detection (`--color` / `--no-color` / auto)
 
