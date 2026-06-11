@@ -884,7 +884,7 @@ class TestAutoLLMRepair:
             return new_text, cost, model
         return drafter_full
 
-    def test_auto_llm_repair_rewrites_whole_prompt_once(self, tmp_path):
+    def test_auto_llm_repair_writes_only_with_apply(self, tmp_path):
         report = _medium_report(tmp_path, n=3)
         session = RecordingCheckupSession()
         agent = CheckupAgent(
@@ -899,6 +899,7 @@ class TestAutoLLMRepair:
                 quiet=True,
                 auto=True,
                 llm_repair=True,
+                apply=True,  # headless path requires --apply to write
             )
 
         # Whole file replaced by the single rewrite; all 3 findings resolved.
@@ -908,6 +909,32 @@ class TestAutoLLMRepair:
         assert acc["patches_applied"] == 1  # one full_rewrite patch, not one per finding
         assert acc["remaining"] == 0
         assert cost == pytest.approx(0.05)  # exactly one model call
+
+    def test_auto_llm_repair_without_apply_is_preview_only(self, tmp_path):
+        """Headless --auto --llm-repair must NOT write without --apply (the write
+        gate holds for the non-interactive path); it drafts and queues instead."""
+        report = _medium_report(tmp_path, n=3)
+        original = report.prompt_path.read_text(encoding="utf-8")
+        session = RecordingCheckupSession()
+        agent = CheckupAgent(
+            DeterministicPlanner(),
+            session,
+            repair_drafter_full=self._full("% rewritten\n"),
+        )
+        with patch("pdd.checkup_agent.build_prompt_source_set_report", return_value=report):
+            agent.run(
+                str(report.prompt_path),
+                project_root=tmp_path,
+                quiet=True,
+                auto=True,
+                llm_repair=True,  # no apply
+            )
+
+        assert report.prompt_path.read_text(encoding="utf-8") == original  # nothing written
+        acc = session.events_of_kind("session_done")[0].data["accounting"]
+        assert acc["drafted_by_llm"] == 0
+        assert acc["patches_applied"] == 0
+        assert acc["patches_queued"] >= 1
 
     def test_auto_llm_repair_offline_falls_back_to_deterministic(self, tmp_path):
         report = _medium_report(tmp_path, n=3)

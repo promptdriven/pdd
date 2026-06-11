@@ -475,11 +475,17 @@ class CheckupAgent:
         # separately from the bulk --apply path because each was explicitly
         # confirmed in-session.
         llm_patches: list[ApprovedPatch] = []
+        # True when the queued LLM patch came from the HEADLESS --auto --llm-repair
+        # path, which has no in-session approval and so honors the --apply write
+        # gate (preview unless --apply). The interactive [5]/[f] paths are already
+        # approved in-session and write without --apply.
+        _llm_apply_gated = False
         total_cost = 0.0
         last_model = ""
 
         # --auto --llm-repair: a single LLM pass rewrites the whole prompt so
-        # ALL findings are fixed at once (not one group at a time), applied once.
+        # ALL findings are fixed at once (not one group at a time). Preview by
+        # default; written only with --apply (consistent with deterministic --auto).
         auto_llm_done = False
         if _auto and llm_repair and groups:
             for group in groups:
@@ -505,7 +511,10 @@ class CheckupAgent:
             total_cost += cost_inc
             if model_inc:
                 last_model = model_inc
-            if not auto_llm_done and not quiet:
+            if auto_llm_done:
+                # Headless path: subject to the --apply write gate.
+                _llm_apply_gated = True
+            elif not quiet:
                 click.echo(
                     "\nLLM repair unavailable (no credential / offline / out of credits) "
                     "— falling back to per-finding review."
@@ -645,13 +654,21 @@ class CheckupAgent:
                 1 for d in disposition.values() if d in ("low", "manual_low")
             )
 
-        # 5b. Apply operator-approved LLM drafts (menu option 7). These were each
-        # explicitly confirmed in-session, so they apply regardless of the bulk
-        # --apply flag — but still honor --dry-run/--preview.
+        # 5b. Apply LLM drafts. Interactive [5]/[f] drafts are approved in-session
+        # and apply regardless of the bulk --apply flag; the headless
+        # --auto --llm-repair draft (_llm_apply_gated) honors the --apply write gate
+        # so a material write never happens without explicit approval. Both honor
+        # --dry-run/--preview.
         if llm_patches:
             llm_finding_ids = [fid for fid, d in disposition.items() if d == "llm"]
-            if dry_run:
+            _preview_only = dry_run or (_llm_apply_gated and not apply)
+            if _preview_only:
                 acc.patches_queued += len(llm_patches)
+                if _llm_apply_gated and not apply and not dry_run and not quiet:
+                    click.echo(
+                        "\nLLM repair drafted but not written — re-run with --apply to "
+                        "apply it, or --dry-run to preview."
+                    )
             else:
                 code = apply_approved_patches(
                     llm_patches,

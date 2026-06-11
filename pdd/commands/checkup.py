@@ -456,10 +456,11 @@ def _forward_subcommand_json(
     is_flag=True,
     default=False,
     help=(
-        "With --auto: let the LLM draft the real fix for each finding group and "
-        "apply it automatically (no per-finding approval). Costs model calls and "
-        "writes to the prompt files; honors --dry-run/--preview. Without a model "
-        "(offline / no key) each group safely falls back to 'save for review'."
+        "With --auto: let the LLM draft the real fix for every finding in one "
+        "pass. Preview by default — the rewrite is written to the prompt files "
+        "only with --apply (also honors --dry-run/--preview). v1 has no "
+        "auto-apply-by-confidence. Offline / no key falls back to deterministic "
+        "review. (The interactive [5]/[f] options apply after in-session approval.)"
     ),
 )
 @click.option(
