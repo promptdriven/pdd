@@ -1405,6 +1405,7 @@ STEP5_SHELL_EVIDENCE_FILENAME = "layer1-step5-evidence.json"
 _STEP5_SHELL_TIMEOUT_SECONDS = 180.0
 _STEP5_SHELL_OUTPUT_MAX_CHARS = 12000
 _STEP5_SHELL_ACTIONABLE_STATUSES = frozenset({"failed", "error", "timeout_partial"})
+_STEP5_SHELL_EVIDENCE_MEMORY: Dict[Tuple[str, int], Dict[str, Any]] = {}
 
 
 def _step5_failure_signal_status(step_output_value: str) -> str:
@@ -2193,8 +2194,30 @@ def _pr_changed_paths_for_targeted_checks(changed_files_text: str) -> List[str]:
 
 
 def _step5_shell_evidence_path(cwd: Path, pr_number: int) -> Path:
-    """Return the Layer 1 shell-first Step 5 evidence artifact path."""
+    """Return the legacy Layer 1 shell-first Step 5 evidence artifact path."""
     return cwd / ".pdd" / f"checkup-pr-{pr_number}" / STEP5_SHELL_EVIDENCE_FILENAME
+
+
+def _step5_shell_evidence_memory_key(cwd: Path, pr_number: int) -> Tuple[str, int]:
+    """Return a stable key for same-process Step 5 evidence handoff."""
+    try:
+        root = str(cwd.resolve())
+    except OSError:
+        root = str(cwd)
+    return root, pr_number
+
+
+def _load_step5_shell_evidence_from_memory(
+    cwd: Path,
+    pr_number: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """Load same-process shell-first Step 5 evidence for final-gate Layer 2."""
+    if pr_number is None:
+        return None
+    payload = _STEP5_SHELL_EVIDENCE_MEMORY.get(
+        _step5_shell_evidence_memory_key(cwd, pr_number)
+    )
+    return dict(payload) if isinstance(payload, dict) else None
 
 
 def _safe_repo_rel_path(path: str) -> Optional[Path]:
@@ -2318,15 +2341,9 @@ def _write_step5_shell_evidence(
     pr_number: int,
     evidence: Dict[str, Any],
 ) -> None:
-    """Persist shell-first Step 5 evidence for final-gate Layer 2."""
-    artifact = _step5_shell_evidence_path(cwd, pr_number)
-    artifact.parent.mkdir(parents=True, exist_ok=True)
-    safe_evidence = _storage_safe_step5_shell_evidence(evidence)
-    # Required local artifact for the final-gate Layer 2 handoff. Do not persist
-    # subprocess stdout/stderr here; CodeQL treats those streams as secret-like.
-    artifact.write_text(
-        json.dumps(safe_evidence, indent=2, sort_keys=True),
-        encoding="utf-8",
+    """Record shell-first Step 5 evidence for final-gate Layer 2."""
+    _STEP5_SHELL_EVIDENCE_MEMORY[_step5_shell_evidence_memory_key(cwd, pr_number)] = (
+        _storage_safe_step5_shell_evidence(evidence)
     )
 
 
@@ -2339,7 +2356,7 @@ def _run_step5_shell_first_evidence(
     iteration: int,
     quiet: bool,
 ) -> Optional[Dict[str, Any]]:
-    """Run a bounded shell-first Step 5 probe and persist its evidence.
+    """Run a bounded shell-first Step 5 probe and record its evidence.
 
     This does not replace the existing agentic Step 5. It gives the final gate
     a deterministic test artifact that can be promoted into a Layer 2 fixer
@@ -2378,21 +2395,10 @@ def _run_step5_shell_first_evidence(
             "changed-file list; agentic Step 5 remains responsible for broader "
             "project-specific discovery."
         ),
-        "output_omitted_from_artifact": False,
         "output_truncated": False,
     }
-    artifact_evidence: Dict[str, Any] = dict(evidence)
 
     if selected_tests:
-        artifact_evidence.update(
-            {
-                "output": (
-                    "Step 5 subprocess output is omitted from the disk artifact. "
-                    "Layer 1 prompt context receives the scrubbed bounded output."
-                ),
-                "output_omitted_from_artifact": True,
-            }
-        )
         env = os.environ.copy()
         prior_pythonpath = env.get("PYTHONPATH")
         env["PYTHONPATH"] = (
@@ -2422,13 +2428,6 @@ def _run_step5_shell_first_evidence(
                     "output_truncated": truncated,
                 }
             )
-            artifact_evidence.update(
-                {
-                    "status": status,
-                    "exit_code": completed.returncode,
-                    "output_truncated": truncated,
-                }
-            )
         except subprocess.TimeoutExpired as exc:
             raw_output = (
                 ((exc.stdout or "") if isinstance(exc.stdout, str) else "")
@@ -2440,13 +2439,6 @@ def _run_step5_shell_first_evidence(
                     "status": "timeout_partial",
                     "exit_code": "timeout",
                     "output": output or "pytest timed out before producing output.",
-                    "output_truncated": truncated,
-                }
-            )
-            artifact_evidence.update(
-                {
-                    "status": "timeout_partial",
-                    "exit_code": "timeout",
                     "output_truncated": truncated,
                 }
             )
@@ -2462,17 +2454,9 @@ def _run_step5_shell_first_evidence(
                     "output_truncated": truncated,
                 }
             )
-            artifact_evidence.update(
-                {
-                    "status": "error",
-                    "exit_code": "error",
-                    "output_truncated": truncated,
-                }
-            )
 
     evidence = _storage_safe_step5_shell_evidence(evidence)
-    artifact_evidence = _storage_safe_step5_shell_evidence(artifact_evidence)
-    _write_step5_shell_evidence(cwd, pr_number, artifact_evidence)
+    _write_step5_shell_evidence(cwd, pr_number, evidence)
     context["step5_shell_evidence"] = json.dumps(evidence, indent=2, sort_keys=True)
     if not quiet and evidence.get("status") in _STEP5_SHELL_ACTIONABLE_STATUSES:
         console.print(

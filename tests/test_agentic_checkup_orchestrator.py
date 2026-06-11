@@ -21,6 +21,7 @@ from pdd.agentic_checkup_orchestrator import (
     _format_step_abort_message,
     _get_state_dir,
     _is_step_timeout_failure,
+    _load_step5_shell_evidence_from_memory,
     _next_step,
     _normalised_failure_signal_text,
     _parse_changed_files,
@@ -129,15 +130,14 @@ class TestStep5ShellFirstEvidence:
         assert "tests/test_widget.py::test_breaks" in evidence["output"]
         assert "step5_shell_evidence" in context
         artifact = tmp_path / ".pdd" / "checkup-pr-1" / "layer1-step5-evidence.json"
-        assert artifact.is_file()
-        payload = json.loads(artifact.read_text(encoding="utf-8"))
+        assert not artifact.exists()
+        payload = _load_step5_shell_evidence_from_memory(tmp_path, 1)
+        assert payload is not None
         assert payload["status"] == "failed"
-        assert payload["output_omitted_from_artifact"] is True
         assert "tests/test_widget.py::test_breaks" in context["step5_shell_evidence"]
-        assert "tests/test_widget.py::test_breaks" not in artifact.read_text(
-            encoding="utf-8"
-        )
-        artifact_text = artifact.read_text(encoding="utf-8")
+        memory_text = json.dumps(payload, indent=2, sort_keys=True)
+        assert "tests/test_widget.py::test_breaks" in memory_text
+        artifact_text = memory_text
         assert gh_token not in artifact_text
         assert env_token not in artifact_text
         assert gh_token not in context["step5_shell_evidence"]

@@ -28,6 +28,7 @@ from .agentic_change import (
 from .agentic_checkup_orchestrator import (
     STEP5_SHELL_EVIDENCE_FILENAME,
     STEP5_SHELL_EVIDENCE_SCHEMA,
+    _load_step5_shell_evidence_from_memory,
     run_agentic_checkup_orchestrator,
 )
 from .checkup_review_loop import (
@@ -635,9 +636,12 @@ def _load_layer1_step5_evidence(
     project_root: Path,
     pr_number: Optional[int],
 ) -> Optional[Dict[str, Any]]:
-    """Load the Layer 1 shell-first Step 5 evidence artifact, if present."""
+    """Load Layer 1 shell-first Step 5 evidence, if present."""
     if pr_number is None:
         return None
+    memory_payload = _load_step5_shell_evidence_from_memory(project_root, pr_number)
+    if isinstance(memory_payload, dict):
+        return memory_payload
     path = (
         project_root
         / ".pdd"
