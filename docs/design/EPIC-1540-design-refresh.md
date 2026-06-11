@@ -21,7 +21,7 @@ mapping distilled from §3 (Color Palette) and §7 (ASCII & Terminal Assets).
 
 | # | Workstream | PR | Status |
 |---|------------|----|--------|
-| 1 | Command color system — one consistent palette for commands, tags, labels, and states | _this EPIC's first child PR_ | 🟡 In progress |
+| 1 | Command color system — one consistent palette for commands, tags, labels, and states | sohni-tagirisa/pdd#1 | ✅ Merged into EPIC |
 | 2 | Better status & progress communication | — | ⬜ Not started |
 | 3 | `pdd context` token visualization (multi-color tokens) | — | ⬜ Not started |
 | 4 | Adaptive theming (detect IDE/editor light/dark theme) | — | ⬜ Not started |
