@@ -51,13 +51,40 @@ Machine-readable output uses `--json` and conforms to
 - `target`: the CLI target string
 - `checks[]`: per-engine status summary
 - `findings[]`: deterministic findings with `id`, `source_check`, `severity`,
-  `file`, `line`, `message`, `recommended_action`, and `fix_command`
+  `file`, `line`, `message`, `recommended_action`, `fix_command`,
+  `requires_clarification`, and `clarification_reason`
 - `actions[]`: suggested next commands
 - `deterministic_exit_code`: 0 clean, 1 warnings, 2 errors (or strict warnings)
 
 `--strict` affects deterministic exit codes only (warnings become failures in
 strict mode, including automatic `--prompt-checkup strict`). `--explain` prints a
 read-only finding summary and never changes the exit code.
+
+### Clarification signal
+
+Every finding carries two paired fields so downstream tooling can decide which
+findings need a human decision before automatic repair:
+
+- `requires_clarification` (boolean, always present, defaults to `false`):
+  `true` only when a deterministic, per-engine heuristic detects genuine
+  ambiguity that a human must resolve. There is no LLM classification.
+- `clarification_reason` (string, always present, empty `""` when
+  `requires_clarification` is `false`): a compact, machine-parseable reason
+  containing only metadata (term, rule ID, status, path, line) — never prompt
+  excerpts or sensitive prose.
+
+Heuristics are conservative and code/status-driven:
+
+| Engine   | Marks `requires_clarification: true` when |
+|----------|-------------------------------------------|
+| lint     | vague/ambiguous vocabulary with multiple plausible definitions |
+| contract | rule-ID collision (`DUPLICATE_ID`) or a vague obligation code (`VAGUE*`) |
+| coverage | a `story-only` rule matches more than one candidate story target |
+| gate     | a waiver/policy decision is required but policy metadata is ambiguous |
+
+The fields are additive and backward-compatible: consumers that ignore them are
+unaffected, and `requires_clarification` is always emitted as a real JSON boolean
+(never a string or `0/1`).
 
 ## Workflow hook interface
 

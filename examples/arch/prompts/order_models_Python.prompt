@@ -1,0 +1,11 @@
+<pdd-reason>Database models and schemas for order entities.</pdd-reason>
+
+% Goal
+Define the order model prompt fixture used by the architecture include validator.
+
+% Requirements
+- The implementation MUST define order entities and status transitions.
+- The implementation MUST expose total calculation behavior.
+
+% Deliverable
+- `src/models/order.py`

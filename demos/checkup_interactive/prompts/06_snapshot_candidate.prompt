@@ -1,0 +1,14 @@
+<pdd-reason>Summarises open GitHub issues for a repository using live query context.</pdd-reason>
+
+% Write `pdd/issue_summarizer.py`.
+
+<pdd.issues><include query="recent open issues labelled bug or feature-request">context/github_issues_example.py</include></pdd.issues>
+
+% Requirements
+- Accept `repo: str` and `max_issues: int = 10`.
+- Return a list of dicts with keys: `number`, `title`, `labels`, `created_at`.
+- Sort by `created_at` descending (most recent first).
+- Omit closed issues.
+
+% Deliverables
+- Code: `pdd/issue_summarizer.py`
