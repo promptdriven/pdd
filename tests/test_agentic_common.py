@@ -7629,6 +7629,14 @@ class TestProviderLimitMarker:
         assert reset_at == "2099-01-02T09:00:00Z"
         assert source == "parsed_text"
 
+        # An explicit *past* year is honored verbatim (not rolled forward) — the
+        # provider stated it, so cloud reads the past reset as "retry now".
+        reset_at, source = _parse_reset_at(
+            "resets Jan 2, 2020, 9am (UTC)", now=self.NOW
+        )
+        assert reset_at == "2020-01-02T09:00:00Z"
+        assert source == "parsed_text"
+
     def test_parse_reset_date_with_at_connector_is_parsed(self):
         """An "at" between the date and the time ("June 11 at 3:30pm") must not
         make an otherwise-exact reset unparseable; it parses identically to the
