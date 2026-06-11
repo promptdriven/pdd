@@ -3274,3 +3274,152 @@ def test_looks_like_user_intent_path_heuristic() -> None:
     assert not f("")
     assert not f("\n")
     assert not f("a" * 300)  # too long
+
+
+# =============================================================================
+# Additional tests (appended) — focus on uncovered behaviors
+# =============================================================================
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+def test_compute_user_intent_paths_includes_all_grammars() -> None:
+    """compute_user_intent_paths should capture body, path=, self-closing, include-many, backtick."""
+    from pdd.preprocess import compute_user_intent_paths
+    text = (
+        '<include>body.py</include>\n'
+        '<include path="attr.py">ignored</include>\n'
+        '<include path="self.py" />\n'
+        '<include-many>a.py, b.py\nc.py</include-many>\n'
+        '```<bt.py>```\n'
+    )
+    paths = compute_user_intent_paths(text)
+    assert {"body.py", "attr.py", "self.py", "a.py", "b.py", "c.py", "bt.py"} <= paths
+
+
+def test_compute_user_intent_paths_empty_input() -> None:
+    from pdd.preprocess import compute_user_intent_paths
+    assert compute_user_intent_paths("") == set()
+    assert compute_user_intent_paths(None) == set()  # type: ignore[arg-type]
+
+
+def test_preprocess_non_string_input_returns_str() -> None:
+    """Non-string inputs should be coerced to str without raising."""
+    class Dummy:
+        def __str__(self) -> str:
+            return "dummy-content"
+    result = preprocess(Dummy(), recursive=False, double_curly_brackets=False)
+    assert result == "dummy-content"
+
+
+def test_preprocess_empty_string_returns_empty() -> None:
+    assert preprocess("", recursive=False, double_curly_brackets=False) == ""
+
+
+def test_circular_include_raises_value_error(tmp_path, monkeypatch) -> None:
+    """A→A self-include should raise ValueError mentioning circular."""
+    monkeypatch.chdir(tmp_path)
+    f = tmp_path / "self.txt"
+    f.write_text("<include>self.txt</include>")
+    with pytest.raises(ValueError, match=r"[Cc]ircular"):
+        preprocess("<include>self.txt</include>", recursive=False, double_curly_brackets=False)
+
+
+def test_circular_include_a_b_a_raises(tmp_path, monkeypatch) -> None:
+    """A→B→A cycle should raise ValueError."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "a.txt").write_text("<include>b.txt</include>")
+    (tmp_path / "b.txt").write_text("<include>a.txt</include>")
+    with pytest.raises(ValueError, match=r"[Cc]ircular"):
+        preprocess("<include>a.txt</include>", recursive=False, double_curly_brackets=False)
+
+
+def test_shell_timeout_inserts_marker(monkeypatch) -> None:
+    """TimeoutExpired in <shell> should produce a visible timeout marker, not hang."""
+    prompt = "X <shell>sleep 999</shell> Y"
+    def raise_timeout(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="sleep 999", timeout=1)
+    with patch("subprocess.run", side_effect=raise_timeout):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert "timed out" in result
+    assert "sleep 999" in result
+
+
+def test_shell_respects_pdd_shell_timeout_env(monkeypatch) -> None:
+    """PDD_SHELL_TIMEOUT env var should be honored when invoking subprocess.run."""
+    monkeypatch.setenv("PDD_SHELL_TIMEOUT", "7")
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value.stdout = "ok"
+        mock_run.return_value.returncode = 0
+        preprocess("<shell>echo ok</shell>", recursive=False, double_curly_brackets=False)
+    _, kwargs = mock_run.call_args
+    assert kwargs.get("timeout") == 7
+
+
+def test_double_curly_preserves_excluded_exact_key_only() -> None:
+    """Exclude list: exact-match {key} stays, but {key_x} is still doubled."""
+    out = preprocess("{key} and {key2}", recursive=False,
+                     double_curly_brackets=True, exclude_keys=["key"])
+    assert "{key}" in out and "{{key2}}" in out
+
+
+def test_quiet_mode_suppresses_panels(monkeypatch, capsys) -> None:
+    """PDD_QUIET=1 should suppress the start/complete preprocessing panels."""
+    monkeypatch.setenv("PDD_QUIET", "1")
+    preprocess("Hello {x}", recursive=False, double_curly_brackets=True)
+    captured = capsys.readouterr().out
+    assert "Starting prompt preprocessing" not in captured
+    assert "Preprocessing complete" not in captured
+
+
+def test_include_many_optional_attribute_silences_missing(tmp_path, monkeypatch, capsys) -> None:
+    """include-many with optional='true' should silently drop missing entries."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "present.txt").write_text("HERE")
+    prompt = '<include-many optional="true">present.txt, missing.txt</include-many>'
+    out = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert out == "HERE"
+    assert "File not found" not in capsys.readouterr().out
+
+
+def test_get_file_path_absolute_returned_unchanged(tmp_path) -> None:
+    """Absolute paths should not be prefixed with ./"""
+    p = str(tmp_path / "abs.txt")
+    assert get_file_path(p) == p
+
+
+def test_web_tag_inside_code_block_not_processed() -> None:
+    """<web> inside a fenced block should not trigger fetching."""
+    prompt = "```\n<web>https://example.com</web>\n```"
+    with patch.dict("sys.modules", {"firecrawl": MagicMock()}):
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    assert result == prompt
+
+
+def test_include_max_iterations_guard(tmp_path, monkeypatch) -> None:
+    """Self-referential include should hit the circular detection rather than infinite-loop."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "loop.txt").write_text("<include>loop.txt</include>")
+    with pytest.raises(ValueError, match=r"[Cc]ircular"):
+        preprocess("<include>loop.txt</include>", recursive=False, double_curly_brackets=False)
+
+
+def test_xml_include_with_lines_attribute(tmp_path, monkeypatch) -> None:
+    """lines='N-M' should be passed as a selector to ContentSelector."""
+    monkeypatch.chdir(tmp_path)
+    src = tmp_path / "f.py"
+    src.write_text("a\nb\nc\nd\n")
+    prompt = '<include lines="2-3">f.py</include>'
+    with patch("pdd.content_selector.ContentSelector") as MockCS:
+        MockCS.return_value.select.return_value = "b\nc"
+        result = preprocess(prompt, recursive=False, double_curly_brackets=False)
+    selectors = MockCS.return_value.select.call_args.kwargs["selectors"]
+    assert "lines:2-3" in selectors
+    assert result == "b\nc"

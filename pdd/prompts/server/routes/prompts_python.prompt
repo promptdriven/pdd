@@ -1,8 +1,9 @@
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/prompts.py`.
 
 % Role & Scope
-  Build one FastAPI router that provides prompt analysis, sync status, model listing,
-  prompt/code matching, bidirectional diff analysis, and prompt git history/diff APIs.
+  Build one FastAPI router that provides prompt analysis, deterministic per-source
+  context-window audit, sync status, model listing, prompt/code matching,
+  bidirectional diff analysis, and prompt git history/diff APIs.
 
 <context.python_preamble><include>context/python_preamble.prompt</include></context.python_preamble>
 
@@ -13,7 +14,8 @@
      - Use `rich.console.Console` with an ImportError fallback console that prints via builtins.
 
   2. Models:
-     - Define request/response Pydantic models for analyze, sync status, model catalog, match check, diff analysis, git history, and prompt diff endpoints.
+     - Define request/response Pydantic models for analyze, context audit, sync status, model catalog, match check, diff analysis, git history, and prompt diff endpoints.
+     - Context-audit models: `ContextAuditRow` (`source`, `tokens`, `percent`, `status` one of `resolved|unresolved|deferred|unavailable|body`, optional `note`); `ContextAuditRequest` (`path` required, `model` default `claude-sonnet-4-20250514`, `threshold` int default `80` with `ge=0, le=100`, optional direct `content`); `ContextAuditResponse` (`total_tokens`, `context_limit`, `percent_used`, `model`, `rows: list[ContextAuditRow]`, `warnings: list[str]`, `threshold_exceeded: bool`). The response mirrors `pdd context --json` 1:1 so the CLI and this API never drift.
      - Diff models must include `PromptRange`, `CodeRange`, `DiffSection`, `LineMapping`, `HiddenKnowledgeLocation`, `HiddenKnowledge`, `DiffStats`, `DiffAnalysisResult`, `DiffAnalysisRequest`, `DiffAnalysisResponse`.
      - `DiffAnalysisResult` includes `overallScore`, `canRegenerate`, `regenerationRisk`, `promptToCodeScore`, `codeToPromptScore`, `sections`, `codeSections`, `hiddenKnowledge`, `lineMappings`, `stats`, `missing`, `extra`, `suggestions`.
      - Prompt diff response includes `version_a_label`, `version_b_label`, and `versions_swapped`.
@@ -23,8 +25,16 @@
      - Validate `path` with `PathValidator`; if `content` is provided it takes precedence over file reads.
      - Enforce 500KB limit for both file and direct content; reject directory/nonexistent/binary text decode failures with HTTP errors.
      - Compute raw metrics with `get_token_metrics`; use pricing CSV at `project_root/.pdd/llm_model.csv` when present.
-     - If preprocessing enabled: run `pdd.preprocess.preprocess(..., recursive=True, double_curly_brackets=True)` after `chdir(project_root)` and always restore cwd.
+     - If preprocessing enabled: run `pdd.preprocess.preprocess(..., recursive=True, double_curly_brackets=True)` after `chdir(project_root)` and always restore cwd. Hold `pdd.context_audit.cwd_env_lock()` for the whole `chdir`/`preprocess`/restore window so this route's cwd change is serialized against the context-audit endpoint — both resolve includes by changing cwd and run together in connect's debounced cycle, so concurrent requests must not cross-contaminate include resolution (PR #1387 review #3).
      - Preprocessing failure is non-fatal: still return raw metrics with `preprocessing_succeeded=False` and `preprocessing_error`.
+     - Convert `SecurityError` to HTTP 403.
+
+  3b. `POST /context-audit`:
+     - Deterministic, LLM-free per-source context-window audit. Backed by the shared `pdd.context_audit` core — the exact implementation the `pdd context` CLI uses — imported locally (matching this module's circular-import convention) and NEVER via `pdd.commands.*`, so the API and CLI never drift.
+     - Always validate `path` with `PathValidator` (for project scope / base-dir semantics), even when auditing override `content`: includes still resolve from its project root.
+     - When `content` is provided it takes precedence over the file on disk (so connect reflects unsaved editor edits): enforce the 500KB limit (HTTP 400 on overflow) and call `audit_prompt_text(content, model=..., base_dir=str(project_root))`. A missing/never-saved `path` is therefore NOT a 404 when `content` is given.
+     - Otherwise read from disk: reject nonexistent (404) and directory (400) paths, then call `audit_prompt_file(str(abs_path), model=..., base_dir=str(project_root))`. Pass `base_dir` rather than changing cwd in the route — the shared core performs and serializes the cwd change under its lock.
+     - Map the core `ContextAudit` to `ContextAuditResponse`, computing each row's `percent` via `row_percent(row, total_tokens)` and `threshold_exceeded` via `threshold_exceeded(percent_used, request.threshold)`.
      - Convert `SecurityError` to HTTP 403.
 
   4. `GET /sync-status`:

@@ -9,7 +9,7 @@ import { javascript } from '@codemirror/lang-javascript';
 import { java } from '@codemirror/lang-java';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { marked, Marked } from 'marked';
-import { api, PromptInfo, PromptAnalyzeResponse, TokenMetrics, RunResult } from '../api';
+import { api, PromptInfo, PromptAnalyzeResponse, ContextAuditResponse, TokenMetrics, RunResult } from '../api';
 import { CommandType, CommandConfig, CommandOption, GlobalOption } from '../types';
 import { COMMANDS, GLOBAL_OPTIONS, GLOBAL_DEFAULTS } from '../constants';
 import type { GlobalDefaults } from '../types';
@@ -472,11 +472,20 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   const originalContentRef = useRef<string>('');
   const editedContentRef = useRef<string>('');  // Track user's edited content
   const editableCompartment = useRef(new Compartment());
+  // Monotonic id for the debounced analysis/audit run; only the latest run's
+  // results are applied, so a slow earlier response can never overwrite a newer
+  // one when typing quickly (PR #1387 review — stale responses must not win).
+  const latestAnalysisRequestRef = useRef(0);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [content, setContent] = useState<string | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
+  // Bumped on every editor edit so the debounced analysis/audit effect re-runs
+  // on *each* keystroke, not just the first. `hasChanges` flips false->true once
+  // and then stays true, so depending on it alone left the per-source context
+  // audit stale from the second edit onward (PR #1387 review #1).
+  const [contentVersion, setContentVersion] = useState(0);
   const [saving, setSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [modalCommand, setModalCommand] = useState<CommandConfig | null>(null);
@@ -484,6 +493,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
   // Token metrics and view mode state
   const [viewMode, setViewMode] = useState<'raw' | 'processed'>('raw');
   const [analysisResult, setAnalysisResult] = useState<PromptAnalyzeResponse | null>(null);
+  const [contextAudit, setContextAudit] = useState<ContextAuditResponse | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [showPreview, setShowPreview] = useState(false);
 
@@ -649,6 +659,9 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
               editedContentRef.current = newContent;
             }
             setHasChanges(newContent !== originalContentRef.current);
+            // Re-run the debounced analysis/audit on every edit (not just the
+            // first), so the context breakdown tracks the live buffer.
+            setContentVersion((v) => v + 1);
           }
         }),
         EditorView.theme({
@@ -694,6 +707,10 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
     if (content === null) return;
 
     const analyzePrompt = async () => {
+      // Version this run; only the latest one's results are committed below, so
+      // a slower earlier response cannot overwrite a newer one (stale responses
+      // must not win — PR #1387 review).
+      const requestId = ++latestAnalysisRequestRef.current;
       setIsAnalyzing(true);
       try {
         // Get current content from editor or ref
@@ -704,25 +721,45 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
         // Use selected model for cost estimation, fallback to Claude Sonnet
         const modelForAnalysis = selectedModel?.model || 'claude-sonnet-4-20250514';
 
-        const result = await api.analyzePrompt({
-          path: prompt.prompt,
-          model: modelForAnalysis,
-          preprocess: true,
-          content: currentContent,  // Send current content instead of reading from file
-        });
+        // Aggregate metrics and the per-source context audit run from the SAME
+        // debounced flow and pass the SAME unsaved editor content, so the
+        // breakdown never disagrees with the visible buffer or the token totals.
+        const [result, audit] = await Promise.all([
+          api.analyzePrompt({
+            path: prompt.prompt,
+            model: modelForAnalysis,
+            preprocess: true,
+            content: currentContent,  // Send current content instead of reading from file
+          }),
+          api.contextAudit({
+            path: prompt.prompt,
+            model: modelForAnalysis,
+            content: currentContent,  // Audit the same unsaved content
+          }).catch((e: any) => {
+            // Per-source breakdown is optional; keep aggregate metrics on failure.
+            console.error('Failed to audit prompt context:', e);
+            return null;
+          }),
+        ]);
+        // A newer edit superseded this run while it was in flight — drop it.
+        if (requestId !== latestAnalysisRequestRef.current) return;
         setAnalysisResult(result);
+        setContextAudit(audit);
       } catch (e: any) {
         console.error('Failed to analyze prompt:', e);
         // Don't show error to user, just log it - metrics are optional
       } finally {
-        setIsAnalyzing(false);
+        // Only the latest run owns the spinner; an outdated run must not clear it.
+        if (requestId === latestAnalysisRequestRef.current) {
+          setIsAnalyzing(false);
+        }
       }
     };
 
     // Debounce by 500ms
     const timeoutId = setTimeout(analyzePrompt, 500);
     return () => clearTimeout(timeoutId);
-  }, [content, prompt.prompt, hasChanges, selectedModel]);  // Re-analyze when content or model changes
+  }, [content, prompt.prompt, contentVersion, selectedModel]);  // Re-analyze on every edit (contentVersion) or model change
 
   // Load code content when code panel is opened
   const loadCodeContent = useCallback(async () => {
@@ -1639,6 +1676,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
               <PromptMetricsBar
                 rawMetrics={analysisResult?.raw_metrics || null}
                 processedMetrics={analysisResult?.processed_metrics || null}
+                contextAudit={contextAudit}
                 viewMode={viewMode}
                 onViewModeChange={handleViewModeChange}
                 isLoading={isAnalyzing}
