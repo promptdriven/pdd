@@ -17,11 +17,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from rich.console import Console
-from rich.theme import Theme
-
 from ._selector_parse import parse_selectors_string
 from .api_contract_slicer import ApiContractSlicer, ContractSlicerError
+from .cli_theme import get_console
 from .compression_reporting import (
     CompressionFallbackError,
     record_compression_applied,
@@ -37,18 +35,9 @@ try:
 except ImportError:  # pragma: no cover
     _HAS_YAML = False
 
-# Rich console with custom theme for error reporting
-_theme = Theme(
-    {
-        "info": "cyan",
-        "warning": "yellow",
-        "error": "bold red",
-        "success": "green",
-        "path": "dim blue",
-        "selector": "bold magenta",
-    }
-)
-console = Console(theme=_theme)
+# Rich console for error reporting, themed by the central PDD color system
+# (pdd/cli_theme.py) so commands, tags, and states render consistently.
+console = get_console()
 
 
 # ---------------------------------------------------------------------------
