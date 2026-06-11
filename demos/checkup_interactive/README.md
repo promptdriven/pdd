@@ -26,8 +26,10 @@ A human reviewer running this demo from a fresh checkout can verify that:
    there are findings, and their paths are printed in the summary;
 6. the **final summary** distinguishes fixed-manually / fixed-automatically /
    skipped / remaining and applied / queued / saved-for-review;
-7. `--interactive` asks **one grouped question** with an `[a]` switch to auto;
-   `--apply` is what actually edits files, after which checks are **re-verified**;
+7. `--interactive` asks **one grouped question** with a numbered menu (incl.
+   `[5]`/`[f]` to let the LLM draft fixes); `--apply` is the **only** thing that
+   writes — for deterministic *and* LLM fixes — after which checks are
+   **re-verified**;
 8. the LLM planning path is exposed and **falls back gracefully** offline;
 9. the unified flow reaches **all six tools** and the **direct subcommands**
    still work on their own.
@@ -61,14 +63,19 @@ pdd checkup <prompt>
 # summary; exit 2 if any prompt blocks (one gate for the set).
 pdd checkup <directory>/
 
-# Interactive: one grouped question per finding group, with an [a] auto switch.
+# Interactive: one grouped question per finding group, with a short numbered menu.
 pdd checkup <prompt> --interactive
 
 # Auto: resolve all findings without prompts (low-risk queued, rest saved).
 pdd checkup <prompt> --auto
 
+# Let the LLM draft a real fix for every finding in one pass (preview by default):
+pdd checkup <prompt> --auto --llm-repair
+
 # Actually edit files (then re-verify): add --apply (with --interactive or --auto).
+# This is the ONLY thing that writes — for deterministic AND LLM fixes alike.
 pdd checkup <prompt> --interactive --apply
+pdd checkup <prompt> --auto --llm-repair --apply
 
 # Machine output stays on the structured path:
 pdd checkup <prompt> --json
@@ -78,11 +85,12 @@ pdd checkup <prompt> --explain
 | Flag | Meaning |
 |---|---|
 | *(no flags)* | **Agentic review** (default): run checks, group findings, write artifacts, print a summary + decision. Never prompts, never edits. CI-safe, no LLM. |
-| `--interactive` | One grouped question per group: `[Y]` queue · `[n]` skip · `[edit]` write your own · `[auto]` finish the rest automatically. Requires a TTY. |
+| `--interactive` | One grouped question per group with a numbered menu: `[1]` save · `[2]` alt · `[3]` skip · `[4]` custom · `[5]` let the LLM draft this fix · `[a]` deterministic auto for the rest · `[f]` let the LLM draft fixes for all remaining · `[q]` quit. Requires a TTY. |
 | `--planner deterministic` | Default planner — all tools in fixed order, offline. (Implied by the bare command.) |
 | `--planner llm` | Let an LLM prioritise tools; falls back to deterministic on failure. |
-| `--auto` | Apply **low-risk** fixes automatically; medium → saved for review; high → manual. Never makes a risky change. No prompts. |
-| `--apply` | Actually write the low-risk fixes to the prompt, then re-run the affected checks to verify. Requires `--interactive`. |
+| `--auto` | Resolve every finding without prompts: low-risk queued, medium saved for review, high manual. Never makes a risky change. |
+| `--llm-repair` | With `--auto`: let the LLM draft the real fix for every finding in one pass. **Preview by default**; written only with `--apply`. Offline → deterministic review. |
+| `--apply` | The **only** thing that writes — for deterministic low-risk fixes *and* LLM drafts (`[5]`/`[f]`/`--llm-repair`) alike — then re-runs the affected checks to verify. Works with `--interactive` or `--auto`. |
 | `--json` / `--explain` | Machine-readable / read-only structured output (stays on the non-agent path). |
 
 **Safety model (repair risk).** Every finding is classified:
@@ -93,8 +101,10 @@ pdd checkup <prompt> --explain
 | medium | undefined vague term, coverage/gate/snapshot gaps | **saved for review** (never fabricated) |
 | high | contract/evidence errors | left as a **manual TODO** |
 
-By default **nothing is written** — fixes are queued / saved and a patch preview
-is produced. `--apply` is the only thing that edits files.
+By default **nothing is written** — fixes (deterministic *and* LLM-drafted) are
+queued / saved and a patch preview is produced. `--apply` is the only thing that
+edits files: an in-session choice (`[5]`/`[f]`) selects a draft, but the disk
+write still requires `--apply`. v1 has no auto-apply-by-confidence.
 
 **Decision (gate before code generation).** Every run ends with a `Decision:`
 line and an exit code so it can gate the next PDD step:
@@ -199,7 +209,8 @@ python -m pdd checkup demos/checkup_interactive/prompts/
 ```
 
 The live interactive session — **one grouped question** for all 10 vague terms,
-with an `[a]` switch to auto and `[q]` to quit:
+with a numbered menu (`[5]` LLM-draft this group, `[a]` deterministic auto, `[f]`
+LLM-draft all remaining, `[q]` quit):
 
 ```bash
 python -m pdd checkup \
@@ -207,14 +218,29 @@ python -m pdd checkup \
   --interactive
 ```
 
-Answer `n` to skip the group, `auto` to switch the rest to auto mode, or `q` to
-quit (remaining findings left untouched).
+Pick `3` to skip the group, `a` to switch the rest to deterministic auto, `5`/`f`
+to let the LLM draft a fix, or `q` to quit. The LLM options draft/select a fix
+in-session but **write nothing without `--apply`** — re-run with `--apply` to
+write (and re-verify):
+
+```bash
+python -m pdd checkup \
+  demos/checkup_interactive/prompts/02_vague_clarification.prompt \
+  --interactive --apply
+```
 
 Auto mode (no prompts; low-risk applied with `--apply`, the rest saved):
 
 ```bash
 python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt \
   --auto
+```
+
+One-pass LLM repair of every finding (preview by default; writes with `--apply`):
+
+```bash
+python -m pdd checkup demos/checkup_interactive/prompts/02_vague_clarification.prompt \
+  --auto --llm-repair --apply
 ```
 
 ---

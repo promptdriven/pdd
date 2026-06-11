@@ -128,21 +128,31 @@ This runs the REAL agentic session in interactive mode:
 The impatient-user UX:
   * a compact, described plan
   * a per-TOOL status block with reasons for skips
-  * ONE grouped question for all 10 vague terms (not ten prompts). The verb
-    matches the risk — vague terms are medium-risk, so it asks to SAVE, not
-    apply:
-        Save recommended fix for review for this group?
-            [Y]es / [n]o-skip / [e]dit / [a]uto / [q]uit
-        - Y     accept (queue/save the recommended fix)
-        - n     skip the group
-        - edit  type your own <vocabulary> block once
-        - auto  finish the rest automatically (low-risk only)
-        - q     quit — remaining findings left untouched
+  * ONE grouped question for all 10 vague terms (not ten prompts), with a short
+    numbered menu (the rationale is printed inline above it):
+        [1] Option A: save the recommended fix for review
+        [2] Option B: alternative repair proposal
+        [3] Keep current / skip
+        [4] Custom fix
+        [5] Let the LLM draft this fix now (one model call)
+        [a] Auto for remaining — deterministic (apply low-risk, save the rest)
+        [f] Let the LLM draft fixes for ALL remaining (one coherent pass)
+        [q] Quit — remaining findings left untouched
   * a clear final summary (fixed / skipped / remaining, patches, artifacts,
     and a pass/warn/block Decision)
 
-Nothing is written to your prompt unless you also pass --apply
-(which works with --interactive or --auto).
+Nothing is written to your prompt unless you also pass --apply — and that
+includes the LLM options. [5] and [f] let you draft/select a fix in-session, but
+the file is written only with --apply; without it the draft is kept as a preview.
+So the safe way to inspect an LLM fix is:
+
+    $PYTHON -m pdd checkup $REL/02_vague_clarification.prompt --interactive
+    # choose [f], review the draft — nothing is written
+
+and to apply it:
+
+    $PYTHON -m pdd checkup $REL/02_vague_clarification.prompt --interactive --apply
+    # choose [f] — the rewrite is written, backed up, logged, and re-verified
 
 EOF
   if [ ! -t 0 ]; then
