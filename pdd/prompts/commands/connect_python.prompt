@@ -85,7 +85,7 @@
        - Call register() to get cloud URL (no public URL needed - cloud hosts everything)
        - Start heartbeat background task
        - Start command listener for Firestore message bus
-       - Display cloud access URL to user
+       - Confirm registration to the user (the cloud access URL display is deferred until the production /connect page is deployed; the URL is captured but not printed)
        - Use set_active_session_manager() to store for server access
      - If not authenticated or --local-only:
        - Run in local-only mode (existing behavior)
