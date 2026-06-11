@@ -70,8 +70,26 @@ def is_checkup_source_set_json_invocation(arguments: List[str]) -> bool:
     return False
 
 
+def is_context_json_invocation(arguments: List[str]) -> bool:
+    """Return True for ``pdd context <prompt> --json`` machine output.
+
+    ``pdd context --json`` emits a JSON context-usage audit that dashboards
+    parse, so its stdout must stay payload-only. Exclude the case where
+    ``context`` is the value of the global ``--context`` option (e.g.
+    ``pdd --context context generate --json``) rather than the subcommand.
+    """
+    if "--json" not in arguments:
+        return False
+    for index, arg in enumerate(arguments):
+        if arg == "context" and (index == 0 or arguments[index - 1] != "--context"):
+            return True
+    return False
+
+
 def is_machine_json_invocation(arguments: List[str]) -> bool:
     """Return whether stdout must remain machine-parseable JSON only."""
-    return is_checkup_subcommand_json_invocation(
-        arguments
-    ) or is_checkup_source_set_json_invocation(arguments)
+    return (
+        is_checkup_subcommand_json_invocation(arguments)
+        or is_checkup_source_set_json_invocation(arguments)
+        or is_context_json_invocation(arguments)
+    )

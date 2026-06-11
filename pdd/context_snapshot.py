@@ -293,8 +293,18 @@ class ContextSnapshotRecorder:
         content: str,
         query: Optional[str] = None,
         output: Optional[str] = None,
+        include_depth: Optional[int] = None,
+        **_: Any,
     ) -> Dict[str, Any]:
-        """Record deterministic include or semantic query extraction output."""
+        """Record deterministic include or semantic query extraction output.
+
+        ``include_depth`` is accepted for parity with the ``snapshot_recorder``
+        contract that :func:`pdd.preprocess.preprocess` calls with — it lets
+        attribution-oriented recorders (e.g. ``pdd context``) keep only
+        top-level includes. The snapshot manifest does not depend on recursion
+        depth, so it is accepted and ignored here. The trailing ``**_`` keeps
+        this hook tolerant of any future keyword the caller adds.
+        """
 
         artifact_type = "query_include" if query else "include"
         if query and "query_include" not in self.dynamic_tags:

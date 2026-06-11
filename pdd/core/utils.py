@@ -83,6 +83,8 @@ def _should_show_onboarding_reminder(ctx: click.Context) -> bool:
     first_command = _first_pending_command(ctx)
     if first_command == "setup":
         return False
+    if first_command == "context":
+        return False
 
     if _api_env_exists():
         return False
