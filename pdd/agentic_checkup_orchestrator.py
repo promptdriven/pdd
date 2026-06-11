@@ -2322,10 +2322,9 @@ def _write_step5_shell_evidence(
     artifact = _step5_shell_evidence_path(cwd, pr_number)
     artifact.parent.mkdir(parents=True, exist_ok=True)
     safe_evidence = _storage_safe_step5_shell_evidence(evidence)
-    # Required local artifact for the final-gate Layer 2 handoff. The payload is
-    # recursively scrubbed above; CodeQL does not model this project scrubber.
+    # Required local artifact for the final-gate Layer 2 handoff. Do not persist
+    # subprocess stdout/stderr here; CodeQL treats those streams as secret-like.
     artifact.write_text(
-        # codeql[py/clear-text-storage-sensitive-data]
         json.dumps(safe_evidence, indent=2, sort_keys=True),
         encoding="utf-8",
     )
@@ -2379,10 +2378,21 @@ def _run_step5_shell_first_evidence(
             "changed-file list; agentic Step 5 remains responsible for broader "
             "project-specific discovery."
         ),
+        "output_omitted_from_artifact": False,
         "output_truncated": False,
     }
+    artifact_evidence: Dict[str, Any] = dict(evidence)
 
     if selected_tests:
+        artifact_evidence.update(
+            {
+                "output": (
+                    "Step 5 subprocess output is omitted from the disk artifact. "
+                    "Layer 1 prompt context receives the scrubbed bounded output."
+                ),
+                "output_omitted_from_artifact": True,
+            }
+        )
         env = os.environ.copy()
         prior_pythonpath = env.get("PYTHONPATH")
         env["PYTHONPATH"] = (
@@ -2412,6 +2422,13 @@ def _run_step5_shell_first_evidence(
                     "output_truncated": truncated,
                 }
             )
+            artifact_evidence.update(
+                {
+                    "status": status,
+                    "exit_code": completed.returncode,
+                    "output_truncated": truncated,
+                }
+            )
         except subprocess.TimeoutExpired as exc:
             raw_output = (
                 ((exc.stdout or "") if isinstance(exc.stdout, str) else "")
@@ -2423,6 +2440,13 @@ def _run_step5_shell_first_evidence(
                     "status": "timeout_partial",
                     "exit_code": "timeout",
                     "output": output or "pytest timed out before producing output.",
+                    "output_truncated": truncated,
+                }
+            )
+            artifact_evidence.update(
+                {
+                    "status": "timeout_partial",
+                    "exit_code": "timeout",
                     "output_truncated": truncated,
                 }
             )
@@ -2438,9 +2462,17 @@ def _run_step5_shell_first_evidence(
                     "output_truncated": truncated,
                 }
             )
+            artifact_evidence.update(
+                {
+                    "status": "error",
+                    "exit_code": "error",
+                    "output_truncated": truncated,
+                }
+            )
 
     evidence = _storage_safe_step5_shell_evidence(evidence)
-    _write_step5_shell_evidence(cwd, pr_number, evidence)
+    artifact_evidence = _storage_safe_step5_shell_evidence(artifact_evidence)
+    _write_step5_shell_evidence(cwd, pr_number, artifact_evidence)
     context["step5_shell_evidence"] = json.dumps(evidence, indent=2, sort_keys=True)
     if not quiet and evidence.get("status") in _STEP5_SHELL_ACTIONABLE_STATUSES:
         console.print(

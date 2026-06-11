@@ -132,6 +132,11 @@ class TestStep5ShellFirstEvidence:
         assert artifact.is_file()
         payload = json.loads(artifact.read_text(encoding="utf-8"))
         assert payload["status"] == "failed"
+        assert payload["output_omitted_from_artifact"] is True
+        assert "tests/test_widget.py::test_breaks" in context["step5_shell_evidence"]
+        assert "tests/test_widget.py::test_breaks" not in artifact.read_text(
+            encoding="utf-8"
+        )
         artifact_text = artifact.read_text(encoding="utf-8")
         assert gh_token not in artifact_text
         assert env_token not in artifact_text
