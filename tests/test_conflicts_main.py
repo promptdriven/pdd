@@ -1,8 +1,12 @@
 import pytest
+from io import StringIO
 from unittest.mock import patch, MagicMock, mock_open
 from typing import List, Dict, Tuple, Optional
 
+from rich.console import Console
+
 from pdd.conflicts_main import conflicts_main
+from pdd.cli_status import Status, StatusReporter
 from pdd import DEFAULT_STRENGTH
 
 @pytest.fixture
@@ -18,12 +22,24 @@ def mock_ctx():
     return ctx
 
 
+@pytest.fixture
+def mock_status():
+    """Inject a recording StatusReporter so tests can assert message *shape*.
+
+    Writes to a throwaway StringIO console (no terminal, no spinner, no timing),
+    keeping assertions deterministic.
+    """
+    reporter = StatusReporter("pdd conflicts", console=Console(file=StringIO()))
+    with patch('pdd.conflicts_main.from_context', return_value=reporter):
+        yield reporter
+
+
 @patch('csv.DictWriter')  # Added patch for csv.DictWriter
 @patch('pdd.conflicts_main.conflicts_in_prompts')
 @patch('pdd.conflicts_main.construct_paths')
 @patch('pdd.conflicts_main.rprint')
 @patch('builtins.open', new_callable=mock_open)
-def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_dict_writer, mock_ctx):
+def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_dict_writer, mock_ctx, mock_status):
     """Test conflicts_main with valid inputs and an output path."""
     # Setup mock for construct_paths
     mock_construct_paths.return_value = (
@@ -104,11 +120,20 @@ def test_success_with_output(mock_file, mock_rprint, mock_construct_paths, mock_
     ]
     mock_writer_instance.writerow.assert_has_calls(expected_calls, any_order=False)
 
-    # Ensure rprint was called for user feedback
-    mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
+    # Ensure rprint was called for the detailed data report (unchanged).
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_xyz")
     mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.123456")
     mock_rprint.assert_any_call("[bold]Results saved to:[/bold] output.csv")
+
+    # Status messaging: start, a waiting indicator on the LLM, and a success
+    # with a next action — the UX acceptance criteria for a covered command.
+    kinds = [m.status for m in mock_status.messages]
+    assert kinds[0] == Status.START
+    assert Status.WAITING in kinds
+    success = [m for m in mock_status.messages if m.status == Status.SUCCESS]
+    assert success and success[-1].next_step
+    waiting = [m for m in mock_status.messages if m.status == Status.WAITING]
+    assert waiting[0].waiting_on == "LLM"
 
 @patch('csv.DictWriter')
 @patch('pdd.conflicts_main.conflicts_in_prompts')
@@ -200,8 +225,7 @@ def test_success_without_output(
     ]
     mock_writer_instance.writerow.assert_has_calls(expected_calls, any_order=False)
     
-    # Ensure rprint was called for user feedback without output path
-    mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
+    # Ensure rprint was called for the detailed report without an output path.
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_abc")
     mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.654321")
     
@@ -209,11 +233,11 @@ def test_success_without_output(
 
 @patch('pdd.conflicts_main.construct_paths')
 @patch('pdd.conflicts_main.rprint')
-def test_missing_prompt_files(mock_rprint, mock_construct_paths, mock_ctx):
+def test_missing_prompt_files(mock_rprint, mock_construct_paths, mock_ctx, mock_status):
     """Test conflicts_main handling of missing prompt files."""
     # Setup construct_paths to raise FileNotFoundError
     mock_construct_paths.side_effect = FileNotFoundError("Prompt files not found.")
-    
+
     # Call the function under test and expect it to exit
     with pytest.raises(SystemExit) as exc_info:
         conflicts_main(
@@ -222,16 +246,19 @@ def test_missing_prompt_files(mock_rprint, mock_construct_paths, mock_ctx):
             prompt2='path/to/nonexistent_prompt2',
             output='path/to/output.csv'
         )
-    
-    # Assertions
+
+    # Assertions: actionable failure (cause + suggestions) and exit code 1.
     assert exc_info.value.code == 1
-    mock_rprint.assert_any_call("[bold red]Error:[/bold red] Prompt files not found.")
+    failures = [m for m in mock_status.messages if m.status == Status.FAILURE]
+    assert failures, "a FAILURE status should be reported"
+    assert failures[-1].reason == "Prompt files not found."
+    assert len(failures[-1].suggestions) >= 1
 
 
 @patch('pdd.conflicts_main.conflicts_in_prompts')
 @patch('pdd.conflicts_main.construct_paths')
 @patch('pdd.conflicts_main.rprint')
-def test_conflicts_in_prompts_error(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx):
+def test_conflicts_in_prompts_error(mock_rprint, mock_construct_paths, mock_conflicts_in_prompts, mock_ctx, mock_status):
     """Test conflicts_main handling exceptions from conflicts_in_prompts."""
     # Setup construct_paths
     mock_construct_paths.return_value = (
@@ -258,9 +285,12 @@ def test_conflicts_in_prompts_error(mock_rprint, mock_construct_paths, mock_conf
             output='path/to/output.csv'
         )
     
-    # Assertions
+    # Assertions: actionable failure (cause + suggestions) and exit code 1.
     assert exc_info.value.code == 1
-    mock_rprint.assert_any_call("[bold red]Error:[/bold red] Model error occurred.")
+    failures = [m for m in mock_status.messages if m.status == Status.FAILURE]
+    assert failures, "a FAILURE status should be reported"
+    assert failures[-1].reason == "Model error occurred."
+    assert len(failures[-1].suggestions) >= 1
 
 
 @patch('csv.DictWriter')
@@ -402,8 +432,7 @@ def test_force_option(mock_file, mock_rprint, mock_construct_paths, mock_conflic
         {'prompt_name': 'path/to/prompt1', 'change_instructions': 'Force Change A'}
     )
     
-    # Ensure rprint was called for user feedback
-    mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
+    # Ensure rprint was called for the detailed data report.
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_force")
     mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.789012")
     mock_rprint.assert_any_call("[bold]Results saved to:[/bold] output/output.csv")
@@ -462,8 +491,7 @@ def test_replace_prompt_names(mock_file, mock_rprint, mock_construct_paths, mock
         False
     )
     
-    # Ensure rprint was called correctly
-    mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
+    # Ensure rprint was called correctly for the detailed report + listing.
     mock_rprint.assert_any_call("[bold]Model used:[/bold] model_replace")
     mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.333333")
     mock_rprint.assert_any_call("[bold]Conflicts detected:[/bold]")
@@ -554,6 +582,5 @@ def test_verbose_mode(mock_dict_writer, mock_file, mock_rprint, mock_construct_p
     # rather that verbose is passed to conflicts_in_prompts for *its* detailed output.
     # So, we just check the standard non-quiet prints.
     if not mock_ctx.obj.get('quiet', False):
-        mock_rprint.assert_any_call("[bold green]Conflict analysis completed successfully.[/bold green]")
         mock_rprint.assert_any_call("[bold]Model used:[/bold] model_verbose")
         mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.999000")

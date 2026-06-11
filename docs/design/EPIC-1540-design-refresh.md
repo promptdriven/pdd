@@ -22,7 +22,7 @@ mapping distilled from §3 (Color Palette) and §7 (ASCII & Terminal Assets).
 | # | Workstream | PR | Status |
 |---|------------|----|--------|
 | 1 | Command color system — one consistent palette for commands, tags, labels, and states | sohni-tagirisa/pdd#1 | ✅ Merged into EPIC |
-| 2 | Better status & progress communication | — | ⬜ Not started |
+| 2 | Better status & progress communication — START/STEP/WAITING/SUCCESS/FAILURE primitives (`pdd/cli_status.py`); see `docs/design/status-messaging.md` | sohni-tagirisa/pdd#2 | 🟡 In progress |
 | 3 | `pdd context` token visualization (multi-color tokens) | — | ⬜ Not started |
 | 4 | Adaptive theming (detect IDE/editor light/dark theme) | — | ⬜ Not started |
 | 5 | `pdd connect` redesign | — | ⬜ Not started |
