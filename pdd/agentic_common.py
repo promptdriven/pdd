@@ -956,20 +956,30 @@ _RESET_ISO_RE = re.compile(
     r"(?:Z|[+-]\d{2}:?\d{2})?)",
     re.IGNORECASE,
 )
+# `ampm` accepts plain and dotted forms (am, pm, a.m., p.m.); `tz` captures any
+# parenthesized suffix immediately after the time so an unrecognized zone is
+# rejected (-> unparseable) instead of silently defaulting to UTC.
 _RESET_DATE_RE = re.compile(
     r"resets?\b[^\n]{0,12}?"
     r"(?P<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
     r"(?P<day>\d{1,2})(?:,)?\s+"
-    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm)?"
-    r"(?:\s*\((?P<tz>[A-Za-z][A-Za-z0-9_+\-/]*)\))?",
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
+    r"(?:\s*\((?P<tz>[^)\n]{1,40})\))?",
     re.IGNORECASE,
 )
 _RESET_TIME_RE = re.compile(
-    r"resets?\b[^\n]{0,12}?"
-    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>am|pm)?"
-    r"(?:\s*\((?P<tz>[A-Za-z][A-Za-z0-9_+\-/]*)\))?",
+    r"resets?\b(?P<gap>[^\n]{0,12}?)"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
+    r"(?:\s*\((?P<tz>[^)\n]{1,40})\))?",
     re.IGNORECASE,
 )
+
+# A relative-countdown preposition in the gap before a time-only token marks a
+# duration ("resets in 00:30", "try again within 5:00"), NOT an absolute clock
+# time — those must not yield a reset_at.
+_RELATIVE_RESET_GAP_RE = re.compile(r"\b(?:in|after|within|every)\b", re.IGNORECASE)
+# Explicit numeric UTC/GMT offset, e.g. "UTC+02:00", "GMT-5", "+0530".
+_TZ_OFFSET_RE = re.compile(r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
 
 
 def _format_utc(dt: datetime) -> str:
@@ -982,27 +992,41 @@ def _resolve_reset_tz(name: Optional[str]) -> Optional[tzinfo]:
 
     Returns ``timezone.utc`` when no timezone was given (the conservative,
     documented default for unzoned reset text), a resolved zone for ``UTC``/
-    ``GMT``/``Z`` or a recognized IANA name (e.g. ``America/Los_Angeles``), and
-    ``None`` when an *explicit* timezone token is present but unrecognized — the
-    caller then treats the reset as unparseable rather than emitting a
-    confidently-wrong UTC timestamp (e.g. reading ``3:30pm (PDT)`` as 15:30Z).
+    ``GMT``/``Z``, an explicit numeric offset (``UTC+02:00``, ``GMT-5``), or a
+    recognized IANA name (e.g. ``America/Los_Angeles``), and ``None`` when an
+    *explicit* timezone token is present but unrecognized (``PDT``, ``Pacific
+    Time``) — the caller then treats the reset as unparseable rather than
+    emitting a confidently-wrong UTC timestamp.
     """
     if not name:
         return timezone.utc
-    if name.upper() in ("UTC", "GMT", "Z"):
+    cleaned = name.strip()
+    if cleaned.upper() in ("UTC", "GMT", "Z", "UT"):
         return timezone.utc
+    offset = _TZ_OFFSET_RE.match(cleaned)
+    if offset:
+        sign = -1 if offset.group(1) == "-" else 1
+        hours = int(offset.group(2))
+        minutes = int(offset.group(3) or 0)
+        if hours > 23 or minutes > 59:
+            return None
+        return timezone(sign * timedelta(hours=hours, minutes=minutes))
     try:
-        return ZoneInfo(name)
+        return ZoneInfo(cleaned)
     except Exception:
         return None
 
 
 def _reset_hour_to_24h(hour: int, ampm: Optional[str]) -> Optional[int]:
-    """Convert a parsed clock hour (12h with am/pm, or 24h) to 0-23, or None."""
+    """Convert a parsed clock hour (12h with am/pm, or 24h) to 0-23, or None.
+
+    ``ampm`` may be a dotted form (``a.m.``/``p.m.``); dots are normalized away.
+    """
     if ampm:
+        marker = ampm.replace(".", "").lower()
         if not 1 <= hour <= 12:
             return None
-        if ampm.lower() == "am":
+        if marker == "am":
             return 0 if hour == 12 else hour
         return 12 if hour == 12 else hour + 12
     return hour if 0 <= hour <= 23 else None
@@ -1103,9 +1127,15 @@ def _parse_reset_at(
 
     # 3) Time-of-day only (date inferred -> next future occurrence; estimated).
     #    Require an am/pm marker OR an explicit minute so a bare "resets 11"
-    #    cannot parse as an ambiguous time.
+    #    cannot parse as an ambiguous time, and reject relative countdowns
+    #    ("resets in 00:30") whose HH:MM looks like a clock time but is a
+    #    duration.
     match = _RESET_TIME_RE.search(text)
-    if match and (match.group("ampm") or match.group("minute")):
+    if (
+        match
+        and (match.group("ampm") or match.group("minute"))
+        and not _RELATIVE_RESET_GAP_RE.search(match.group("gap"))
+    ):
         dt = _time_only_reset_to_datetime(match, now)
         if dt is not None:
             return _format_utc(dt), "estimated"

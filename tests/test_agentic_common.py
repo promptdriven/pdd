@@ -7548,9 +7548,39 @@ class TestProviderLimitMarker:
         cloud retry too early. Degrade to unparseable instead."""
         from pdd.agentic_common import _parse_reset_at
 
-        reset_at, source = _parse_reset_at("resets 3:30pm (PDT)", now=self.NOW)
-        assert reset_at == ""
-        assert source == "none"
+        for unknown_tz in ("resets 3:30pm (PDT)", "resets 3:30pm (Pacific Time)"):
+            reset_at, source = _parse_reset_at(unknown_tz, now=self.NOW)
+            assert reset_at == "", unknown_tz
+            assert source == "none", unknown_tz
+
+    def test_parse_reset_relative_countdown_hhmm_is_not_a_clock_time(self):
+        """A relative countdown that happens to look like HH:MM ("resets in
+        00:30") is a duration, not an absolute reset time — it must not yield
+        a (wrong, next-day) reset_at."""
+        from pdd.agentic_common import _parse_reset_at
+
+        for relative in ("resets in 00:30", "Error 429; resets in 00:30", "resets within 5:00"):
+            reset_at, source = _parse_reset_at(relative, now=self.NOW)
+            assert reset_at == "", relative
+            assert source == "none", relative
+
+    def test_parse_reset_dotted_ampm_is_recognized(self):
+        """Dotted ``p.m.`` must convert to 24h, not be dropped (which would
+        misread 3:30 p.m. as 03:30Z)."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 3:30 p.m. (UTC)", now=self.NOW)
+        assert reset_at == "2026-06-11T15:30:00Z"
+        assert source == "estimated"
+
+    def test_parse_reset_explicit_numeric_utc_offset(self):
+        """An explicit numeric UTC offset converts correctly (15:30 at +02:00
+        is 13:30Z)."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 3:30pm (UTC+02:00)", now=self.NOW)
+        assert reset_at == "2026-06-11T13:30:00Z"
+        assert source == "estimated"
 
     def test_parse_reset_absent_keyword_yields_empty_none(self):
         from pdd.agentic_common import _parse_reset_at
