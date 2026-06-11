@@ -29,6 +29,7 @@ from pdd.agentic_sync_runner import (
     _parse_public_surface_failure,
     _parse_test_churn_failure,
     _parse_cost_from_csv,
+    _parse_estimate_summary_from_stdout,
     build_dep_graph_from_architecture,
     build_dep_graph_from_architecture_data,
 )
@@ -148,6 +149,167 @@ def test_agentic_sync_estimate_request_skips_state_and_github_writes(
     assert success is True
     assert "estimate" in summary.lower()
     assert total_cost == pytest.approx(0.0)
+
+
+# ---------------------------------------------------------------------------
+# Estimate-mode unknown / lower-bound preservation (PR #1526 feedback)
+# ---------------------------------------------------------------------------
+
+
+class TestParseEstimateSummaryFromStdout:
+    """The child-estimate stdout parser must preserve unknown / lower-bound
+    status, not collapse it to an exact-looking cost (or None-then-0.0)."""
+
+    def test_json_lower_bound_preserved(self):
+        line = json.dumps({
+            "estimate": True,
+            "estimated_cost": 0.05,
+            "total_cost": 0.05,
+            "unknown_cost": True,
+            "is_lower_bound": True,
+            "currency": "USD",
+        })
+        summary = _parse_estimate_summary_from_stdout("noise\n" + line + "\ntail")
+        assert summary == {
+            "estimated_cost": 0.05,
+            "unknown_cost": True,
+            "is_lower_bound": True,
+            "currency": "USD",
+        }
+
+    def test_json_unknown_cost_none_stays_none(self):
+        line = json.dumps({
+            "estimate": True,
+            "estimated_cost": None,
+            "total_cost": None,
+            "unknown_cost": True,
+            "is_lower_bound": False,
+        })
+        summary = _parse_estimate_summary_from_stdout(line)
+        assert summary["estimated_cost"] is None
+        assert summary["unknown_cost"] is True
+
+    def test_json_missing_cost_is_unknown_even_without_flag(self):
+        # A priced field that is absent must read as unknown, never exact 0.0.
+        line = json.dumps({"estimate": True, "unknown_cost": False})
+        summary = _parse_estimate_summary_from_stdout(line)
+        assert summary["estimated_cost"] is None
+        assert summary["unknown_cost"] is True
+
+    def test_json_exact(self):
+        line = json.dumps({
+            "estimate": True,
+            "estimated_cost": 0.02,
+            "unknown_cost": False,
+            "is_lower_bound": False,
+        })
+        summary = _parse_estimate_summary_from_stdout(line)
+        assert summary["estimated_cost"] == pytest.approx(0.02)
+        assert summary["unknown_cost"] is False
+        assert summary["is_lower_bound"] is False
+
+    def test_human_lower_bound(self):
+        summary = _parse_estimate_summary_from_stdout(
+            "Total estimated cost: ≥ $0.050000 "
+            "(lower bound; some steps not estimable without execution)"
+        )
+        assert summary["estimated_cost"] == pytest.approx(0.05)
+        assert summary["is_lower_bound"] is True
+        assert summary["unknown_cost"] is True
+
+    def test_human_exact(self):
+        summary = _parse_estimate_summary_from_stdout("Total estimated cost: $0.020000")
+        assert summary["estimated_cost"] == pytest.approx(0.02)
+        assert summary["is_lower_bound"] is False
+        assert summary["unknown_cost"] is False
+
+    def test_human_unknown(self):
+        summary = _parse_estimate_summary_from_stdout("Total estimated cost: unknown")
+        assert summary["estimated_cost"] is None
+        assert summary["unknown_cost"] is True
+
+    def test_no_estimate_returns_none(self):
+        assert _parse_estimate_summary_from_stdout("nothing relevant here") is None
+        assert _parse_estimate_summary_from_stdout("") is None
+
+
+class TestRunEstimateAggregation:
+    """``_run_estimate`` must aggregate unknown / lower-bound across child
+    modules so an unknown or floor child total is never reported as an exact
+    parent total (PR #1526 feedback)."""
+
+    @staticmethod
+    def _runner(basenames):
+        return AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph={b: [] for b in basenames},
+            sync_options={"estimate": True},
+            github_info=None,
+            quiet=True,
+        )
+
+    @staticmethod
+    def _drive(runner, summaries):
+        """Emulate _run_attempt recording per-module estimate summaries."""
+        def fake_sync(basename):
+            s = summaries.get(basename)
+            if s is not None:
+                runner._estimate_module_summaries[basename] = s
+            cost = (s or {}).get("estimated_cost") or 0.0
+            return True, cost, ""
+
+        with patch.object(runner, "_sync_one_module", side_effect=fake_sync):
+            return runner._run_estimate()
+
+    def test_all_exact_reports_exact_total(self):
+        runner = self._runner(["a", "b"])
+        success, summary, total = self._drive(runner, {
+            "a": {"estimated_cost": 0.02, "unknown_cost": False, "is_lower_bound": False},
+            "b": {"estimated_cost": 0.03, "unknown_cost": False, "is_lower_bound": False},
+        })
+        assert success is True
+        assert total == pytest.approx(0.05)
+        assert "lower bound" not in summary
+        assert "unknown" not in summary.lower()
+        assert "$0.050000" in summary
+
+    def test_lower_bound_child_makes_total_a_floor(self):
+        runner = self._runner(["a", "b"])
+        success, summary, total = self._drive(runner, {
+            "a": {"estimated_cost": 0.02, "unknown_cost": False, "is_lower_bound": False},
+            "b": {"estimated_cost": 0.05, "unknown_cost": True, "is_lower_bound": True},
+        })
+        assert total == pytest.approx(0.07)
+        assert "≥" in summary
+        assert "lower bound" in summary
+        # Must NOT present the floor as an exact total.
+        assert "Estimated cost: $0.070000." not in summary
+
+    def test_unknown_child_does_not_become_exact_zero(self):
+        runner = self._runner(["a", "b"])
+        success, summary, total = self._drive(runner, {
+            "a": {"estimated_cost": 0.02, "unknown_cost": False, "is_lower_bound": False},
+            "b": {"estimated_cost": None, "unknown_cost": True, "is_lower_bound": False},
+        })
+        # The priced module still contributes a floor; the unknown one marks it.
+        assert total == pytest.approx(0.02)
+        assert "lower bound" in summary
+
+    def test_all_unknown_reports_unknown_not_zero(self):
+        runner = self._runner(["a", "b"])
+        success, summary, total = self._drive(runner, {
+            "a": {"estimated_cost": None, "unknown_cost": True, "is_lower_bound": False},
+            "b": {"estimated_cost": None, "unknown_cost": True, "is_lower_bound": False},
+        })
+        assert "unknown" in summary.lower()
+        # The headline must not read as an exact $0.00 total.
+        assert "Estimated cost: $0.000000." not in summary
+
+    def test_missing_child_summary_is_treated_as_unknown(self):
+        runner = self._runner(["a"])
+        success, summary, total = self._drive(runner, {})
+        assert "unknown" in summary.lower()
+        assert "Estimated cost: $0.000000." not in summary
 
 
 class TestModuleState:
