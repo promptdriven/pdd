@@ -21,7 +21,6 @@ from pdd.cli_theme import (
     BREAK_RED,
     DIFF_YELLOW,
     ELECTRIC_CYAN,
-    LUMEN_PURPLE,
     hex_to_ansi,
 )
 import importlib
@@ -29,12 +28,14 @@ import importlib
 context_mod = importlib.import_module("pdd.commands.context")
 from pdd.commands.context import (
     _FREE_GLYPH,
+    _SOURCE_CYCLE,
     _UNAVAILABLE_GLYPH,
     _USED_GLYPH,
     _color_enabled,
     _glyph_for,
     _make_painter,
     _render_usage_box,
+    _row_colors,
     context,
 )
 from pdd.context_audit import AuditRow, ContextAudit
@@ -88,20 +89,22 @@ def _invoke(args, prompt_file, env=None):
 
 
 # --------------------------------------------------------------------------- #
-# Color is multi-color, by category, and on the expected brand hues.
+# Color is multi-color: distinct sources get distinct hues; problems get their
+# reserved red/yellow; free space stays faint.
 # --------------------------------------------------------------------------- #
-def test_forced_color_emits_each_category_color(patched, prompt_file):
+def test_forced_color_emits_expected_hues(patched, prompt_file):
     res = _invoke(["--color"], prompt_file)
     assert res.exit_code == 0, res.output
     out = res.output
-    # Every category present in the audit contributes its brand color marker.
-    assert hex_to_ansi(ELECTRIC_CYAN) in out  # body
-    assert hex_to_ansi(LUMEN_PURPLE) in out  # resolved include
+    # Two counted sources (body, then resolved) take the first two cycle hues...
+    assert _SOURCE_CYCLE[0] in out  # 1st source  (Electric-Cyan)
+    assert _SOURCE_CYCLE[1] in out  # 2nd source  (Prompt-Magenta) — *not* the same as the 1st
+    # ...problem rows keep their reserved semantic colors...
     assert hex_to_ansi(DIFF_YELLOW) in out  # deferred
     assert hex_to_ansi(BREAK_RED) in out  # unresolved
-    assert ANSI_FAINT in out  # free space
+    # ...and free space is faint.
+    assert ANSI_FAINT in out
     assert ANSI_RESET in out
-    # More than one distinct color → genuinely multi-color, not a single hue.
     distinct = set(_ANSI_RE.findall(out))
     assert len(distinct) >= 4
 
@@ -209,7 +212,7 @@ def test_table_color_keeps_alignment(patched, prompt_file):
 
 def test_table_forced_color_has_markers(patched, prompt_file):
     out = _invoke(["--table", "--color"], prompt_file).output
-    assert hex_to_ansi(LUMEN_PURPLE) in out
+    assert _SOURCE_CYCLE[0] in out
     assert ANSI_RESET in out
 
 
@@ -243,15 +246,16 @@ def test_color_enabled_auto(monkeypatch):
 
 def test_painter_disabled_is_noop():
     paint = _make_painter(False)
-    assert paint("body", "x") == "x"
-    assert paint("free", "⛶") == "⛶"
+    assert paint(hex_to_ansi(ELECTRIC_CYAN), "x") == "x"
+    assert paint(ANSI_FAINT, "⛶") == "⛶"
 
 
-def test_painter_enabled_wraps_known_category_only():
+def test_painter_enabled_wraps_in_given_color():
     paint = _make_painter(True)
-    assert paint("body", "x") == f"{hex_to_ansi(ELECTRIC_CYAN)}x{ANSI_RESET}"
-    # Unknown category falls back to plain text rather than emitting a bad code.
-    assert paint("does-not-exist", "x") == "x"
+    code = hex_to_ansi(ELECTRIC_CYAN)
+    assert paint(code, "x") == f"{code}x{ANSI_RESET}"
+    # An empty color falls back to plain text rather than emitting a bad code.
+    assert paint("", "x") == "x"
 
 
 # --------------------------------------------------------------------------- #
@@ -297,8 +301,49 @@ def test_counted_categories_share_glyph_in_legend():
 
 
 def test_color_distinguishes_the_shared_glyph(patched, prompt_file):
-    """Same glyph, different category → different color in front of it."""
+    """Same glyph, different source → different color in front of it."""
     out = _invoke(["--color"], prompt_file).output
-    # body (cyan) and resolved (purple) both wear _USED_GLYPH, told apart by color.
-    assert f"{hex_to_ansi(ELECTRIC_CYAN)}{_USED_GLYPH}" in out
-    assert f"{hex_to_ansi(LUMEN_PURPLE)}{_USED_GLYPH}" in out
+    # The two counted sources both wear _USED_GLYPH, told apart by color.
+    assert f"{_SOURCE_CYCLE[0]}{_USED_GLYPH}" in out
+    assert f"{_SOURCE_CYCLE[1]}{_USED_GLYPH}" in out
+
+
+# --------------------------------------------------------------------------- #
+# Per-source coloring: distinct sources never share a color; problem rows keep
+# their reserved semantic colors regardless of position.
+# --------------------------------------------------------------------------- #
+def test_row_colors_assignment():
+    rows = [
+        AuditRow(source="a.md", tokens=50, status="resolved"),
+        AuditRow(source="body", tokens=40, status="body"),
+        AuditRow(source="b.md", tokens=30, status="resolved"),
+        AuditRow(source="missing.md", tokens=0, status="unresolved"),
+        AuditRow(source="<shell>", tokens=0, status="deferred"),
+        AuditRow(source="grounding", tokens=0, status="unavailable"),
+    ]
+    colors = _row_colors(rows)
+    # Counted sources cycle the palette by position (overrides are skipped, so
+    # they do not consume a cycle slot).
+    assert colors[0] == _SOURCE_CYCLE[0]  # a.md
+    assert colors[1] == _SOURCE_CYCLE[1]  # body
+    assert colors[2] == _SOURCE_CYCLE[2]  # b.md
+    # Problem rows take their reserved colors no matter where they fall.
+    assert colors[3] == hex_to_ansi(BREAK_RED)  # unresolved
+    assert colors[4] == hex_to_ansi(DIFF_YELLOW)  # deferred
+    assert colors[5] == ANSI_FAINT  # unavailable
+
+
+def test_two_resolved_sources_get_distinct_colors():
+    """The reported confusion fix: two includes must not be the same color."""
+    audit = _audit_with_unavailable()  # has context/a.txt and context/b.txt
+    box = _render_usage_box(
+        audit.rows, audit.total_tokens, audit.context_limit, audit.model,
+        audit.percent_used, _make_painter(True),
+    )
+    # (colored: an ANSI reset sits between the source name and the ":", so match
+    # on the bare name)
+    a_line = next(ln for ln in box.splitlines() if "context/a.txt" in ln)
+    b_line = next(ln for ln in box.splitlines() if "context/b.txt" in ln)
+    a_color = _ANSI_RE.findall(a_line)[0]
+    b_color = _ANSI_RE.findall(b_line)[0]
+    assert a_color != b_color

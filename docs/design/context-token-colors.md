@@ -6,50 +6,58 @@ token visualization."
 `pdd context` renders a Claude-Code `/context`-style usage box (and a `--table`
 view) that attributes a hydrated prompt's tokens by source. This workstream
 upgrades that view from a single-colored, glyph-only indicator to a readable,
-**multi-color** one: **color** now distinguishes token *categories* at a glance.
-The counted categories (`body`/`resolved`/`deferred`/`unresolved`) all share one
-glyph and are told apart by color alone; `unavailable` and free space keep their
-own distinct glyphs so they stay legible regardless of color. Every count,
-ordering, and the machine-readable `--json` output stay exactly the same — only
-the glyph *scheme* changed.
+**multi-color** one: **color** distinguishes each *source* so different includes
+are visually distinct, while two row states (`unresolved`, `deferred`) are
+reserved as semantic colors so problems always stand out. Every count, ordering,
+and the machine-readable `--json` output stay exactly the same.
 
-## Categories → color (one place)
+## Source → color (one place)
 
-A row's category is its deterministic
-[`status`](../../pdd/context_audit.py) — what a segment *is* — plus the synthetic
-`free` for unused context-window space. Color tracks the category, not the
-source string, so the same kind of segment always reads the same way (like
-Claude Code's `/context`). The mapping lives in **one** table,
-[`_CATEGORY_COLOR` in `pdd/commands/context.py`](../../pdd/commands/context.py),
-built from the central palette in [`pdd/cli_theme.py`](../../pdd/cli_theme.py)
-(Brand Guidelines v1.4 §3). No module hand-writes ANSI codes — every escape is
-produced by `cli_theme.hex_to_ansi` / `ANSI_FAINT` / `ANSI_RESET`.
+Color tracks the *source*, not its category — so two different includes are never
+the same color (the original confusion: when color tracked category, every
+`resolved` include came out the same purple). Two `status` values are reserved as
+**overrides** so trouble pops regardless of position, and free/unavailable stay
+faint. This lives in **one** place in
+[`pdd/commands/context.py`](../../pdd/commands/context.py): a `_SOURCE_CYCLE`
+tuple, a `_STATUS_OVERRIDE` map, and the `_row_colors(rows)` helper that assigns
+one color per row. All hues come from the central palette in
+[`pdd/cli_theme.py`](../../pdd/cli_theme.py) (Brand Guidelines v1.4 §3); no module
+hand-writes ANSI codes (every escape is `cli_theme.hex_to_ansi` / `ANSI_FAINT` /
+`ANSI_RESET`).
 
-| Category      | Meaning                                            | Brand color    |
-|---------------|----------------------------------------------------|----------------|
-| `body`        | the prompt's own instructions (the hero)           | Electric-Cyan  |
-| `resolved`    | a hydrated `<include>` source                      | Lumen-Purple   |
-| `deferred`    | dynamic markup not yet realized (`<shell>`/`<web>`/`query=`) | Diff-Yellow (warn) |
+**Reserved overrides** (always, whatever the source's position):
+
+| `status`      | Meaning                                            | Color             |
+|---------------|----------------------------------------------------|-------------------|
 | `unresolved`  | an `<include>` path that did not resolve           | Break-Red (error) |
-| `unavailable` | requires PDD Cloud; counted as 0 tokens            | faint          |
-| `free`        | unused context-window space (low emphasis)         | faint          |
+| `deferred`    | dynamic markup not realized (`<shell>`/`<web>`/`query=`) | Diff-Yellow (warn) |
+| `unavailable` | requires PDD Cloud; counted as 0 tokens            | faint             |
+| *(free space)*| unused context-window space                        | faint             |
 
-Color flows through a single `paint(category, text)` seam: in the grid each cell
-glyph is painted by its source's category (free cells use `free`); in the legend
-the `glyph + source` marker is painted; in `--table` only the width-padded
-`Source` cell is painted, so column alignment is unaffected by escape bytes.
+**Every other (counted) source** takes the next color in `_SOURCE_CYCLE` —
+Electric-Cyan → Prompt-Magenta → Build-Green → Lumen-Purple — assigned by its
+position among counted rows (overrides don't consume a slot). Distinct sources
+therefore get distinct colors; with more sources than palette entries the cycle
+wraps, but neighbours always differ. Assignment is deterministic because the
+core returns rows in a stable order (largest first).
+
+Color flows through a single `paint(color, text)` seam (the `color` is an ANSI
+prefix from `_row_colors`): in the grid each cell glyph is painted by its row's
+color (free cells faint); in the legend the `glyph + source` marker is painted;
+in `--table` only the width-padded `Source` cell is painted, so column alignment
+is unaffected by escape bytes.
 
 ## Glyphs: shared for counted, distinct for the rest
 
-The counted categories (`body`/`resolved`/`deferred`/`unresolved`) all use one
-shared glyph (`_USED_GLYPH`) and rely on **color** to tell them apart — the same
-way Claude Code's `/context` uses one colored-square shape. `unavailable` uses
-its own glyph and free space keeps `⛶`, so those two non-usage rows stay legible
-even where color is unavailable. `_glyph_for(status)` is the single place that
-picks a row's glyph; all grid glyphs share one display width so the grid stays
-aligned. (Trade-off: with `--no-color`/`NO_COLOR`, counted categories are no
-longer distinguishable *in the grid* by symbol — the legend labels still name
-each one, and `--table` is unaffected.)
+Glyphs no longer carry per-source identity (color does that now), so they're kept
+to plain, universally-rendered shapes — **Geometric Shapes / Block Elements** —
+that never show up as missing-glyph boxes the way the earlier `⛁`/`⛶` symbols did
+in common terminal fonts (Menlo, SF Mono). The counted categories
+(`body`/`resolved`/`deferred`/`unresolved`) all use one solid square `■`
+(`_USED_GLYPH`); `unavailable` uses a faint `▨` and free space a faint light-shade
+`░`, so those two non-usage rows stay legible even without color.
+`_glyph_for(status)` is the single place that picks a row's glyph; all grid glyphs
+share one display width so the grid stays aligned.
 
 ## Color detection (`--color` / `--no-color` / auto)
 

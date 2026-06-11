@@ -23,9 +23,11 @@ from ..cli_theme import (
     ANSI_FAINT,
     ANSI_RESET,
     BREAK_RED,
+    BUILD_GREEN,
     DIFF_YELLOW,
     ELECTRIC_CYAN,
     LUMEN_PURPLE,
+    PROMPT_MAGENTA,
     hex_to_ansi,
 )
 from ..context_audit import (
@@ -38,15 +40,16 @@ from ..context_audit import (
 )
 from ..core.errors import handle_error
 
-# Color — not glyph — distinguishes the *counted* categories (body, resolved,
-# deferred, unresolved), mirroring the colored squares of Claude Code's
-# ``/context`` display: every counted cell uses the one ``_USED_GLYPH`` and reads
-# its category from color alone. Unavailable and free space keep their own
-# distinct glyphs (and stay faint) so they remain legible even where color is
-# the same. ``_glyph_for`` is the single place that picks a row's glyph.
-_USED_GLYPH = "⛁"
-_UNAVAILABLE_GLYPH = "▨"
-_FREE_GLYPH = "⛶"
+# Glyphs are plain, universally-rendered shapes (Geometric Shapes / Block
+# Elements) so they never show up as missing-glyph boxes the way the older
+# ``⛁``/``⛶`` symbols did in common terminal fonts (Menlo, SF Mono, …). Color —
+# not glyph — distinguishes the *counted* sources: every counted cell is the same
+# solid square ``■`` and reads its source from color alone. Free space is a faint
+# light-shade ``░`` and the cloud-only ``unavailable`` row a faint ``▨``, both
+# legible without color. ``_glyph_for`` is the single place that picks a glyph.
+_USED_GLYPH = "■"          # U+25A0 BLACK SQUARE — a colored token cell
+_UNAVAILABLE_GLYPH = "▨"   # U+25A8 — faint, distinct (requires PDD Cloud)
+_FREE_GLYPH = "░"          # U+2591 LIGHT SHADE — faint, reads as empty space
 _BOX_COLS = 27
 _BOX_ROWS = 5
 
@@ -58,44 +61,67 @@ def _glyph_for(status: str) -> str:
 
 # --- Token coloring rules (one place; no scattered ANSI codes) --------------
 #
-# A row's *category* is its deterministic ``status`` (plus the synthetic
-# ``"free"`` for unused space), so color tracks what a segment IS, not which
-# file it came from. Each category maps to exactly one brand color, sourced from
-# cli_theme (PromptDriven.ai Brand Guidelines v1.4 §3) — like Claude Code's
-# ``/context``, color carries meaning rather than decoration:
-#   body        the prompt's own instructions (the hero)      -> Electric-Cyan
-#   resolved    a hydrated ``<include>`` source                -> Lumen-Purple
-#   deferred    dynamic markup not yet realized (warn)         -> Diff-Yellow
-#   unresolved  an include path that did not resolve (error)   -> Break-Red
-#   unavailable requires PDD Cloud; counted as 0 tokens        -> faint
-#   free        unused context-window space (low emphasis)     -> faint
-_CATEGORY_COLOR = {
-    "body": hex_to_ansi(ELECTRIC_CYAN),
-    "resolved": hex_to_ansi(LUMEN_PURPLE),
-    "deferred": hex_to_ansi(DIFF_YELLOW),
+# Color distinguishes *sources*, with two semantic colors reserved as overrides
+# for problem rows so they always pop — like Claude Code's ``/context`` (each
+# area its own color; trouble stands out). All hues are brand colors from
+# cli_theme (PromptDriven.ai Brand Guidelines v1.4 §3):
+#   * ``unresolved`` (a missing include)  -> Break-Red   (always)
+#   * ``deferred``   (dynamic, not realized) -> Diff-Yellow (always)
+#   * ``unavailable``/free space          -> faint        (low emphasis)
+#   * every other (counted) source        -> the next color in ``_SOURCE_CYCLE``,
+#       assigned by the source's position in the core's deterministic row order
+#       so two includes never share a color (they cycle if there are more
+#       sources than palette entries, but neighbors always differ).
+_SOURCE_CYCLE = (
+    hex_to_ansi(ELECTRIC_CYAN),
+    hex_to_ansi(PROMPT_MAGENTA),
+    hex_to_ansi(BUILD_GREEN),
+    hex_to_ansi(LUMEN_PURPLE),
+)
+_STATUS_OVERRIDE = {
     "unresolved": hex_to_ansi(BREAK_RED),
+    "deferred": hex_to_ansi(DIFF_YELLOW),
     "unavailable": ANSI_FAINT,
-    "free": ANSI_FAINT,
 }
+_FREE_COLOR = ANSI_FAINT
 
-# Type of the seam every colored surface paints through: ``paint(category, text)``.
+
+def _row_colors(rows: List[AuditRow]) -> List[str]:
+    """ANSI color per row (parallel to ``rows``) — the single source of truth for
+    which color a row wears. Problem rows take their reserved override; every
+    other source takes the next ``_SOURCE_CYCLE`` color by position, so distinct
+    sources are visually distinct.
+    """
+    colors: List[str] = []
+    nth_source = 0
+    for row in rows:
+        override = _STATUS_OVERRIDE.get(row.status)
+        if override is not None:
+            colors.append(override)
+        else:
+            colors.append(_SOURCE_CYCLE[nth_source % len(_SOURCE_CYCLE)])
+            nth_source += 1
+    return colors
+
+
+# Type of the seam every colored surface paints through: ``paint(color, text)``
+# where ``color`` is an ANSI prefix (from :func:`_row_colors` / :data:`_FREE_COLOR`).
 Painter = Callable[[str, str], str]
 
 
 def _make_painter(enabled: bool) -> Painter:
-    """Return the single ``paint(category, text)`` seam used for all coloring.
+    """Return the single ``paint(color, text)`` seam used for all coloring.
 
     When ``enabled`` is false it returns ``text`` unchanged, so the no-color path
     is byte-for-byte identical to the uncolored output (CI logs, pipes, JSON's
-    siblings stay clean). When enabled it wraps ``text`` in the category's brand
-    color from :data:`_CATEGORY_COLOR`, resetting after.
+    siblings stay clean). When enabled it wraps ``text`` in the given ANSI
+    ``color`` prefix, resetting after.
     """
 
-    def paint(category: str, text: str) -> str:
-        if not enabled:
+    def paint(color: str, text: str) -> str:
+        if not enabled or not color:
             return text
-        color = _CATEGORY_COLOR.get(category)
-        return f"{color}{text}{ANSI_RESET}" if color else text
+        return f"{color}{text}{ANSI_RESET}"
 
     return paint
 
@@ -126,25 +152,26 @@ def _render_usage_box(  # pylint: disable=too-many-locals
 ) -> str:
     """Render a Claude-Code ``/context``-style usage box for the attribution.
 
-    The grid shows used context-window space colored by category — every counted
-    cell uses the shared ``_USED_GLYPH`` and is told apart by color — against
-    free space (``⛶``), followed by the model, the total/limit/percent summary,
-    and a per-category breakdown. ``paint`` is the coloring seam; when omitted,
-    output is uncolored.
+    The grid shows used context-window space, each source in its own color (the
+    shared ``_USED_GLYPH``; problem rows take a reserved red/yellow), against free
+    space (``⛶``), followed by the model, the total/limit/percent summary, and a
+    per-source breakdown. ``paint`` is the coloring seam; when omitted, output is
+    uncolored.
     """
     if paint is None:
         paint = _make_painter(False)
+    colors = _row_colors(rows)
     lines: List[str] = ["Context Usage", ""]
 
     if context_limit:
         total_cells = _BOX_COLS * _BOX_ROWS
         cells: List[str] = []
-        for row in rows:
+        for row, color in zip(rows, colors):
             glyph = _glyph_for(row.status)
             count = int(round(row.tokens / context_limit * total_cells))
-            cells.extend([paint(row.status, glyph)] * count)
+            cells.extend([paint(color, glyph)] * count)
         cells = cells[:total_cells]
-        free_cell = paint("free", _FREE_GLYPH)
+        free_cell = paint(_FREE_COLOR, _FREE_GLYPH)
         cells.extend([free_cell] * (total_cells - len(cells)))
         for r in range(_BOX_ROWS):
             chunk = cells[r * _BOX_COLS:(r + 1) * _BOX_COLS]
@@ -162,12 +189,12 @@ def _render_usage_box(  # pylint: disable=too-many-locals
     lines.append("  Estimated usage by category")
 
     share_basis = context_limit if context_limit else total_tokens
-    for row in rows:
+    for row, color in zip(rows, colors):
         glyph = _glyph_for(row.status)
         share = percent(row.tokens, share_basis)
         share_text = f"{share}%" if share is not None else "-"
         note = f"  (WARN: {row.note})" if row.note else ""
-        marker = paint(row.status, f"{glyph} {row.source}")
+        marker = paint(color, f"{glyph} {row.source}")
         lines.append(
             f"  {marker}: {row.tokens:,} tokens ({share_text}){note}"
         )
@@ -176,7 +203,7 @@ def _render_usage_box(  # pylint: disable=too-many-locals
         free = max(0, context_limit - total_tokens)
         free_pct = percent(free, context_limit)
         free_text = f"{free_pct}%" if free_pct is not None else "-"
-        free_marker = paint("free", f"{_FREE_GLYPH} Free space")
+        free_marker = paint(_FREE_COLOR, f"{_FREE_GLYPH} Free space")
         lines.append(f"  {free_marker}: {free:,} tokens ({free_text})")
 
     return "\n".join(lines)
@@ -192,12 +219,13 @@ def _render_table(
 ) -> str:
     """Render the per-source token-attribution table (``--table``).
 
-    ``paint`` colors only the ``Source`` cell by the row's category; it is
-    applied *after* fixed-width padding so column alignment is unaffected by
-    escape sequences. When omitted, output is uncolored.
+    ``paint`` colors only the ``Source`` cell by the row's color; it is applied
+    *after* fixed-width padding so column alignment is unaffected by escape
+    sequences. When omitted, output is uncolored.
     """
     if paint is None:
         paint = _make_painter(False)
+    colors = _row_colors(rows)
     limit_text = f"{context_limit:,} tokens" if context_limit else "unknown"
     pct_text = f"{percent_used}%" if percent_used is not None else "unknown%"
     lines = [
@@ -207,11 +235,11 @@ def _render_table(
         f"{'Source':<48}{'Tokens':>10}{'% of total':>14}",
         "-" * 72,
     ]
-    for row in rows:
+    for row, color in zip(rows, colors):
         row_pct = percent(row.tokens, total_tokens)
         pct_col = f"{row_pct}%" if row_pct is not None else "-"
         note = f"  (WARN: {row.note})" if row.note else ""
-        source_col = paint(row.status, f"{row.source:<48}")
+        source_col = paint(color, f"{row.source:<48}")
         lines.append(f"{source_col}{row.tokens:>10,}{pct_col:>14}{note}")
     return "\n".join(lines)
 
