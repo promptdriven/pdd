@@ -29,6 +29,7 @@ context_mod = importlib.import_module("pdd.commands.context")
 from pdd.commands.context import (
     _FREE_GLYPH,
     _SOURCE_CYCLE,
+    _SOURCE_GLYPHS,
     _UNAVAILABLE_GLYPH,
     _USED_GLYPH,
     _color_enabled,
@@ -36,6 +37,7 @@ from pdd.commands.context import (
     _make_painter,
     _render_usage_box,
     _row_colors,
+    _row_styles,
     context,
 )
 from pdd.context_audit import AuditRow, ContextAudit
@@ -347,3 +349,78 @@ def test_two_resolved_sources_get_distinct_colors():
     a_color = _ANSI_RE.findall(a_line)[0]
     b_color = _ANSI_RE.findall(b_line)[0]
     assert a_color != b_color
+
+
+# --------------------------------------------------------------------------- #
+# Glyph as a SECOND per-source channel: once the color palette wraps, the glyph
+# advances, so a counted source keeps a unique (glyph, color) identity past the
+# palette size — and the no-color render still tells wrapped sources apart.
+# --------------------------------------------------------------------------- #
+def test_source_glyphs_are_distinct_single_cells():
+    import unicodedata
+
+    # The variants are mutually distinct and lead with the base used glyph, so the
+    # common case (<= palette-size sources) is unchanged.
+    assert len(set(_SOURCE_GLYPHS)) == len(_SOURCE_GLYPHS)
+    assert _SOURCE_GLYPHS[0] == _USED_GLYPH
+    # All are Neutral-width (like _USED_GLYPH) so the grid stays aligned.
+    for g in _SOURCE_GLYPHS:
+        assert len(g) == 1
+        assert unicodedata.east_asian_width(g) == "N"
+
+
+def _many_resolved(n):
+    """An audit with ``n`` counted resolved sources (plus a context limit)."""
+    rows = [
+        AuditRow(source=f"src{i}.txt", tokens=10, status="resolved") for i in range(n)
+    ]
+    return ContextAudit(
+        model="gpt-4o", total_tokens=10 * n, context_limit=10_000,
+        percent_used=float(n), rows=rows,
+    )
+
+
+def test_row_styles_first_palette_sources_share_base_glyph():
+    # The first len(_SOURCE_CYCLE) sources all wear the base glyph and cycle color
+    # — i.e. behaviour is byte-identical to before until the palette wraps.
+    rows = _many_resolved(len(_SOURCE_CYCLE)).rows
+    styles = _row_styles(rows)
+    for i, (glyph, color) in enumerate(styles):
+        assert glyph == _SOURCE_GLYPHS[0]
+        assert color == _SOURCE_CYCLE[i % len(_SOURCE_CYCLE)]
+
+
+def test_row_styles_glyph_advances_when_palette_wraps():
+    n = len(_SOURCE_CYCLE)
+    rows = _many_resolved(n + 1).rows  # one past a full palette
+    styles = _row_styles(rows)
+    first, wrapped = styles[0], styles[n]
+    # The wrapped source reuses the first color but takes the NEXT glyph, so its
+    # combined identity is still unique.
+    assert wrapped[1] == first[1] == _SOURCE_CYCLE[0]  # same color
+    assert wrapped[0] == _SOURCE_GLYPHS[1]             # different glyph
+    assert wrapped != first
+
+
+def test_wrapped_source_distinguishable_without_color():
+    """No-color legend: the 5th source still reads differently from the 1st."""
+    n = len(_SOURCE_CYCLE)
+    audit = _many_resolved(n + 1)
+    box = _render_usage_box(  # no painter -> uncolored
+        audit.rows, audit.total_tokens, audit.context_limit, audit.model,
+        audit.percent_used,
+    )
+    first_line = next(ln for ln in box.splitlines() if "src0.txt:" in ln)
+    wrapped_line = next(ln for ln in box.splitlines() if f"src{n}.txt:" in ln)
+    assert first_line.strip().startswith(_SOURCE_GLYPHS[0])
+    assert wrapped_line.strip().startswith(_SOURCE_GLYPHS[1])
+
+
+def test_row_styles_color_half_matches_row_colors():
+    """_row_colors stays the color projection of _row_styles (table path)."""
+    rows = [
+        AuditRow(source="a.md", tokens=50, status="resolved"),
+        AuditRow(source="missing.md", tokens=0, status="unresolved"),
+        AuditRow(source="b.md", tokens=30, status="resolved"),
+    ]
+    assert _row_colors(rows) == [color for _g, color in _row_styles(rows)]

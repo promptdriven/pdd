@@ -38,27 +38,38 @@ hand-writes ANSI codes (every escape is `cli_theme.hex_to_ansi` / `ANSI_FAINT` /
 Electric-Cyan → Prompt-Magenta → Build-Green → Lumen-Purple — assigned by its
 position among counted rows (overrides don't consume a slot). Distinct sources
 therefore get distinct colors; with more sources than palette entries the cycle
-wraps, but neighbours always differ. Assignment is deterministic because the
-core returns rows in a stable order (largest first).
+wraps, but neighbours always differ — and a **second glyph channel** (below)
+keeps wrapped sources distinguishable too. Assignment is deterministic because
+the core returns rows in a stable order (largest first).
 
-Color flows through a single `paint(color, text)` seam (the `color` is an ANSI
-prefix from `_row_colors`): in the grid each cell glyph is painted by its row's
-color (free cells faint); in the legend the `glyph + source` marker is painted;
-in `--table` only the width-padded `Source` cell is painted, so column alignment
-is unaffected by escape bytes.
+Color and glyph are paired by a single `_row_styles(rows) -> [(glyph, color)]`
+helper (the source of truth); `_row_colors` is a thin projection of its colour
+half for the table path. Color flows through a single `paint(color, text)` seam:
+in the grid each cell glyph is painted by its row's colour (free cells faint); in
+the legend the `glyph + source` marker is painted; in `--table` only the
+width-padded `Source` cell is painted, so column alignment is unaffected by
+escape bytes.
 
-## Glyphs: shared for counted, distinct for the rest
+## Glyphs: a second per-source channel
 
-Glyphs no longer carry per-source identity (color does that now), so the view can
-use the **same glyphs as Claude Code's `/context`** that it's modeled on: `⛁`
-(U+26C1) for a used cell and `⛶` (U+26F6) for free space. On macOS, Terminal.app's
-CoreText font fallback (Apple Symbols) renders these as single narrow cells, so
-they display reliably rather than as missing-glyph boxes. The counted categories
-(`body`/`resolved`/`deferred`/`unresolved`) all use one `⛁` (`_USED_GLYPH`) and are
-told apart by color; `unavailable` uses a faint `▨` and free space a faint `⛶`, so
-those two non-usage rows stay legible even without color. `_glyph_for(status)` is
-the single place that picks a row's glyph; all grid glyphs share one display width
-so the grid stays aligned.
+Colour is the primary per-source channel, but it only has four palette hues, so
+glyph is a **secondary** channel that kicks in when the palette wraps. Counted
+sources draw from `_SOURCE_GLYPHS` — two Neutral-width white-draughts variants,
+the stacked "king" `⛁` (U+26C1, also Claude Code's `/context` used cell) then the
+single "man" `⛀` (U+26C0) — indexed so the **glyph advances only each time the
+colour cycle wraps**. So sources 1–4 are `⛁` in the four hues (byte-identical to
+before), source 5 is `⛀` back at the first hue, and so on: a counted source keeps
+a unique `(glyph, color)` identity past the palette size, and even the no-colour
+render tells the 5th source from the 1st. The reserved rows don't vary —
+`unresolved`/`deferred` keep the base `⛁` (their red/yellow marks them),
+`unavailable` a faint `▨`, and free space a faint `⛶` (U+26F6).
+
+On macOS, Terminal.app's CoreText font fallback (Apple Symbols) renders every one
+of these as a single narrow cell (all four draughts glyphs U+26C0–C3 are
+Neutral-width, like `⛁`), so the grid stays aligned. `_glyph_for(status)` picks
+the glyph for the override/non-cycle rows; `_row_styles` owns the counted-source
+glyph. Two further variants (`⛂`/`⛃`, the filled "black" pair) remain available
+if the source channel ever needs more capacity.
 
 ## Color detection (`--color` / `--no-color` / auto)
 

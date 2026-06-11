@@ -15,7 +15,7 @@ from __future__ import annotations
 import json as json_module
 import os
 import sys
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 import click
 
@@ -43,21 +43,34 @@ from ..core.errors import handle_error
 # Glyphs mirror Claude Code's ``/context`` usage box — the view this command is
 # modeled on: ``⛁`` (U+26C1) for a used token cell and ``⛶`` (U+26F6) for free
 # space. On macOS, Terminal.app's CoreText font fallback (Apple Symbols) renders
-# both as single narrow cells, so the grid stays aligned. Color — not glyph —
-# distinguishes the *counted* sources: every counted cell is the same ``⛁`` and
-# reads its source from color alone. The cloud-only ``unavailable`` row uses a
-# faint ``▨`` and free space a faint ``⛶``, both legible without color.
-# ``_glyph_for`` is the single place that picks a glyph.
+# both as single narrow cells, so the grid stays aligned. Color is the *primary*
+# per-source channel; glyph is a *secondary* one (see ``_SOURCE_GLYPHS`` /
+# ``_row_styles``) that only diverges once the color palette wraps, so a counted
+# source stays uniquely identifiable past the palette size. The cloud-only
+# ``unavailable`` row uses a faint ``▨`` and free space a faint ``⛶``, both
+# legible without color. ``_glyph_for`` picks the glyph for override rows.
 _USED_GLYPH = "⛁"          # U+26C1 — a used token cell (Claude /context style)
 _UNAVAILABLE_GLYPH = "▨"   # U+25A8 — faint, distinct (requires PDD Cloud)
 _FREE_GLYPH = "⛶"          # U+26F6 — faint, reads as empty space
+# White-draughts variants used as a *second* per-source channel alongside color:
+# the stacked "king" ``⛁`` (U+26C1) then the single "man" ``⛀`` (U+26C0). Both
+# are Neutral-width like ``_USED_GLYPH``, so the grid stays aligned in
+# Terminal.app's Apple Symbols fallback. Color cycles every counted source; the
+# glyph advances only when the ``_SOURCE_CYCLE`` palette wraps (see
+# ``_row_styles``), so a source keeps a unique ``(glyph, color)`` identity well
+# past the four palette hues — and even the no-color render tells the 5th+ source
+# apart by glyph. The first ``len(_SOURCE_CYCLE)`` sources all use ``⛁``, so
+# output is unchanged until the palette wraps.
+_SOURCE_GLYPHS = (_USED_GLYPH, "⛀")  # U+26C1 stacked, U+26C0 single
 _BOX_COLS = 27
 _BOX_ROWS = 5
 
 
 def _glyph_for(status: str) -> str:
-    """Glyph for a row's ``status``: a distinct one for ``unavailable``, the
-    shared ``_USED_GLYPH`` for every counted category (color tells them apart)."""
+    """Glyph for an override row's ``status``: a distinct one for ``unavailable``,
+    the base ``_USED_GLYPH`` otherwise. Counted-source glyphs come from
+    :func:`_row_styles` (which varies them by position); this picks the glyph for
+    the reserved/override rows that do not participate in the source cycle."""
     return _UNAVAILABLE_GLYPH if status == "unavailable" else _USED_GLYPH
 
 # --- Token coloring rules (one place; no scattered ANSI codes) --------------
@@ -87,26 +100,44 @@ _STATUS_OVERRIDE = {
 _FREE_COLOR = ANSI_FAINT
 
 
-def _row_colors(rows: List[AuditRow]) -> List[str]:
-    """ANSI color per row (parallel to ``rows``) — the single source of truth for
-    which color a row wears. Problem rows take their reserved override; every
-    other source takes the next ``_SOURCE_CYCLE`` color by position, so distinct
-    sources are visually distinct.
+def _row_styles(rows: List[AuditRow]) -> List[Tuple[str, str]]:
+    """``(glyph, color)`` per row (parallel to ``rows``) — the single source of
+    truth for how each row is drawn.
+
+    A row whose ``status`` has a reserved override takes that color and a
+    status glyph (:func:`_glyph_for`: ``⛁``, or ``▨`` for ``unavailable``). Every
+    other (counted) source takes a combined glyph+color identity by its position
+    among counted rows: the color cycles through ``_SOURCE_CYCLE`` every source,
+    and the glyph advances through ``_SOURCE_GLYPHS`` each time the color palette
+    wraps. So distinct sources stay distinct — by color first, then by glyph once
+    the palette is exhausted — and the no-color render still tells wrapped sources
+    apart by glyph. Overrides never consume a cycle slot. Deterministic, given the
+    core's stable row order.
     """
-    colors: List[str] = []
+    styles: List[Tuple[str, str]] = []
     nth_source = 0
     for row in rows:
         override = _STATUS_OVERRIDE.get(row.status)
         if override is not None:
-            colors.append(override)
+            styles.append((_glyph_for(row.status), override))
         else:
-            colors.append(_SOURCE_CYCLE[nth_source % len(_SOURCE_CYCLE)])
+            color = _SOURCE_CYCLE[nth_source % len(_SOURCE_CYCLE)]
+            glyph = _SOURCE_GLYPHS[(nth_source // len(_SOURCE_CYCLE)) % len(_SOURCE_GLYPHS)]
+            styles.append((glyph, color))
             nth_source += 1
-    return colors
+    return styles
+
+
+def _row_colors(rows: List[AuditRow]) -> List[str]:
+    """ANSI color per row (parallel to ``rows``) — the color half of
+    :func:`_row_styles`, kept for callers (e.g. ``--table``) that color by source
+    but draw no glyph.
+    """
+    return [color for _glyph, color in _row_styles(rows)]
 
 
 # Type of the seam every colored surface paints through: ``paint(color, text)``
-# where ``color`` is an ANSI prefix (from :func:`_row_colors` / :data:`_FREE_COLOR`).
+# where ``color`` is an ANSI prefix (from :func:`_row_styles` / :data:`_FREE_COLOR`).
 Painter = Callable[[str, str], str]
 
 
@@ -153,22 +184,21 @@ def _render_usage_box(  # pylint: disable=too-many-locals
 ) -> str:
     """Render a Claude-Code ``/context``-style usage box for the attribution.
 
-    The grid shows used context-window space, each source in its own color (the
-    shared ``_USED_GLYPH``; problem rows take a reserved red/yellow), against free
+    The grid shows used context-window space, each source in its own ``(glyph,
+    color)`` identity (problem rows take a reserved red/yellow ``⛁``), against free
     space (``⛶``), followed by the model, the total/limit/percent summary, and a
     per-source breakdown. ``paint`` is the coloring seam; when omitted, output is
     uncolored.
     """
     if paint is None:
         paint = _make_painter(False)
-    colors = _row_colors(rows)
+    styles = _row_styles(rows)
     lines: List[str] = ["Context Usage", ""]
 
     if context_limit:
         total_cells = _BOX_COLS * _BOX_ROWS
         cells: List[str] = []
-        for row, color in zip(rows, colors):
-            glyph = _glyph_for(row.status)
+        for row, (glyph, color) in zip(rows, styles):
             count = int(round(row.tokens / context_limit * total_cells))
             cells.extend([paint(color, glyph)] * count)
         cells = cells[:total_cells]
@@ -190,8 +220,7 @@ def _render_usage_box(  # pylint: disable=too-many-locals
     lines.append("  Estimated usage by category")
 
     share_basis = context_limit if context_limit else total_tokens
-    for row, color in zip(rows, colors):
-        glyph = _glyph_for(row.status)
+    for row, (glyph, color) in zip(rows, styles):
         share = percent(row.tokens, share_basis)
         share_text = f"{share}%" if share is not None else "-"
         note = f"  (WARN: {row.note})" if row.note else ""
