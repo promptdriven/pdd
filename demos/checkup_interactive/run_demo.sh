@@ -205,10 +205,11 @@ demo_auto_llm_repair() {
   banner "Auto LLM repair — let the LLM fix every finding in one pass"
   cat <<EOF
 
-  --auto --llm-repair drafts the real fix for EVERY finding in a single LLM
-  pass and applies it (one coherent rewrite — not group-by-group, no per-finding
-  approval). It needs a model credential: PDD cloud credit first, then a local
-  provider key. With no credential it safely falls back to the deterministic
+  --auto --llm-repair drafts the real fix for EVERY finding in one LLM pass
+  (one coherent rewrite — not group-by-group). It is PREVIEW by default and
+  honors the write gate: the rewrite is written only with --apply (v1 has no
+  auto-apply-by-confidence). It needs a model credential — PDD cloud credit
+  first, then a local provider key; with none it falls back to the deterministic
   'save for review' flow (never crashes, never fabricates silently).
 
   We use the vague-term prompt: the fix is a <vocabulary> block, which a prompt
@@ -217,14 +218,32 @@ demo_auto_llm_repair() {
   COPY kept inside the repo (apply guards refuse targets outside it) and outside
   prompts/ (so the directory demo ignores it):
 
+      # preview (no write):
       $PYTHON -m pdd checkup demos/checkup_interactive/.llm_repair_tmp/02_vague_clarification.prompt --auto --llm-repair
+      # apply the rewrite:
+      $PYTHON -m pdd checkup demos/checkup_interactive/.llm_repair_tmp/02_vague_clarification.prompt --auto --llm-repair --apply
 
 EOF
   local work="$DEMO_DIR/.llm_repair_tmp"
   local rel_copy="demos/checkup_interactive/.llm_repair_tmp/02_vague_clarification.prompt"
   rm -rf "$work"; mkdir -p "$work"
   cp "$PROMPTS/02_vague_clarification.prompt" "$work/02_vague_clarification.prompt"
+
+  subhead "preview (no --apply): drafts but writes nothing"
+  cp "$PROMPTS/02_vague_clarification.prompt" "$work/02_vague_clarification.prompt"
+  local before; before="$(md5 -q "$work/02_vague_clarification.prompt" 2>/dev/null || md5sum "$work/02_vague_clarification.prompt")"
   run_pdd checkup "$rel_copy" --auto --llm-repair
+  echo_clean | head -30
+  local after; after="$(md5 -q "$work/02_vague_clarification.prompt" 2>/dev/null || md5sum "$work/02_vague_clarification.prompt")"
+  if [ "$before" = "$after" ]; then
+    pass "preview wrote nothing (write gate held without --apply)"
+  else
+    fail "preview must not write without --apply"
+  fi
+
+  subhead "apply (--apply): drafts and writes the rewrite"
+  cp "$PROMPTS/02_vague_clarification.prompt" "$work/02_vague_clarification.prompt"
+  run_pdd checkup "$rel_copy" --auto --llm-repair --apply
   echo_clean | head -45
   if echo "$CMD_OUT" | grep -qiE "Drafted by LLM \(applied\): [1-9]"; then
     pass "LLM repair drafted and applied real fixes in one pass"
