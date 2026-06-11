@@ -83,7 +83,7 @@ class TestStep5ShellFirstEvidence:
 
         assert selected == ["tests/test_widget.py"]
 
-    def test_persists_failed_pytest_evidence(self, tmp_path):
+    def test_persists_failed_pytest_evidence(self, tmp_path, monkeypatch):
         (tmp_path / "pdd").mkdir()
         (tmp_path / "pdd" / "widget.py").write_text("VALUE = 1\n", encoding="utf-8")
         (tmp_path / "tests").mkdir()
@@ -91,15 +91,22 @@ class TestStep5ShellFirstEvidence:
             "def test_widget(): pass\n",
             encoding="utf-8",
         )
+        env_token = "customToken123456789"
+        gh_token = "ghp_" + "A" * 36
+        monkeypatch.setenv("GITHUB_TOKEN", env_token)
         context = {
             "pr_mode": "true",
             "pr_scope_changed_files": "Base: refs/remotes/pdd-checkup/pr-1/base\n"
-            "- M: pdd/widget.py",
+            f"- M: pdd/widget.py\n- M: docs/{gh_token}.txt",
         }
         completed = subprocess.CompletedProcess(
             args=["python", "-m", "pytest", "-q", "tests/test_widget.py"],
             returncode=1,
-            stdout="FAILED tests/test_widget.py::test_breaks\n",
+            stdout=(
+                "FAILED tests/test_widget.py::test_breaks\n"
+                f"Authorization: Bearer {gh_token}\n"
+                f"env token: {env_token}\n"
+            ),
             stderr="",
         )
 
@@ -125,6 +132,11 @@ class TestStep5ShellFirstEvidence:
         assert artifact.is_file()
         payload = json.loads(artifact.read_text(encoding="utf-8"))
         assert payload["status"] == "failed"
+        artifact_text = artifact.read_text(encoding="utf-8")
+        assert gh_token not in artifact_text
+        assert env_token not in artifact_text
+        assert gh_token not in context["step5_shell_evidence"]
+        assert env_token not in context["step5_shell_evidence"]
         assert run_mock.call_args.args[0][-1] == "tests/test_widget.py"
 
 

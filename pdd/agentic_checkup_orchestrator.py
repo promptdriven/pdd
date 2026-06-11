@@ -2272,6 +2272,9 @@ def _select_step5_python_tests(
 def _truncate_step5_shell_output(text: str) -> Tuple[str, bool]:
     """Scrub and truncate Step 5 shell output before prompt/report use."""
     scrubbed = _scrub_secrets(text or "")
+    token = _github_token_from_env()
+    if token:
+        scrubbed = _redact_secret(scrubbed, token)
     if len(scrubbed) <= _STEP5_SHELL_OUTPUT_MAX_CHARS:
         return scrubbed, False
     half = max(1, (_STEP5_SHELL_OUTPUT_MAX_CHARS - 80) // 2)
@@ -2283,6 +2286,33 @@ def _truncate_step5_shell_output(text: str) -> Tuple[str, bool]:
     )
 
 
+def _storage_safe_step5_shell_evidence_value(value: Any) -> Any:
+    """Recursively scrub secret-like strings before evidence persistence."""
+    if isinstance(value, str):
+        scrubbed = _scrub_secrets(value)
+        token = _github_token_from_env()
+        if token:
+            scrubbed = _redact_secret(scrubbed, token)
+        return scrubbed
+    if isinstance(value, list):
+        return [_storage_safe_step5_shell_evidence_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_storage_safe_step5_shell_evidence_value(item) for item in value)
+    if isinstance(value, dict):
+        safe_dict: Dict[str, Any] = {}
+        for key, item in value.items():
+            safe_key = str(_storage_safe_step5_shell_evidence_value(key))
+            safe_dict[safe_key] = _storage_safe_step5_shell_evidence_value(item)
+        return safe_dict
+    return value
+
+
+def _storage_safe_step5_shell_evidence(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """Return Step 5 shell evidence safe for disk and prompt context."""
+    safe = _storage_safe_step5_shell_evidence_value(evidence)
+    return safe if isinstance(safe, dict) else {}
+
+
 def _write_step5_shell_evidence(
     cwd: Path,
     pr_number: int,
@@ -2291,8 +2321,12 @@ def _write_step5_shell_evidence(
     """Persist shell-first Step 5 evidence for final-gate Layer 2."""
     artifact = _step5_shell_evidence_path(cwd, pr_number)
     artifact.parent.mkdir(parents=True, exist_ok=True)
+    safe_evidence = _storage_safe_step5_shell_evidence(evidence)
+    # Required local artifact for the final-gate Layer 2 handoff. The payload is
+    # recursively scrubbed above; CodeQL does not model this project scrubber.
+    # codeql[py/clear-text-storage-sensitive-data]
     artifact.write_text(
-        json.dumps(evidence, indent=2, sort_keys=True),
+        json.dumps(safe_evidence, indent=2, sort_keys=True),
         encoding="utf-8",
     )
 
@@ -2405,6 +2439,7 @@ def _run_step5_shell_first_evidence(
                 }
             )
 
+    evidence = _storage_safe_step5_shell_evidence(evidence)
     _write_step5_shell_evidence(cwd, pr_number, evidence)
     context["step5_shell_evidence"] = json.dumps(evidence, indent=2, sort_keys=True)
     if not quiet and evidence.get("status") in _STEP5_SHELL_ACTIONABLE_STATUSES:
