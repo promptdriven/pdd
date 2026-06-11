@@ -18,7 +18,7 @@ You are a DevOps and Automation Engineer. Your responsibility is to create a CI/
     - The include only triggers if the intersection of selected defs and changed defs is non-empty.
     - When no `--diff-base` is supplied, all selector matches degrade to conservative path-only behavior.
 7. **Diff-Base Normalization**: For `git show`, extract the left-hand ref from either `a...b` or `a..b` expressions; pass through any other ref unchanged.
-8. **Git Integration**: Run `git diff --name-only <diff-base> -- <PDD prefixes>` to fetch the changed file list, scoped to the four prefixes above.
+8. **Git Integration**: Fetch the changed file list scoped to the four prefixes above, **ignoring whitespace-only changes** so a whitespace-only commit (e.g. trailing-space cleanup) does not flag a module for healing. Use `git diff -w --numstat <diff-base> -- <PDD prefixes>` and take the path column (the third tab-separated field); files whose only change is whitespace are omitted by `-w --numstat`. Do NOT use `git diff -w --name-only`, because `-w`/`--ignore-all-space` does not affect `--name-only` tree-level selection and would still list whitespace-only files.
 9. **Output Format**: Print a single line of comma-separated, alphabetically sorted module basenames. Print an empty line if no relevant files changed.
 10. **Error Handling**: Exit 0 in normal operation (including empty output). Exit non-zero only if the `git diff` invocation itself fails.
 11. **Portability**: Use only Python 3 standard library (`argparse`, `ast`, `os`, `re`, `subprocess`, `sys`, `pathlib`) so the script runs identically on GitHub Actions and Google Cloud Build.
@@ -52,7 +52,7 @@ The script does not import the PDD package; it operates on repo file conventions
     - For each prompt file, derive its own basename via `_prompt_basename_from_path` and skip prompts whose basename can't be derived.
     - For each `(include_path, selected_defs)` ref, match against every changed file using three path strategies: full path match, suffix match, or basename match. Selector filtering only applies when the path matched and `selected_defs` is non-None.
 7. **Execution Flow**:
-    - Fetch changed files via `git diff --name-only <diff-base> -- pdd/ prompts/ context/ tests/`.
+    - Fetch changed files via `git diff -w --numstat <diff-base> -- pdd/ prompts/ context/ tests/`, parsing the path column and ignoring whitespace-only changes (see Requirement 8).
     - Direct basename extraction across the changed file list (skipping excluded basenames).
     - Union with reverse-dependency basenames.
     - Print sorted, comma-joined result; empty line if the set is empty.
