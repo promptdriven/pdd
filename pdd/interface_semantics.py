@@ -691,12 +691,7 @@ def _existing_param_compatible(
         # for. A provably-different default is ALWAYS a regression — including
         # the SAME constant name resolving to two different values across the
         # old and generated modules (``_LIMIT = 25000`` -> ``_LIMIT = 5000``),
-        # whose signature text is identical yet whose value changed. An
-        # UNRESOLVABLE default (a call, an imported name) is a regression only
-        # when the source text ALSO differs: two identical unresolvable defaults
-        # (``x=helper()`` unchanged) changed nothing and must not be flagged,
-        # but a changed-text unresolvable default fails closed — unchanged from
-        # the historical exact-string behavior.
+        # whose signature text is identical yet whose value changed.
         verdict = compare_default_sources(
             old.default,
             new.default,
@@ -705,8 +700,26 @@ def _existing_param_compatible(
         )
         if verdict is DefaultCompatibility.INCOMPATIBLE:
             return False
-        if verdict is DefaultCompatibility.UNKNOWN and old.default != new.default:
-            return False
+        if verdict is DefaultCompatibility.UNKNOWN:
+            # At least one side is opaque (a call, an imported name, a constant
+            # the module rebinds). A default is backward compatible here ONLY
+            # when BOTH sides are opaque AND the source text is identical: an
+            # unchanged dynamic default such as ``x=helper()`` -> ``x=helper()``
+            # changed nothing. When exactly ONE side resolves to a safe literal
+            # while the other stays opaque — existing ``_LIMIT = load_limit()``
+            # (or ``from cfg import _LIMIT``) -> generated ``_LIMIT = 5000``,
+            # with identical ``_LIMIT`` text — we have positive evidence the
+            # effective default MAY have changed, so matching text must not wave
+            # it through. Fail closed, consistent with the gate's contract that
+            # dynamic/imported defaults are not silently accepted.
+            old_resolves = (
+                _normalize_default_source(old.default, old_symbols or {}) is not None
+            )
+            new_resolves = (
+                _normalize_default_source(new.default, new_symbols or {}) is not None
+            )
+            if old_resolves != new_resolves or old.default != new.default:
+                return False
     # Annotation comparison is intentionally symmetric: ANY change to a public
     # parameter's type annotation trips the gate, including a backward-compatible
     # widening such as ``str`` -> ``str | int``.  This differs from the default

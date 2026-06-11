@@ -109,6 +109,55 @@ class TestPublicSurfaceSemanticDefaults:
             )
         assert "f" in exc.value.changed_signatures
 
+    def test_unchanged_dynamic_default_passes(self):
+        """The control for the asymmetric cases below: when the default is
+        unresolvable in BOTH module versions and its source text is unchanged,
+        the expression itself did not change, so it is not a regression."""
+        before = "def f(x=helper()):\n    return x\n"
+        after = "def f(x=helper()):\n    return x\n"
+        _verify_public_surface_regression(
+            before, after, PROMPT, OUT, "python", "No default change."
+        )
+
+    def test_existing_dynamic_default_to_generated_literal_fails_closed(self):
+        """A default whose constant the EXISTING module computes dynamically but
+        the GENERATED module pins to a literal is a possible behavior change even
+        though the signature text (``_LIMIT``) is identical: exactly one side
+        resolves, so the gate must fail closed rather than trust the matching
+        text. This matches the gate's own contract that dynamic defaults fail
+        closed."""
+        before = "_LIMIT = load_limit()\ndef f(max_chars=_LIMIT):\n    return max_chars\n"
+        after = "_LIMIT = 5000\ndef f(max_chars=_LIMIT):\n    return max_chars\n"
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", "Pin the limit."
+            )
+        assert "f" in exc.value.changed_signatures
+
+    def test_existing_imported_default_to_generated_literal_fails_closed(self):
+        """Same asymmetry as above with an imported name on the existing side:
+        the import is unresolvable, the generated literal resolves, identical
+        ``_LIMIT`` text -> fail closed."""
+        before = "from cfg import _LIMIT\ndef f(max_chars=_LIMIT):\n    return max_chars\n"
+        after = "_LIMIT = 5000\ndef f(max_chars=_LIMIT):\n    return max_chars\n"
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", "Inline the import."
+            )
+        assert "f" in exc.value.changed_signatures
+
+    def test_existing_literal_default_to_generated_imported_fails_closed(self):
+        """The reverse direction: the existing literal resolves but the generated
+        module makes the same name an import (unresolvable). Still asymmetric,
+        still fail closed."""
+        before = "_LIMIT = 5000\ndef f(max_chars=_LIMIT):\n    return max_chars\n"
+        after = "from cfg import _LIMIT\ndef f(max_chars=_LIMIT):\n    return max_chars\n"
+        with pytest.raises(PublicSurfaceRegressionError) as exc:
+            _verify_public_surface_regression(
+                before, after, PROMPT, OUT, "python", "Import the limit."
+            )
+        assert "f" in exc.value.changed_signatures
+
     def test_mutable_module_constant_default_fails_closed(self):
         """A mutable-container module constant can be mutated in place after
         binding, so it stays UNKNOWN: a literal<->mutable-constant default

@@ -454,3 +454,49 @@ def test_signature_entries_no_module_context_constant_is_conservatively_a_change
         signature_entries_compatible("[function] (x=25000)", "[function] (x=_LIMIT)")
         is False
     )
+
+
+def test_signature_entries_asymmetric_resolution_fails_closed():
+    # Identical "_LIMIT" default text on both sides, but the constant resolves on
+    # only ONE side: the other module leaves it unresolvable (a dynamic call, an
+    # import, or a rebound name). Exactly one side being a known literal while the
+    # other is opaque is positive evidence the effective default MAY have changed,
+    # so textual equality must NOT wave it through -- fail closed. This is the
+    # difference from two equally-unresolvable identical defaults, which DID
+    # change nothing and stay compatible.
+    resolves = build_module_default_symbols("_LIMIT = 5000\n")
+    # Existing side opaque (empty table) -> generated side resolves to 5000.
+    assert (
+        signature_entries_compatible(
+            "[function] (x=_LIMIT)",
+            "[function] (x=_LIMIT)",
+            old_symbols={},
+            new_symbols=resolves,
+        )
+        is False
+    )
+    # Reverse direction: existing side resolves, generated side opaque.
+    assert (
+        signature_entries_compatible(
+            "[function] (x=_LIMIT)",
+            "[function] (x=_LIMIT)",
+            old_symbols=resolves,
+            new_symbols={},
+        )
+        is False
+    )
+
+
+def test_signature_entries_both_unresolvable_same_text_still_compatible():
+    # The control for the asymmetric case above: when NEITHER side resolves and
+    # the source text is identical, the default expression is unchanged, so it
+    # must stay compatible even though one of them happens to be a bare name.
+    assert (
+        signature_entries_compatible(
+            "[function] (x=_LIMIT)",
+            "[function] (x=_LIMIT)",
+            old_symbols={},
+            new_symbols={},
+        )
+        is True
+    )
