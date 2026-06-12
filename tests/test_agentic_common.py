@@ -1513,6 +1513,79 @@ def test_anthropic_claude_policy_builds_read_glob_add_dirs_no_session_json_comma
     assert cmd[cmd.index("--output-format") + 1] == "json"
 
 
+def test_standard_claude_policy_json_usage_reaches_provider_and_agentic_result(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage.txt"
+    prompt_path.write_text("Audit billing usage", encoding="utf-8")
+    model = "claude-sonnet-4-6-20251201"
+    expected_usage = {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 1200,
+                "output_tokens": 340,
+                "cached_input_tokens": 56,
+                "cache_creation_input_tokens": 78,
+            }
+        ]
+    }
+    claude_stdout = {
+        "result": "Structured billing usage returned for GVS noninteractive Claude bridge.",
+        "usage": {
+            "input_tokens": 1200,
+            "output_tokens": 340,
+            "cache_read_input_tokens": 56,
+            "cache_creation_input_tokens": 78,
+        },
+        "modelUsage": {model: {}},
+    }
+    policy = {
+        "allowedTools": "Read,Glob",
+        "addDirs": [],
+        "noSessionPersistence": True,
+        "outputFormat": "json",
+    }
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(claude_stdout)
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy=policy,
+    )
+    success, output, cost, actual_model = provider_result
+
+    assert (success, output, actual_model) == (
+        True,
+        claude_stdout["result"],
+        model,
+    )
+    assert cost > 0.0
+    assert provider_result[4] == expected_usage
+    json.dumps(provider_result[4])
+
+    result = run_agentic_task(
+        "Audit billing usage",
+        mock_cwd,
+        claude_policy=policy,
+    )
+    unpacked_success, unpacked_output, unpacked_cost, provider = result
+
+    assert (unpacked_success, unpacked_output, provider) == (
+        True,
+        claude_stdout["result"],
+        "anthropic",
+    )
+    assert unpacked_cost > 0.0
+    assert result.usage == expected_usage
+    assert result[4] == expected_usage
+    json.dumps(result.usage)
+
+
 def test_anthropic_claude_policy_null_allowed_tools_uses_no_tools(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
