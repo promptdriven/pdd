@@ -779,6 +779,108 @@ def test_run_agentic_task_claude_policy_detects_symlink_target_escape(
     assert "src/target-link.txt" in result.changed_files
 
 
+def test_run_agentic_task_claude_policy_fails_when_writable_root_becomes_symlink(
+    tmp_path, mock_env
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    writable_root = tmp_path / "declared-writable"
+    target_root = tmp_path / "target-root"
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        target_root.mkdir()
+        writable_root.symlink_to(target_root, target_is_directory=True)
+        (writable_root / "leak.txt").write_text("escaped", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Try symlink-created writable root",
+            workspace,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert "symlink" in result.output_text
+    assert any("declared-writable" in path for path in result.changed_files)
+
+
+def test_run_agentic_task_claude_policy_reports_new_escaped_symlink(
+    tmp_path, mock_env
+):
+    workspace = tmp_path / "workspace"
+    writable_root = workspace / "src"
+    outside_root = tmp_path / "outside"
+    writable_root.mkdir(parents=True)
+    outside_root.mkdir()
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        (writable_root / "created-link").symlink_to(
+            outside_root,
+            target_is_directory=True,
+        )
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Create escaped symlink",
+            workspace,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert "symlink" in result.output_text
+    assert "src/created-link" in result.changed_files
+
+
 def test_run_agentic_task_claude_policy_ignores_internal_retry_logs(
     tmp_path, mock_env
 ):
