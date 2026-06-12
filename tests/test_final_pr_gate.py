@@ -22,8 +22,16 @@ from unittest.mock import patch
 from click.testing import CliRunner
 
 from pdd.agentic_checkup import (
+    _classify_layer1_failure_category,
+    _format_github_checks_gate_failure_report,
+    _format_layer1_failure_report,
     _review_loop_ship_verdict,
     run_agentic_checkup,
+)
+from pdd.agentic_checkup_orchestrator import (
+    STEP5_SHELL_EVIDENCE_SCHEMA,
+    _STEP5_SHELL_EVIDENCE_MEMORY,
+    _step5_shell_evidence_memory_key,
 )
 from pdd.checkup_review_loop import _artifacts_dir
 from pdd.commands.checkup import checkup
@@ -58,6 +66,33 @@ def _write_final_state(tmp_path: Path, *, issue_number: int, pr_number: int, pay
     artifacts = _artifacts_dir(tmp_path, issue_number, pr_number)
     artifacts.mkdir(parents=True, exist_ok=True)
     path = artifacts / "final-state.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def _write_layer1_step5_evidence(
+    tmp_path: Path,
+    *,
+    pr_number: int = 1,
+    status: str = "failed",
+) -> Path:
+    path = (
+        tmp_path
+        / ".pdd"
+        / f"checkup-pr-{pr_number}"
+        / "layer1-step5-evidence.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": STEP5_SHELL_EVIDENCE_SCHEMA,
+        "iteration": 1,
+        "status": status,
+        "command": "python -m pytest -q tests/test_widget.py",
+        "exit_code": 1 if status == "failed" else 0,
+        "selected_tests": ["tests/test_widget.py"],
+        "artifact_path": ".pdd/checkup-pr-1/layer1-step5-evidence.json",
+        "output": "FAILED tests/test_widget.py::test_breaks",
+    }
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
@@ -246,6 +281,88 @@ class TestFinalGateLibrary:
         orch_mock.assert_called_once()
         loop_mock.assert_not_called()
         assert cost == 0.5
+
+    def test_layer1_step5_failure_continues_to_layer2(
+        self, tmp_path: Path
+    ) -> None:
+        _write_layer1_step5_evidence(tmp_path)
+
+        def loop(*_a, **kwargs):
+            context = kwargs["context"]
+            assert "tests/test_widget.py::test_breaks" in context.layer1_step5_evidence
+            _write_final_state(
+                tmp_path,
+                issue_number=2,
+                pr_number=1,
+                payload=_clean_final_state(),
+            )
+            return (True, "review ok", 1.5, "codex")
+
+        (result, orch_mock, loop_mock) = _run_final_gate(
+            tmp_path,
+            orch_return=(False, "Step 5 tests failed", 0.5, "model"),
+            loop_side_effect=loop,
+        )
+        success, msg, cost, model = result
+        assert success is True
+        assert "Layer 1 Step 5 shell-first tests failed" in msg
+        assert cost == 2.0
+        assert model == "codex"
+        orch_mock.assert_called_once()
+        loop_mock.assert_called_once()
+
+    def test_layer1_step5_memory_handoff_continues_to_layer2(
+        self, tmp_path: Path
+    ) -> None:
+        key = _step5_shell_evidence_memory_key(tmp_path, 1)
+        _STEP5_SHELL_EVIDENCE_MEMORY[key] = {
+            "schema": STEP5_SHELL_EVIDENCE_SCHEMA,
+            "iteration": 1,
+            "status": "failed",
+            "command": "python -m pytest -q tests/test_widget.py",
+            "exit_code": 1,
+            "selected_tests": ["tests/test_widget.py"],
+            "artifact_path": ".pdd/checkup-pr-1/layer1-step5-evidence.json",
+            "output": "FAILED tests/test_widget.py::test_breaks",
+        }
+
+        def loop(*_a, **kwargs):
+            context = kwargs["context"]
+            assert "tests/test_widget.py::test_breaks" in context.layer1_step5_evidence
+            _write_final_state(
+                tmp_path,
+                issue_number=2,
+                pr_number=1,
+                payload=_clean_final_state(),
+            )
+            return (True, "review ok", 1.5, "codex")
+
+        try:
+            (result, _orch_mock, loop_mock) = _run_final_gate(
+                tmp_path,
+                orch_return=(False, "Step 5 tests failed", 0.5, "model"),
+                loop_side_effect=loop,
+            )
+        finally:
+            _STEP5_SHELL_EVIDENCE_MEMORY.pop(key, None)
+
+        success, msg, _cost, _model = result
+        assert success is True
+        assert "Layer 1 Step 5 shell-first tests failed" in msg
+        loop_mock.assert_called_once()
+
+    def test_layer1_non_actionable_step5_evidence_still_skips_layer2(
+        self, tmp_path: Path
+    ) -> None:
+        _write_layer1_step5_evidence(tmp_path, status="not_found")
+        (result, _orch_mock, loop_mock) = _run_final_gate(
+            tmp_path,
+            orch_return=(False, "layer1 blew up", 0.5, "model"),
+        )
+        success, msg, _cost, _model = result
+        assert success is False
+        assert "Final gate Layer 1 failed" in msg
+        loop_mock.assert_not_called()
 
     def test_github_checks_gate_runs_between_layer1_and_layer2(self, tmp_path: Path) -> None:
         order: list[str] = []
@@ -839,3 +956,76 @@ class TestFinalGateCli:
         )
         assert result.exit_code == 2
         assert "--max-review-rounds must be >= 1" in result.output
+
+
+class TestLayer1FailureCategory2047:
+    """Machine-readable ``failure_category`` classification (issue #2047).
+
+    These map the distinct Layer-1 / github-checks failure shapes (grounded in
+    real prod job output for promptdriven/pdd #1361, #1387, #1501) to stable
+    categories the pdd_cloud checkup-label reporter consumes.
+    """
+
+    def test_empty_step7_json_is_provider_parser(self) -> None:
+        msg = (
+            "Checkup did not verify all issues fixed after 3 fix-verify "
+            "iterations. Step 7 verdict JSON could not be parsed: empty step "
+            "7 output."
+        )
+        assert _classify_layer1_failure_category(msg) == "provider_parser_failure"
+
+    def test_targeted_only_is_incomplete_verification(self) -> None:
+        msg = (
+            "Targeted verification (777 tests) passes after applying 1 checkup "
+            "fix. Full suite (11,060 tests) not run due to time budget — "
+            "full-suite/CI re-run needed. Verification scope: targeted — full "
+            "suite not run."
+        )
+        assert _classify_layer1_failure_category(msg) == "incomplete_verification"
+
+    def test_full_suite_build_failure(self) -> None:
+        msg = (
+            "Verification scope: full suite. Build replay still fails at "
+            "frontend TypeScript checking, and the backend full pytest suite "
+            "timed out after 900 seconds with 5 reproduced tests already failing."
+        )
+        assert _classify_layer1_failure_category(msg) == "full_suite_failed"
+
+    def test_source_of_truth_refusal(self) -> None:
+        msg = (
+            "generated-code-only fix refused: pdd/x.py is generated from "
+            "pdd/prompts/x_python.prompt. Update the prompt source."
+        )
+        assert _classify_layer1_failure_category(msg) == "source_of_truth_repair_needed"
+
+    def test_architecture_registry_refusal(self) -> None:
+        msg = (
+            "architecture.json registry edit refused: removed pair pdd/x.py "
+            "while code still present. Update the prompt source."
+        )
+        assert _classify_layer1_failure_category(msg) == "source_of_truth_repair_needed"
+
+    def test_generic_layer1_fallback(self) -> None:
+        assert _classify_layer1_failure_category("something else failed") == "layer1_failed"
+
+    def test_layer1_report_embeds_failure_category(self) -> None:
+        report = _format_layer1_failure_report(
+            pr_url="https://github.com/o/r/pull/1",
+            issue_url="https://github.com/o/r/issues/2",
+            layer1_message="Step 7 verdict JSON could not be parsed: empty step 7 output.",
+            full_suite_source="github-checks",
+        )
+        block = report.split("```json", 1)[1].split("```", 1)[0]
+        payload = json.loads(block)
+        assert payload["failure_category"] == "provider_parser_failure"
+        assert payload["stage"] == "layer1"
+
+    def test_github_checks_report_embeds_failure_category(self) -> None:
+        report = _format_github_checks_gate_failure_report(
+            pr_url="https://github.com/o/r/pull/1",
+            issue_url="https://github.com/o/r/issues/2",
+            github_checks_message="2 checks failing on head",
+        )
+        block = report.split("```json", 1)[1].split("```", 1)[0]
+        payload = json.loads(block)
+        assert payload["failure_category"] == "github_checks_failed"

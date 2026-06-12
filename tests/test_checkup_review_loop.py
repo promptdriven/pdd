@@ -47,6 +47,13 @@ def _config(**overrides: Any):
         "require_all_reviewers_clean": True,
         "continue_on_reviewer_limit": False,
         "require_final_fresh_review": True,
+        # Issue #2047: the legacy guard tests assert the deterministic
+        # "refuse the push and stop" behavior on a source-of-truth drift.
+        # Default the new source-of-truth repair OFF here so those tests keep
+        # exercising the guard in isolation; tests that drive the repair flow
+        # opt in explicitly (and mock _run_role_task + _regenerate_module_from_prompt).
+        # Production keeps it ON via the ReviewLoopConfig dataclass default.
+        "enable_source_of_truth_repair": False,
     }
     data.update(overrides)
     return ReviewLoopConfig(**data)
@@ -61,6 +68,52 @@ def _json(status: str, findings: List[Dict[str, str]] | None = None) -> str:
             "findings": findings or [],
         }
     )
+
+
+class TestLayer1Step5EvidenceHandoff:
+    def test_failed_shell_evidence_becomes_fixer_finding(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _layer1_step5_evidence_findings
+
+        ctx = _ctx(tmp_path)
+        ctx.layer1_step5_evidence = json.dumps(
+            {
+                "schema": "pdd.checkup.layer1_step5_evidence.v1",
+                "status": "failed",
+                "command": "python -m pytest -q tests/test_widget.py",
+                "exit_code": 1,
+                "selected_tests": ["tests/test_widget.py"],
+                "artifact_path": ".pdd/checkup-pr-1/layer1-step5-evidence.json",
+                "output": "FAILED tests/test_widget.py::test_breaks",
+            }
+        )
+
+        findings = _layer1_step5_evidence_findings(ctx)
+
+        assert len(findings) == 1
+        finding = findings[0]
+        assert finding.reviewer == "layer1:step5"
+        assert finding.area == "test"
+        assert finding.severity == "critical"
+        assert finding.location == "tests/test_widget.py"
+        assert "python -m pytest -q tests/test_widget.py" in finding.evidence
+        assert "tests/test_widget.py::test_breaks" in finding.evidence
+        assert "equivalent targeted check" in finding.required_fix
+
+    def test_non_actionable_shell_evidence_is_not_fixer_input(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _layer1_step5_evidence_findings
+
+        ctx = _ctx(tmp_path)
+        for status in ("passed", "not_found", "skipped"):
+            ctx.layer1_step5_evidence = json.dumps(
+                {
+                    "schema": "pdd.checkup.layer1_step5_evidence.v1",
+                    "status": status,
+                    "command": "python -m pytest -q tests/test_widget.py",
+                }
+            )
+            assert _layer1_step5_evidence_findings(ctx) == []
 
 
 class TestCheckupReviewLoopCli:
@@ -7595,6 +7648,521 @@ def _seed_repo_with_arch(
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=worktree, check=True)
 
 
+class TestPromptSourceOffenders2047:
+    """Unit tests for ``_prompt_source_offenders`` structured classification (#2047)."""
+
+    def _seed(self, tmp_path: Path, *, code_exists: bool, prompt_exists: bool) -> None:
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        if code_exists:
+            code = tmp_path / "pdd/agentic_update.py"
+            code.parent.mkdir(parents=True, exist_ok=True)
+            code.write_text("# generated\n", encoding="utf-8")
+        if prompt_exists:
+            prompt = tmp_path / "pdd/prompts/agentic_update_python.prompt"
+            prompt.parent.mkdir(parents=True, exist_ok=True)
+            prompt.write_text("prompt body\n", encoding="utf-8")
+
+    def test_drift_offender_kind(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed(tmp_path, code_exists=True, prompt_exists=True)
+        offenders = _prompt_source_offenders(tmp_path, ["pdd/agentic_update.py"])
+        assert offenders == [
+            {
+                "code_path": "pdd/agentic_update.py",
+                "prompt_path": "pdd/prompts/agentic_update_python.prompt",
+                "kind": "drift",
+            }
+        ]
+
+    def test_missing_prompt_offender_kind(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed(tmp_path, code_exists=True, prompt_exists=False)
+        offenders = _prompt_source_offenders(tmp_path, ["pdd/agentic_update.py"])
+        assert [o["kind"] for o in offenders] == ["missing_prompt"]
+
+    def test_rename_drift_offender_kind(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        # Code gone from disk, prompt present and NOT co-changed = drift via rename.
+        self._seed(tmp_path, code_exists=False, prompt_exists=True)
+        offenders = _prompt_source_offenders(tmp_path, ["pdd/agentic_update.py"])
+        assert [o["kind"] for o in offenders] == ["rename_drift"]
+
+    def test_co_edited_prompt_is_not_offender(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed(tmp_path, code_exists=True, prompt_exists=True)
+        offenders = _prompt_source_offenders(
+            tmp_path,
+            [
+                "pdd/agentic_update.py",
+                "pdd/prompts/agentic_update_python.prompt",
+            ],
+        )
+        assert offenders == []
+
+    def test_unregistered_change_is_not_offender(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _prompt_source_offenders
+
+        self._seed(tmp_path, code_exists=True, prompt_exists=True)
+        offenders = _prompt_source_offenders(tmp_path, ["pdd/not_registered.py"])
+        assert offenders == []
+
+    def test_guard_string_unchanged_after_refactor(self, tmp_path: Path) -> None:
+        # The deterministic refusal string is unchanged by the #2047 refactor.
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        self._seed(tmp_path, code_exists=True, prompt_exists=True)
+        refusal = _check_prompt_source_guard(tmp_path, ["pdd/agentic_update.py"])
+        assert refusal is not None
+        assert refusal.startswith("generated-code-only fix refused: ")
+        assert "pdd/agentic_update.py is generated from " in refusal
+        assert "pdd/prompts/agentic_update_python.prompt" in refusal
+
+
+class TestAttemptSourceOfTruthRepair2047:
+    """Unit tests for ``_attempt_source_of_truth_repair`` (#2047)."""
+
+    def _make(self, tmp_path: Path, *, code_exists=True, prompt_exists=True):
+        from pdd.checkup_review_loop import ReviewLoopConfig, ReviewLoopState
+
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        if code_exists:
+            (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "pdd/agentic_update.py").write_text("# gen\n", encoding="utf-8")
+        if prompt_exists:
+            (tmp_path / "pdd/prompts").mkdir(parents=True, exist_ok=True)
+            (tmp_path / "pdd/prompts/agentic_update_python.prompt").write_text(
+                "prompt body\n", encoding="utf-8"
+            )
+        return _ctx(tmp_path), ReviewLoopConfig, ReviewLoopState
+
+    def test_drift_triggers_repair_turn_and_regen(self, tmp_path, monkeypatch):
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path)
+        state = State()
+        calls = {"role_task": 0, "regen": 0}
+
+        def fake_task(role, instruction, cwd, **kwargs):
+            calls["role_task"] += 1
+            # The repair turn edits the owning prompt on disk.
+            (tmp_path / "pdd/prompts/agentic_update_python.prompt").write_text(
+                "prompt body\nrepaired\n", encoding="utf-8"
+            )
+            assert "sot-repair" in kwargs["label"]
+            return True, "edited prompt", 0.3, role
+
+        def fake_regen(worktree, code_path, prompt_path):
+            calls["regen"] += 1
+            return {"ok": True, "cost": 0.2, "model": "m", "error": ""}
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(mod, "_regenerate_module_from_prompt", fake_regen)
+
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(enable_source_of_truth_repair=True, max_cost=50.0),
+            state=state,
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=float("inf"),
+            active_fixer="claude",
+            verbose=False,
+            quiet=True,
+        )
+        assert details["repair_attempted"] is True
+        assert calls["role_task"] == 1
+        assert calls["regen"] == 1
+        assert details["unrepairable"] == []
+        assert state.total_cost == pytest.approx(0.5)
+
+    def test_missing_prompt_is_blocker_without_llm(self, tmp_path, monkeypatch):
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path, prompt_exists=False)
+        state = State()
+        called = {"n": 0}
+        monkeypatch.setattr(
+            mod,
+            "_run_role_task",
+            lambda *a, **k: called.__setitem__("n", called["n"] + 1) or (True, "", 0.0, "x"),
+        )
+
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(enable_source_of_truth_repair=True, max_cost=50.0),
+            state=state,
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=float("inf"),
+            active_fixer="claude",
+            verbose=False,
+            quiet=True,
+        )
+        assert details["repair_attempted"] is False
+        assert called["n"] == 0
+        assert details["blocked"] is True
+        assert details["unrepairable"][0]["kind"] == "missing_prompt"
+        assert "deleted" in details["unrepairable"][0]["reason"]
+
+    def test_repair_disabled_skips(self, tmp_path, monkeypatch):
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path)
+        monkeypatch.setattr(
+            mod, "_run_role_task", lambda *a, **k: pytest.fail("should not run")
+        )
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(enable_source_of_truth_repair=False),
+            state=State(),
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=float("inf"),
+            active_fixer="claude",
+            verbose=False,
+            quiet=True,
+        )
+        assert details["repair_attempted"] is False
+        assert details["repair_skipped_reason"] == "source-of-truth repair disabled"
+
+    def test_budget_exhausted_skips_repair(self, tmp_path, monkeypatch):
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path)
+        monkeypatch.setattr(
+            mod, "_run_role_task", lambda *a, **k: pytest.fail("should not run")
+        )
+        state = State()
+        state.total_cost = 100.0  # over max_cost
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(enable_source_of_truth_repair=True, max_cost=1.0),
+            state=state,
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=float("inf"),
+            active_fixer="claude",
+            verbose=False,
+            quiet=True,
+        )
+        assert details["repair_attempted"] is False
+        assert "budget" in details["repair_skipped_reason"]
+
+    def test_fixer_failure_skips_regen_and_blocks(self, tmp_path, monkeypatch):
+        # Review hardening: if the repair fixer turn reports failure, do NOT
+        # regenerate (no code from a botched prompt edit) and block — never push
+        # a partial repair even if a co-edit would let the guard pass.
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import _attempt_source_of_truth_repair
+
+        ctx, Config, State = self._make(tmp_path)
+        state = State()
+        calls = {"regen": 0}
+        monkeypatch.setattr(
+            mod, "_run_role_task", lambda *a, **k: (False, "fixer failed", 0.2, "claude")
+        )
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: calls.__setitem__("regen", calls["regen"] + 1) or {"ok": True, "cost": 0.0, "model": "", "error": ""},
+        )
+        details = _attempt_source_of_truth_repair(
+            context=ctx,
+            config=Config(enable_source_of_truth_repair=True, max_cost=50.0),
+            state=state,
+            worktree=tmp_path,
+            changed_files=["pdd/agentic_update.py"],
+            head_ref="HEAD",
+            round_number=1,
+            artifacts_dir=tmp_path / ".pdd" / "art",
+            deadline=float("inf"),
+            active_fixer="claude",
+            verbose=False,
+            quiet=True,
+        )
+        assert details["repair_attempted"] is True
+        assert details["fixer_reported_success"] is False
+        assert details["blocked"] is True
+        assert calls["regen"] == 0  # no regeneration on fixer failure
+
+
+def _machine_verdict_from_report(report: str) -> Dict[str, Any]:
+    """Extract the parsed ``### Machine Verdict`` JSON block from a report."""
+    marker = "### Machine Verdict"
+    assert marker in report, "report has no Machine Verdict block"
+    after = report.split(marker, 1)[1]
+    block = after.split("```json", 1)[1].split("```", 1)[0]
+    return json.loads(block)
+
+
+class TestSourceOfTruthRepairLoop2047:
+    """Full-loop wiring of the #2047 source-of-truth repair/blocker seam."""
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "base_ref": "main",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_pr_changed_files_all", lambda *a, **k: [])
+
+    def _finding(self) -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/agentic_update.py:1",
+            "evidence": "broke",
+            "finding": "broken api",
+            "required_fix": "fix it",
+        }
+
+    def test_missing_prompt_blocks_with_structured_verdict(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        # Models Diana #1519: the change needs a source-of-truth repair that
+        # cannot be auto-authored (owning prompt absent). The loop must refuse
+        # the push and emit a structured, classifiable blocker rather than a
+        # generic failure.
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        # Code present, owning prompt ABSENT -> "missing_prompt" (not auto-repairable).
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd/agentic_update.py").write_text("# gen\n", encoding="utf-8")
+
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _wt: ["pdd/agentic_update.py"]
+        )
+        push_calls: List[str] = []
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: push_calls.append("called") or (True, "pushed"),
+        )
+        # If the repair ever tried to regenerate we'd know it mis-classified.
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: pytest.fail("missing_prompt must not regenerate"),
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "sot-repair" in label:
+                pytest.fail("missing_prompt offender must not run a repair turn")
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                max_rounds=1,
+                require_final_fresh_review=False,
+                enable_source_of_truth_repair=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert push_calls == []  # refused
+        verdict = _machine_verdict_from_report(report)
+        assert verdict["failure_category"] == "source_of_truth_repair_needed"
+        assert verdict["status"] == "failed"
+        sot = verdict["source_of_truth"]
+        assert sot["blocked"] is True
+        assert sot["repair_attempted"] is False
+        assert sot["unrepairable"][0]["kind"] == "missing_prompt"
+        assert "pdd/agentic_update.py" in report
+
+    def test_drift_repair_unblocks_push(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        # A repairable drift: the loop repairs the owning prompt + regenerates,
+        # the guard re-check passes, and the push proceeds.
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd/agentic_update.py").write_text("# gen\n", encoding="utf-8")
+        prompt_rel = "pdd/prompts/agentic_update_python.prompt"
+        (tmp_path / prompt_rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / prompt_rel).write_text("prompt body\n", encoding="utf-8")
+
+        changed = ["pdd/agentic_update.py"]
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _wt: list(changed))
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: {"ok": True, "cost": 0.1, "model": "m", "error": ""},
+        )
+        push_calls: List[str] = []
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: push_calls.append("called") or (True, "pushed"),
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "sot-repair" in label:
+                # Repair edits the owning prompt -> now co-edited.
+                (tmp_path / prompt_rel).write_text(
+                    "prompt body\nrepaired\n", encoding="utf-8"
+                )
+                if prompt_rel not in changed:
+                    changed.append(prompt_rel)
+                return True, "repaired prompt", 0.2, role
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                max_rounds=1,
+                require_final_fresh_review=False,
+                enable_source_of_truth_repair=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert push_calls, "repair should have unblocked the push"
+        verdict = _machine_verdict_from_report(report)
+        # The repair recorded its result and the guard no longer blocks.
+        assert verdict["source_of_truth"]["blocked"] is False
+
+    def test_repair_disabled_preserves_legacy_block(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd/agentic_update.py").write_text("# gen\n", encoding="utf-8")
+        (tmp_path / "pdd/prompts").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd/prompts/agentic_update_python.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _wt: ["pdd/agentic_update.py"]
+        )
+        monkeypatch.setattr(
+            mod,
+            "_regenerate_module_from_prompt",
+            lambda *a, **k: pytest.fail("repair disabled must not regenerate"),
+        )
+        push_calls: List[str] = []
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: push_calls.append("called") or (True, "pushed"),
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "sot-repair" in label:
+                pytest.fail("repair disabled must not run a repair turn")
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                max_rounds=1,
+                require_final_fresh_review=False,
+                enable_source_of_truth_repair=False,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+        assert success is True
+        assert push_calls == []
+        assert "generated-code-only fix refused" in report
+
+
 class TestArchitectureRegistryEditGuardHelper:
     """Unit tests for ``_check_architecture_registry_edit_guard`` (#1081)."""
 
@@ -12882,3 +13450,116 @@ class TestGuardBaselineHeadRef:
         )
         assert refusal is not None, "guard must block with pre-fix baseline"
         assert "pdd/foo.py" in refusal or "foo_python.prompt" in refusal
+
+
+class TestReviewLoopFailureCategory2047:
+    """``_review_loop_failure_category`` SoT-finding detection (#2047, the #1519 shape)."""
+
+    def _finding(self, area="api", finding="x", required_fix="y", status="open"):
+        from pdd.checkup_review_loop import ReviewFinding
+
+        return ReviewFinding(
+            severity="blocker",
+            reviewer="codex",
+            area=area,
+            evidence="",
+            finding=finding,
+            required_fix=required_fix,
+            status=status,
+        )
+
+    def test_open_sot_finding_by_text_is_source_of_truth(self):
+        # #1519: a PR adds modules without prompt contracts -> reviewer finding,
+        # NOT a deterministic guard refusal. Must still classify as SoT.
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        finding = self._finding(
+            area="workflow",
+            finding="Six new modules lack prompt contracts.",
+            required_fix="Author the prompt contracts and architecture.json entries.",
+        )
+        cat = _review_loop_failure_category(ReviewLoopState(), False, [finding])
+        assert cat == FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+
+    def test_open_sot_finding_by_area_is_source_of_truth(self):
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        finding = self._finding(area="prompt", finding="prompt drifted", required_fix="fix prompt")
+        assert (
+            _review_loop_failure_category(ReviewLoopState(), False, [finding])
+            == FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+        )
+
+    def test_generic_finding_is_review_findings(self):
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_REVIEW_FINDINGS,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        finding = self._finding(area="api", finding="null deref", required_fix="add guard")
+        assert (
+            _review_loop_failure_category(ReviewLoopState(), False, [finding])
+            == FINAL_GATE_CATEGORY_REVIEW_FINDINGS
+        )
+
+    def test_prompt_source_guard_stop_reason_is_source_of_truth(self):
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        state = ReviewLoopState(
+            stop_reason="generated-code-only fix refused: pdd/x.py is generated from ..."
+        )
+        assert (
+            _review_loop_failure_category(state, False) == FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+        )
+
+    def test_architecture_registry_guard_stop_reason_is_source_of_truth(self):
+        # The architecture-registry guard is also a source-of-truth contract,
+        # so its refusal must classify as source_of_truth_repair_needed too.
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        state = ReviewLoopState(
+            stop_reason="architecture.json registry edit refused: removed pair ..."
+        )
+        assert (
+            _review_loop_failure_category(state, False) == FINAL_GATE_CATEGORY_SOURCE_OF_TRUTH
+        )
+
+    def test_fixed_sot_finding_does_not_trigger(self):
+        # A resolved SoT finding must not keep classifying as SoT.
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_REVIEW_FINDINGS,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        sot_fixed = self._finding(area="prompt", finding="prompt", required_fix="fix", status="fixed")
+        generic_open = self._finding(area="api", finding="bug", required_fix="fix")
+        cat = _review_loop_failure_category(ReviewLoopState(), False, [sot_fixed, generic_open])
+        assert cat == FINAL_GATE_CATEGORY_REVIEW_FINDINGS
+
+    def test_passed_short_circuits(self):
+        from pdd.checkup_review_loop import (
+            FINAL_GATE_CATEGORY_PASSED,
+            ReviewLoopState,
+            _review_loop_failure_category,
+        )
+
+        sot = self._finding(area="prompt")
+        assert _review_loop_failure_category(ReviewLoopState(), True, [sot]) == FINAL_GATE_CATEGORY_PASSED
