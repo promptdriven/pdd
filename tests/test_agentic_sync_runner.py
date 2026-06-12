@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import time
@@ -3663,6 +3664,8 @@ class TestPddSyncMaxWorkersEnvVar:
         module-level constant is evaluated with the env var present.
         Fails on buggy code where MAX_WORKERS is unconditionally 4.
         """
+        _project_root = str(Path(__file__).resolve().parent.parent)
+        _pythonpath = f"{_project_root}:{os.environ.get('PYTHONPATH', '')}"
         result = subprocess.run(
             [
                 sys.executable,
@@ -3675,6 +3678,7 @@ class TestPddSyncMaxWorkersEnvVar:
             ],
             capture_output=True,
             text=True,
+            env={**os.environ, "PYTHONPATH": _pythonpath},
         )
         assert result.returncode == 0, (
             f"Import subprocess failed; stderr={result.stderr!r}"
