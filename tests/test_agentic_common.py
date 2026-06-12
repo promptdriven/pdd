@@ -1706,6 +1706,57 @@ def test_standard_claude_policy_json_usage_merges_issue686_partial_model_usage_c
     json.dumps(provider_result[4])
 
 
+def test_standard_claude_policy_json_usage_prefers_complete_aggregate_for_inconsistent_single_model_cache(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_inconsistent_cache.txt"
+    prompt_path.write_text("Audit inconsistent partial modelUsage cache", encoding="utf-8")
+    model = "claude-sonnet-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for inconsistent cached Claude run.",
+        "usage": {
+            "input_tokens": 50000,
+            "output_tokens": 5000,
+            "cache_read_input_tokens": 40000,
+            "cache_creation_input_tokens": 8000,
+        },
+        "modelUsage": {
+            model: {
+                "inputTokens": 0,
+                "outputTokens": 5,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 50000,
+                "output_tokens": 5000,
+                "cached_input_tokens": 40000,
+                "cache_creation_input_tokens": 8000,
+            },
+        ],
+    }
+    json.dumps(provider_result[4])
+
+
 def test_standard_claude_policy_json_usage_model_usage_only_counters_estimate_cost(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
@@ -7808,6 +7859,26 @@ def test_anthropic_cost_from_model_usage_costUSD():
     }
     cost = _calculate_anthropic_cost(data)
     assert cost == pytest.approx(0.030)
+
+
+def test_anthropic_cost_hybrid_model_usage_costusd_and_tokens():
+    """costUSD on one model should not hide token-priced sibling usage."""
+    data = {
+        "modelUsage": {
+            "claude-opus-4-20250514": {
+                "costUSD": 0.001,
+            },
+            "claude-haiku-3-5-20241022": {
+                "inputTokens": 2000,
+                "outputTokens": 200,
+            },
+        },
+        "result": "Done",
+    }
+
+    cost = _calculate_anthropic_cost(data)
+
+    assert cost == pytest.approx(0.0034)
 
 
 def test_anthropic_cost_token_based_fallback():
