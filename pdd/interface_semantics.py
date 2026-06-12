@@ -529,8 +529,8 @@ def _count_module_bindings(tree: ast.Module) -> dict:
     ``X = 25000`` shadowed by ``import x as X`` would be wrongly admitted), as
     are ``except ... as X`` and ``match`` capture patterns. Two forms rebind a
     module global from a place this walk skips and are detected separately: a
-    function that BOTH declares ``global X`` and assigns it, and a walrus
-    ``X := ...`` evaluated at module scope (directly or inside a module-level
+    function or class body that BOTH declares ``global X`` and assigns it, and a
+    walrus ``X := ...`` evaluated at module scope (directly or inside a module-level
     comprehension — comprehension scopes are transparent to walrus). A read-only
     ``global`` and a walrus inside a function/lambda body bind nothing at module
     scope, so neither disqualifies the constant. Where attribution is imprecise it
@@ -578,17 +578,19 @@ def _count_module_bindings(tree: ast.Module) -> dict:
     # must NOT be treated as a rebind, or the gate reports drift on code that did
     # not change the default (the false sync failure #1558 exists to remove).
     #
-    # (1) ``global X`` rebinds the module global only when the SAME function also
-    # assigns X; a read-only ``global`` rebinds nothing. Intersect each function's
-    # ``global`` declarations with the names it stores. ``ast.walk`` also sees a
-    # nested function's stores, but over-attributing one only over-evicts toward
-    # UNKNOWN (safe) — never a false match.
-    for fn in ast.walk(tree):
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    # (1) ``global X`` rebinds the module global only when the SAME scope also
+    # assigns X; a read-only ``global`` rebinds nothing. ``global`` is valid in a
+    # function AND a class body (in both, an assignment to a global-declared name
+    # writes the module global), so check both. Intersect each scope's ``global``
+    # declarations with the names it stores. ``ast.walk`` also sees a nested
+    # scope's stores, but over-attributing one only over-evicts toward UNKNOWN
+    # (safe) — never a false match.
+    for scope in ast.walk(tree):
+        if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
         declared_global = {
             name
-            for sub in ast.walk(fn)
+            for sub in ast.walk(scope)
             if isinstance(sub, ast.Global)
             for name in sub.names
         }
@@ -596,7 +598,7 @@ def _count_module_bindings(tree: ast.Module) -> dict:
             continue
         stored = {
             sub.id
-            for sub in ast.walk(fn)
+            for sub in ast.walk(scope)
             if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)
         }
         for name in declared_global & stored:

@@ -541,6 +541,9 @@ def test_module_constant_survives_inner_scope_shadow(module_source):
         "X = 25000\ndef g():\n    global X\n    X = 1\n",
         # ...even when the global-declaring assignment is nested deeper.
         "X = 25000\ndef g():\n    global X\n    if cond:\n        X = 1\n",
+        # ``global X`` is valid in a CLASS body too; an assignment there writes
+        # the module global (not a class attribute).
+        "X = 25000\nclass C:\n    global X\n    X = 1\n",
         # A walrus in a MODULE-level comprehension leaks X to module scope.
         "X = 25000\n_ys = [(X := i) for i in range(3)]\n",
         # A walrus in a function default arg is evaluated in the enclosing scope.
