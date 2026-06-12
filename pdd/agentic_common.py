@@ -3603,48 +3603,400 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
     Tries modelUsage per-model costUSD first, then falls back to token-based
     estimation from the usage field.
     """
-    # Try 1: Sum costUSD from modelUsage (most accurate)
-    model_usage = data.get("modelUsage", {})
-    if model_usage:
-        total = sum(
-            float(info.get("costUSD", 0.0))
-            for info in model_usage.values()
-            if isinstance(info, dict)
-        )
-        if total > 0:
-            return total
+    raw_model_usage = data.get("modelUsage", {})
+    model_usage = raw_model_usage if isinstance(raw_model_usage, dict) else {}
 
-    # Try 2: Token-based estimation from usage field
+    # Try 1: Per-model modelUsage costUSD/token estimates.
     usage = data.get("usage", {})
-    if not usage:
-        return 0.0
+    aggregate_usage = usage if isinstance(usage, dict) else None
+    model_usage_cost = _calculate_anthropic_model_usage_token_cost(
+        model_usage,
+        aggregate_usage=aggregate_usage,
+    )
+    if model_usage_cost is not None:
+        return model_usage_cost
 
-    input_tokens = usage.get("input_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_creation = usage.get("cache_creation_input_tokens", 0)
+    # Try 3: Token-based estimation from aggregate usage field.
+    if isinstance(usage, dict) and usage:
+        family = _anthropic_pricing_family_for_aggregate(data, model_usage)
+        cost = _calculate_anthropic_usage_cost(usage, family)
+        if cost is not None:
+            return cost
 
-    # Determine pricing family from modelUsage keys or default to sonnet
-    family = "sonnet"  # default
+    return 0.0
+
+
+_INPUT_TOKEN_KEYS: Tuple[str, ...] = ("input_tokens", "inputTokens")
+_OUTPUT_TOKEN_KEYS: Tuple[str, ...] = ("output_tokens", "outputTokens")
+_CACHE_READ_TOKEN_KEYS: Tuple[str, ...] = (
+    "cache_read_input_tokens",
+    "cached_input_tokens",
+    "cacheReadInputTokens",
+    "cachedInputTokens",
+)
+_CACHE_CREATION_TOKEN_KEYS: Tuple[str, ...] = (
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+)
+
+
+def _validated_token_counter(
+    usage: Dict[str, Any],
+    aliases: Tuple[str, ...],
+    *,
+    required: bool,
+) -> Optional[int]:
+    """Return a non-negative token count, or None for missing/invalid required data."""
+    value = None
+    found = False
+    for key in aliases:
+        if key in usage:
+            value = usage[key]
+            found = True
+            break
+
+    if not found:
+        return None if required else 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _validated_anthropic_token_counts(
+    usage: Dict[str, Any],
+) -> Optional[Tuple[int, int, int, int]]:
+    """Return validated Anthropic token counters in canonical order."""
+    input_tokens = _validated_token_counter(
+        usage,
+        _INPUT_TOKEN_KEYS,
+        required=True,
+    )
+    output_tokens = _validated_token_counter(
+        usage,
+        _OUTPUT_TOKEN_KEYS,
+        required=True,
+    )
+    cache_read = _validated_token_counter(
+        usage,
+        _CACHE_READ_TOKEN_KEYS,
+        required=False,
+    )
+    cache_creation = _validated_token_counter(
+        usage,
+        _CACHE_CREATION_TOKEN_KEYS,
+        required=False,
+    )
+    if (
+        input_tokens is None
+        or output_tokens is None
+        or cache_read is None
+        or cache_creation is None
+    ):
+        return None
+    return input_tokens, output_tokens, cache_read, cache_creation
+
+
+def _positive_model_usage_cost_usd(usage: Dict[str, Any]) -> Optional[float]:
+    """Return a positive provider-reported model cost, or None."""
+    if "costUSD" not in usage:
+        return None
+    try:
+        cost = float(usage["costUSD"])
+    except (TypeError, ValueError):
+        return None
+    if cost <= 0:
+        return None
+    return cost
+
+
+def _anthropic_pricing_family_from_model_name(model_name: Optional[str]) -> Optional[str]:
+    """Return the Anthropic pricing family implied by an observed model name."""
+    if not isinstance(model_name, str) or not model_name:
+        return None
+    name_lower = model_name.lower()
+    if "opus" in name_lower:
+        return "opus"
+    if "haiku" in name_lower:
+        return "haiku"
+    if "sonnet" in name_lower:
+        return "sonnet"
+    return None
+
+
+def _anthropic_pricing_family_from_model_usage(
+    model_usage: Dict[str, Any],
+) -> Optional[str]:
+    """Infer aggregate pricing family from modelUsage keys."""
+    selected = None
     for model_name in model_usage.keys():
-        name_lower = model_name.lower()
-        if "opus" in name_lower:
-            family = "opus"
-            break
-        elif "haiku" in name_lower:
-            family = "haiku"
-            break
+        family = _anthropic_pricing_family_from_model_name(str(model_name))
+        if family == "opus":
+            return "opus"
+        if family == "haiku" and selected is None:
+            selected = "haiku"
+        elif family == "sonnet" and selected is None:
+            selected = "sonnet"
+    return selected
 
-    pricing = ANTHROPIC_PRICING_BY_FAMILY.get(family, ANTHROPIC_PRICING_BY_FAMILY["sonnet"])
 
-    # new_input = total input minus cached reads and cache creation (those tokens are billed separately)
-    new_input = max(0, input_tokens - cache_read - cache_creation)
-    input_cost = (new_input / 1_000_000) * pricing.input_per_million
+def _calculate_anthropic_usage_cost(
+    usage: Dict[str, Any],
+    family: Optional[str],
+) -> Optional[float]:
+    """Calculate Anthropic token cost from validated usage counters."""
+    counts = _validated_anthropic_token_counts(usage)
+    if counts is None:
+        return None
+    input_tokens, output_tokens, cache_read, cache_creation = counts
+
+    pricing_family = family or "sonnet"
+    pricing = ANTHROPIC_PRICING_BY_FAMILY.get(
+        pricing_family,
+        ANTHROPIC_PRICING_BY_FAMILY["sonnet"],
+    )
+
+    input_cost = (input_tokens / 1_000_000) * pricing.input_per_million
     cache_read_cost = (cache_read / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
     cache_write_cost = (cache_creation / 1_000_000) * pricing.input_per_million * 1.25
     output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
 
     return input_cost + cache_read_cost + cache_write_cost + output_cost
+
+
+def _calculate_anthropic_model_usage_token_cost(
+    model_usage: Dict[str, Any],
+    *,
+    aggregate_usage: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """Estimate cost from per-model costUSD or validated token counters."""
+    if not model_usage:
+        return None
+
+    if not any(
+        isinstance(usage, dict)
+        and (
+            _positive_model_usage_cost_usd(usage) is not None
+            or _has_token_counter_key(usage)
+        )
+        for usage in model_usage.values()
+    ):
+        return None
+
+    aggregate_has_nonzero_cache = (
+        isinstance(aggregate_usage, dict)
+        and _has_nonzero_or_invalid_cache_counter(aggregate_usage)
+    )
+    total = 0.0
+    for model_name, usage in model_usage.items():
+        if not isinstance(usage, dict):
+            continue
+        direct_cost = _positive_model_usage_cost_usd(usage)
+        if direct_cost is not None:
+            total += direct_cost
+            continue
+        if not _has_token_counter_key(usage):
+            continue
+        if aggregate_has_nonzero_cache and not _has_complete_cache_counters(usage):
+            return None
+        family = (
+            _anthropic_pricing_family_from_model_name(str(model_name))
+            or "sonnet"
+        )
+        cost = _calculate_anthropic_usage_cost(usage, family)
+        if cost is None:
+            return None
+        total += cost
+
+    return total
+
+
+def _build_claude_usage_record(
+    model_name: str,
+    usage: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Build one JSON-serializable Claude usage record from validated counters."""
+    counts = _validated_anthropic_token_counts(usage)
+    if counts is None:
+        return None
+    input_tokens, output_tokens, cached_input_tokens, cache_creation_input_tokens = counts
+
+    return {
+        "model": model_name,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+    }
+
+
+def _has_token_counter_key(usage: Dict[str, Any]) -> bool:
+    """Return True when a usage object contains any known token counter key."""
+    aliases = (
+        _INPUT_TOKEN_KEYS
+        + _OUTPUT_TOKEN_KEYS
+        + _CACHE_READ_TOKEN_KEYS
+        + _CACHE_CREATION_TOKEN_KEYS
+    )
+    return any(key in usage for key in aliases)
+
+
+def _has_counter_alias(usage: Dict[str, Any], aliases: Tuple[str, ...]) -> bool:
+    """Return True when any alias in a counter family is present."""
+    return any(key in usage for key in aliases)
+
+
+def _has_complete_cache_counters(usage: Dict[str, Any]) -> bool:
+    """Return True when both cache-read and cache-creation counters are explicit."""
+    return (
+        _has_counter_alias(usage, _CACHE_READ_TOKEN_KEYS)
+        and _has_counter_alias(usage, _CACHE_CREATION_TOKEN_KEYS)
+    )
+
+
+def _has_required_token_counters(usage: Dict[str, Any]) -> bool:
+    """Return True when required input/output counters are explicit and valid."""
+    return (
+        _validated_token_counter(usage, _INPUT_TOKEN_KEYS, required=True) is not None
+        and _validated_token_counter(usage, _OUTPUT_TOKEN_KEYS, required=True) is not None
+    )
+
+
+def _has_nonzero_or_invalid_cache_counter(usage: Dict[str, Any]) -> bool:
+    """Return True when aggregate cache counters should not be silently dropped."""
+    for aliases in (_CACHE_READ_TOKEN_KEYS, _CACHE_CREATION_TOKEN_KEYS):
+        value = _validated_token_counter(usage, aliases, required=False)
+        if value is None or value > 0:
+            return True
+    return False
+
+
+def _merge_missing_cache_counters(
+    per_model_usage: Dict[str, Any],
+    aggregate_usage: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Fill absent per-model cache counters from aggregate Claude usage."""
+    merged = dict(per_model_usage)
+    for aliases in (_CACHE_READ_TOKEN_KEYS, _CACHE_CREATION_TOKEN_KEYS):
+        if any(key in merged for key in aliases):
+            continue
+        for key in aliases:
+            if key in aggregate_usage:
+                merged[key] = aggregate_usage[key]
+                break
+    return merged
+
+
+def _extract_anthropic_model_from_envelope(data: Dict[str, Any]) -> Optional[str]:
+    """Extract a concrete Claude model from known JSON envelope locations."""
+    model = data.get("model")
+    if isinstance(model, str) and model:
+        return model
+
+    for key in ("message", "response", "result", "advisor"):
+        value = data.get(key)
+        if not isinstance(value, dict):
+            continue
+        model = value.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return None
+
+
+def _anthropic_pricing_family_for_aggregate(
+    data: Dict[str, Any],
+    model_usage: Dict[str, Any],
+) -> str:
+    """Pick a pricing family for aggregate Claude usage from observed models."""
+    return (
+        _anthropic_pricing_family_from_model_usage(model_usage)
+        or _anthropic_pricing_family_from_model_name(
+            _extract_anthropic_model_from_envelope(data)
+        )
+        or "sonnet"
+    )
+
+
+def _extract_anthropic_standard_usage(
+    data: Any,
+    *,
+    actual_model: Optional[str],
+) -> AgenticUsage:
+    """Extract GVS-compatible usage from a Claude Code JSON envelope."""
+    if not isinstance(data, dict):
+        return None
+
+    model_usage = data.get("modelUsage")
+    if isinstance(model_usage, dict) and model_usage:
+        records: List[Dict[str, Any]] = []
+        names = sorted(str(name) for name in model_usage if name)
+        aggregate_usage = data.get("usage")
+        aggregate_has_nonzero_cache = (
+            isinstance(aggregate_usage, dict)
+            and _has_nonzero_or_invalid_cache_counter(aggregate_usage)
+        )
+        for model_name in names:
+            per_model_usage = model_usage.get(model_name)
+            has_per_model_counters = (
+                isinstance(per_model_usage, dict)
+                and _has_token_counter_key(per_model_usage)
+            )
+            if (
+                len(names) > 1
+                and aggregate_has_nonzero_cache
+                and has_per_model_counters
+                and not _has_complete_cache_counters(per_model_usage)
+            ):
+                return None
+            record_usage = per_model_usage
+            if (
+                len(names) == 1
+                and isinstance(record_usage, dict)
+                and isinstance(aggregate_usage, dict)
+            ):
+                if (
+                    not _has_complete_cache_counters(record_usage)
+                    and _has_required_token_counters(aggregate_usage)
+                ):
+                    record_usage = aggregate_usage
+                else:
+                    record_usage = _merge_missing_cache_counters(
+                        record_usage,
+                        aggregate_usage,
+                    )
+            record = (
+                _build_claude_usage_record(model_name, record_usage)
+                if isinstance(record_usage, dict)
+                else None
+            )
+            if (
+                record is None
+                and len(names) == 1
+                and isinstance(aggregate_usage, dict)
+            ):
+                record = _build_claude_usage_record(model_name, aggregate_usage)
+            if record is None:
+                return None
+            records.append(record)
+        if records:
+            return {"claude": records}
+
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    model_name = (
+        _extract_anthropic_model_from_envelope(data)
+        or actual_model
+    )
+    if not model_name:
+        return None
+
+    record = _build_claude_usage_record(model_name, usage)
+    if record is None:
+        return None
+    return {"claude": [record]}
 
 
 def run_agentic_task(
@@ -5342,10 +5694,12 @@ def _run_with_provider(
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
     claude_policy: Optional[ClaudePolicy] = None,
-) -> Tuple[bool, str, float, Optional[str]]:
+) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
     Internal helper to run a specific provider's CLI.
-    Returns (success, output_or_error, cost, actual_model).
+    Returns a provider result whose iteration yields
+    (success, output_or_error, cost, actual_model). Claude paths may expose
+    structured usage at index 4 while preserving four-value unpacking.
 
     Issue #1376: ``actual_model`` is the model name extracted from the
     provider's JSON response (e.g. ``claude-sonnet-4-6``,
@@ -5814,6 +6168,17 @@ def _run_with_provider(
                 f"[dim]Warning: {provider} returned $0 cost. "
                 f"JSON keys: {sorted(data.keys())}[/dim]"
             )
+        if provider == "anthropic":
+            return _ProviderRunResult(
+                success,
+                text,
+                cost,
+                actual_model,
+                _extract_anthropic_standard_usage(
+                    data,
+                    actual_model=actual_model,
+                ),
+            )
         return success, text, cost, actual_model
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
@@ -5901,6 +6266,9 @@ def _extract_provider_model_from_data(provider: str, data: Dict[str, Any]) -> Op
                 names = [str(k) for k in usage.keys() if k]
                 if names:
                     return "+".join(sorted(names)) if len(names) > 1 else names[0]
+            model = _extract_anthropic_model_from_envelope(data)
+            if model:
+                return model
         elif provider == "google":
             models = (data.get("stats") or {}).get("models")
             if isinstance(models, dict) and models:

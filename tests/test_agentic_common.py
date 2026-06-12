@@ -29,6 +29,7 @@ from pdd.agentic_common import (
     _classify_permanent_error,
     _detect_claude_interactive_auth_failure,
     _estimate_claude_interactive_session_cost,
+    _extract_anthropic_standard_usage,
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
@@ -1511,6 +1512,533 @@ def test_anthropic_claude_policy_builds_read_glob_add_dirs_no_session_json_comma
     assert cmd[cmd.index("--add-dir") + 1] == str(extra_dir)
     assert "--no-session-persistence" in cmd
     assert cmd[cmd.index("--output-format") + 1] == "json"
+
+
+def test_standard_claude_policy_json_usage_reaches_provider_and_agentic_result(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage.txt"
+    prompt_path.write_text("Audit billing usage", encoding="utf-8")
+    model = "claude-sonnet-4-6-20251201"
+    expected_usage = {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 1200,
+                "output_tokens": 340,
+                "cached_input_tokens": 56,
+                "cache_creation_input_tokens": 78,
+            }
+        ]
+    }
+    claude_stdout = {
+        "result": "Structured billing usage returned for GVS noninteractive Claude bridge.",
+        "usage": {
+            "input_tokens": 1200,
+            "output_tokens": 340,
+            "cache_read_input_tokens": 56,
+            "cache_creation_input_tokens": 78,
+        },
+        "modelUsage": {model: {}},
+    }
+    policy = {
+        "allowedTools": "Read,Glob",
+        "addDirs": [],
+        "noSessionPersistence": True,
+        "outputFormat": "json",
+    }
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps(claude_stdout)
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy=policy,
+    )
+    success, output, cost, actual_model = provider_result
+
+    assert (success, output, actual_model) == (
+        True,
+        claude_stdout["result"],
+        model,
+    )
+    assert cost > 0.0
+    assert provider_result[4] == expected_usage
+    json.dumps(provider_result[4])
+
+    result = run_agentic_task(
+        "Audit billing usage",
+        mock_cwd,
+        claude_policy=policy,
+    )
+    unpacked_success, unpacked_output, unpacked_cost, provider = result
+
+    assert (unpacked_success, unpacked_output, provider) == (
+        True,
+        claude_stdout["result"],
+        "anthropic",
+    )
+    assert unpacked_cost > 0.0
+    assert result.usage == expected_usage
+    assert result[4] == expected_usage
+    json.dumps(result.usage)
+
+
+def test_standard_claude_policy_json_usage_preserves_model_usage_records(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_multi.txt"
+    prompt_path.write_text("Audit multi-model billing usage", encoding="utf-8")
+    model_haiku = "claude-haiku-3-5-20241022"
+    model_opus = "claude-opus-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for a mixed-model Claude run.",
+        "usage": {
+            "input_tokens": 9999,
+            "output_tokens": 8888,
+            "cache_read_input_tokens": 777,
+            "cache_creation_input_tokens": 666,
+        },
+        "modelUsage": {
+            model_haiku: {
+                "inputTokens": 120,
+                "outputTokens": 34,
+                "cacheReadInputTokens": 5,
+                "cacheCreationInputTokens": 6,
+                "costUSD": 0.001,
+            },
+            model_opus: {
+                "input_tokens": 220,
+                "output_tokens": 44,
+                "cache_read_input_tokens": 7,
+                "cache_creation_input_tokens": 8,
+                "costUSD": 0.02,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model_haiku,
+                "input_tokens": 120,
+                "output_tokens": 34,
+                "cached_input_tokens": 5,
+                "cache_creation_input_tokens": 6,
+            },
+            {
+                "model": model_opus,
+                "input_tokens": 220,
+                "output_tokens": 44,
+                "cached_input_tokens": 7,
+                "cache_creation_input_tokens": 8,
+            },
+        ]
+    }
+    json.dumps(provider_result[4])
+
+
+def test_standard_claude_policy_json_usage_merges_issue686_partial_model_usage_cache_counters(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_issue686.txt"
+    prompt_path.write_text("Audit partial modelUsage billing usage", encoding="utf-8")
+    model = "claude-sonnet-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for a cached Claude run.",
+        "usage": {
+            "input_tokens": 50000,
+            "output_tokens": 5000,
+            "cache_read_input_tokens": 40000,
+            "cache_creation_input_tokens": 8000,
+        },
+        "modelUsage": {
+            model: {
+                "inputTokens": 50000,
+                "outputTokens": 5000,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 50000,
+                "output_tokens": 5000,
+                "cached_input_tokens": 40000,
+                "cache_creation_input_tokens": 8000,
+            },
+        ],
+    }
+    json.dumps(provider_result[4])
+
+
+def test_standard_claude_policy_json_usage_prefers_complete_aggregate_for_inconsistent_single_model_cache(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_inconsistent_cache.txt"
+    prompt_path.write_text("Audit inconsistent partial modelUsage cache", encoding="utf-8")
+    model = "claude-sonnet-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for inconsistent cached Claude run.",
+        "usage": {
+            "input_tokens": 50000,
+            "output_tokens": 5000,
+            "cache_read_input_tokens": 40000,
+            "cache_creation_input_tokens": 8000,
+        },
+        "modelUsage": {
+            model: {
+                "inputTokens": 0,
+                "outputTokens": 5,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 50000,
+                "output_tokens": 5000,
+                "cached_input_tokens": 40000,
+                "cache_creation_input_tokens": 8000,
+            },
+        ],
+    }
+    json.dumps(provider_result[4])
+
+
+def test_standard_claude_policy_json_usage_accepts_aggregate_cache_larger_than_input():
+    """Aggregate Claude usage buckets can legitimately exceed fresh input tokens."""
+    data = {
+        "result": "ok",
+        "model": "claude-opus-4-8",
+        "usage": {
+            "input_tokens": 2225,
+            "output_tokens": 140,
+            "cache_read_input_tokens": 24991,
+            "cache_creation_input_tokens": 27351,
+        },
+    }
+
+    usage = _extract_anthropic_standard_usage(data, actual_model=None)
+
+    assert usage == {
+        "claude": [
+            {
+                "model": "claude-opus-4-8",
+                "input_tokens": 2225,
+                "output_tokens": 140,
+                "cached_input_tokens": 24991,
+                "cache_creation_input_tokens": 27351,
+            },
+        ],
+    }
+    assert _calculate_anthropic_cost(data) == pytest.approx(0.59419275)
+
+
+def test_standard_claude_policy_json_usage_model_usage_only_counters_estimate_cost(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_model_only.txt"
+    prompt_path.write_text("Audit modelUsage-only billing usage", encoding="utf-8")
+    model = "claude-opus-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned with per-model counters only.",
+        "modelUsage": {
+            model: {
+                "inputTokens": 2000,
+                "outputTokens": 300,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    expected_cost = (
+        (2000 / 1_000_000) * pricing.input_per_million
+        + (300 / 1_000_000) * pricing.output_per_million
+    )
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 2000,
+                "output_tokens": 300,
+                "cached_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        ],
+    }
+    assert provider_result[2] == pytest.approx(expected_cost)
+
+
+def test_standard_claude_policy_json_usage_rejects_ambiguous_multi_model_partial_cache(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_ambiguous_cache.txt"
+    prompt_path.write_text("Audit ambiguous multi-model cache usage", encoding="utf-8")
+    model_haiku = "claude-haiku-3-5-20241022"
+    model_opus = "claude-opus-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for ambiguous cached model routing.",
+        "usage": {
+            "input_tokens": 3000,
+            "output_tokens": 300,
+            "cache_read_input_tokens": 1000,
+            "cache_creation_input_tokens": 200,
+        },
+        "modelUsage": {
+            model_haiku: {
+                "inputTokens": 1000,
+                "outputTokens": 100,
+            },
+            model_opus: {
+                "inputTokens": 2000,
+                "outputTokens": 200,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] is None
+
+
+@pytest.mark.parametrize(
+    "model_fields",
+    [
+        {"model": "claude-sonnet-4-6-20251201"},
+        {"message": {"model": "claude-sonnet-4-6-20251201"}},
+    ],
+)
+def test_standard_claude_policy_json_usage_infers_model_without_model_usage(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+    model_fields,
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_model.txt"
+    prompt_path.write_text("Audit aggregate billing usage", encoding="utf-8")
+    model = "claude-sonnet-4-6-20251201"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned without modelUsage.",
+        "usage": {
+            "inputTokens": 123,
+            "outputTokens": 45,
+        },
+        **model_fields,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[3] == model
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 123,
+                "output_tokens": 45,
+                "cached_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }
+        ]
+    }
+    json.dumps(provider_result[4])
+
+
+def test_standard_claude_policy_json_usage_rejects_requested_model_fallback(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_no_model.txt"
+    prompt_path.write_text("Audit aggregate usage with no observed model", encoding="utf-8")
+    mock_env["CLAUDE_MODEL"] = "claude-sonnet-requested-only"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Claude returned aggregate usage without an observed model.",
+        "usage": {
+            "input_tokens": 123,
+            "output_tokens": 45,
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[3] is None
+    assert provider_result[4] is None
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"output_tokens": 45},
+        {"input_tokens": "not-a-token-count", "output_tokens": 45},
+        {"input_tokens": 123, "output_tokens": -1},
+    ],
+)
+def test_standard_claude_policy_json_usage_rejects_invalid_required_counters(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+    usage,
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_invalid.txt"
+    prompt_path.write_text("Audit invalid billing usage", encoding="utf-8")
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Claude returned usage with invalid required counters.",
+        "modelUsage": {"claude-sonnet-4-6-20251201": {}},
+        "usage": usage,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] is None
+
+
+def test_standard_claude_policy_json_usage_ignores_non_object_json(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_array.txt"
+    prompt_path.write_text("Audit non-object Claude JSON", encoding="utf-8")
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps([])
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[0] is False
+    assert "Error parsing anthropic JSON" in provider_result[1]
+    assert provider_result[4] is None
 
 
 def test_anthropic_claude_policy_null_allowed_tools_uses_no_tools(
@@ -3545,12 +4073,13 @@ def test_anthropic_cost_cache_creation_not_double_counted():
     """Test that cache_creation tokens are NOT double-counted.
 
     Bug #686: cache_creation tokens were charged at both the regular input
-    rate (1.0x) AND the cache write rate (1.25x), totaling 2.25x instead
-    of just 1.25x. The fix subtracts cache_creation from new_input.
+    rate (1.0x) AND the cache write rate (1.25x). Anthropic usage reports
+    input_tokens as the fresh input bucket, so cache_creation is added only
+    at the cache write rate.
     """
     data = {
         "usage": {
-            "input_tokens": 1000,
+            "input_tokens": 200,
             "output_tokens": 200,
             "cache_read_input_tokens": 500,
             "cache_creation_input_tokens": 300,
@@ -3559,10 +4088,8 @@ def test_anthropic_cost_cache_creation_not_double_counted():
     cost = _calculate_anthropic_cost(data)
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
-    # new_input should be 1000 - 500 (cache_read) - 300 (cache_creation) = 200
-    new_input = 200
     expected = (
-        (new_input / 1e6) * pricing.input_per_million
+        (200 / 1e6) * pricing.input_per_million
         + (500 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
         + (300 / 1e6) * pricing.input_per_million * 1.25
         + (200 / 1e6) * pricing.output_per_million
@@ -3594,7 +4121,7 @@ def test_anthropic_cost_cache_read_only():
     """Test cost calculation with cache_read but no cache_creation."""
     data = {
         "usage": {
-            "input_tokens": 1000,
+            "input_tokens": 400,
             "output_tokens": 200,
             "cache_read_input_tokens": 600,
         }
@@ -3634,7 +4161,7 @@ def test_anthropic_cost_opus_pricing():
             "claude-opus-4-20250514": {}  # No costUSD → falls through to token math
         },
         "usage": {
-            "input_tokens": 2000,
+            "input_tokens": 800,
             "output_tokens": 500,
             "cache_read_input_tokens": 800,
             "cache_creation_input_tokens": 400,
@@ -3643,10 +4170,8 @@ def test_anthropic_cost_opus_pricing():
     cost = _calculate_anthropic_cost(data)
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
-    # new_input should be 2000 - 800 - 400 = 800
-    new_input = 800
     expected = (
-        (new_input / 1e6) * pricing.input_per_million
+        (800 / 1e6) * pricing.input_per_million
         + (800 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
         + (400 / 1e6) * pricing.input_per_million * 1.25
         + (500 / 1e6) * pricing.output_per_million
@@ -3660,7 +4185,7 @@ def test_anthropic_cost_all_tokens_cached():
     """Test edge case where all input tokens are cached (read + creation = total)."""
     data = {
         "usage": {
-            "input_tokens": 1000,
+            "input_tokens": 0,
             "output_tokens": 100,
             "cache_read_input_tokens": 700,
             "cache_creation_input_tokens": 300,
@@ -3669,9 +4194,8 @@ def test_anthropic_cost_all_tokens_cached():
     cost = _calculate_anthropic_cost(data)
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
-    # new_input should be 1000 - 700 - 300 = 0
     expected = (
-        0  # no regular input cost
+        0  # no fresh input cost
         + (700 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
         + (300 / 1e6) * pricing.input_per_million * 1.25
         + (100 / 1e6) * pricing.output_per_million
@@ -7363,11 +7887,31 @@ def test_anthropic_cost_from_model_usage_costUSD():
     assert cost == pytest.approx(0.030)
 
 
+def test_anthropic_cost_hybrid_model_usage_costusd_and_tokens():
+    """costUSD on one model should not hide token-priced sibling usage."""
+    data = {
+        "modelUsage": {
+            "claude-opus-4-20250514": {
+                "costUSD": 0.001,
+            },
+            "claude-haiku-3-5-20241022": {
+                "inputTokens": 2000,
+                "outputTokens": 200,
+            },
+        },
+        "result": "Done",
+    }
+
+    cost = _calculate_anthropic_cost(data)
+
+    assert cost == pytest.approx(0.0034)
+
+
 def test_anthropic_cost_token_based_fallback():
     """Token-based estimation when no costUSD or total_cost_usd."""
     data = {
         "usage": {
-            "input_tokens": 5000,
+            "input_tokens": 2500,
             "output_tokens": 1000,
             "cache_read_input_tokens": 2000,
             "cache_creation_input_tokens": 500,
@@ -7377,13 +7921,85 @@ def test_anthropic_cost_token_based_fallback():
     }
     cost = _calculate_anthropic_cost(data)
     # Sonnet pricing: $3/M input, $15/M output, cache read 10%, cache write 1.25x input
-    # new_input = 5000 - 2000 - 500 = 2500 (subtract both cache_read and cache_creation)
     # input_cost = 2500/1M * 3 = 0.0075
     # cache_read_cost = 2000/1M * 3 * 0.1 = 0.0006
     # cache_write_cost = 500/1M * 3 * 1.25 = 0.001875
     # output_cost = 1000/1M * 15 = 0.015
     expected = 0.0075 + 0.0006 + 0.001875 + 0.015
     assert cost == pytest.approx(expected, abs=1e-6)
+
+
+def test_anthropic_cost_token_based_fallback_accepts_camel_case_usage():
+    """Token-based estimation should match structured usage aliases."""
+    data = {
+        "usage": {
+            "inputTokens": 2500,
+            "outputTokens": 1000,
+            "cacheReadInputTokens": 2000,
+            "cacheCreationInputTokens": 500,
+        },
+        "modelUsage": {"claude-sonnet-4-20250514": {}},
+        "result": "Done",
+    }
+    cost = _calculate_anthropic_cost(data)
+    expected = 0.0075 + 0.0006 + 0.001875 + 0.015
+    assert cost == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    "model_fields",
+    [
+        {"model": "claude-opus-4-20250514"},
+        {"message": {"model": "claude-opus-4-20250514"}},
+    ],
+)
+def test_anthropic_cost_aggregate_usage_uses_observed_opus_model(model_fields):
+    """Aggregate usage without modelUsage should price by the observed model."""
+    data = {
+        "usage": {
+            "input_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+        },
+        "result": "Done",
+        **model_fields,
+    }
+    cost = _calculate_anthropic_cost(data)
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    expected = pricing.input_per_million + pricing.output_per_million
+    assert cost == pytest.approx(expected)
+
+
+def test_anthropic_cost_prefers_mixed_model_usage_counters_over_aggregate_usage():
+    """Mixed per-model counters should not be priced as one aggregate model."""
+    opus_model = "claude-opus-4-20250514"
+    haiku_model = "claude-haiku-3-5-20241022"
+    data = {
+        "usage": {
+            "input_tokens": 3000,
+            "output_tokens": 300,
+        },
+        "modelUsage": {
+            opus_model: {
+                "inputTokens": 1000,
+                "outputTokens": 100,
+            },
+            haiku_model: {
+                "inputTokens": 2000,
+                "outputTokens": 200,
+            },
+        },
+        "result": "Done",
+    }
+    cost = _calculate_anthropic_cost(data)
+    opus = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    haiku = ANTHROPIC_PRICING_BY_FAMILY["haiku"]
+    expected = (
+        (1000 / 1_000_000) * opus.input_per_million
+        + (100 / 1_000_000) * opus.output_per_million
+        + (2000 / 1_000_000) * haiku.input_per_million
+        + (200 / 1_000_000) * haiku.output_per_million
+    )
+    assert cost == pytest.approx(expected)
 
 
 def test_anthropic_cost_opus_model_detection():
