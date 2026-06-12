@@ -206,6 +206,29 @@ def test_agentic_common_architecture_exposes_prompt_required_public_helpers():
     assert required <= functions
 
 
+def test_agentic_common_architecture_validate_claude_policy_signature_matches_public_api():
+    """architecture.json should expose the interactive Claude policy contract."""
+    from pdd.agentic_common import validate_claude_policy
+
+    entries = json.loads(_read_repo_text("architecture.json"))
+    entry = next(
+        item for item in entries if item.get("filepath") == "pdd/agentic_common.py"
+    )
+    function = next(
+        item
+        for item in entry["interface"]["module"]["functions"]
+        if item["name"] == "validate_claude_policy"
+    )
+
+    assert str(inspect.signature(validate_claude_policy)) == (
+        "(policy: 'Any', *, interactive: 'bool' = False) -> 'ClaudePolicy'"
+    )
+    assert function["signature"] == (
+        "(policy: Any, *, interactive: bool = False) -> ClaudePolicy"
+    )
+    assert function["returns"] == "ClaudePolicy"
+
+
 def test_ci_failure_comments_use_shared_pr_helper(tmp_path):
     """CI failure summaries should be posted through the shared PR comment helper."""
     from pdd.ci_validation import post_ci_failure_comment

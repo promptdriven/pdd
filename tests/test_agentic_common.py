@@ -7873,6 +7873,39 @@ def test_anthropic_cost_aggregate_usage_uses_observed_opus_model(model_fields):
     assert cost == pytest.approx(expected)
 
 
+def test_anthropic_cost_prefers_mixed_model_usage_counters_over_aggregate_usage():
+    """Mixed per-model counters should not be priced as one aggregate model."""
+    opus_model = "claude-opus-4-20250514"
+    haiku_model = "claude-haiku-3-5-20241022"
+    data = {
+        "usage": {
+            "input_tokens": 3000,
+            "output_tokens": 300,
+        },
+        "modelUsage": {
+            opus_model: {
+                "inputTokens": 1000,
+                "outputTokens": 100,
+            },
+            haiku_model: {
+                "inputTokens": 2000,
+                "outputTokens": 200,
+            },
+        },
+        "result": "Done",
+    }
+    cost = _calculate_anthropic_cost(data)
+    opus = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    haiku = ANTHROPIC_PRICING_BY_FAMILY["haiku"]
+    expected = (
+        (1000 / 1_000_000) * opus.input_per_million
+        + (100 / 1_000_000) * opus.output_per_million
+        + (2000 / 1_000_000) * haiku.input_per_million
+        + (200 / 1_000_000) * haiku.output_per_million
+    )
+    assert cost == pytest.approx(expected)
+
+
 def test_anthropic_cost_opus_model_detection():
     """Opus model is detected by name for pricing."""
     data = {
