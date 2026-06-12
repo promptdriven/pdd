@@ -511,6 +511,16 @@ def test_claude_policy_capability_contract_declared_and_validated():
             "outputFormat": "json",
         })
 
+    with pytest.raises(AgenticUnsupportedSemanticsError, match="Bash"):
+        validate_claude_policy({
+            "allowedTools": "Read,Bash",
+            "addDirs": [],
+            "writableRoots": ["/tmp/project/src"],
+            "readOnlyRoots": [],
+            "noSessionPersistence": False,
+            "outputFormat": "json",
+        })
+
 
 def test_run_agentic_task_claude_policy_rejects_when_anthropic_unavailable(
     mock_cwd, mock_env
@@ -881,6 +891,55 @@ def test_run_agentic_task_claude_policy_reports_new_escaped_symlink(
     assert "src/created-link" in result.changed_files
 
 
+def test_run_agentic_task_claude_policy_fails_closed_on_symlink_loop(
+    tmp_path, mock_env
+):
+    workspace = tmp_path / "workspace"
+    writable_root = workspace / "src"
+    writable_root.mkdir(parents=True)
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        loop_a = writable_root / "loop-a"
+        loop_b = writable_root / "loop-b"
+        loop_a.symlink_to(loop_b)
+        loop_b.symlink_to(loop_a)
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Create symlink loop",
+            workspace,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy audit failed" in result.output_text
+    assert "symlink loop" in result.output_text
+
+
 def test_run_agentic_task_claude_policy_rejects_symlink_to_linked_git_audit_root(
     tmp_path, mock_env
 ):
@@ -1048,6 +1107,67 @@ def test_run_agentic_task_claude_policy_reports_deleted_internal_retry_log(
         path.startswith(".pdd/agentic-logs/session_")
         for path in result.changed_files
     )
+    assert provider_calls == 2
+
+
+def test_run_agentic_task_claude_policy_reports_tampered_existing_retry_log(
+    tmp_path, mock_env
+):
+    writable_root = tmp_path / "src"
+    log_file = tmp_path / AGENTIC_LOG_DIR / "session_tainted.jsonl"
+    writable_root.mkdir()
+    log_file.parent.mkdir(parents=True)
+    log_file.write_text('{"existing": true}\n', encoding="utf-8")
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    provider_calls = 0
+
+    def fake_provider(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            log_file.write_text("provider tampered before pdd append\n", encoding="utf-8")
+            return (True, "Ok", 0.0, "claude-sonnet", None)
+        (writable_root / "result.txt").write_text("generated", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common._AGENTIC_SESSION_ID",
+        "tainted",
+    ), patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Retry after tampered log false positive",
+            tmp_path,
+            max_retries=2,
+            retry_delay=0.0,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert ".pdd/agentic-logs/session_tainted.jsonl" in result.changed_files
     assert provider_calls == 2
 
 
