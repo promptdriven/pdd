@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import os
 import signal
@@ -25,6 +26,7 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+_FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
@@ -35,10 +37,12 @@ def get_agentic_capabilities() -> Dict[str, Any]:
     """Return machine-checkable agentic capability contracts for callers."""
     return {
         "claude_policy": {
-            "schema_version": 1,
+            "schema_version": 2,
             "fields": {
                 "allowedTools": ["string", "null"],
                 "addDirs": "list[string]",
+                "writableRoots": "list[string]",
+                "readOnlyRoots": "list[string]",
                 "noSessionPersistence": {
                     "standard": "boolean",
                     "interactive": False,
@@ -52,8 +56,46 @@ def get_agentic_capabilities() -> Dict[str, Any]:
                     "usageSource": "persisted_session_transcript",
                 },
             },
+            "filesystemPolicy": {
+                "schemaVersion": 1,
+                "writableRoots": True,
+                "readOnlyRoots": True,
+                "enforcement": "post_run_audit_fail_closed",
+                "auditsGitMetadata": True,
+                "auditsLinkedGitMetadata": True,
+                "pddOwnedLogChanges": "chained_exact_signature_verified_only",
+                "providerLogDirWritesAudited": True,
+                "auditsDirectoryMetadata": True,
+                "escapedSymlinkTargets": "fail_closed",
+                "unrestrictedBashWithFilesystemRoots": "rejected",
+                "symlinkTargetAllowRoots": [
+                    "cwd",
+                    "addDirs",
+                    "writableRoots",
+                    "readOnlyRoots",
+                ],
+                "nonFollowingPolicyRootIdentity": True,
+            },
+            "result": {
+                "schemaVersion": 1,
+                "changedFiles": {
+                    "pythonAttribute": "changed_files",
+                    "dictKey": "changed_files",
+                },
+            },
         }
     }
+
+
+def _allowed_tools_include_unrestricted_bash(allowed_tools: Optional[str]) -> bool:
+    """Return True when allowedTools grants unrestricted Bash execution."""
+    if allowed_tools is None:
+        return False
+    for token in allowed_tools.split(","):
+        normalized = re.sub(r"\s+", "", token).lower()
+        if normalized in {"bash", "bash(*)"}:
+            return True
+    return False
 
 
 def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudePolicy:
@@ -64,6 +106,8 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
     allowed_keys = {
         "allowedTools",
         "addDirs",
+        "writableRoots",
+        "readOnlyRoots",
         "noSessionPersistence",
         "outputFormat",
     }
@@ -89,6 +133,27 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
             "claude_policy.addDirs must be a list of strings"
         )
 
+    normalized_roots: Dict[str, List[str]] = {}
+    for key in _FILESYSTEM_POLICY_KEYS:
+        if key not in policy:
+            continue
+        roots = policy.get(key)
+        if not isinstance(roots, list) or not all(isinstance(p, str) for p in roots):
+            raise AgenticUnsupportedSemanticsError(
+                f"claude_policy.{key} must be a list of strings"
+            )
+        if any(not p.strip() for p in roots):
+            raise AgenticUnsupportedSemanticsError(
+                f"claude_policy.{key} must not contain empty paths"
+            )
+        normalized_roots[key] = list(roots)
+    if normalized_roots and _allowed_tools_include_unrestricted_bash(allowed_tools):
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.allowedTools must not include unrestricted Bash when "
+            "writableRoots or readOnlyRoots are declared because PDD cannot "
+            "audit shell writes outside the filesystem policy roots"
+        )
+
     no_session = policy.get("noSessionPersistence", False)
     if not isinstance(no_session, bool):
         raise AgenticUnsupportedSemanticsError(
@@ -107,12 +172,14 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
             "claude_policy.outputFormat must be json"
         )
 
-    return {
+    normalized = {
         "allowedTools": allowed_tools,
         "addDirs": list(add_dirs),
         "noSessionPersistence": no_session,
         "outputFormat": "json",
     }
+    normalized.update(normalized_roots)
+    return normalized
 
 
 def _append_claude_policy_args(cmd: List[str], claude_policy: ClaudePolicy) -> None:
@@ -122,10 +189,604 @@ def _append_claude_policy_args(cmd: List[str], claude_policy: ClaudePolicy) -> N
         cmd.extend(["--tools", ""])
     else:
         cmd.extend(["--allowedTools", allowed_tools])
-    for add_dir in claude_policy["addDirs"]:
+    add_dirs: List[str] = []
+    for key in ("addDirs", "writableRoots", "readOnlyRoots"):
+        for path in claude_policy.get(key, []):
+            if path not in add_dirs:
+                add_dirs.append(path)
+    for add_dir in add_dirs:
         cmd.extend(["--add-dir", add_dir])
     if claude_policy["noSessionPersistence"]:
         cmd.append("--no-session-persistence")
+
+
+@dataclass
+class _FilesystemPolicySnapshot:
+    files: Dict[Path, str]
+    errors: List[str]
+    escaped_symlink_targets: Dict[Path, Path]
+
+
+def _claude_policy_has_filesystem_roots(policy: Optional[ClaudePolicy]) -> bool:
+    """Return True when caller requested the filesystem audit policy."""
+    return bool(
+        policy is not None and any(key in policy for key in _FILESYSTEM_POLICY_KEYS)
+    )
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return True when *path* is equal to or contained by *root*."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _record_resolution_error(
+    errors: Optional[List[str]],
+    path: Path,
+    context: str,
+    exc: Exception,
+) -> None:
+    """Record or re-raise path resolution failures."""
+    if errors is None:
+        raise exc
+    if isinstance(exc, RuntimeError):
+        errors.append(f"{path}: symlink loop while resolving {context}: {exc}")
+    else:
+        errors.append(f"{path}: {exc}")
+
+
+def _resolve_audit_path(
+    path: Path,
+    errors: Optional[List[str]],
+    context: str,
+) -> Optional[Path]:
+    """Resolve a path and route audit failures into *errors*."""
+    try:
+        return path.resolve(strict=False)
+    except (RuntimeError, OSError) as exc:
+        _record_resolution_error(errors, path, context, exc)
+        return None
+
+
+def _resolve_policy_path(
+    cwd: Path,
+    raw_path: str,
+    errors: Optional[List[str]] = None,
+) -> Optional[Path]:
+    """Resolve a policy path without following its final symlink component."""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = cwd / path
+    try:
+        if path.name in ("", os.pardir):
+            return path.resolve(strict=False)
+        return path.parent.resolve(strict=False) / path.name
+    except (RuntimeError, OSError) as exc:
+        _record_resolution_error(errors, path, f"policy root {raw_path}", exc)
+        return None
+
+
+def _resolve_policy_roots(
+    cwd: Path,
+    policy: ClaudePolicy,
+    key: str,
+    errors: Optional[List[str]] = None,
+) -> List[Path]:
+    """Resolve and deduplicate root paths from a normalized policy key."""
+    roots: List[Path] = []
+    for raw_path in policy.get(key, []):
+        resolved = _resolve_policy_path(cwd, raw_path, errors)
+        if resolved is None:
+            continue
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _resolve_git_metadata_path(base_dir: Path, raw_path: str) -> Path:
+    """Resolve a git metadata path from a gitdir/commondir pointer file."""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = base_dir / path
+    return path.resolve(strict=False)
+
+
+def _linked_git_metadata_roots(cwd: Path) -> List[Path]:
+    """Return linked-worktree git metadata roots referenced by cwd/.git."""
+    git_pointer = cwd / ".git"
+    try:
+        if not git_pointer.is_file():
+            return []
+        line = git_pointer.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+    except (IndexError, OSError, UnicodeError):
+        return []
+
+    if not line.lower().startswith("gitdir:"):
+        return []
+
+    raw_gitdir = line.split(":", 1)[1].strip()
+    if not raw_gitdir:
+        return []
+
+    roots: List[Path] = []
+    git_dir = _resolve_git_metadata_path(git_pointer.parent, raw_gitdir)
+    roots.append(git_dir)
+
+    common_dir_file = git_dir / "commondir"
+    try:
+        raw_common_dir = common_dir_file.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines()[0].strip()
+    except (IndexError, OSError, UnicodeError):
+        raw_common_dir = ""
+
+    if raw_common_dir:
+        common_dir = _resolve_git_metadata_path(git_dir, raw_common_dir)
+        if common_dir not in roots:
+            roots.append(common_dir)
+    return roots
+
+
+def _collapse_audit_roots(roots: List[Path]) -> List[Path]:
+    """Remove duplicate/nested audit roots so recursive snapshots stay bounded."""
+    collapsed: List[Path] = []
+    for root in sorted(set(roots), key=lambda p: (len(p.parts), str(p))):
+        if any(_path_is_within(root, existing) for existing in collapsed):
+            continue
+        collapsed.append(root)
+    return collapsed
+
+
+def _audit_entry_path(path: Path) -> Path:
+    """Return a stable absolute audit key without following the symlink leaf."""
+    if path.is_symlink():
+        return path.parent.resolve(strict=False) / path.name
+    return path.resolve(strict=False)
+
+
+def _resolve_symlink_target_path(
+    link_path: Path,
+    raw_target: str,
+    errors: List[str],
+) -> Optional[Path]:
+    """Resolve a symlink target path relative to its link parent."""
+    target_path = Path(raw_target)
+    if not target_path.is_absolute():
+        target_path = link_path.parent / target_path
+    try:
+        return target_path.resolve(strict=False)
+    except RuntimeError as exc:
+        errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
+        return None
+    except OSError as exc:
+        errors.append(f"{link_path}: {exc}")
+        return None
+
+
+def _filesystem_signature(path: Path, errors: List[str]) -> str:
+    """Return a content-aware signature for an audited filesystem path."""
+    try:
+        stat_result = path.lstat()
+    except FileNotFoundError:
+        return "missing"
+    except OSError as exc:
+        errors.append(f"{path}: {exc}")
+        return "error"
+
+    if path.is_symlink():
+        try:
+            target = os.readlink(path)
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            target = "<unreadable>"
+        return f"symlink:{stat_result.st_mode}:{target}"
+
+    if path.is_file():
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            return f"file-error:{stat_result.st_mode}:{stat_result.st_size}"
+        return f"file:{stat_result.st_mode}:{stat_result.st_size}:{digest.hexdigest()}"
+
+    if path.is_dir():
+        return (
+            f"dir:{stat_result.st_mode}:{stat_result.st_size}:"
+            f"{stat_result.st_mtime_ns}"
+        )
+
+    return (
+        f"other:{stat_result.st_mode}:{stat_result.st_size}:"
+        f"{stat_result.st_mtime_ns}"
+    )
+
+
+def _record_escaped_symlink_target(
+    link_path: Path,
+    target_path: Path,
+    symlink_target_roots: List[Path],
+    escaped_symlink_targets: Dict[Path, Path],
+) -> None:
+    """Record symlinks whose targets leave the caller-allowed target roots."""
+    if any(_path_is_within(target_path, root) for root in symlink_target_roots):
+        return
+    escaped_symlink_targets[_audit_entry_path(link_path)] = target_path
+
+
+def _snapshot_audit_path(
+    path: Path,
+    files: Dict[Path, str],
+    errors: List[str],
+    symlink_target_roots: List[Path],
+    escaped_symlink_targets: Dict[Path, Path],
+) -> None:
+    """Add one filesystem path to the snapshot and track symlink escapes."""
+    entry_path = _audit_entry_path(path)
+    files[entry_path] = _filesystem_signature(path, errors)
+    if not path.is_symlink():
+        return
+    try:
+        raw_target = os.readlink(path)
+    except OSError as exc:
+        errors.append(f"{path}: {exc}")
+        return
+    target_path = _resolve_symlink_target_path(path, raw_target, errors)
+    if target_path is None:
+        return
+    _record_escaped_symlink_target(
+        path,
+        target_path,
+        symlink_target_roots,
+        escaped_symlink_targets,
+    )
+
+
+def _snapshot_audit_root(
+    root: Path,
+    files: Dict[Path, str],
+    errors: List[str],
+    symlink_target_roots: List[Path],
+    escaped_symlink_targets: Dict[Path, Path],
+) -> None:
+    """Add all auditable files under *root* to *files*."""
+    if root.is_symlink():
+        _snapshot_audit_path(
+            root,
+            files,
+            errors,
+            symlink_target_roots,
+            escaped_symlink_targets,
+        )
+        return
+    if not root.exists():
+        return
+    if root.is_file():
+        _snapshot_audit_path(
+            root,
+            files,
+            errors,
+            symlink_target_roots,
+            escaped_symlink_targets,
+        )
+        return
+    if not root.is_dir():
+        _snapshot_audit_path(
+            root,
+            files,
+            errors,
+            symlink_target_roots,
+            escaped_symlink_targets,
+        )
+        return
+    _snapshot_audit_path(
+        root,
+        files,
+        errors,
+        symlink_target_roots,
+        escaped_symlink_targets,
+    )
+
+    def on_walk_error(exc: OSError) -> None:
+        errors.append(f"{root}: {exc}")
+
+    for current, dirnames, filenames in os.walk(
+        root,
+        topdown=True,
+        onerror=on_walk_error,
+    ):
+        current_path = Path(current)
+        for dirname in list(dirnames):
+            dir_path = current_path / dirname
+            if dir_path.is_symlink():
+                _snapshot_audit_path(
+                    dir_path,
+                    files,
+                    errors,
+                    symlink_target_roots,
+                    escaped_symlink_targets,
+                )
+            else:
+                _snapshot_audit_path(
+                    dir_path,
+                    files,
+                    errors,
+                    symlink_target_roots,
+                    escaped_symlink_targets,
+                )
+        for filename in filenames:
+            file_path = current_path / filename
+            _snapshot_audit_path(
+                file_path,
+                files,
+                errors,
+                symlink_target_roots,
+                escaped_symlink_targets,
+            )
+
+
+def _take_filesystem_policy_snapshot(
+    cwd: Path,
+    policy: ClaudePolicy,
+) -> _FilesystemPolicySnapshot:
+    """Snapshot files under cwd, addDirs, writable roots, and read-only roots."""
+    files: Dict[Path, str] = {}
+    errors: List[str] = []
+    escaped_symlink_targets: Dict[Path, Path] = {}
+
+    resolved_cwd = _resolve_audit_path(cwd, errors, "cwd")
+    if resolved_cwd is None:
+        return _FilesystemPolicySnapshot(
+            files=files,
+            errors=errors,
+            escaped_symlink_targets=escaped_symlink_targets,
+        )
+
+    symlink_target_roots = [resolved_cwd]
+    for key in ("addDirs", "writableRoots", "readOnlyRoots"):
+        symlink_target_roots.extend(
+            _resolve_policy_roots(resolved_cwd, policy, key, errors)
+        )
+    snapshot_roots = list(symlink_target_roots)
+    snapshot_roots.extend(_linked_git_metadata_roots(resolved_cwd))
+
+    audit_roots = _collapse_audit_roots(snapshot_roots)
+    collapsed_symlink_target_roots = _collapse_audit_roots(symlink_target_roots)
+    for root in audit_roots:
+        _snapshot_audit_root(
+            root,
+            files,
+            errors,
+            collapsed_symlink_target_roots,
+            escaped_symlink_targets,
+        )
+    return _FilesystemPolicySnapshot(
+        files=files,
+        errors=errors,
+        escaped_symlink_targets=escaped_symlink_targets,
+    )
+
+
+def _display_audit_path(cwd: Path, path: Path) -> str:
+    """Render cwd-contained paths as POSIX relative paths, else absolute paths."""
+    resolved_cwd = cwd.resolve(strict=False)
+    try:
+        return path.relative_to(resolved_cwd).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _format_audit_paths(paths: List[str], *, limit: int = 12) -> str:
+    """Format changed paths for concise policy messages."""
+    shown = paths[:limit]
+    suffix = f" (+{len(paths) - limit} more)" if len(paths) > limit else ""
+    return ", ".join(shown) + suffix
+
+
+@dataclass
+class _PddOwnedLogWrite:
+    path: Path
+    before_signature: str
+    after_signature: str
+
+
+def _record_pdd_owned_log_signature(
+    log_write: Optional[_PddOwnedLogWrite],
+    signatures: Dict[Path, str],
+    baseline: Optional[_FilesystemPolicySnapshot],
+) -> None:
+    """Record the exact post-write signature of a PDD-owned log file."""
+    if log_write is None:
+        return
+    entry_path = _audit_entry_path(log_write.path)
+    baseline_signature = (
+        signatures.get(entry_path)
+        if entry_path in signatures
+        else (
+            baseline.files.get(entry_path, "missing")
+            if baseline is not None
+            else log_write.before_signature
+        )
+    )
+    if log_write.before_signature != baseline_signature:
+        return
+    signatures[entry_path] = log_write.after_signature
+
+
+def _is_trusted_pdd_owned_log_change(
+    path: Path,
+    after_signature: Optional[str],
+    signatures: Dict[Path, str],
+) -> bool:
+    """Return True only for exact PDD-owned log writes with matching signatures."""
+    if after_signature is None:
+        return False
+    return signatures.get(path) == after_signature
+
+
+def _is_directory_signature(signature: Optional[str]) -> bool:
+    """Return True when a snapshot signature describes a directory."""
+    return bool(signature and signature.startswith("dir:"))
+
+
+def _is_directory_change(
+    path: Path,
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+) -> bool:
+    """Return True when a changed path is a directory in either snapshot."""
+    return (
+        _is_directory_signature(before.files.get(path))
+        or _is_directory_signature(after.files.get(path))
+    )
+
+
+def _filter_redundant_directory_changes(
+    paths: List[Path],
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+    explained_paths: Optional[Set[Path]] = None,
+) -> List[Path]:
+    """Drop directory mtime changes when a changed descendant is also reported."""
+    all_explained_paths = list(paths) + list(explained_paths or set())
+    filtered: List[Path] = []
+    for path in paths:
+        if _is_directory_change(path, before, after) and any(
+            other != path and _path_is_within(other, path)
+            for other in all_explained_paths
+        ):
+            continue
+        filtered.append(path)
+    return filtered
+
+
+def _escaped_symlink_target_for_path(
+    path: Path,
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+) -> Path:
+    """Return the known escaped symlink target without assuming snapshot side."""
+    if path in after.escaped_symlink_targets:
+        return after.escaped_symlink_targets[path]
+    return before.escaped_symlink_targets[path]
+
+
+def _audit_filesystem_policy(
+    cwd: Path,
+    policy: Optional[ClaudePolicy],
+    before: Optional[_FilesystemPolicySnapshot],
+    pdd_owned_log_signatures: Optional[Dict[Path, str]] = None,
+) -> Tuple[List[str], Optional[str]]:
+    """Compare filesystem snapshots and return changed files plus violation text."""
+    if policy is None or before is None:
+        return [], None
+
+    after = _take_filesystem_policy_snapshot(cwd, policy)
+    if before.errors or after.errors:
+        errors = before.errors + after.errors
+        detail = _format_audit_paths(errors)
+        return [], f"Filesystem policy audit failed; refusing result: {detail}"
+
+    pdd_owned_log_signatures = pdd_owned_log_signatures or {}
+    comparison_paths = (
+        set(before.files) | set(after.files) | set(pdd_owned_log_signatures)
+    )
+    trusted_pdd_log_paths = {
+        path for path, signature in pdd_owned_log_signatures.items()
+        if after.files.get(path) == signature
+    }
+    changed_paths = sorted(
+        _filter_redundant_directory_changes(
+            [
+                path for path in comparison_paths
+                if (
+                    before.files.get(path) != after.files.get(path)
+                    or (
+                        path in pdd_owned_log_signatures
+                        and after.files.get(path) != pdd_owned_log_signatures[path]
+                    )
+                )
+                and not _is_trusted_pdd_owned_log_change(
+                    path,
+                    after.files.get(path),
+                    pdd_owned_log_signatures,
+                )
+            ],
+            before,
+            after,
+            trusted_pdd_log_paths,
+        ),
+        key=str,
+    )
+    escaped_symlink_paths = sorted(
+        set(before.escaped_symlink_targets) | set(after.escaped_symlink_targets),
+        key=str,
+    )
+    reported_paths = sorted(set(changed_paths) | set(escaped_symlink_paths), key=str)
+    escaped_symlink_files = [
+        (
+            _display_audit_path(cwd, path),
+            str(_escaped_symlink_target_for_path(path, before, after)),
+        )
+        for path in escaped_symlink_paths
+    ]
+    changed_files = [_display_audit_path(cwd, path) for path in reported_paths]
+    if not reported_paths:
+        return changed_files, None
+
+    resolved_cwd = cwd.resolve(strict=False)
+    writable_roots = _resolve_policy_roots(resolved_cwd, policy, "writableRoots")
+    read_only_roots = _resolve_policy_roots(resolved_cwd, policy, "readOnlyRoots")
+
+    outside_writable = [
+        path for path in changed_paths
+        if not any(_path_is_within(path, root) for root in writable_roots)
+    ]
+    inside_read_only = [
+        path for path in changed_paths
+        if any(_path_is_within(path, root) for root in read_only_roots)
+    ]
+    if not outside_writable and not inside_read_only and not escaped_symlink_files:
+        return changed_files, None
+
+    lines = [
+        "Filesystem policy violation: changed files must stay inside "
+        "caller-declared writable roots and outside declared read-only roots.",
+    ]
+    if outside_writable:
+        lines.append(
+            "Changed files outside writable roots: "
+            + _format_audit_paths(
+                [_display_audit_path(cwd, path) for path in outside_writable]
+            )
+        )
+    if inside_read_only:
+        lines.append(
+            "Changed files inside read-only roots: "
+            + _format_audit_paths(
+                [_display_audit_path(cwd, path) for path in inside_read_only]
+            )
+        )
+    if escaped_symlink_files:
+        symlink_details = [
+            f"{display_path} -> {target_path}"
+            for display_path, target_path in escaped_symlink_files
+        ]
+        lines.append(
+            "symlink targets outside audited roots: "
+            + _format_audit_paths(symlink_details)
+        )
+    lines.append("Changed files: " + _format_audit_paths(changed_files))
+    return changed_files, "\n".join(lines)
 
 
 def _interactive_allowed_tools(allowed_tools: Optional[str]) -> Optional[str]:
@@ -226,7 +887,8 @@ class AgenticTaskResult(tuple):
     structured usage with ``isinstance(result, tuple)``, ``len(result) >= 5``,
     and ``result[4]``. Iteration intentionally yields the historical four
     fields to preserve existing ``success, output, cost, provider = ...``
-    callers.
+    callers. Changed-file metadata is stored as an attribute so the indexed
+    usage slot remains stable.
     """
 
     def __new__(
@@ -236,11 +898,15 @@ class AgenticTaskResult(tuple):
         cost_usd: float,
         provider: str,
         usage: AgenticUsage = None,
+        *,
+        changed_files: Optional[List[str]] = None,
     ) -> "AgenticTaskResult":
-        return tuple.__new__(
+        result = tuple.__new__(
             cls,
             (success, output_text, cost_usd, provider, usage),
         )
+        result._changed_files = list(changed_files or [])
+        return result
 
     def __iter__(self):
         return (tuple.__getitem__(self, i) for i in range(4))
@@ -265,6 +931,10 @@ class AgenticTaskResult(tuple):
     def usage(self) -> AgenticUsage:
         return tuple.__getitem__(self, 4)
 
+    @property
+    def changed_files(self) -> List[str]:
+        return list(getattr(self, "_changed_files", []))
+
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable mapping shape for structured consumers."""
         return {
@@ -273,6 +943,7 @@ class AgenticTaskResult(tuple):
             "cost_usd": self.cost_usd,
             "provider": self.provider,
             "usage": self.usage,
+            "changed_files": self.changed_files,
         }
 
 
@@ -1553,7 +2224,7 @@ def _log_agentic_interaction(
     model: Optional[str] = None,
     false_positive: bool = False,
     include_bodies: bool = True,
-) -> None:
+) -> Optional[_PddOwnedLogWrite]:
     """
     Append one record per provider attempt to ``.pdd/agentic-logs/session_*.jsonl``.
 
@@ -1580,6 +2251,10 @@ def _log_agentic_interaction(
         include_bodies: When True, include the full ``prompt`` and ``response``
             text. When False, omit them but keep ``prompt_length`` and
             ``response_length`` so downstream tooling can still gauge size.
+
+    Returns:
+        The PDD-owned log append metadata when the write succeeds, otherwise
+        ``None``.
     """
     global _AGENTIC_SESSION_ID
 
@@ -1593,6 +2268,8 @@ def _log_agentic_interaction(
             _AGENTIC_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         log_file = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
+        before_errors: List[str] = []
+        before_signature = _filesystem_signature(log_file, before_errors)
 
         entry: Dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
@@ -1613,8 +2290,17 @@ def _log_agentic_interaction(
 
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
+        after_errors: List[str] = []
+        after_signature = _filesystem_signature(log_file, after_errors)
+        if before_errors or after_errors or after_signature == "missing":
+            return None
+        return _PddOwnedLogWrite(
+            path=log_file,
+            before_signature=before_signature,
+            after_signature=after_signature,
+        )
     except Exception:
-        pass  # Don't break workflow for logging errors
+        return None  # Don't break workflow for logging errors
 
 
 # ---------------------------------------------------------------------------
@@ -3079,6 +3765,24 @@ def run_agentic_task(
         with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(full_instruction)
 
+        filesystem_snapshot: Optional[_FilesystemPolicySnapshot] = None
+        pdd_owned_log_signatures: Dict[Path, str] = {}
+        if _claude_policy_has_filesystem_roots(normalized_claude_policy):
+            filesystem_snapshot = _take_filesystem_policy_snapshot(
+                cwd,
+                normalized_claude_policy or {},
+            )
+            if filesystem_snapshot.errors:
+                detail = _format_audit_paths(filesystem_snapshot.errors)
+                return AgenticTaskResult(
+                    False,
+                    "Filesystem policy audit failed before provider run; "
+                    f"refusing to execute: {detail}",
+                    0.0,
+                    "",
+                    None,
+                )
+
         provider_errors: List[str] = []
 
         for provider in candidates:
@@ -3196,17 +3900,21 @@ def run_agentic_task(
                         # Issue #1376: log false-positive provider replies so the
                         # heuristic-rejection path leaves the same audit trail
                         # as outright failures (was previously silent).
-                        _log_agentic_interaction(
-                            label=label,
-                            prompt=full_instruction,
-                            response=output,
-                            cost=cost,
-                            provider=provider,
-                            success=False,
-                            duration=time.time() - task_start_time,
-                            cwd=cwd,
-                            model=effective_model,
-                            false_positive=True,
+                        _record_pdd_owned_log_signature(
+                            _log_agentic_interaction(
+                                label=label,
+                                prompt=full_instruction,
+                                response=output,
+                                cost=cost,
+                                provider=provider,
+                                success=False,
+                                duration=time.time() - task_start_time,
+                                cwd=cwd,
+                                model=effective_model,
+                                false_positive=True,
+                            ),
+                            pdd_owned_log_signatures,
+                            filesystem_snapshot,
                         )
                         any_attempt_logged_inside = True
                         # Multi-provider configs (default): fall through to the
@@ -3251,6 +3959,34 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
+                        changed_files, filesystem_violation = _audit_filesystem_policy(
+                            cwd,
+                            normalized_claude_policy,
+                            filesystem_snapshot,
+                            pdd_owned_log_signatures,
+                        )
+                        if filesystem_violation is not None:
+                            _log_agentic_interaction(
+                                label=label,
+                                prompt=full_instruction,
+                                response=filesystem_violation,
+                                cost=cost,
+                                provider=provider,
+                                success=False,
+                                duration=time.time() - task_start_time,
+                                cwd=cwd,
+                                model=effective_model,
+                                include_bodies=verbose,
+                            )
+                            return AgenticTaskResult(
+                                False,
+                                filesystem_violation,
+                                cost,
+                                provider,
+                                usage,
+                                changed_files=changed_files,
+                            )
+
                         # Issue #1376: always emit a summary record so the audit
                         # log answers "which provider/model produced step N?"
                         # without --verbose. Full prompt+response bodies stay
@@ -3268,7 +4004,14 @@ def run_agentic_task(
                             model=effective_model,
                             include_bodies=verbose,
                         )
-                        return AgenticTaskResult(True, output, cost, provider, usage)
+                        return AgenticTaskResult(
+                            True,
+                            output,
+                            cost,
+                            provider,
+                            usage,
+                            changed_files=changed_files,
+                        )
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
                 # Issue #1376 codex round 2: log each failed attempt inside
@@ -3277,16 +4020,20 @@ def run_agentic_task(
                 # produces only one JSONL row — exactly the audit-trail gap
                 # this PR set out to close.
                 if not success:
-                    _log_agentic_interaction(
-                        label=label,
-                        prompt=full_instruction,
-                        response=output,
-                        cost=cost,
-                        provider=provider,
-                        success=False,
-                        duration=time.time() - task_start_time,
-                        cwd=cwd,
-                        model=effective_model,
+                    _record_pdd_owned_log_signature(
+                        _log_agentic_interaction(
+                            label=label,
+                            prompt=full_instruction,
+                            response=output,
+                            cost=cost,
+                            provider=provider,
+                            success=False,
+                            duration=time.time() - task_start_time,
+                            cwd=cwd,
+                            model=effective_model,
+                        ),
+                        pdd_owned_log_signatures,
+                        filesystem_snapshot,
                     )
                     any_attempt_logged_inside = True
 
