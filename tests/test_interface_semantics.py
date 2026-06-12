@@ -527,6 +527,16 @@ def test_signature_entries_both_unresolvable_same_text_still_compatible():
         "_LIMIT = 25000\ndef g():\n    return (_LIMIT := 1)\n",
         # ``global _LIMIT`` that only READS the global rebinds nothing.
         "_LIMIT = 25000\ndef g():\n    global _LIMIT\n    return _LIMIT\n",
+        # An outer function declares ``global _LIMIT`` but never assigns it; only
+        # a NESTED function assigns a _LIMIT, which is the nested function's own
+        # local (it has no ``global``). Neither writes the module global.
+        "_LIMIT = 25000\n"
+        "def outer():\n"
+        "    global _LIMIT\n"
+        "    def inner():\n"
+        "        _LIMIT = 1\n"
+        "        return _LIMIT\n"
+        "    return inner\n",
     ],
 )
 def test_module_constant_survives_inner_scope_shadow(module_source):
@@ -544,6 +554,13 @@ def test_module_constant_survives_inner_scope_shadow(module_source):
         # ``global X`` is valid in a CLASS body too; an assignment there writes
         # the module global (not a class attribute).
         "X = 25000\nclass C:\n    global X\n    X = 1\n",
+        # A NESTED function with ITS OWN ``global X`` and an assignment rebinds
+        # the module global (the declaration governs the scope it is written in).
+        "X = 25000\ndef g():\n    def h():\n        global X\n        X = 2\n    return h\n",
+        # A walrus in a comprehension binds the CONTAINING scope honoring its
+        # ``global`` (PEP 572), so ``global X`` plus a comprehension walrus to X
+        # rebinds the module global.
+        "X = 25000\ndef g():\n    global X\n    return [(X := v) for v in range(3)]\n",
         # A walrus in a MODULE-level comprehension leaks X to module scope.
         "X = 25000\n_ys = [(X := i) for i in range(3)]\n",
         # A walrus in a function default arg is evaluated in the enclosing scope.

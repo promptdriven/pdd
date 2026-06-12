@@ -225,6 +225,26 @@ class TestPublicSurfaceSemanticDefaults:
             before, after, PROMPT, OUT, "python", "Hoist default; unrelated walrus."
         )
 
+    def test_literal_to_constant_passes_despite_nested_global_read(self):
+        """An outer function declares ``global _LIMIT`` but never assigns it; a
+        nested function assigns its own local _LIMIT. Neither writes the module
+        global, so the literal->constant refactor must still pass (a nested
+        store must not be attributed to the outer scope's ``global``)."""
+        before = "def f(max_chars=25000):\n    return max_chars\n"
+        after = (
+            "_LIMIT = 25000\n"
+            "def f(max_chars=_LIMIT):\n    return max_chars\n"
+            "def outer():\n"
+            "    global _LIMIT\n"
+            "    def inner():\n"
+            "        _LIMIT = 1\n"
+            "        return _LIMIT\n"
+            "    return inner\n"
+        )
+        _verify_public_surface_regression(
+            before, after, PROMPT, OUT, "python", "Hoist default; nested global read."
+        )
+
 
 # ---------------------------------------------------------------------------
 # <pdd-interface> / architecture-conformance gate (prompt -> generated-code).

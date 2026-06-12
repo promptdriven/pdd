@@ -509,6 +509,40 @@ _NEW_SCOPE_NODES = (
 )
 
 
+def _scope_local_globals_and_stores(scope: ast.AST) -> tuple[set, set]:
+    """Return (``global``-declared names, stored names) for one scope's OWN body.
+
+    A ``global X`` declaration governs only assignments to X in the SAME scope.
+    A store in a nested ``def``/``async def``/``class``/``lambda`` belongs to
+    that nested scope — which needs its own ``global`` to write the module
+    global — so those bodies are not descended into; each nested scope is matched
+    on its own when ``ast.walk`` reaches it. A comprehension is NOT a scope
+    boundary here: a walrus ``X := ...`` inside one binds the containing scope,
+    honoring its ``global``, so comprehensions ARE descended into. (Their loop
+    variables are counted as stores too, which — only when the scope also
+    declares ``global X`` — can over-evict toward ``UNKNOWN``, never a false
+    match.)
+    """
+    boundary = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+    declared: set = set()
+    stored: set = set()
+
+    def _visit(node: ast.AST) -> None:
+        if isinstance(node, ast.Global):
+            declared.update(node.names)
+            return
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stored.add(node.id)
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, boundary):
+                _visit(child)
+
+    for stmt in getattr(scope, "body", []):
+        if not isinstance(stmt, boundary):
+            _visit(stmt)
+    return declared, stored
+
+
 def _count_module_bindings(tree: ast.Module) -> dict:
     """Count how many times each name is bound in the MODULE (global) scope.
 
@@ -529,13 +563,15 @@ def _count_module_bindings(tree: ast.Module) -> dict:
     ``X = 25000`` shadowed by ``import x as X`` would be wrongly admitted), as
     are ``except ... as X`` and ``match`` capture patterns. Two forms rebind a
     module global from a place this walk skips and are detected separately: a
-    function or class body that BOTH declares ``global X`` and assigns it, and a
-    walrus ``X := ...`` evaluated at module scope (directly or inside a module-level
-    comprehension — comprehension scopes are transparent to walrus). A read-only
-    ``global`` and a walrus inside a function/lambda body bind nothing at module
-    scope, so neither disqualifies the constant. Where attribution is imprecise it
-    errs toward an extra binding, which can only evict a constant toward
-    ``UNKNOWN`` — never a false match.
+    function or class body that BOTH declares ``global X`` and assigns X in that
+    SAME scope (a nested scope's store is its own — see
+    :func:`_scope_local_globals_and_stores`), and a walrus ``X := ...`` evaluated
+    at module scope (directly or inside a module-level comprehension —
+    comprehension scopes are transparent to walrus). A read-only ``global``, a
+    store made only by a nested function, and a walrus inside a function/lambda
+    body all bind nothing at module scope, so none disqualifies the constant.
+    Where attribution is imprecise it errs toward an extra binding, which can only
+    evict a constant toward ``UNKNOWN`` — never a false match.
     """
     counts: dict[str, int] = {}
 
@@ -581,26 +617,14 @@ def _count_module_bindings(tree: ast.Module) -> dict:
     # (1) ``global X`` rebinds the module global only when the SAME scope also
     # assigns X; a read-only ``global`` rebinds nothing. ``global`` is valid in a
     # function AND a class body (in both, an assignment to a global-declared name
-    # writes the module global), so check both. Intersect each scope's ``global``
-    # declarations with the names it stores. ``ast.walk`` also sees a nested
-    # scope's stores, but over-attributing one only over-evicts toward UNKNOWN
-    # (safe) — never a false match.
+    # writes the module global), so check both — but a store in a NESTED
+    # def/class/lambda belongs to that nested scope (which needs its own
+    # ``global`` to write the module global), so match each scope's declarations
+    # only against the names it stores in its OWN body.
     for scope in ast.walk(tree):
         if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
-        declared_global = {
-            name
-            for sub in ast.walk(scope)
-            if isinstance(sub, ast.Global)
-            for name in sub.names
-        }
-        if not declared_global:
-            continue
-        stored = {
-            sub.id
-            for sub in ast.walk(scope)
-            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store)
-        }
+        declared_global, stored = _scope_local_globals_and_stores(scope)
         for name in declared_global & stored:
             _bump(name, 2)
 
