@@ -27,7 +27,7 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
-_AUDIT_SKIP_DIR_NAMES: Set[str] = {".git"}
+_PDD_OWNED_AUDIT_LOG_ROOT = Path(".pdd") / "agentic-logs"
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
@@ -62,6 +62,9 @@ def get_agentic_capabilities() -> Dict[str, Any]:
                 "writableRoots": True,
                 "readOnlyRoots": True,
                 "enforcement": "post_run_audit_fail_closed",
+                "auditsGitMetadata": True,
+                "excludedInternalPaths": [".pdd/agentic-logs"],
+                "escapedSymlinkTargets": "fail_closed",
             },
             "result": {
                 "schemaVersion": 1,
@@ -174,6 +177,7 @@ def _append_claude_policy_args(cmd: List[str], claude_policy: ClaudePolicy) -> N
 class _FilesystemPolicySnapshot:
     files: Dict[Path, str]
     errors: List[str]
+    escaped_symlink_targets: Dict[Path, Path]
 
 
 def _claude_policy_has_filesystem_roots(policy: Optional[ClaudePolicy]) -> bool:
@@ -224,6 +228,21 @@ def _collapse_audit_roots(roots: List[Path]) -> List[Path]:
     return collapsed
 
 
+def _audit_entry_path(path: Path) -> Path:
+    """Return a stable absolute audit key without following the symlink leaf."""
+    if path.is_symlink():
+        return path.parent.resolve(strict=False) / path.name
+    return path.resolve(strict=False)
+
+
+def _resolve_symlink_target_path(link_path: Path, raw_target: str) -> Path:
+    """Resolve a symlink target path relative to its link parent."""
+    target_path = Path(raw_target)
+    if not target_path.is_absolute():
+        target_path = link_path.parent / target_path
+    return target_path.resolve(strict=False)
+
+
 def _filesystem_signature(path: Path, errors: List[str]) -> str:
     """Return a content-aware signature for an audited filesystem path."""
     try:
@@ -262,21 +281,71 @@ def _filesystem_signature(path: Path, errors: List[str]) -> str:
     )
 
 
+def _record_escaped_symlink_target(
+    link_path: Path,
+    target_path: Path,
+    audit_roots: List[Path],
+    escaped_symlink_targets: Dict[Path, Path],
+) -> None:
+    """Record symlinks whose targets leave the declared audit roots."""
+    if any(_path_is_within(target_path, root) for root in audit_roots):
+        return
+    escaped_symlink_targets[_audit_entry_path(link_path)] = target_path
+
+
+def _snapshot_audit_path(
+    path: Path,
+    files: Dict[Path, str],
+    errors: List[str],
+    audit_roots: List[Path],
+    escaped_symlink_targets: Dict[Path, Path],
+) -> None:
+    """Add one filesystem path to the snapshot and track symlink escapes."""
+    entry_path = _audit_entry_path(path)
+    files[entry_path] = _filesystem_signature(path, errors)
+    if not path.is_symlink():
+        return
+    try:
+        raw_target = os.readlink(path)
+    except OSError as exc:
+        errors.append(f"{path}: {exc}")
+        return
+    target_path = _resolve_symlink_target_path(path, raw_target)
+    _record_escaped_symlink_target(
+        path,
+        target_path,
+        audit_roots,
+        escaped_symlink_targets,
+    )
+
+
 def _snapshot_audit_root(
     root: Path,
     files: Dict[Path, str],
     errors: List[str],
+    audit_roots: List[Path],
+    escaped_symlink_targets: Dict[Path, Path],
 ) -> None:
     """Add all auditable files under *root* to *files*."""
     if not root.exists():
         return
     if root.is_file() or root.is_symlink():
-        resolved = root.resolve(strict=False)
-        files[resolved] = _filesystem_signature(root, errors)
+        _snapshot_audit_path(
+            root,
+            files,
+            errors,
+            audit_roots,
+            escaped_symlink_targets,
+        )
         return
     if not root.is_dir():
-        resolved = root.resolve(strict=False)
-        files[resolved] = _filesystem_signature(root, errors)
+        _snapshot_audit_path(
+            root,
+            files,
+            errors,
+            audit_roots,
+            escaped_symlink_targets,
+        )
         return
 
     def on_walk_error(exc: OSError) -> None:
@@ -287,19 +356,26 @@ def _snapshot_audit_root(
         topdown=True,
         onerror=on_walk_error,
     ):
-        dirnames[:] = [
-            name for name in dirnames if name not in _AUDIT_SKIP_DIR_NAMES
-        ]
         current_path = Path(current)
         for dirname in list(dirnames):
             dir_path = current_path / dirname
             if dir_path.is_symlink():
-                resolved = dir_path.resolve(strict=False)
-                files[resolved] = _filesystem_signature(dir_path, errors)
+                _snapshot_audit_path(
+                    dir_path,
+                    files,
+                    errors,
+                    audit_roots,
+                    escaped_symlink_targets,
+                )
         for filename in filenames:
             file_path = current_path / filename
-            resolved = file_path.resolve(strict=False)
-            files[resolved] = _filesystem_signature(file_path, errors)
+            _snapshot_audit_path(
+                file_path,
+                files,
+                errors,
+                audit_roots,
+                escaped_symlink_targets,
+            )
 
 
 def _take_filesystem_policy_snapshot(
@@ -314,9 +390,21 @@ def _take_filesystem_policy_snapshot(
 
     files: Dict[Path, str] = {}
     errors: List[str] = []
-    for root in _collapse_audit_roots(roots):
-        _snapshot_audit_root(root, files, errors)
-    return _FilesystemPolicySnapshot(files=files, errors=errors)
+    escaped_symlink_targets: Dict[Path, Path] = {}
+    audit_roots = _collapse_audit_roots(roots)
+    for root in audit_roots:
+        _snapshot_audit_root(
+            root,
+            files,
+            errors,
+            audit_roots,
+            escaped_symlink_targets,
+        )
+    return _FilesystemPolicySnapshot(
+        files=files,
+        errors=errors,
+        escaped_symlink_targets=escaped_symlink_targets,
+    )
 
 
 def _display_audit_path(cwd: Path, path: Path) -> str:
@@ -333,6 +421,12 @@ def _format_audit_paths(paths: List[str], *, limit: int = 12) -> str:
     shown = paths[:limit]
     suffix = f" (+{len(paths) - limit} more)" if len(paths) > limit else ""
     return ", ".join(shown) + suffix
+
+
+def _is_pdd_owned_audit_log_path(cwd: Path, path: Path) -> bool:
+    """Return True for PDD's internal agentic log files."""
+    log_root = cwd.resolve(strict=False) / _PDD_OWNED_AUDIT_LOG_ROOT
+    return _path_is_within(path, log_root)
 
 
 def _audit_filesystem_policy(
@@ -354,11 +448,29 @@ def _audit_filesystem_policy(
         (
             path for path in set(before.files) | set(after.files)
             if before.files.get(path) != after.files.get(path)
+            and not _is_pdd_owned_audit_log_path(cwd, path)
         ),
         key=str,
     )
-    changed_files = [_display_audit_path(cwd, path) for path in changed_paths]
-    if not changed_paths:
+    escaped_symlink_paths = sorted(
+        set(before.escaped_symlink_targets) | set(after.escaped_symlink_targets),
+        key=str,
+    )
+    reported_paths = sorted(set(changed_paths) | set(escaped_symlink_paths), key=str)
+    escaped_symlink_files = [
+        (
+            _display_audit_path(cwd, path),
+            str(
+                after.escaped_symlink_targets.get(
+                    path,
+                    before.escaped_symlink_targets[path],
+                )
+            ),
+        )
+        for path in escaped_symlink_paths
+    ]
+    changed_files = [_display_audit_path(cwd, path) for path in reported_paths]
+    if not reported_paths:
         return changed_files, None
 
     resolved_cwd = cwd.resolve(strict=False)
@@ -373,7 +485,7 @@ def _audit_filesystem_policy(
         path for path in changed_paths
         if any(_path_is_within(path, root) for root in read_only_roots)
     ]
-    if not outside_writable and not inside_read_only:
+    if not outside_writable and not inside_read_only and not escaped_symlink_files:
         return changed_files, None
 
     lines = [
@@ -393,6 +505,15 @@ def _audit_filesystem_policy(
             + _format_audit_paths(
                 [_display_audit_path(cwd, path) for path in inside_read_only]
             )
+        )
+    if escaped_symlink_files:
+        symlink_details = [
+            f"{display_path} -> {target_path}"
+            for display_path, target_path in escaped_symlink_files
+        ]
+        lines.append(
+            "symlink targets outside audited roots: "
+            + _format_audit_paths(symlink_details)
         )
     lines.append("Changed files: " + _format_audit_paths(changed_files))
     return changed_files, "\n".join(lines)
