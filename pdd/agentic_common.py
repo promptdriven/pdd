@@ -63,7 +63,7 @@ def get_agentic_capabilities() -> Dict[str, Any]:
                 "enforcement": "post_run_audit_fail_closed",
                 "auditsGitMetadata": True,
                 "auditsLinkedGitMetadata": True,
-                "pddOwnedLogChanges": "exact_signature_verified_only",
+                "pddOwnedLogChanges": "chained_exact_signature_verified_only",
                 "providerLogDirWritesAudited": True,
                 "auditsDirectoryMetadata": True,
                 "escapedSymlinkTargets": "fail_closed",
@@ -223,25 +223,64 @@ def _path_is_within(path: Path, root: Path) -> bool:
         return False
 
 
-def _resolve_policy_path(cwd: Path, raw_path: str) -> Path:
+def _record_resolution_error(
+    errors: Optional[List[str]],
+    path: Path,
+    context: str,
+    exc: Exception,
+) -> None:
+    """Record or re-raise path resolution failures."""
+    if errors is None:
+        raise exc
+    if isinstance(exc, RuntimeError):
+        errors.append(f"{path}: symlink loop while resolving {context}: {exc}")
+    else:
+        errors.append(f"{path}: {exc}")
+
+
+def _resolve_audit_path(
+    path: Path,
+    errors: Optional[List[str]],
+    context: str,
+) -> Optional[Path]:
+    """Resolve a path and route audit failures into *errors*."""
+    try:
+        return path.resolve(strict=False)
+    except (RuntimeError, OSError) as exc:
+        _record_resolution_error(errors, path, context, exc)
+        return None
+
+
+def _resolve_policy_path(
+    cwd: Path,
+    raw_path: str,
+    errors: Optional[List[str]] = None,
+) -> Optional[Path]:
     """Resolve a policy path without following its final symlink component."""
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
         path = cwd / path
-    if path.name in ("", os.pardir):
-        return path.resolve(strict=False)
-    return path.parent.resolve(strict=False) / path.name
+    try:
+        if path.name in ("", os.pardir):
+            return path.resolve(strict=False)
+        return path.parent.resolve(strict=False) / path.name
+    except (RuntimeError, OSError) as exc:
+        _record_resolution_error(errors, path, f"policy root {raw_path}", exc)
+        return None
 
 
 def _resolve_policy_roots(
     cwd: Path,
     policy: ClaudePolicy,
     key: str,
+    errors: Optional[List[str]] = None,
 ) -> List[Path]:
     """Resolve and deduplicate root paths from a normalized policy key."""
     roots: List[Path] = []
     for raw_path in policy.get(key, []):
-        resolved = _resolve_policy_path(cwd, raw_path)
+        resolved = _resolve_policy_path(cwd, raw_path, errors)
+        if resolved is None:
+            continue
         if resolved not in roots:
             roots.append(resolved)
     return roots
@@ -500,16 +539,26 @@ def _take_filesystem_policy_snapshot(
     policy: ClaudePolicy,
 ) -> _FilesystemPolicySnapshot:
     """Snapshot files under cwd, addDirs, writable roots, and read-only roots."""
-    resolved_cwd = cwd.resolve(strict=False)
-    symlink_target_roots = [resolved_cwd]
-    for key in ("addDirs", "writableRoots", "readOnlyRoots"):
-        symlink_target_roots.extend(_resolve_policy_roots(resolved_cwd, policy, key))
-    snapshot_roots = list(symlink_target_roots)
-    snapshot_roots.extend(_linked_git_metadata_roots(resolved_cwd))
-
     files: Dict[Path, str] = {}
     errors: List[str] = []
     escaped_symlink_targets: Dict[Path, Path] = {}
+
+    resolved_cwd = _resolve_audit_path(cwd, errors, "cwd")
+    if resolved_cwd is None:
+        return _FilesystemPolicySnapshot(
+            files=files,
+            errors=errors,
+            escaped_symlink_targets=escaped_symlink_targets,
+        )
+
+    symlink_target_roots = [resolved_cwd]
+    for key in ("addDirs", "writableRoots", "readOnlyRoots"):
+        symlink_target_roots.extend(
+            _resolve_policy_roots(resolved_cwd, policy, key, errors)
+        )
+    snapshot_roots = list(symlink_target_roots)
+    snapshot_roots.extend(_linked_git_metadata_roots(resolved_cwd))
+
     audit_roots = _collapse_audit_roots(snapshot_roots)
     collapsed_symlink_target_roots = _collapse_audit_roots(symlink_target_roots)
     for root in audit_roots:
@@ -560,9 +609,13 @@ def _record_pdd_owned_log_signature(
         return
     entry_path = _audit_entry_path(log_write.path)
     baseline_signature = (
-        baseline.files.get(entry_path, "missing")
-        if baseline is not None
-        else log_write.before_signature
+        signatures.get(entry_path)
+        if entry_path in signatures
+        else (
+            baseline.files.get(entry_path, "missing")
+            if baseline is not None
+            else log_write.before_signature
+        )
     )
     if log_write.before_signature != baseline_signature:
         return
