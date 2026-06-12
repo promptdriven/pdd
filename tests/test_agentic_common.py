@@ -1,9 +1,12 @@
 import pytest
+import io
 import json
 import os
 import subprocess
 import sys
 import time
+from contextlib import redirect_stdout
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock, ANY, call
 from pathlib import Path
 
@@ -7443,6 +7446,526 @@ class TestCredentialLimitClassification:
         assert (
             _classify_permanent_error(envelope) == "credential-limit"
         )
+
+
+class TestProviderLimitMarker:
+    """Issue #1541: stable, secret-safe ``PDD_PROVIDER_LIMIT`` marker so PDD
+    Cloud can schedule a retry after the provider reset window without scraping
+    raw provider stderr.
+
+    The marker is additive — it piggybacks on the already-vetted
+    ``_classify_permanent_error`` (``credential-limit``) and ``_is_rate_limited``
+    classifications so it inherits their false-positive guards and never changes
+    retry/backoff semantics. A fixed UTC clock is injected so reset-time parsing
+    is deterministic.
+    """
+
+    # June 11 2026, noon UTC — the deterministic "now" for time-only/relative
+    # resolution. May 18 is in the past relative to this, so date strings
+    # without a year roll to the next future occurrence.
+    NOW = datetime(2026, 6, 11, 12, 0, 0, tzinfo=timezone.utc)
+    # May 1 2026 — used where we want "May 18" to land in the current year.
+    NOW_EARLY = datetime(2026, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    EXACT_BUG_ERROR = (
+        'Exit code 1: {"type":"result","subtype":"success","is_error":true,'
+        '"api_error_status":429,"duration_ms":658,"duration_api_ms":0,'
+        '"num_turns":1,"result":"You\'ve hit your limit · resets May 18, '
+        '11pm (UTC)","stop_reason":"stop_sequence","total_cost_usd":0,'
+        '"service_tier":"standard"}'
+    )
+
+    # ----- _parse_reset_at: exact date/timestamp strings -----
+
+    def test_parse_reset_full_date_time_tz_normalizes_to_utc(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "You've hit your limit · resets May 18, 11pm (UTC)",
+            now=self.NOW_EARLY,
+        )
+        assert reset_at == "2026-05-18T23:00:00Z"
+        assert source == "parsed_text"
+
+    def test_parse_reset_iso_timestamp_with_year_is_honored_verbatim(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets 2026-05-18T23:00:00Z", now=self.NOW
+        )
+        assert reset_at == "2026-05-18T23:00:00Z"
+        assert source == "parsed_text"
+
+    def test_parse_reset_date_without_year_rolls_to_next_future_occurrence(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        # Jan 2 has already passed in 2026 (now is June) -> next is 2027.
+        reset_at, source = _parse_reset_at("resets Jan 2, 9am", now=self.NOW)
+        assert reset_at == "2027-01-02T09:00:00Z"
+        assert source == "parsed_text"
+
+    def test_parse_reset_dated_year_inferred_from_reset_zone_not_utc(self):
+        """Year inference must anchor on the reset timezone's local year, not the
+        UTC year. At 2026-01-01T07:30Z it is still 2025-12-31 23:30 in Pacific,
+        so "resets Dec 31, 11:45pm" is 15 minutes away (2026-01-01T07:45Z), NOT a
+        full year out — using ``now.year`` (2026) would skip the valid 2025
+        candidate and land on 2027."""
+        from pdd.agentic_common import _parse_reset_at
+
+        near_new_year = datetime(2026, 1, 1, 7, 30, 0, tzinfo=timezone.utc)
+        for tz_token in ("America/Los_Angeles", "UTC-08:00"):
+            reset_at, source = _parse_reset_at(
+                f"You've hit your limit · resets Dec 31, 11:45pm ({tz_token})",
+                now=near_new_year,
+            )
+            assert reset_at == "2026-01-01T07:45:00Z", tz_token
+            assert source == "parsed_text", tz_token
+
+    # ----- _parse_reset_at: time-only strings (date inferred -> estimated) -----
+
+    def test_parse_reset_time_only_future_today_is_estimated(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 9pm", now=self.NOW)
+        assert reset_at == "2026-06-11T21:00:00Z"
+        assert source == "estimated"
+
+    def test_parse_reset_time_only_already_passed_rolls_to_next_day(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        # 9am UTC is before now (noon) -> next occurrence is tomorrow.
+        reset_at, source = _parse_reset_at("resets 9am", now=self.NOW)
+        assert reset_at == "2026-06-12T09:00:00Z"
+        assert source == "estimated"
+
+    def test_parse_reset_time_only_with_iana_tz_converts_to_utc(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        # 3:30pm PDT (UTC-7 in June) == 22:30 UTC, still in the future today.
+        reset_at, source = _parse_reset_at(
+            "resets 3:30pm (America/Los_Angeles)", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T22:30:00Z"
+        assert source == "estimated"
+
+    # ----- _parse_reset_at: unparseable / absent -----
+
+    def test_parse_reset_unparseable_text_yields_empty_none(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets at a provider-set time", now=self.NOW
+        )
+        assert reset_at == ""
+        assert source == "none"
+
+    def test_parse_reset_explicit_unknown_tz_is_unparseable_not_silent_utc(self):
+        """An explicit but unrecognized timezone token must NOT be silently
+        read as UTC — that would emit a confidently-wrong timestamp and make
+        cloud retry too early. Degrade to unparseable instead."""
+        from pdd.agentic_common import _parse_reset_at
+
+        for unknown_tz in ("resets 3:30pm (PDT)", "resets 3:30pm (Pacific Time)"):
+            reset_at, source = _parse_reset_at(unknown_tz, now=self.NOW)
+            assert reset_at == "", unknown_tz
+            assert source == "none", unknown_tz
+
+    def test_parse_reset_relative_countdown_hhmm_is_not_a_clock_time(self):
+        """A relative countdown that happens to look like HH:MM ("resets in
+        00:30") is a duration, not an absolute reset time — it must not yield
+        a (wrong, next-day) reset_at."""
+        from pdd.agentic_common import _parse_reset_at
+
+        for relative in ("resets in 00:30", "Error 429; resets in 00:30", "resets within 5:00"):
+            reset_at, source = _parse_reset_at(relative, now=self.NOW)
+            assert reset_at == "", relative
+            assert source == "none", relative
+
+    def test_parse_reset_dotted_ampm_is_recognized(self):
+        """Dotted ``p.m.`` must convert to 24h, not be dropped (which would
+        misread 3:30 p.m. as 03:30Z)."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 3:30 p.m. (UTC)", now=self.NOW)
+        assert reset_at == "2026-06-11T15:30:00Z"
+        assert source == "estimated"
+
+    def test_parse_reset_explicit_numeric_utc_offset(self):
+        """An explicit numeric UTC offset converts correctly (15:30 at +02:00
+        is 13:30Z)."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 3:30pm (UTC+02:00)", now=self.NOW)
+        assert reset_at == "2026-06-11T13:30:00Z"
+        assert source == "estimated"
+
+    def test_parse_reset_absent_keyword_yields_empty_none(self):
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("some unrelated text", now=self.NOW)
+        assert reset_at == ""
+        assert source == "none"
+
+    # ----- _parse_reset_at: format-robustness regressions -----
+
+    def test_parse_reset_explicit_year_is_honored_not_misread_as_hour(self):
+        """A 4-digit year between the day and the time ("June 11, 2026, 3:30pm")
+        must be honored as the year, NOT consumed as the hour — the latter drops
+        the real time and emits a confidently-wrong 20:00Z (from "2026"). An
+        explicit year is taken from the text verbatim, not inferred."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets June 11, 2026, 3:30pm (UTC)", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T15:30:00Z"
+        assert source == "parsed_text"
+
+        # A year that differs from now's proves it is read from the text, not
+        # inferred from the clock.
+        reset_at, source = _parse_reset_at(
+            "resets Jan 2, 2099, 9am (UTC)", now=self.NOW
+        )
+        assert reset_at == "2099-01-02T09:00:00Z"
+        assert source == "parsed_text"
+
+        # An explicit *past* year is honored verbatim (not rolled forward) — the
+        # provider stated it, so cloud reads the past reset as "retry now".
+        reset_at, source = _parse_reset_at(
+            "resets Jan 2, 2020, 9am (UTC)", now=self.NOW
+        )
+        assert reset_at == "2020-01-02T09:00:00Z"
+        assert source == "parsed_text"
+
+    def test_parse_reset_date_with_at_connector_is_parsed(self):
+        """An "at" between the date and the time ("June 11 at 3:30pm") must not
+        make an otherwise-exact reset unparseable; it parses identically to the
+        comma-separated form (with or without an explicit year)."""
+        from pdd.agentic_common import _parse_reset_at
+
+        for text in (
+            "resets June 11 at 3:30pm (UTC)",
+            "resets June 11, 2026, at 3:30pm (UTC)",
+        ):
+            reset_at, source = _parse_reset_at(text, now=self.NOW)
+            assert reset_at == "2026-06-11T15:30:00Z", text
+            assert source == "parsed_text", text
+
+    def test_parse_reset_bare_unparenthesized_unknown_tz_is_unparseable(self):
+        """An explicit but UNparenthesized zone ("11pm PST") must degrade to
+        unparseable exactly like the parenthesized "(PDT)" case
+        (test_parse_reset_explicit_unknown_tz_is_unparseable_not_silent_utc) —
+        not be silently read as UTC, which would resume ~8h early."""
+        from pdd.agentic_common import _parse_reset_at
+
+        for text in ("resets 11pm PST", "resets 3:30pm PDT", "resets 9pm CST"):
+            reset_at, source = _parse_reset_at(text, now=self.NOW)
+            assert reset_at == "", text
+            assert source == "none", text
+
+    def test_parse_reset_bare_unparenthesized_recognized_tz_resolves(self):
+        """A recognized unparenthesized zone (bare UTC / numeric offset) resolves
+        just like its parenthesized form rather than being ignored."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 3:30pm UTC", now=self.NOW)
+        assert reset_at == "2026-06-11T15:30:00Z"
+        assert source == "estimated"
+
+        # 3:30pm at UTC-08:00 == 23:30Z, still in the future today.
+        reset_at, source = _parse_reset_at("resets 3:30pm UTC-08:00", now=self.NOW)
+        assert reset_at == "2026-06-11T23:30:00Z"
+        assert source == "estimated"
+
+    def test_parse_reset_trailing_word_is_not_mistaken_for_timezone(self):
+        """The bare-zone capture is bounded to UPPERCASE tokens so ordinary
+        trailing prose does not suppress a valid time: a lowercase word
+        ("9pm today") leaves the time intact, while an all-caps token is treated
+        as a possible unknown zone and degrades to unparseable rather than
+        emitting a confidently-wrong UTC time. The asymmetry is deliberate."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at("resets 9pm today", now=self.NOW)
+        assert reset_at == "2026-06-11T21:00:00Z"
+        assert source == "estimated"
+
+        reset_at, source = _parse_reset_at("resets 9pm SOON", now=self.NOW)
+        assert reset_at == ""
+        assert source == "none"
+
+    def test_parse_reset_iso_with_fractional_seconds_keeps_offset(self):
+        """Fractional-second ISO timestamps must not be partially matched: the
+        fractional part is common in real APIs and truncating it drops the
+        trailing offset, emitting a confidently-wrong 15:00Z (7h early) instead
+        of 22:00Z. Sub-second precision is dropped from the normalized result;
+        the offset is honored."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets 2026-06-11T15:00:00.123-07:00", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T22:00:00Z"
+        assert source == "parsed_text"
+
+        # Fractional + Z keeps the (already-UTC) value, just drops sub-seconds.
+        reset_at, source = _parse_reset_at(
+            "resets 2026-06-11T15:00:00.123456Z", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T15:00:00Z"
+        assert source == "parsed_text"
+
+    def test_parse_reset_bare_iana_zone_converts_to_utc(self):
+        """An unparenthesized IANA zone ("3:30pm America/Los_Angeles") must
+        convert to UTC like its parenthesized form, not silently default to UTC
+        and emit 15:30Z. The area-anchored capture also accepts legacy aliases
+        ("US/Pacific") without truncating them to a bare abbreviation."""
+        from pdd.agentic_common import _parse_reset_at
+
+        # Dated form keeps the high-confidence parsed_text source.
+        reset_at, source = _parse_reset_at(
+            "resets June 11, 2026, 3:30pm America/Los_Angeles", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T22:30:00Z"
+        assert source == "parsed_text"
+
+        for text in ("resets 3:30pm America/Los_Angeles", "resets 3:30pm US/Pacific"):
+            reset_at, source = _parse_reset_at(text, now=self.NOW)
+            assert reset_at == "2026-06-11T22:30:00Z", text
+            assert source == "estimated", text
+
+    def test_parse_reset_bare_iana_capture_does_not_eat_prose(self):
+        """The IANA capture is anchored on the closed set of IANA area prefixes,
+        so a slash-containing prose token ("and/or") is NOT mistaken for a zone
+        and does not suppress an otherwise-valid time."""
+        from pdd.agentic_common import _parse_reset_at
+
+        reset_at, source = _parse_reset_at(
+            "resets 9pm and/or contact support", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T21:00:00Z"
+        assert source == "estimated"
+
+    # ----- _classify_provider_limit: credential-limit variants -----
+
+    def test_classify_credential_limit_full_marker(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "anthropic", self.EXACT_BUG_ERROR, now=self.NOW_EARLY
+        )
+        assert marker == (
+            "PDD_PROVIDER_LIMIT provider=anthropic status=credential_limit "
+            "reason=credential_limit reset_at=2026-05-18T23:00:00Z "
+            "reset_source=parsed_text"
+        )
+
+    def test_classify_session_limit_reason(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "anthropic",
+            "You've hit your session limit · resets 3:30pm (America/Los_Angeles)",
+            now=self.NOW,
+        )
+        assert "status=credential_limit" in marker
+        assert "reason=session_limit" in marker
+        assert "reset_at=2026-06-11T22:30:00Z" in marker
+        assert "reset_source=estimated" in marker
+
+    def test_classify_usage_limit_reason(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "anthropic", "You've hit your usage limit · resets 9pm", now=self.NOW
+        )
+        assert "status=credential_limit" in marker
+        assert "reason=usage_limit" in marker
+        assert "reset_source=estimated" in marker
+
+    def test_classify_credential_limit_unparseable_reset_still_emits_marker(self):
+        """A real Claude cap whose reset text was stripped (the interactive
+        fast-fail message) still emits the marker, just with an empty
+        ``reset_at`` and ``reset_source=none``.
+        """
+        from pdd.agentic_common import _classify_provider_limit
+
+        text = (
+            "you've hit your limit · resets at a provider-set time (PDD "
+            "credential-limit). PDD detected a synthetic credential-limit turn."
+        )
+        marker = _classify_provider_limit("anthropic", text, now=self.NOW)
+        assert marker is not None
+        assert "status=credential_limit" in marker
+        assert "reset_at= reset_source=none" in marker  # empty reset_at field
+
+    # ----- _classify_provider_limit: generic 429 -----
+
+    def test_classify_generic_429_emits_stable_marker_with_no_reset(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "google", "Error: api_error_status: 429 rate limit exceeded"
+        )
+        assert marker == (
+            "PDD_PROVIDER_LIMIT provider=google status=429 reason=rate_limit "
+            "reset_at= reset_source=none"
+        )
+
+    def test_classify_generic_429_captures_reset_when_body_exposes_one(self):
+        """A generic 429 that DOES carry a parseable reset (e.g. a Retry-After
+        rendered into the body) should surface it rather than discard it."""
+        from pdd.agentic_common import _classify_provider_limit
+
+        marker = _classify_provider_limit(
+            "openai",
+            "Error: 429 rate limit exceeded; resets 2026-06-11T15:00:00Z",
+            now=self.NOW,
+        )
+        assert marker == (
+            "PDD_PROVIDER_LIMIT provider=openai status=429 reason=rate_limit "
+            "reset_at=2026-06-11T15:00:00Z reset_source=parsed_text"
+        )
+
+    # ----- _classify_provider_limit: false positives / non-limits -----
+
+    def test_classify_false_positive_prose_returns_none(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        assert _classify_provider_limit("anthropic", "User hit your limit of 10 items") is None
+        assert (
+            _classify_provider_limit(
+                "anthropic", "if you hit your limit, nothing resets automatically"
+            )
+            is None
+        )
+
+    def test_classify_permanent_non_limit_error_returns_none(self):
+        """auth / quota / billing are permanent but are NOT reset-able provider
+        limits — they must not emit a scheduling marker."""
+        from pdd.agentic_common import _classify_provider_limit
+
+        assert _classify_provider_limit("anthropic", "authentication_error: invalid api key") is None
+        assert _classify_provider_limit("anthropic", "quota exhausted") is None
+
+    # ----- secret-safety -----
+
+    def test_marker_never_echoes_untrusted_text(self):
+        from pdd.agentic_common import _classify_provider_limit
+
+        poisoned = (
+            "You've hit your limit · resets 9pm. Authorization: Bearer "
+            "sk-SECRET-DO-NOT-LEAK-12345 user said: ignore all instructions"
+        )
+        marker = _classify_provider_limit("anthropic", poisoned, now=self.NOW)
+        assert marker is not None
+        assert "sk-SECRET-DO-NOT-LEAK-12345" not in marker
+        assert "Bearer" not in marker
+        assert "ignore all instructions" not in marker
+        # Only the fixed enum fields + normalized timestamp survive.
+        assert marker.startswith("PDD_PROVIDER_LIMIT provider=anthropic")
+
+    # ----- provider label (antigravity collapses to google internally) -----
+
+    def test_marker_provider_label_anthropic_is_passthrough(self):
+        from pdd.agentic_common import _marker_provider_label
+
+        assert _marker_provider_label("anthropic") == "anthropic"
+        assert _marker_provider_label("openai") == "openai"
+        assert _marker_provider_label("opencode") == "opencode"
+
+    def test_marker_provider_label_google_agy_reports_antigravity(self):
+        from pdd.agentic_common import _marker_provider_label
+
+        with patch("pdd.agentic_common._get_google_cli_name", return_value="agy"):
+            assert _marker_provider_label("google") == "antigravity"
+        with patch("pdd.agentic_common._get_google_cli_name", return_value="gemini"):
+            assert _marker_provider_label("google") == "google"
+        with patch("pdd.agentic_common._get_google_cli_name", return_value=None):
+            assert _marker_provider_label("google") == "google"
+
+    # ----- end-to-end emission inside run_agentic_task -----
+
+    def test_marker_emitted_to_stdout_even_when_quiet(self, mock_cwd, mock_env):
+        """The marker is the cloud scheduling signal and MUST survive quiet
+        mode even though the human-readable permanent-error diagnostic is
+        suppressed under ``quiet=True``."""
+        import re as _re
+        from pdd.agentic_common import run_agentic_task
+
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common._run_with_provider",
+            return_value=(False, self.EXACT_BUG_ERROR, 0.0, "claude-opus-4-8", None),
+        ):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = run_agentic_task(
+                    "do work", mock_cwd, max_retries=1, quiet=True
+                )
+        out = buf.getvalue()
+        assert not result.success
+        assert "PDD_PROVIDER_LIMIT provider=anthropic status=credential_limit" in out
+        assert "reason=credential_limit" in out
+        assert "reset_source=parsed_text" in out
+        # reset_at is normalized to UTC ISO; year rolls per the real clock.
+        assert _re.search(r"reset_at=\d{4}-05-18T23:00:00Z", out)
+
+    def test_marker_emitted_once_per_provider_on_exhausted_429(self, mock_cwd, mock_env):
+        """Two failed 429 attempts for one provider must emit the marker
+        exactly once (no per-retry duplicates)."""
+        from pdd.agentic_common import run_agentic_task
+
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.time.sleep",
+        ), patch(
+            "pdd.agentic_common._run_with_provider",
+            return_value=(False, "Error: api_error_status: 429 rate limit exceeded", 0.0, "claude-opus-4-8", None),
+        ):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                run_agentic_task("do work", mock_cwd, max_retries=2, quiet=True)
+        out = buf.getvalue()
+        assert out.count("PDD_PROVIDER_LIMIT") == 1
+        assert "status=429 reason=rate_limit reset_at= reset_source=none" in out
+
+    def test_no_marker_when_transient_429_recovers(self, mock_cwd, mock_env):
+        """A 429 that succeeds on retry never reaches the per-provider
+        exhaustion seam, so no scheduling marker is emitted."""
+        from pdd.agentic_common import run_agentic_task
+
+        attempts = [
+            (False, "Error: api_error_status: 429 rate limit exceeded", 0.0, "claude-opus-4-8", None),
+            (True, "Task completed.", 0.01, "claude-opus-4-8", None),
+        ]
+        with patch(
+            "pdd.agentic_common.get_agent_provider_preference",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.get_available_agents",
+            return_value=["anthropic"],
+        ), patch(
+            "pdd.agentic_common.time.sleep",
+        ), patch(
+            "pdd.agentic_common._run_with_provider",
+            side_effect=attempts,
+        ):
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                result = run_agentic_task("do work", mock_cwd, max_retries=2, quiet=True)
+        out = buf.getvalue()
+        assert result.success
+        assert "PDD_PROVIDER_LIMIT" not in out
 
 
 class TestIssue1072FailureLogging:

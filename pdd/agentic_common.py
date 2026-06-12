@@ -13,8 +13,9 @@ import time
 import uuid
 import re
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 
@@ -893,6 +894,443 @@ def _classify_permanent_error(error_message: str) -> Optional[str]:
 def _is_permanent_error(error_message: str) -> bool:
     """Backward-compatible wrapper around `_classify_permanent_error`."""
     return _classify_permanent_error(error_message) is not None
+
+
+# ---------------------------------------------------------------------------
+# Issue #1541: secret-safe provider-limit marker for PDD Cloud retry scheduling
+# ---------------------------------------------------------------------------
+# PDD Cloud needs to queue an agentic executor run when the active credential
+# hits a rate/usage/credential limit, then resume after the provider reset
+# window. It cannot reliably extract a reset time by scraping raw provider
+# stderr (brittle, provider-specific, and risks leaking secrets the provider
+# echoes back in an error body). Instead the CLI emits exactly one stable,
+# machine-parseable line per provider-limit event:
+#
+#   PDD_PROVIDER_LIMIT provider=<anthropic|openai|google|antigravity|opencode>
+#       status=<429|credential_limit>
+#       reason=<rate_limit|usage_limit|session_limit|credential_limit>
+#       reset_at=<UTC ISO-8601 'YYYY-MM-DDTHH:MM:SSZ' or empty>
+#       reset_source=<provider|parsed_text|estimated|none>
+#
+# The marker is ADDITIVE — it piggybacks on the already-vetted
+# `_classify_permanent_error` ("credential-limit") and `_is_rate_limited`
+# classifications, so it inherits their false-positive guards and never changes
+# retry/backoff semantics. It only ever emits fixed enum fields plus a
+# normalized UTC timestamp, never a slice of the (untrusted) provider text.
+
+PDD_PROVIDER_LIMIT_MARKER: str = "PDD_PROVIDER_LIMIT"
+_provider_limit_logger = logging.getLogger(__name__ + ".provider_limit")
+
+# Allowed enum values. Anything outside these is coerced to a conservative
+# default by the formatter so a classifier bug can never widen the marker into
+# untrusted territory.
+_MARKER_PROVIDERS: frozenset = frozenset(
+    {"anthropic", "openai", "google", "antigravity", "opencode"}
+)
+_MARKER_STATUSES: frozenset = frozenset({"429", "credential_limit"})
+_MARKER_REASONS: frozenset = frozenset(
+    {"rate_limit", "usage_limit", "session_limit", "credential_limit"}
+)
+_MARKER_SOURCES: frozenset = frozenset(
+    {"provider", "parsed_text", "estimated", "none"}
+)
+
+_MONTHS: Dict[str, int] = {
+    name.lower(): num
+    for num, name in enumerate(
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        start=1,
+    )
+}
+
+# Normalized UTC reset timestamp shape used both to format and to validate.
+_RESET_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+# Reset-clause matchers. Each is anchored on the `resets` keyword and reads ONLY
+# structured groups (never the surrounding free text). A short bounded gap
+# (`[^\n]{0,12}?`) absorbs the typical "· " / "at " / "on " delimiter between
+# the anchor and the time token. Tried most-specific first.
+_RESET_ISO_RE = re.compile(
+    r"resets?\b[^\n]{0,12}?"
+    r"(?P<iso>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?"
+    r"(?:Z|[+-]\d{2}:?\d{2})?)",
+    re.IGNORECASE,
+)
+# Optional trailing timezone, tried after the time. `tz` is a parenthesized
+# token ("(UTC)", "(America/Los_Angeles)"); `tzbare` is an *unparenthesized*
+# zone, captured in two structurally-anchored shapes so it catches real zone
+# tokens without swallowing ordinary trailing prose:
+#   * an IANA "Area/Location" name ("America/Los_Angeles") anchored on the closed
+#     set of IANA area prefixes — the required area + "/" can't match prose like
+#     "and/or"; tried first so "US/Pacific" is not truncated to the "US" abbrev;
+#   * an UPPERCASE abbreviation or numeric offset ("PST", "UTC-08:00"), matched
+#     case-sensitively so a lowercase word like "today" is left alone.
+# Every token (parenthesized OR bare) is routed through `_resolve_reset_tz`, so
+# an unrecognized zone degrades to unparseable instead of being silently read as
+# UTC. The uppercase-only bound on the abbreviation branch is deliberate: it
+# treats an all-caps non-zone word as a possible unknown zone (-> unparseable)
+# rather than emit a confidently-wrong UTC timestamp.
+_TZ_TAIL = (
+    r"(?:\s*\((?P<tz>[^)\n]{1,40})\)"
+    r"|\s+(?P<tzbare>"
+    r"(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Brazil|Canada"
+    r"|Chile|Europe|Indian|Mexico|Pacific|US|Etc)/[\w+/-]+"
+    r"|(?-i:[A-Z]{2,5}(?:[+-]\d{1,2}(?::?\d{2})?)?|[+-]\d{2}:?\d{2})"
+    r"))?"
+)
+# `ampm` accepts plain and dotted forms (am, pm, a.m., p.m.). The date matcher
+# also accepts an explicit 4-digit `year` and an optional "at" connector between
+# the day and the time, so "June 11, 2026, 3:30pm" is not misread as hour=20 and
+# "June 11 at 3:30pm" is not dropped as unparseable.
+_RESET_DATE_RE = re.compile(
+    r"resets?\b[^\n]{0,12}?"
+    r"(?P<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
+    r"(?P<day>\d{1,2})(?:,)?\s+"
+    r"(?:(?P<year>\d{4})(?:,)?\s+)?"
+    r"(?:at\s+)?"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
+    + _TZ_TAIL,
+    re.IGNORECASE,
+)
+_RESET_TIME_RE = re.compile(
+    r"resets?\b(?P<gap>[^\n]{0,12}?)"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
+    + _TZ_TAIL,
+    re.IGNORECASE,
+)
+
+# A relative-countdown preposition in the gap before a time-only token marks a
+# duration ("resets in 00:30", "try again within 5:00"), NOT an absolute clock
+# time — those must not yield a reset_at.
+_RELATIVE_RESET_GAP_RE = re.compile(r"\b(?:in|after|within|every)\b", re.IGNORECASE)
+# Explicit numeric UTC/GMT offset, e.g. "UTC+02:00", "GMT-5", "+0530".
+_TZ_OFFSET_RE = re.compile(r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
+
+
+def _format_utc(dt: datetime) -> str:
+    """Render a timezone-aware datetime as compact UTC ISO ``YYYY-MM-DDTHH:MM:SSZ``."""
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _resolve_reset_tz(name: Optional[str]) -> Optional[tzinfo]:
+    """Resolve a parenthesized timezone token to a ``tzinfo``.
+
+    Returns ``timezone.utc`` when no timezone was given (the conservative,
+    documented default for unzoned reset text), a resolved zone for ``UTC``/
+    ``GMT``/``Z``, an explicit numeric offset (``UTC+02:00``, ``GMT-5``), or a
+    recognized IANA name (e.g. ``America/Los_Angeles``), and ``None`` when an
+    *explicit* timezone token is present but unrecognized (``PDT``, ``Pacific
+    Time``) — the caller then treats the reset as unparseable rather than
+    emitting a confidently-wrong UTC timestamp.
+    """
+    if not name:
+        return timezone.utc
+    cleaned = name.strip()
+    if cleaned.upper() in ("UTC", "GMT", "Z", "UT"):
+        return timezone.utc
+    offset = _TZ_OFFSET_RE.match(cleaned)
+    if offset:
+        sign = -1 if offset.group(1) == "-" else 1
+        hours = int(offset.group(2))
+        minutes = int(offset.group(3) or 0)
+        if hours > 23 or minutes > 59:
+            return None
+        return timezone(sign * timedelta(hours=hours, minutes=minutes))
+    try:
+        return ZoneInfo(cleaned)
+    except Exception:
+        return None
+
+
+def _reset_hour_to_24h(hour: int, ampm: Optional[str]) -> Optional[int]:
+    """Convert a parsed clock hour (12h with am/pm, or 24h) to 0-23, or None.
+
+    ``ampm`` may be a dotted form (``a.m.``/``p.m.``); dots are normalized away.
+    """
+    if ampm:
+        marker = ampm.replace(".", "").lower()
+        if not 1 <= hour <= 12:
+            return None
+        if marker == "am":
+            return 0 if hour == 12 else hour
+        return 12 if hour == 12 else hour + 12
+    return hour if 0 <= hour <= 23 else None
+
+
+def _iso_reset_to_utc(raw: str) -> Optional[datetime]:
+    """Parse an explicit ISO-8601 reset timestamp to an aware UTC datetime."""
+    candidate = raw.strip().replace(" ", "T")
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _match_tz(match: "re.Match[str]") -> Optional[str]:
+    """Return the timezone token from a reset match, preferring a parenthesized
+    token (``tz``) and falling back to a bare trailing abbreviation/offset
+    (``tzbare``) so an unparenthesized zone like ``11pm PST`` is not silently
+    dropped and read as UTC."""
+    groups = match.groupdict()
+    return groups.get("tz") or groups.get("tzbare")
+
+
+def _dated_reset_to_datetime(match: "re.Match[str]", now: datetime) -> Optional[datetime]:
+    """Build a reset datetime from a month/day/time match.
+
+    An explicit 4-digit year, when captured, is honored verbatim — even if it
+    lies in the past (the provider stated it, so a past reset reads as "retry
+    now"). Otherwise the year is inferred as the next future occurrence (a date
+    already past this year rolls forward)."""
+    month = _MONTHS.get(match.group("month").lower()[:3])
+    hour = _reset_hour_to_24h(int(match.group("hour")), match.group("ampm"))
+    minute = int(match.group("minute") or 0)
+    day = int(match.group("day"))
+    if month is None or hour is None or not 1 <= day <= 31 or not 0 <= minute <= 59:
+        return None
+    tz = _resolve_reset_tz(_match_tz(match))
+    if tz is None:  # explicit but unrecognized timezone -> unparseable
+        return None
+    year_token = match.groupdict().get("year")
+    if year_token:
+        try:
+            return datetime(int(year_token), month, day, hour, minute, tzinfo=tz)
+        except ValueError:
+            return None
+    # Anchor year inference to the reset *timezone's* local year, not the UTC
+    # year: near a New Year boundary `now` can already be in the next year in
+    # UTC while still in the previous year in the reset zone (or vice versa), so
+    # using `now.year` would skip the correct candidate and land a full year off
+    # (e.g. "resets Dec 31, 11:45pm (America/Los_Angeles)" at 2026-01-01T07:30Z).
+    base_year = now.astimezone(tz).year
+    for year in (base_year, base_year + 1):
+        try:
+            local = datetime(year, month, day, hour, minute, tzinfo=tz)
+        except ValueError:
+            return None
+        if local.astimezone(timezone.utc) >= now:
+            return local
+    return None
+
+
+def _time_only_reset_to_datetime(match: "re.Match[str]", now: datetime) -> Optional[datetime]:
+    """Build a reset datetime from a time-of-day match against ``now``'s date,
+    rolling to the next day when the time has already passed."""
+    hour = _reset_hour_to_24h(int(match.group("hour")), match.group("ampm"))
+    minute = int(match.group("minute") or 0)
+    if hour is None or not 0 <= minute <= 59:
+        return None
+    tz = _resolve_reset_tz(_match_tz(match))
+    if tz is None:  # explicit but unrecognized timezone -> unparseable
+        return None
+    local_now = now.astimezone(tz)
+    candidate = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate.astimezone(timezone.utc) < now:
+        candidate = candidate + timedelta(days=1)
+    return candidate
+
+
+def _parse_reset_at(
+    text: Optional[str], *, now: Optional[datetime] = None
+) -> Tuple[str, str]:
+    """Parse a provider reset time out of sanitized limit text.
+
+    Returns ``(reset_at, reset_source)`` where ``reset_at`` is a normalized UTC
+    ISO-8601 string ``YYYY-MM-DDTHH:MM:SSZ`` (or ``""`` when no reset time can be
+    read) and ``reset_source`` is one of:
+
+    * ``parsed_text`` — an explicit date or full timestamp was read from text,
+    * ``estimated`` — only a time-of-day was given, so the date was inferred,
+    * ``none`` — nothing parseable.
+
+    Only recognized date/time tokens are ever read out of ``text``; the
+    surrounding free text is never echoed, so the result is safe to emit even
+    when the input carries untrusted provider output. Unzoned times are
+    interpreted as UTC (a conservative, documented default). ``now`` is
+    injectable for deterministic tests and defaults to the current UTC time.
+    """
+    if not text:
+        return "", "none"
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    # 1) Explicit ISO-8601 timestamp (carries its own date; honored verbatim).
+    match = _RESET_ISO_RE.search(text)
+    if match:
+        dt = _iso_reset_to_utc(match.group("iso"))
+        if dt is not None:
+            return _format_utc(dt), "parsed_text"
+
+    # 2) Month-name date + time (year inferred -> next future occurrence).
+    match = _RESET_DATE_RE.search(text)
+    if match:
+        dt = _dated_reset_to_datetime(match, now)
+        if dt is not None:
+            return _format_utc(dt), "parsed_text"
+
+    # 3) Time-of-day only (date inferred -> next future occurrence; estimated).
+    #    Require an am/pm marker OR an explicit minute so a bare "resets 11"
+    #    cannot parse as an ambiguous time, and reject relative countdowns
+    #    ("resets in 00:30") whose HH:MM looks like a clock time but is a
+    #    duration.
+    match = _RESET_TIME_RE.search(text)
+    if (
+        match
+        and (match.group("ampm") or match.group("minute"))
+        and not _RELATIVE_RESET_GAP_RE.search(match.group("gap"))
+    ):
+        dt = _time_only_reset_to_datetime(match, now)
+        if dt is not None:
+            return _format_utc(dt), "estimated"
+
+    return "", "none"
+
+
+def _provider_limit_marker(
+    *,
+    provider: str,
+    status: str,
+    reason: str,
+    reset_at: str = "",
+    reset_source: str = "none",
+) -> str:
+    """Format the stable, secret-safe ``PDD_PROVIDER_LIMIT`` marker line.
+
+    Every field is constrained to a fixed enum (or a normalized UTC timestamp
+    for ``reset_at``); out-of-range inputs are coerced to conservative defaults
+    so the marker can never carry untrusted text. An unmappable provider is
+    reported as the literal ``unknown`` (a fixed token, never the raw string) —
+    in practice unreachable because the emission seam always passes a known
+    provider, but it keeps the marker safe if a future caller does not.
+    """
+    if provider not in _MARKER_PROVIDERS:
+        provider = "unknown"
+    if status not in _MARKER_STATUSES:
+        status = "credential_limit"
+    if reason not in _MARKER_REASONS:
+        reason = "credential_limit"
+    if reset_source not in _MARKER_SOURCES:
+        reset_source = "none"
+    if reset_at and not _RESET_AT_RE.fullmatch(reset_at):
+        reset_at, reset_source = "", "none"
+    return (
+        f"{PDD_PROVIDER_LIMIT_MARKER} provider={provider} status={status} "
+        f"reason={reason} reset_at={reset_at} reset_source={reset_source}"
+    )
+
+
+def _credential_limit_reason(error_message: str) -> str:
+    """Map a Claude Code subscription-cap envelope to a marker ``reason``.
+
+    ``session``/``usage`` map to their specific reasons; weekly/monthly/overall
+    caps map to the overarching ``credential_limit``.
+    """
+    match = re.search(
+        r"hit\s+your\s+(session|usage|weekly|monthly)?\s*limit",
+        error_message,
+        re.IGNORECASE,
+    )
+    subtype = (match.group(1) or "").lower() if match and match.group(1) else ""
+    if subtype == "session":
+        return "session_limit"
+    if subtype == "usage":
+        return "usage_limit"
+    return "credential_limit"
+
+
+def _classify_provider_limit(
+    provider: str, error_message: Optional[str], *, now: Optional[datetime] = None
+) -> Optional[str]:
+    """Return the ``PDD_PROVIDER_LIMIT`` marker line for a real provider/
+    credential limit, or ``None`` when the error is not a reset-able limit.
+
+    Piggybacks on the existing vetted classification so it inherits the
+    credential-limit false-positive guards and the generic-429 short-circuit:
+
+    * ``credential-limit`` (Claude Code subscription/session/usage/weekly cap)
+      -> ``status=credential_limit`` with a session/usage/credential reason and
+      a parsed reset time when the envelope carries one.
+    * generic transient 429 (no permanent classification) ->
+      ``status=429 reason=rate_limit`` with no reset metadata.
+
+    auth / quota / billing / oauth / provider-config permanent errors are NOT
+    reset-able limits and return ``None`` (no scheduling marker).
+    """
+    if not error_message:
+        return None
+    permanent_class = _classify_permanent_error(error_message)
+    if permanent_class == "credential-limit":
+        reset_at, reset_source = _parse_reset_at(error_message, now=now)
+        return _provider_limit_marker(
+            provider=provider,
+            status="credential_limit",
+            reason=_credential_limit_reason(error_message),
+            reset_at=reset_at,
+            reset_source=reset_source,
+        )
+    if permanent_class is None and _is_rate_limited(error_message):
+        # Generic transient 429: usually carries no reset metadata
+        # (-> reset_at= reset_source=none), but capture it when the body does
+        # expose a parseable reset (e.g. a Retry-After rendered as
+        # "resets <ISO>") so cloud can schedule precisely instead of guessing.
+        reset_at, reset_source = _parse_reset_at(error_message, now=now)
+        return _provider_limit_marker(
+            provider=provider,
+            status="429",
+            reason="rate_limit",
+            reset_at=reset_at,
+            reset_source=reset_source,
+        )
+    return None
+
+
+def _marker_provider_label(
+    provider: str, env: Optional[Dict[str, str]] = None
+) -> str:
+    """Map an internal provider name to its marker ``provider=`` value.
+
+    ``antigravity`` is collapsed to ``google`` everywhere in the agentic
+    preference list, so the marker re-derives the ``antigravity`` label when the
+    selected Google CLI is ``agy`` (vs. legacy ``gemini``) — otherwise the
+    issue's ``antigravity`` enum value would never appear.
+    """
+    if provider == "google" and _get_google_cli_name(env) == "agy":
+        return "antigravity"
+    return provider
+
+
+def _emit_provider_limit_marker(
+    provider: str, error_message: Optional[str], *, env: Optional[Dict[str, str]] = None
+) -> Optional[str]:
+    """Emit the ``PDD_PROVIDER_LIMIT`` marker for ``error_message`` if it is a
+    real provider/credential limit; return the marker line (or ``None``).
+
+    Printed on plain stdout — deliberately unstyled and NOT quiet-gated — so the
+    cloud scheduler can parse it even when human diagnostics are suppressed.
+
+    Best-effort telemetry: any failure while building/printing the marker is
+    swallowed so a marker bug can never break the agentic run it annotates.
+    """
+    try:
+        marker = _classify_provider_limit(
+            _marker_provider_label(provider, env), error_message
+        )
+        if marker is not None:
+            print(marker, flush=True)
+        return marker
+    except Exception as exc:  # pragma: no cover - defensive: marker must never crash the run
+        _provider_limit_logger.debug(
+            "Provider-limit marker emission failed for %s: %s", provider, exc
+        )
+        return None
 
 
 def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
@@ -2901,6 +3339,17 @@ def run_agentic_task(
 
             # All retries exhausted (or deadline budget exhausted) for this provider
             provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
+            # Issue #1541: emit a stable, secret-safe provider-limit marker so
+            # PDD Cloud can schedule a retry after the reset window without
+            # scraping raw provider stderr. This post-retry-loop seam fires at
+            # most once per provider (the credential-limit branch breaks here;
+            # generic 429s reach here only after exhausting retries — a 429 that
+            # recovers returns earlier and emits nothing). Only real
+            # credential-limit / generic-429 classifications produce a marker;
+            # auth/quota/etc. produce none. Deliberately NOT quiet-gated: the
+            # cloud scheduler needs the marker even when human diagnostics are
+            # suppressed.
+            _emit_provider_limit_marker(provider, last_output)
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
             # Issue #1072 / #1376 (codex round 2): inline per-attempt logging
