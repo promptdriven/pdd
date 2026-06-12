@@ -1,308 +1,172 @@
 from __future__ import annotations
 
-import json
 import os
-import re
-import subprocess
 import sys
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import Any, Dict, Optional, Tuple
-from unittest.mock import patch
+from typing import Any, Dict, List
 
 from rich.console import Console
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
+# Ensure the package is importable
+project_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(project_root))
 
 from pdd.agentic_common import (
-    clear_workflow_state as _clear_workflow_state,
+    AgenticTaskResult,
+    ClaudePolicy,
+    TokenMatch,
+    detect_control_token,
+    extract_step_report,
     get_agent_provider_preference,
-    github_load_state,
-    github_save_state,
-    load_workflow_state as _load_workflow_state,
-    post_final_comment,
-    post_pr_comment,
-    post_step_comment,
-    run_agentic_task as _run_agentic_task,
-    validate_cached_state,
+    get_available_agents,
+    run_agentic_task,
+    validate_claude_policy,
 )
 
 console = Console()
 
 
-def run_agentic_task(*args: Any, **kwargs: Any) -> Any:
-    """Delegate to the public agentic task runner for selector-based prompts."""
-    return _run_agentic_task(*args, **kwargs)
+def demonstrate_provider_discovery() -> None:
+    """
+    Demonstrates how to discover configured agentic CLI providers and user preferences.
+
+    Outputs:
+        Prints lists of available and preferred providers to the console.
+    """
+    console.print("[bold cyan]--- Discovery & Preferences ---[/bold cyan]")
+
+    # Get preferred order from env (PDD_AGENTIC_PROVIDER) or defaults
+    preferences: List[str] = get_agent_provider_preference()
+    console.print(f"[green]Preferred providers:[/green] {preferences}")
+
+    # Get providers actually available based on installed CLIs and credentials
+    available: List[str] = get_available_agents()
+    console.print(f"[green]Available providers on this machine:[/green] {available}")
+    console.print()
 
 
-def load_workflow_state(
-    cwd: Path,
-    issue_number: int,
-    workflow_type: str,
-    state_dir: Path,
-    repo_owner: str,
-    repo_name: str,
-    use_github_state: bool = True,
-) -> Tuple[Optional[Dict], Optional[int]]:
-    """Delegate to the shared workflow-state loader."""
-    return _load_workflow_state(
-        cwd,
-        issue_number,
-        workflow_type,
-        state_dir,
-        repo_owner,
-        repo_name,
-        use_github_state,
-    )
+def demonstrate_policy_validation() -> None:
+    """
+    Demonstrates how to validate and normalize security policies for Claude execution.
 
+    Outputs:
+        Prints the normalized validated policy schema.
+    """
+    console.print("[bold cyan]--- Claude Policy Validation ---[/bold cyan]")
 
-def clear_workflow_state(
-    cwd: Path,
-    issue_number: int,
-    workflow_type: str,
-    state_dir: Path,
-    repo_owner: str,
-    repo_name: str,
-    use_github_state: bool = True,
-) -> bool:
-    """Delegate to the shared workflow-state clearer."""
-    return _clear_workflow_state(
-        cwd,
-        issue_number,
-        workflow_type,
-        state_dir,
-        repo_owner,
-        repo_name,
-        use_github_state,
-    )
-
-
-def _fetch_comments(comments_url: str) -> str:
-    """Small deterministic example of a comments fetch helper."""
-    if not comments_url:
-        return "[]"
-    return json.dumps([{"body": "Looks good", "user": {"login": "reviewer"}}])
-
-
-def _escape_format_braces(text: str) -> str:
-    """Escape braces before putting arbitrary text through str.format."""
-    return text.replace("{", "{{").replace("}", "}}")
-
-
-def _extract_json_from_text(text: str) -> dict[str, Any] | None:
-    """Extract the first JSON object embedded in free-form text."""
-    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    if not match:
-        return None
-    try:
-        parsed = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
-    return parsed if isinstance(parsed, dict) else None
-
-
-def _parse_pr_url(url: str) -> Optional[Tuple[str, str, int]]:
-    """Parse a GitHub PR URL into owner, repository, and PR number."""
-    match = re.match(r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)$", url)
-    if not match:
-        return None
-    owner, repo, number = match.groups()
-    return owner, repo, int(number)
-
-
-def _is_github_issue_url(value: str) -> bool:
-    """Return True for a canonical GitHub issue URL."""
-    return re.match(r"https://github\.com/[^/]+/[^/]+/issues/\d+$", value) is not None
-
-
-def example_provider_preference() -> None:
-    """Show the default provider order and an environment override."""
-    console.print("[bold blue]Provider Preference[/bold blue]")
-    console.print(f"Default: {get_agent_provider_preference()}")
-
-    with patch.dict(os.environ, {"PDD_AGENTIC_PROVIDER": "google,anthropic"}, clear=False):
-        console.print(f"Override: {get_agent_provider_preference()}")
-
-
-def example_run_agentic_task(cwd: Path) -> None:
-    """Run a fully mocked agentic task through the public entry point."""
-    console.print("\n[bold blue]run_agentic_task()[/bold blue]")
-    mocked_json = {
-        "response": "Applied the fix, ran verification, and everything passed.",
-        "total_cost_usd": 0.12,
+    raw_policy: Dict[str, Any] = {
+        "allowedTools": "Read,Write,Bash",
+        "addDirs": ["./src", "./tests"],
+        "writableRoots": ["./src"],
+        "readOnlyRoots": ["./tests"],
+        "noSessionPersistence": True,
+        "outputFormat": "json",
     }
 
-    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/local/bin/claude"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=["claude"],
-            returncode=0,
-            stdout=json.dumps(mocked_json),
-            stderr="",
-        )
-        result = run_agentic_task(
-            "Fix the failing workflow.",
-            cwd,
-            verbose=False,
-            max_retries=1,
-        )
-        success, output, cost, provider = result
-
-    console.print(f"Success: {success}")
-    console.print(f"Provider: {provider}")
-    console.print(f"Cost: ${cost:.2f}")
-    console.print(f"Usage: {result.usage}")
-    console.print(f"Output: {output}")
+    # Validate and normalize the policy schema
+    normalized_policy: ClaudePolicy = validate_claude_policy(raw_policy, interactive=False)
+    console.print("[green]Validated Policy Shape:[/green]")
+    console.print(normalized_policy)
+    console.print()
 
 
-def example_validate_cached_state() -> None:
-    """Demonstrate cache correction when a stored step failed."""
-    console.print("\n[bold blue]validate_cached_state()[/bold blue]")
-    corrected = validate_cached_state(
-        last_completed_step=4,
-        step_outputs={
-            "1": "Collected context",
-            "2": "Generated fix",
-            "3": "FAILED: verification failed",
-            "4": "Should not be trusted",
-        },
-        step_order=[1, 2, 3, 4],
-        quiet=True,
+def demonstrate_text_parsing() -> None:
+    """
+    Demonstrates extracting structured step reports and detecting workflow control tokens
+    from raw LLM agent stdout.
+
+    Outputs:
+        Prints extracted blocks and detected control token match states.
+    """
+    console.print("[bold cyan]--- Output Parsing & Control Tokens ---[/bold cyan]")
+
+    # Simulated raw output containing metadata blocks and text
+    raw_llm_output = (
+        "We analyzed the codebase and implemented the requested fixes.\n"
+        "<step_report>\n"
+        "## Fix Summary\n"
+        "Modified math utility to prevent zero division errors.\n"
+        "</step_report>\n"
+        "All checks are green. ALL_TESTS_PASS"
     )
-    console.print(f"Corrected last completed step: {corrected}")
 
+    # Extract step report block from tagged markup
+    extracted_report: str | None = extract_step_report(raw_llm_output)
+    console.print("[green]Extracted Step Report:[/green]")
+    console.print(extracted_report)
 
-def example_post_step_comment(cwd: Path) -> None:
-    """Show the issue step-comment helper with a mocked gh CLI."""
-    console.print("\n[bold blue]post_step_comment()[/bold blue]")
-    with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
-         patch("pdd.agentic_common.subprocess.run") as mock_run:
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=["gh"],
-            returncode=0,
-            stdout="",
-            stderr="",
+    # Parse control token using exact, case-insensitive, or semantic fallback regex
+    match: TokenMatch | None = detect_control_token(raw_llm_output, "ALL_TESTS_PASS")
+    if match:
+        console.print(
+            f"[green]Detected control token:[/green] {match.token} "
+            f"(Matched via [yellow]{match.tier}[/yellow] tier)"
         )
-        posted = post_step_comment(
-            repo_owner="example-owner",
-            repo_name="example-repo",
-            issue_number=822,
-            step_num=3,
-            total_steps=5,
-            description="Verify generated fix",
-            output="pytest failed with one assertion error",
-            cwd=cwd,
+    console.print()
+
+
+def demonstrate_agentic_task(output_dir: Path) -> None:
+    """
+    Demonstrates running an agentic CLI task in a sandboxed target directory.
+
+    Inputs:
+        output_dir: Path to the target workspace directory.
+
+    Outputs:
+        Runs the task and prints results, costs, and modified file parameters.
+    """
+    console.print("[bold cyan]--- Running Agentic Task ---[/bold cyan]")
+
+    # Check if we have at least one usable agent available
+    available = get_available_agents()
+    if not available:
+        console.print(
+            "[yellow]No providers are currently available. "
+            "Set ANTHROPIC_API_KEY, GOOGLE_API_KEY, or OPENAI_API_KEY "
+            "to execute real tasks.[/yellow]"
         )
-    console.print(f"Issue comment posted: {posted}")
+        return
+
+    # Define the workspace directory for the task run
+    workspace: Path = output_dir / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+
+    # Create a dummy file for the agent to inspect
+    test_file = workspace / "todo.txt"
+    test_file.write_text("Task list:\n- Fix formatting in main.py", encoding="utf-8")
+
+    instruction = "Read the file todo.txt and tell me what the first task is."
+    console.print(f"Executing Instruction: [dim]{instruction}[/dim]")
+
+    # Run the task through the provider preference waterfall
+    result: AgenticTaskResult = run_agentic_task(
+        instruction=instruction,
+        cwd=workspace,
+        verbose=False,
+        quiet=True,
+        label="todo-check",
+        timeout=60.0,
+    )
+
+    # Unpack AgenticTaskResult. Tuple-unpacking iteration is also supported
+    console.print(f"[green]Success Status:[/green] {result.success}")
+    console.print(f"[green]Output Text:[/green] {result.output_text.strip()}")
+    console.print(f"[green]Cost Incurred:[/green] ${result.cost_usd:.6f}")
+    console.print(f"[green]Provider Used:[/green] {result.provider}")
+    if result.changed_files:
+        console.print(f"[green]Changed Files:[/green] {result.changed_files}")
+    console.print()
 
 
-def example_post_pr_comment():
-    """Demonstrate the PR comment helper used by CI validation."""
-    with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
-         patch("pdd.agentic_common.subprocess.run") as mock_run:
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=["gh"],
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
-        posted = post_pr_comment(
-            repo_owner="example-owner",
-            repo_name="example-repo",
-            pr_number=42,
-            body="CI validation exhausted retries; lint is still failing.",
-            cwd=Path.cwd(),
-        )
+def main() -> None: 
+    # Set up sandboxed output directory relative to this script
+    output_dir = Path(__file__).resolve().parent / "output"
+    output_dir.mkdir(parents=True, exist_ok=True)
 
-    console.print(f"PR comment posted: {posted}")
-
-
-def example_post_final_comment(cwd: Path) -> None:
-    """Show the final workflow comment helper with a mocked gh CLI."""
-    console.print("\n[bold blue]post_final_comment()[/bold blue]")
-    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
-         patch("pdd.agentic_common.subprocess.run") as mock_run:
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=["gh"],
-            returncode=0,
-            stdout="",
-            stderr="",
-        )
-        posted = post_final_comment(
-            repo_owner="example-owner",
-            repo_name="example-repo",
-            issue_number=822,
-            reason="NOT_A_BUG",
-            total_cost=0.25,
-            steps_completed=4,
-            total_steps=5,
-            cwd=cwd,
-        )
-    console.print(f"Final comment posted: {posted}")
-
-
-def example_github_state_helpers(cwd: Path) -> None:
-    """Show state save/load helpers without talking to GitHub."""
-    console.print("\n[bold blue]GitHub State Helpers[/bold blue]")
-
-    def mock_gh_api(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        cmd = args[0]
-        if isinstance(cmd, list) and "POST" in cmd:
-            return subprocess.CompletedProcess(cmd, 0, json.dumps({"id": 321}), "")
-        return subprocess.CompletedProcess(cmd, 0, "", "")
-
-    with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
-         patch("pdd.agentic_common.subprocess.run", side_effect=mock_gh_api), \
-         patch(
-             "pdd.agentic_common._find_state_comment",
-             return_value=(321, {"last_completed_step": 2, "step_outputs": {"1": "ok", "2": "ok"}}),
-         ):
-        comment_id = github_save_state(
-            repo_owner="example-owner",
-            repo_name="example-repo",
-            issue_number=822,
-            workflow_type="agentic_sync",
-            state={"last_completed_step": 2, "step_outputs": {"1": "ok", "2": "ok"}},
-            cwd=cwd,
-        )
-        loaded_state, loaded_comment_id = github_load_state(
-            repo_owner="example-owner",
-            repo_name="example-repo",
-            issue_number=822,
-            workflow_type="agentic_sync",
-            cwd=cwd,
-        )
-
-    console.print(f"Saved comment id: {comment_id}")
-    console.print(f"Loaded state: {loaded_state}")
-    console.print(f"Loaded comment id: {loaded_comment_id}")
-
-
-def example_consecutive_provider_failures_guard() -> None:
-    """Show the provider-failure counter used by agentic orchestrators."""
-    consecutive_provider_failures = 0
-    for step_success in [False, False, True]:
-        if step_success:
-            consecutive_provider_failures = 0
-        else:
-            consecutive_provider_failures += 1
-    console.print(f"Consecutive provider failures: {consecutive_provider_failures}")
-
-
-def main() -> None:
-    """Run deterministic examples in a temporary working directory."""
-    with TemporaryDirectory(prefix="pdd-agentic-common-example-") as temp_dir:
-        cwd = Path(temp_dir)
-        example_provider_preference()
-        example_run_agentic_task(cwd)
-        example_validate_cached_state()
-        example_post_step_comment(cwd)
-        example_post_pr_comment()
-        example_post_final_comment(cwd)
-        example_github_state_helpers(cwd)
-        example_consecutive_provider_failures_guard()
+    demonstrate_provider_discovery()
+    demonstrate_policy_validation()
+    demonstrate_text_parsing()
+    demonstrate_agentic_task(output_dir)
 
 
 if __name__ == "__main__":
