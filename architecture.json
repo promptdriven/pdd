@@ -56,8 +56,8 @@
           },
           {
             "name": "validate_claude_policy",
-            "signature": "(policy: Any) -> Dict[str, Any]",
-            "returns": "Dict[str, Any]"
+            "signature": "(policy: Any, *, interactive: bool = False) -> ClaudePolicy",
+            "returns": "ClaudePolicy"
           },
           {
             "name": "run_agentic_task",

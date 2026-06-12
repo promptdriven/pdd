@@ -3615,18 +3615,22 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
         if total > 0:
             return total
 
-    # Try 2: Token-based estimation from aggregate usage field
+    # Try 2: Token-based estimation from validated per-model modelUsage fields.
     usage = data.get("usage", {})
+    aggregate_usage = usage if isinstance(usage, dict) else None
+    model_usage_cost = _calculate_anthropic_model_usage_token_cost(
+        model_usage,
+        aggregate_usage=aggregate_usage,
+    )
+    if model_usage_cost is not None:
+        return model_usage_cost
+
+    # Try 3: Token-based estimation from aggregate usage field.
     if isinstance(usage, dict) and usage:
         family = _anthropic_pricing_family_for_aggregate(data, model_usage)
         cost = _calculate_anthropic_usage_cost(usage, family)
         if cost is not None:
             return cost
-
-    # Try 3: Token-based estimation from validated per-model modelUsage fields.
-    model_usage_cost = _calculate_anthropic_model_usage_token_cost(model_usage)
-    if model_usage_cost is not None:
-        return model_usage_cost
 
     return 0.0
 
@@ -3761,16 +3765,29 @@ def _calculate_anthropic_usage_cost(
 
 def _calculate_anthropic_model_usage_token_cost(
     model_usage: Dict[str, Any],
+    *,
+    aggregate_usage: Optional[Dict[str, Any]] = None,
 ) -> Optional[float]:
     """Estimate cost from validated per-model modelUsage token counters."""
     if not model_usage:
         return None
 
+    if not any(
+        isinstance(usage, dict) and _has_token_counter_key(usage)
+        for usage in model_usage.values()
+    ):
+        return None
+
+    aggregate_has_nonzero_cache = (
+        isinstance(aggregate_usage, dict)
+        and _has_nonzero_or_invalid_cache_counter(aggregate_usage)
+    )
     total = 0.0
-    saw_valid_usage = False
     for model_name, usage in model_usage.items():
         if not isinstance(usage, dict) or not _has_token_counter_key(usage):
-            continue
+            return None
+        if aggregate_has_nonzero_cache and not _has_complete_cache_counters(usage):
+            return None
         family = (
             _anthropic_pricing_family_from_model_name(str(model_name))
             or "sonnet"
@@ -3779,9 +3796,8 @@ def _calculate_anthropic_model_usage_token_cost(
         if cost is None:
             return None
         total += cost
-        saw_valid_usage = True
 
-    return total if saw_valid_usage else None
+    return total
 
 
 def _build_claude_usage_record(
