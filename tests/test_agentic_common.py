@@ -1586,6 +1586,174 @@ def test_standard_claude_policy_json_usage_reaches_provider_and_agentic_result(
     json.dumps(result.usage)
 
 
+def test_standard_claude_policy_json_usage_preserves_model_usage_records(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_multi.txt"
+    prompt_path.write_text("Audit multi-model billing usage", encoding="utf-8")
+    model_haiku = "claude-haiku-3-5-20241022"
+    model_opus = "claude-opus-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for a mixed-model Claude run.",
+        "usage": {
+            "input_tokens": 9999,
+            "output_tokens": 8888,
+            "cache_read_input_tokens": 777,
+            "cache_creation_input_tokens": 666,
+        },
+        "modelUsage": {
+            model_haiku: {
+                "inputTokens": 120,
+                "outputTokens": 34,
+                "cacheReadInputTokens": 5,
+                "cacheCreationInputTokens": 6,
+                "costUSD": 0.001,
+            },
+            model_opus: {
+                "input_tokens": 220,
+                "output_tokens": 44,
+                "cache_read_input_tokens": 7,
+                "cache_creation_input_tokens": 8,
+                "costUSD": 0.02,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model_haiku,
+                "input_tokens": 120,
+                "output_tokens": 34,
+                "cached_input_tokens": 5,
+                "cache_creation_input_tokens": 6,
+            },
+            {
+                "model": model_opus,
+                "input_tokens": 220,
+                "output_tokens": 44,
+                "cached_input_tokens": 7,
+                "cache_creation_input_tokens": 8,
+            },
+        ]
+    }
+    json.dumps(provider_result[4])
+
+
+@pytest.mark.parametrize(
+    "model_fields",
+    [
+        {"model": "claude-sonnet-4-6-20251201"},
+        {"message": {"model": "claude-sonnet-4-6-20251201"}},
+    ],
+)
+def test_standard_claude_policy_json_usage_infers_model_without_model_usage(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+    model_fields,
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_model.txt"
+    prompt_path.write_text("Audit aggregate billing usage", encoding="utf-8")
+    model = "claude-sonnet-4-6-20251201"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned without modelUsage.",
+        "usage": {
+            "inputTokens": 123,
+            "outputTokens": 45,
+        },
+        **model_fields,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[3] == model
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 123,
+                "output_tokens": 45,
+                "cached_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            }
+        ]
+    }
+    json.dumps(provider_result[4])
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {"output_tokens": 45},
+        {"input_tokens": "not-a-token-count", "output_tokens": 45},
+        {"input_tokens": 123, "output_tokens": -1},
+    ],
+)
+def test_standard_claude_policy_json_usage_rejects_invalid_required_counters(
+    mock_cwd,
+    mock_env,
+    mock_load_model_data,
+    mock_shutil_which,
+    mock_subprocess,
+    usage,
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_invalid.txt"
+    prompt_path.write_text("Audit invalid billing usage", encoding="utf-8")
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Claude returned usage with invalid required counters.",
+        "modelUsage": {"claude-sonnet-4-6-20251201": {}},
+        "usage": usage,
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] is None
+
+
 def test_anthropic_claude_policy_null_allowed_tools_uses_no_tools(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
