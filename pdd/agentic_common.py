@@ -3647,6 +3647,56 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
     return input_cost + cache_read_cost + cache_write_cost + output_cost
 
 
+def _safe_token_int(value: Any) -> int:
+    """Return a JSON-safe, non-negative integer token count."""
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_anthropic_standard_usage(
+    data: Dict[str, Any],
+    *,
+    actual_model: Optional[str],
+    fallback_model: Optional[str],
+) -> AgenticUsage:
+    """Extract GVS-compatible usage from a Claude Code JSON envelope."""
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    model_name: Optional[str] = None
+    model_usage = data.get("modelUsage")
+    if isinstance(model_usage, dict) and model_usage:
+        names = sorted(str(name) for name in model_usage.keys() if name)
+        if names:
+            model_name = "+".join(names)
+    if not model_name:
+        model_name = actual_model or fallback_model
+    if not model_name:
+        return None
+
+    return {
+        "claude": [
+            {
+                "model": model_name,
+                "input_tokens": _safe_token_int(usage.get("input_tokens")),
+                "output_tokens": _safe_token_int(usage.get("output_tokens")),
+                "cached_input_tokens": _safe_token_int(
+                    usage.get(
+                        "cache_read_input_tokens",
+                        usage.get("cached_input_tokens"),
+                    )
+                ),
+                "cache_creation_input_tokens": _safe_token_int(
+                    usage.get("cache_creation_input_tokens")
+                ),
+            }
+        ]
+    }
+
+
 def run_agentic_task(
     instruction: str,
     cwd: Path,
@@ -5342,10 +5392,12 @@ def _run_with_provider(
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
     claude_policy: Optional[ClaudePolicy] = None,
-) -> Tuple[bool, str, float, Optional[str]]:
+) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
     Internal helper to run a specific provider's CLI.
-    Returns (success, output_or_error, cost, actual_model).
+    Returns a provider result whose iteration yields
+    (success, output_or_error, cost, actual_model). Claude paths may expose
+    structured usage at index 4 while preserving four-value unpacking.
 
     Issue #1376: ``actual_model`` is the model name extracted from the
     provider's JSON response (e.g. ``claude-sonnet-4-6``,
@@ -5813,6 +5865,18 @@ def _run_with_provider(
             console.print(
                 f"[dim]Warning: {provider} returned $0 cost. "
                 f"JSON keys: {sorted(data.keys())}[/dim]"
+            )
+        if provider == "anthropic":
+            return _ProviderRunResult(
+                success,
+                text,
+                cost,
+                actual_model,
+                _extract_anthropic_standard_usage(
+                    data,
+                    actual_model=actual_model,
+                    fallback_model=env.get("CLAUDE_MODEL"),
+                ),
             )
         return success, text, cost, actual_model
     except json.JSONDecodeError:
