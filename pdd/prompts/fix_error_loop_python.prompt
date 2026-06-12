@@ -14,8 +14,6 @@
 
 <pdd-dependency>failure_classification_python.prompt</pdd-dependency>
 <pdd-dependency>fix_focus_python.prompt</pdd-dependency>
-<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
-<pdd-dependency>core/cli_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
 
 % You are an expert Python Software Engineer. Your goal is to write a robust Python module containing the `fix_error_loop` function and its associated helpers. This module implements an iterative, agentic workflow to fix errors in unit tests and their corresponding code files using an LLM.
@@ -64,14 +62,7 @@ The module supports both local and cloud execution modes:
     - Use keyword arguments for local fix calls so `time`, `verbose`, `protect_tests`, `language`, and `failure_classification` are forwarded to their matching parameters without positional drift.
     - When `failure_aware_retries=False`, skip all of the above early-exit branches; only `max_attempts` / `budget` / existing loop guards apply.
 
-14. **Estimate Mode:** When the shared estimate collector and `llm_invoke` sentinel from the prerequisite estimate-mode implementation are active, short-circuit before the repair loop performs side effects. Do not add a second estimate flag, environment variable, collector, or cloud/provider stub.
-    - Contract gap handling: if the included `pdd/core/cli.py` and `pdd/llm_invoke.py` interfaces do not expose a concrete shared estimate-mode API, report that prerequisite gap explicitly and do not invent a local estimate flag, collector, provider stub, or env-only substitute.
-    - Estimate at most one exact local/cloud fix prompt from the current prompt, unit-test, code, and error payloads when those inputs are already available without running tests or writing files.
-    - If an exact prompt cannot be built safely, register one approximate one-round fix estimate with an explicit assumption.
-    - MUST NOT run pytest or language-specific test commands, create backups, write logs, restore or write files, call `cloud_fix_errors`, call `fix_errors_from_unit_tests` past the shared estimate sentinel, or invoke `run_agentic_fix`.
-    - Focused repair and failure-aware retry classification MUST NOT perform file slicing, test execution, or fallback loops in estimate mode; they may contribute only labelled heuristic assumptions.
-    - Preserve the public `fix_error_loop` and `cloud_fix_errors` return contracts. The returned 6-tuple must carry projected cost/model metadata from the shared collector, set `total_attempts` to 0, and treat projected cost as informational rather than real budget spend.
-15. **Compressed repair context:** Accept optional compressed repair context. Include it in local and cloud LLM fix calls as supplemental context, but never replace the concrete pytest output, verification output, failure classification, or raw failure signature used for early exits. For non-Python agentic fallback, pass the compressed context through when supported or record an explicit unavailable reason.
+14. **Compressed repair context:** Accept optional compressed repair context. Include it in local and cloud LLM fix calls as supplemental context, but never replace the concrete pytest output, verification output, failure classification, or raw failure signature used for early exits. For non-Python agentic fallback, pass the compressed context through when supported or record an explicit unavailable reason.
 
 ### Public Interface:
 
@@ -160,12 +151,6 @@ def fix_error_loop(
     <include>context/python_preamble.prompt</include>
 </python_preamble>
 <internal_modules>
-    <cli_estimate_interface>
-        <include optional mode="interface" select="def:cli">pdd/core/cli.py</include>
-    </cli_estimate_interface>
-    <llm_invoke_estimate_interface>
-        <include optional mode="interface" select="def:llm_invoke">pdd/llm_invoke.py</include>
-    </llm_invoke_estimate_interface>
     <get_language>
         <include>context/get_language_example.py</include>
     </get_language>

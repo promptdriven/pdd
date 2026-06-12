@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.263.dev61",
-  "timestamp": "2026-06-05T19:40:11.426202+00:00",
-  "command": "sync",
-  "prompt_hash": "bdd601235d1840e5704c71e0a5d7e70b36e2bf7f2b1a974c84918bd6140d7d25",
-  "code_hash": "fe463ea8ec52fe85980971cc4745ed53c9649cfcecffb5d7e8503e7ceb587fe1",
-  "example_hash": "e577d4567996eeebd451ac1d7c93517a9c98e0f8f5a384d827c619e5a5a5f942",
-  "test_hash": "f148423de1b4ae8d4634d351073bcea20a5cf7077112fd7e6309ab2a09c3ac25",
+  "pdd_version": "0.0.246.dev34",
+  "timestamp": "2026-05-21T04:24:21.384951+00:00",
+  "command": "update",
+  "prompt_hash": "413975fcaf5d900d1c7edd631ad843a00c1ebe983e70812f86e689821c6218fa",
+  "code_hash": "3a1282ced73cc96c0428a006db619282c23c31aed6a50e2d427f106505ebd0ce",
+  "example_hash": "bd60efaa7d6274b0e4d1743ac05785461af65ec785b254730288d08774f72ed6",
+  "test_hash": "2d272934a7ce4f40ffb1555451ed71fb09ff5fb451b7fd5a6893374968e99d0f",
   "test_files": {
-    "test_track_cost.py": "f148423de1b4ae8d4634d351073bcea20a5cf7077112fd7e6309ab2a09c3ac25"
+    "test_track_cost.py": "2d272934a7ce4f40ffb1555451ed71fb09ff5fb451b7fd5a6893374968e99d0f"
   },
   "include_deps": {}
 }

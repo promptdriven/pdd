@@ -7,4 +7,3 @@ It should expose:
 - `clear() -> None`
 
 Keep ordering deterministic and avoid external dependencies.
-

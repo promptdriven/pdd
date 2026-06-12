@@ -6,4 +6,3 @@ piece independently.
 
 Generate a Python parser for a simple `.env`-style configuration format.
 Comments start with `#`; values may be quoted; duplicate keys should raise.
-

@@ -10,4 +10,3 @@ The module should include:
 
 The code should be production quality with clear names and small helper methods.
 Include docstrings for public methods and keep all datetime handling timezone aware.
-

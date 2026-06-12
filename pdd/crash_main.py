@@ -400,8 +400,6 @@ def crash_main(
         # Re-raise UsageError for proper CLI handling (e.g., cloud auth failures, insufficient credits)
         raise
     except Exception as e:
-        if e.__class__.__name__ == "EstimateOnlyResult":
-            raise
         if not quiet:
             rprint(f"[bold red]An unexpected error occurred:[/bold red] {str(e)}")
         # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully

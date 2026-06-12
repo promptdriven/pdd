@@ -3,4 +3,3 @@ Generate a code-heavy Python module for a Pratt parser.
 Support integer literals, identifiers, prefix negation, addition, subtraction,
 multiplication, division, parenthesized expressions, and function calls. Include
 token classes, lexer, parser, AST node dataclasses, and an evaluator.
-

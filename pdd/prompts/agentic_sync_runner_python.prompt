@@ -1,6 +1,5 @@
 <include>context/python_preamble.prompt</include>
-
-<pdd-reason>Runs dependency-aware multi-module sync subprocesses with progress tracking, estimate-mode safety, and compressed-context sync forwarding.</pdd-reason>
+<pdd-reason>Parallel dependency-aware sync runner that forwards compressed-context sync settings.</pdd-reason>
 
 <pdd-interface>
 {
@@ -23,14 +22,6 @@
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>sync_order_python.prompt</pdd-dependency>
-<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
-<pdd-dependency>core/cli_python.prompt</pdd-dependency>
-
-% Estimate-mode prerequisite context:
-<estimate_mode_interfaces>
-  <cli_interface><include optional mode="interface" select="def:cli">pdd/core/cli.py</include></cli_interface>
-  <llm_interface><include optional mode="interface" select="def:llm_invoke">pdd/llm_invoke.py</include></llm_interface>
-</estimate_mode_interfaces>
 
 % Goal
 Write the `pdd/agentic_sync_runner.py` module.
@@ -42,7 +33,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, module_targets, initial_cost=0.0)`
    - `basenames: List[str]` — modules to sync
    - `dep_graph: Dict[str, List[str]]` — basename -> [dependency basenames]
-   - `sync_options: Dict` — budget, total_budget, target_coverage, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session, local, timeout_adder, context, strength, temperature, estimate, compressed_context
+   - `sync_options: Dict` — budget, total_budget, target_coverage, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session, local, timeout_adder, context, strength, temperature, compressed_context
    - `github_info: Optional[Dict]` — owner, repo, issue_number, cwd (None to disable comments)
    - `issue_url: Optional[str]` — GitHub issue URL for state persistence (None disables resumability)
    - `module_cwds: Optional[Dict[str, Path]]` — per-module working directories (defaults to project_root)
@@ -63,7 +54,6 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 6. Failure scheduling: when a module fails, set `self.failed = True`, but do not globally pause the queue. Failed modules block only modules that depend on them through `dep_graph`; unrelated modules whose own dependencies are satisfied must continue to run so partial progress is preserved and future retries can resume from more completed modules. Blocked-module classification must be transitive: if `a` fails and `b` depends on `a`, then pending modules that depend on `b` are also blocked. Only total-budget exhaustion stops new scheduling globally, and `_budget_exhausted()` must be checked after every completed future, including failed module results, before scheduling more work.
 7. Each module runs as a `pdd sync` subprocess with `--force`, `--agentic`, `--no-steer` flags; append global `--local` before `sync` if `sync_options["local"]` is truthy; append `--target-coverage` if `sync_options["target_coverage"]` is not None; append `--one-session` if `sync_options["one_session"]` is truthy; append `--compressed-context` if `sync_options["compressed_context"] is True`; append `--no-compressed-context` if `sync_options["compressed_context"] is False` so child sync subprocesses preserve the parent's resolved compression setting instead of re-reading `.pddrc`
 8. Use `PDD_OUTPUT_COST_PATH` env var for cost capture from subprocess (CSV format)
-8a. Estimate mode is out of scope for agentic sync in the generate-only first version. If `sync_options["estimate"]` is set, fail closed with `Estimate mode currently supports `generate` only.` and do not launch child syncs, create cost CSV files, write state, update GitHub comments, or contact providers.
 9. Sync failure detection: exit code != 0 OR "Overall status:" line contains "Failed"
 9a. Failed-module error-summary contract (issue #1399): the `error` string returned for a failed module MUST start with a deterministic failure reason — the `Overall status: Failed` line if present in stdout, otherwise `f"Exit code {exit_code}"`. Then append high-signal lines from stdout+stderr (those containing `error`/`failed`/`traceback`/`exception`/`abort`, lowercased), filtering out `INFO`/`DEBUG` log lines and known nonfatal warnings (module-level constant `_NONFATAL_WARNING_SUBSTRINGS`, currently `("ContentSelector failed",)`, exposed via helper `_is_nonfatal_warning(line)`). Drop any candidate line equal to the failure reason so it is not echoed twice. If no high-signal line exists, fall back to labeled `--- stderr tail ---` and `--- stdout tail ---` blocks (last 10 non-blank, non-warning, non-failure-reason lines each). Cap keyword-line summary at last 20 lines. Console preview: `error[:500]`.
 9b. Architecture-conformance / public-surface / test-churn retry/repair (issues #865, #1012): when a per-module `pdd sync` subprocess fails AND the captured stdout/stderr contains a repairable generation failure — detected via any of the line prefixes `Architecture conformance error for `, `Public surface regression for `, or `Test churn threshold exceeded for ` — the runner MUST treat it as a repairable generation failure and retry the same module up to `MAX_CONFORMANCE_ATTEMPTS = 3` total attempts (initial attempt + up to 2 repair attempts). Each repair attempt MUST set the `PDD_REPAIR_DIRECTIVE` environment variable in the subprocess env to a directive built by the appropriate parser — `_parse_conformance_failure(stdout, stderr)`, `_parse_public_surface_failure(stdout, stderr)`, or `_parse_test_churn_failure(stdout, stderr)` — that names the exact offending symbols / churn ratio and forbids editing `architecture.json` or rewriting unrelated tests. The directive MUST NOT be set on the first attempt. Retries MUST NOT advance the per-module `current_phase` to a later phase; these failures restart the same generate-then-verify cycle. Repair retries do NOT count against any per-module test/fix attempt budget — they are a separate, prompt-level repair loop. When `total_budget` is set, every retry command MUST receive the remaining total budget after subtracting both persisted module costs and the current module's in-flight retry costs; if the in-flight repair cost exhausts the remaining total budget, stop retrying before launching another child process and record a hard failure. The runner MUST also forward the parent's resolved `.pddrc` context and `--strength` (when present in `sync_options`) on EVERY retry attempt so a flaky regeneration cannot silently switch model or context between attempts.

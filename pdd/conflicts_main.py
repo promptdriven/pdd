@@ -94,8 +94,6 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         return conflicts, total_cost, model_name
 
     except Exception as e:
-        if e.__class__.__name__ == "EstimateOnlyResult":
-            raise
         if not ctx.obj.get('quiet', False):
             rprint(f"[bold red]Error:[/bold red] {str(e)}")
         sys.exit(1)

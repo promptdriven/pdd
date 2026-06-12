@@ -65,29 +65,6 @@ def _is_github_issue_url(s: str) -> bool:
     return bool(re.search(r"github\.com/.+/issues/\d+", s))
 
 
-def _estimate_mode_active() -> bool:
-    """Return True when the global ``--estimate`` flag is active.
-
-    Prefers the shared state on the active Click context (set by the root CLI),
-    then falls back to the process-wide ``PDD_ESTIMATE`` env var — matching the
-    other command wrappers so estimate detection no longer depends on which
-    command path is taken. Consulting the env var is safe because the root CLI
-    now snapshots and restores it on context teardown (see ``pdd/core/cli.py``),
-    so it can no longer leak across CliRunner-based tests and wrongly enable
-    estimate mode for unrelated runs.
-    """
-    try:
-        import click
-
-        ctx = click.get_current_context(silent=True)
-        obj = getattr(ctx, "obj", None) if ctx is not None else None
-        if isinstance(obj, dict) and obj.get("estimate"):
-            return True
-    except Exception:
-        pass
-    return os.getenv("PDD_ESTIMATE", "").lower() in {"1", "true", "yes", "on"}
-
-
 def _is_runtime_llm_template(basename: str) -> bool:
     """Return True if ``basename`` refers to a runtime ``*_LLM.prompt`` template.
 
@@ -1194,9 +1171,6 @@ def run_global_sync(
             "strength": strength,
             "temperature": temperature,
             "context": context_override,
-            # Estimate mode is scoped to `pdd generate` in this first version;
-            # sync/agentic sync estimates are intentionally disabled.
-            "estimate": False,
             "compressed_context": compressed_context,
         },
         github_info=None,
@@ -2235,9 +2209,6 @@ def run_agentic_sync(
         "strength": strength,
         "temperature": temperature,
         "context": context_override,
-        # Estimate mode is scoped to `pdd generate` in this first version;
-        # sync/agentic sync estimates are intentionally disabled.
-        "estimate": False,
         "compressed_context": compressed_context,
     }
 

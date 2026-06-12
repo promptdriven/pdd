@@ -3,4 +3,3 @@ Generate a Python slug utility module.
 Include implementation code plus examples in docstrings and pytest-style unit
 test helpers for common inputs, unicode handling, duplicate separators, and
 empty strings. The generated output should make it easy to copy tests later.
-

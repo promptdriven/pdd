@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 import sys
-import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -29,28 +28,6 @@ def _is_issue_url(value: str) -> bool:
 def _is_user_story_file(value: str) -> bool:
     """Return True when the argument looks like a user story markdown file."""
     return bool(_USER_STORY_RE.match(Path(value).name))
-
-
-def _estimate_mode_active(ctx: click.Context) -> bool:
-    """Return whether the global dry-run cost estimate mode is active."""
-    return bool((ctx.obj or {}).get("estimate")) or os.getenv("PDD_ESTIMATE", "").lower() in {
-        "1", "true", "yes", "on",
-    }
-
-
-def _is_estimate_only_result(exception: Exception) -> bool:
-    """Identify llm_invoke.EstimateOnlyResult without importing llm_invoke eagerly."""
-    return (
-        exception.__class__.__name__ == "EstimateOnlyResult"
-        and isinstance(getattr(exception, "estimate", None), dict)
-    )
-
-
-def _estimate_result_tuple(exception: Exception) -> Tuple[Dict[str, Any], float, str]:
-    """Convert EstimateOnlyResult into the normal command return tuple."""
-    payload = getattr(exception, "payload", None) or getattr(exception, "estimate", {})
-    model = str(payload.get("model") or "unknown") if isinstance(payload, dict) else "unknown"
-    return payload, 0.0, model
 
 
 @click.command(name="fix")
@@ -192,8 +169,6 @@ def fix(
             raise click.UsageError("--clean-restart can only be used with an agentic GitHub issue URL.")
 
         if not manual and _is_issue_url(first_arg):
-            if _estimate_mode_active(ctx):
-                raise click.UsageError("Estimate mode currently supports `generate` only.")
             from ..agentic_e2e_fix import run_agentic_e2e_fix
 
             success, message, cost, model, changed_files = run_agentic_e2e_fix(
@@ -232,26 +207,19 @@ def fix(
             )
 
         if not manual and len(args) == 1 and _is_user_story_file(first_arg):
-            if _estimate_mode_active(ctx):
-                raise click.UsageError("Estimate mode currently supports `generate` only.")
             from ..user_story_tests import run_user_story_fix
 
-            try:
-                success, message, cost, model, changed_files = run_user_story_fix(
-                    ctx=ctx,
-                    story_file=first_arg,
-                    prompts_dir=ctx.obj.get("prompts_dir"),
-                    strength=ctx.obj.get("strength", 0.2),
-                    temperature=ctx.obj.get("temperature", 0.0),
-                    time=ctx.obj.get("time", 0.25),
-                    budget=budget,
-                    verbose=verbose,
-                    quiet=quiet,
-                )
-            except Exception as exception:
-                if _is_estimate_only_result(exception):
-                    return _estimate_result_tuple(exception)
-                raise
+            success, message, cost, model, changed_files = run_user_story_fix(
+                ctx=ctx,
+                story_file=first_arg,
+                prompts_dir=ctx.obj.get("prompts_dir"),
+                strength=ctx.obj.get("strength", 0.2),
+                temperature=ctx.obj.get("temperature", 0.0),
+                time=ctx.obj.get("time", 0.25),
+                budget=budget,
+                verbose=verbose,
+                quiet=quiet,
+            )
 
             if not quiet:
                 style = "green" if success else "red"
@@ -268,8 +236,6 @@ def fix(
                 model,
             )
 
-        if _estimate_mode_active(ctx):
-            raise click.UsageError("Estimate mode currently supports `generate` only.")
         from ..fix_main import fix_main
 
         min_args = 3 if loop else 4
@@ -304,34 +270,29 @@ def fix(
                     "[/bold blue]"
                 )
 
-            try:
-                success, _fixed_unit_test, _fixed_code, attempts, cost, model = fix_main(
-                    ctx=ctx,
-                    prompt_file=prompt_file,
-                    code_file=code_file,
-                    unit_test_file=unit_test_file,
-                    error_file=error_file,
-                    output_test=output_test,
-                    output_code=output_code,
-                    output_results=output_results,
-                    loop=loop,
-                    verification_program=verification_program,
-                    max_attempts=max_attempts,
-                    budget=budget,
-                    auto_submit=auto_submit,
-                    agentic_fallback=agentic_fallback,
-                    strength=None,
-                    temperature=None,
-                    protect_tests=protect_tests,
-                    failure_aware_retries=failure_aware_retries,
-                    compress_test_context=compress_test_context,
-                    context_compression=context_compression,
-                    compression_fallback=compression_fallback,
-                )
-            except Exception as exception:
-                if _is_estimate_only_result(exception):
-                    return _estimate_result_tuple(exception)
-                raise
+            success, _fixed_unit_test, _fixed_code, attempts, cost, model = fix_main(
+                ctx=ctx,
+                prompt_file=prompt_file,
+                code_file=code_file,
+                unit_test_file=unit_test_file,
+                error_file=error_file,
+                output_test=output_test,
+                output_code=output_code,
+                output_results=output_results,
+                loop=loop,
+                verification_program=verification_program,
+                max_attempts=max_attempts,
+                budget=budget,
+                auto_submit=auto_submit,
+                agentic_fallback=agentic_fallback,
+                strength=None,
+                temperature=None,
+                protect_tests=protect_tests,
+                failure_aware_retries=failure_aware_retries,
+                compress_test_context=compress_test_context,
+                context_compression=context_compression,
+                compression_fallback=compression_fallback,
+            )
 
             total_cost += cost
             total_attempts += attempts
@@ -369,7 +330,5 @@ def fix(
     except (click.Abort, click.ClickException, click.exceptions.Exit):
         raise
     except Exception as exception:
-        if _is_estimate_only_result(exception):
-            return _estimate_result_tuple(exception)
         handle_error(exception, "fix", quiet)
         raise click.exceptions.Exit(1) from exception

@@ -1973,22 +1973,6 @@ def _display_sync_log(
     return {'success': True, 'log_entries': log_entries}
 
 
-def _sync_estimate_requested(explicit: bool = False) -> bool:
-    """Return True when an unsupported sync estimate request is present."""
-    if explicit:
-        return True
-    try:
-        import click
-
-        ctx = click.get_current_context(silent=True)
-        obj = getattr(ctx, "obj", None) if ctx is not None else None
-        if isinstance(obj, dict) and obj.get("estimate"):
-            return True
-    except Exception:
-        pass
-    return os.getenv("PDD_ESTIMATE", "").lower() in {"1", "true", "yes", "on"}
-
-
 def sync_orchestration(
     basename: str,
     target_coverage: float = 90.0,
@@ -2017,7 +2001,6 @@ def sync_orchestration(
     no_steer: bool = False,
     steer_timeout: float = DEFAULT_STEER_TIMEOUT_S,
     agentic_mode: bool = False,
-    estimate: bool = False,
     compress: bool = False,
     evidence: bool = False,
     snapshot_context: bool = False,
@@ -2052,26 +2035,6 @@ def sync_orchestration(
         if _dry_paths:
             return _display_sync_log(basename, language, verbose, paths=_dry_paths)
         return _display_sync_log(basename, language, verbose)
-
-    # Estimate mode is intentionally scoped to `pdd generate` in this PR. Sync
-    # is multi-step and any partial lower-bound preview is out of scope.
-    if _sync_estimate_requested(estimate):
-        return {
-            "success": False,
-            "estimate": True,
-            "operations_completed": [],
-            "skipped_operations": [],
-            "total_cost": 0.0,
-            "total_time": 0.0,
-            "errors": [
-                "Estimate mode currently supports `generate` only.",
-            ],
-            "error": "Estimate mode currently supports `generate` only.",
-            "summary": (
-                "Sync estimate skipped: estimate mode currently supports "
-                "`generate` only."
-            ),
-        }
 
     # --- Initialize State and Paths ---
     try:

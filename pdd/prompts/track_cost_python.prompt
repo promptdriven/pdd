@@ -1,4 +1,4 @@
-<pdd-reason>Click decorator that tracks command cost, token counts, model, and attempt history to CSV.</pdd-reason>
+<pdd-reason>Click decorator that tracks per-command LLM cost, model, and attempted-models history to a CSV file.</pdd-reason>
 
 <pdd-interface>
 {
@@ -7,7 +7,6 @@
     "functions": [
       {"name": "track_cost", "signature": "(func)", "returns": "Callable"},
       {"name": "extract_cost_and_model", "signature": "(result: Any) -> Tuple[Any, str]", "returns": "Tuple[Any, str]"},
-      {"name": "extract_token_counts", "signature": "(result: Any) -> Tuple[Optional[int], Optional[int]]", "returns": "Tuple[Optional[int], Optional[int]]"},
       {"name": "collect_files", "signature": "(args, kwargs)", "returns": "Tuple[List[str], List[str]]"},
       {"name": "looks_like_file", "signature": "(path_str)", "returns": "bool"}
     ]
@@ -28,47 +27,25 @@
 2. **Execute the Command Function:** Call the original command function and capture its result.
 3. **Record the End Time:** After the command completes, record the current datetime as the end time.
 4. **Access Command Context:** Retrieve the Click context using `click.get_current_context()`.
-- **Record the invoked subcommand name:** Before executing the command function, append the wrapped command's name (`ctx.command.name`) to the `invoked_subcommands` list on `ctx.obj` (initialize it to an empty list when absent). The root `process_commands` result callback, `get_command_name`, and `record_after_guarded_command` fall back to this list whenever Click does not expose `ctx.invoked_subcommands` (the common case for real CLI runs), so command summaries and core dumps can name each step instead of emitting `Unknown Command N`. Skip this recording when running under pytest (`PYTEST_CURRENT_TEST` is set) and when `ctx.obj` is not a dict or the command has no name, so existing unit tests that assert the `Unknown Command` output keep passing.
 5. **Retrieve Output Cost Option:** Check if the output cost option is specified directly via `ctx.obj` or via the `PDD_OUTPUT_COST_PATH` environment variable.
 6. **Prepare Cost Data:**
 - Determine the command name from the context.
 - Extract the cost and model name from the command function's result if available. Generally, the second to the last element of the result tuple will be the cost and the last element will be the model name.
-- Extract actual `input_tokens` and `output_tokens` from the command result when available without changing legacy tuple behavior. Support common shapes:
-  - Dict-like results containing `input_tokens` and/or `output_tokens` keys, including nested usage/token dictionaries.
-  - Objects with `input_tokens` and/or `output_tokens` attributes, including nested usage/token attributes.
-  - Tuple payloads that include a usage/token dictionary or object before the trailing cost/model elements.
-  Token counts should be normalized to integers when possible and left blank when unavailable or invalid.
 - Collect input and output file paths from the command arguments using `kwargs`. Input file paths should be validated to ensure they exist, and output file paths should be identified by their parameter names starting with 'output'.
 - Retrieve the audit log of attempted models from `ctx.obj.get('attempted_models')` (populated by `llm_invoke` whenever a model attempt is made, including cloud attempts that recoverably failed and triggered local fallback). The list accumulates across every `llm_invoke` call the wrapped command makes — for example `pdd generate` runs code-generation and postprocess in sequence, so both substeps contribute their attempts to this single per-command list. Sequential command paths emit attempts in wall-clock order; concurrent paths (e.g. `auto-deps --concurrency > 1`, which fans summarization across worker threads) sort their per-file contributions by file-submission index to keep CSV output deterministic across runs — track_cost simply forwards whatever order is on `ctx.obj`. The `model` column (from the wrapped command's return tuple) names the model that produced the operation's output; `attempted_models` is the complete record of what was tried. The two may legitimately differ — e.g. when a command catches a substep terminal failure and recovers with an earlier successful model, the `attempted_models` list will still contain the failed substep's candidates AFTER the `model` column's entry. If the key is missing, empty, or `ctx.obj` is not a dict, default to `[model_name]` so single-attempt commands still emit a meaningful value. Convert each entry to a string and replace any literal `;` characters in model names with `:` to preserve the semicolon as a safe delimiter.
 7. **Append Cost Data to CSV File:**
 - Skip CSV writing entirely when running under pytest (`PYTEST_CURRENT_TEST` environment variable is set). This prevents mock return values from polluting the cost CSV during test runs.
 - If the output cost file does not exist, create it and write the header row.
 - If the file exists, append the cost data to the end of the file.
-- Ensure newly created CSV files include these exact columns: `timestamp`, `model`, `command`, `cost`, `input_tokens`, `output_tokens`, `input_files`, `output_files`, and `attempted_models`.
-- `input_tokens` and `output_tokens` columns contain integer counts when known and blank values when unavailable. Missing token counts must not prevent cost logging.
+- Ensure all columns are included in the CSV file: timestamp, model, command, cost, input files, output files, and attempted_models.
 - The `attempted_models` column MUST be the last column. Its value is the sanitized list joined by `;` (semicolon). Example: `vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat`. For single-attempt commands the value is just the successful model (e.g. `deepseek/deepseek-chat`). For multi-substep commands (e.g. `generate` = code-generation + postprocess), the list contains every attempt across all substeps in the order they were appended to `ctx.obj['attempted_models']` upstream (wall-clock for sequential paths; submission-index order for concurrent worker paths — track_cost does not re-sort). The `model` column is the model that produced the command's output; `attempted_models` is the audit log of what was tried — they may differ when a substep failure was recovered.
-- Header compatibility must handle multiple legacy states: old files without `attempted_models`, old files without token columns, and files with only some new columns. Existing headers must not be rewritten; appended rows must match the existing header exactly.
-- When a pre-existing CSV file is missing the `attempted_models` column header, append rows in the legacy column order without the new column rather than rewriting the header — never break existing files. Newly created CSV files MUST include the `attempted_models` header.
-- When a pre-existing CSV file is missing `input_tokens` or `output_tokens`, omit missing token values for that row rather than rewriting the header.
-- When any legacy-header path is taken for missing `attempted_models` or token columns, emit a one-time `rprint` warning per file telling the user which new columns will not be recorded and that they should delete or rename the file to opt in. Use a process-level set (e.g. `_legacy_csv_warned: set`) keyed on the absolute `output_cost_path` so the same session does not spam the user with the same notice across multiple commands.
+- When a pre-existing CSV file is missing the `attempted_models` column header (older files), append rows in the legacy column order without the new column rather than rewriting the header — never break existing files. Newly created CSV files MUST include the `attempted_models` header.
+- When the legacy-header path is taken, emit a one-time `rprint` warning per file telling the user the new `attempted_models` column will not be recorded and that they should delete or rename the file to opt in. Use a process-level set (e.g. `_legacy_csv_warned: set`) keyed on the absolute `output_cost_path` so the same session does not spam the user with the same notice across multiple commands.
 8. **Handle Exceptions Gracefully:**
-- If any extraction or CSV errors occur during cost logging, print an error message using Rich's `rprint` but do not interrupt the command execution.
+- If any errors occur during cost logging, print an error message using Rich's `rprint` but do not interrupt the command execution.
 9. **Return the Command Result:** Return the result of the original command function.
 
 % The decorator should be robust and ensure that the main command functionality is not adversely affected by the cost tracking. Use the `functools.wraps` decorator to preserve the metadata of the original function.
-
-% Public API preservation requirements:
-- Preserve the existing public module surface exactly. Do not remove or rename `functools`; keep `import functools` at module scope and call `@functools.wraps(func)` inside `track_cost`.
-- Preserve the existing datetime import surface exactly: keep `from datetime import datetime` and continue to call `datetime.now()`. Do not replace it with `import datetime`, `datetime.datetime`, aliases, wrappers, or any other public `datetime` binding change.
-- Preserve these public function names and signatures exactly, with no added annotations, no changed parameters, and no renamed arguments:
-  - `def track_cost(func):`
-  - `def extract_cost_and_model(result: Any) -> Tuple[Any, str]:`
-  - `def extract_token_counts(result: Any) -> Tuple[Optional[int], Optional[int]]:`
-  - `def collect_files(args, kwargs) -> Tuple[List[str], List[str]]:`
-  - `def looks_like_file(path_str) -> bool:`
-- Add helper functions only as private underscore-prefixed functions. Do not make the token-count feature by changing public function signatures or removing legacy functions.
-- Do not add new public functions/classes/constants while implementing token-count logging. Any helper added for token extraction, CSV header handling, or legacy warnings must be underscore-prefixed.
-- `track_cost`, `collect_files`, and `looks_like_file` are imported by tests and downstream callers, so regenerated code that changes their signatures is a public API regression even if behavior still works internally.
 
 % Here is an example of how the `track_cost` decorator will be used in the `pdd` program:
 ```@cli.command()

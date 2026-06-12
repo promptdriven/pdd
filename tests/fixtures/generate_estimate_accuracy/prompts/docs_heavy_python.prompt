@@ -3,4 +3,3 @@ Generate a Python module for formatting release notes.
 The code should include extensive docstrings and inline documentation explaining
 the release-note model, grouping behavior, markdown rendering, and edge cases.
 Return markdown sections for features, fixes, breaking changes, and chores.
-

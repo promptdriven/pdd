@@ -161,7 +161,5 @@ def fix_code_module_errors(
         print("[red]Validation Error: Invalid result format[/red]")
         raise
     except Exception as e:
-        if e.__class__.__name__ == "EstimateOnlyResult":
-            raise
         print(f"[red]Unexpected error: {str(e)}[/red]")
         raise

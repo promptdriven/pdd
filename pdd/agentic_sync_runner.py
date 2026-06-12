@@ -179,90 +179,6 @@ def _parse_cost_from_csv(csv_path: str) -> float:
         return 0.0
 
 
-def _parse_estimate_summary_from_stdout(stdout: str) -> Optional[Dict[str, Any]]:
-    """Extract the estimate summary from a child ``--estimate`` sync's stdout.
-
-    Estimate-mode children make no billable call, so they write no cost CSV;
-    the estimated total is emitted on stdout instead. Prefer the machine-readable
-    ``--estimate-json`` payload (a single JSON object with ``estimate: true`` and
-    ``estimated_cost``/``total_cost``/``unknown_cost``/``is_lower_bound`` fields),
-    falling back to the human ``Total estimated cost: ...`` line.
-
-    Returns a normalized dict::
-
-        {"estimated_cost": Optional[float], "unknown_cost": bool,
-         "is_lower_bound": bool, "currency": str}
-
-    or ``None`` when no estimate could be parsed at all. Crucially, ``estimated_cost``
-    being ``None`` (or ``unknown_cost``/``is_lower_bound`` being set) is preserved so
-    callers can distinguish an exact total from an unknown total or a lower bound,
-    rather than silently collapsing unknown/floor estimates to an exact-looking 0.0.
-    """
-    if not stdout:
-        return None
-
-    # Preferred: a JSON estimate summary line (pdd --estimate-json sync ...).
-    for line in stdout.splitlines():
-        stripped = line.strip()
-        if not (stripped.startswith("{") and stripped.endswith("}")):
-            continue
-        try:
-            payload = json.loads(stripped)
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(payload, dict) or payload.get("estimate") is not True:
-            continue
-        raw = payload.get("estimated_cost", payload.get("total_cost"))
-        cost: Optional[float] = None
-        if raw is not None:
-            try:
-                cost = float(raw)
-            except (ValueError, TypeError):
-                cost = None
-        return {
-            # A missing/unparseable cost is itself an unknown, regardless of the
-            # child's own flag, so cost-less rows can never read as exact 0.0.
-            "estimated_cost": cost,
-            "unknown_cost": bool(payload.get("unknown_cost")) or cost is None,
-            "is_lower_bound": bool(payload.get("is_lower_bound")),
-            "currency": payload.get("currency", "USD"),
-        }
-
-    # Fallback: the human-readable total line. The renderer prints
-    # "Total estimated cost: ≥ $X (lower bound; ...)" for a floor, a bare
-    # "Total estimated cost: $X" for an exact total, and "... unknown" when no
-    # step is priced -- preserve those distinctions.
-    for line in stdout.splitlines():
-        if "Total estimated cost:" not in line:
-            continue
-        is_lower_bound = "≥" in line or "lower bound" in line.lower()
-        match = re.search(r"\$\s*([0-9]+(?:\.[0-9]+)?)", line)
-        if not match:
-            # e.g. "Total estimated cost: unknown"
-            return {
-                "estimated_cost": None,
-                "unknown_cost": True,
-                "is_lower_bound": False,
-                "currency": "USD",
-            }
-        try:
-            cost = float(match.group(1))
-        except (ValueError, TypeError):
-            return {
-                "estimated_cost": None,
-                "unknown_cost": True,
-                "is_lower_bound": False,
-                "currency": "USD",
-            }
-        return {
-            "estimated_cost": cost,
-            "unknown_cost": is_lower_bound,
-            "is_lower_bound": is_lower_bound,
-            "currency": "USD",
-        }
-    return None
-
-
 def _format_duration(start: Optional[float], end: Optional[float]) -> str:
     """Format a duration from start/end timestamps."""
     if start is None or end is None:
@@ -1090,10 +1006,6 @@ class AsyncSyncRunner:
         self.module_targets: Dict[str, str] = dict(module_targets or {})
         self.initial_cost = float(initial_cost or 0.0)
         self._steer_state: Dict[str, Any] = {}
-        # Per-module estimate summaries recorded during ``--estimate`` runs so
-        # ``_run_estimate`` can aggregate unknown_cost / is_lower_bound across
-        # children instead of collapsing unpriced child totals to exact 0.0.
-        self._estimate_module_summaries: Dict[str, Dict[str, Any]] = {}
 
         self.total_budget = self.sync_options.get("total_budget")
         self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
@@ -1879,9 +1791,6 @@ class AsyncSyncRunner:
         if not self.basenames:
             return True, "No modules to sync", self.initial_cost
 
-        if self.sync_options.get("estimate"):
-            return False, "Estimate mode currently supports `generate` only.", 0.0
-
         if self._resumed_modules and not self.quiet:
             resumed = sorted(self._resumed_modules)
             console.print(
@@ -1921,87 +1830,6 @@ class AsyncSyncRunner:
             except (ValueError, OSError, TypeError):
                 pass
             self._kill_children()
-
-    def _run_estimate(self) -> Tuple[bool, str, float]:
-        """Side-effect-free estimate run for agentic sync.
-
-        Each module is dispatched as a child ``pdd --estimate --estimate-json
-        sync`` dry-run (see ``_build_command``/``_build_env``), so no provider
-        calls, generated files, or ``--output-cost`` rows are produced. The
-        agentic runner itself must not persist ``.pdd/agentic_sync_state.json``
-        or post/update GitHub comments either, because no real progress has
-        occurred.
-
-        Although no billable call is made, the whole point of this command is
-        cost estimation: the per-module estimated costs reported by the children
-        are aggregated and returned (added to ``initial_cost``) so programmatic
-        callers and summaries see the projected total rather than a meaningless
-        0.0.
-        """
-        self._estimate_module_summaries = {}
-        results: List[Tuple[str, bool]] = []
-        all_success = True
-        priced_total = 0.0
-        priced_any = False
-        any_unknown = False
-        any_lower_bound = False
-        for basename in self.basenames:
-            try:
-                success, _cost, _error = self._sync_one_module(basename)
-            except Exception:
-                success = False
-            all_success = all_success and bool(success)
-            results.append((basename, bool(success)))
-
-            # Aggregate from the recorded per-module estimate summary (set by
-            # _run_attempt) rather than the returned cost float, so unknown and
-            # lower-bound child totals are preserved instead of summing as 0.0.
-            summary = self._estimate_module_summaries.get(basename)
-            if summary is None:
-                # No parseable child estimate -> an unknown component. Counting
-                # it as a known $0.00 would understate (and falsely exact-ify)
-                # the aggregate, so treat it as unknown.
-                any_unknown = True
-                continue
-            module_cost = summary.get("estimated_cost")
-            if module_cost is None:
-                any_unknown = True
-            else:
-                priced_total += float(module_cost)
-                priced_any = True
-            if summary.get("unknown_cost"):
-                any_unknown = True
-            if summary.get("is_lower_bound"):
-                any_lower_bound = True
-
-        succeeded = [b for b, ok in results if ok]
-        failed = [b for b, ok in results if not ok]
-
-        # The aggregate is a lower bound when some priced steps were summed but
-        # other steps were unknown / themselves a floor. It is fully unknown only
-        # when nothing (not even the carried initial_cost) could be priced.
-        has_floor = priced_any or self.initial_cost > 0.0
-        is_lower_bound = has_floor and (any_unknown or any_lower_bound)
-        total_unknown = not has_floor and any_unknown
-        total_cost = round(self.initial_cost + priced_total, 6)
-
-        prefix = f"Estimate complete for {len(succeeded)} module(s): {succeeded}."
-        if total_unknown:
-            cost_phrase = (
-                " Estimated cost: unknown (no step could be priced without "
-                "execution)."
-            )
-        elif is_lower_bound:
-            cost_phrase = (
-                f" Estimated cost: ≥ ${total_cost:.6f} (lower bound; some "
-                "steps not estimable without execution)."
-            )
-        else:
-            cost_phrase = f" Estimated cost: ${total_cost:.6f}."
-        summary = prefix + cost_phrase
-        if failed:
-            summary += f" Estimate gaps: {failed}."
-        return all_success, summary, total_cost
 
     def _run_inner(self) -> Tuple[bool, str, float]:
         """Inner run loop, separated so signal handlers wrap it."""
@@ -2139,8 +1967,6 @@ class AsyncSyncRunner:
         temperature = self.sync_options.get("temperature")
         if temperature is not None:
             cmd.extend(["--temperature", str(temperature)])
-        # Estimate mode is generate-only in this first version. Do not propagate
-        # estimate flags into child sync commands.
         cmd.append("sync")
 
         # Module-specific flags
@@ -2186,13 +2012,7 @@ class AsyncSyncRunner:
     ) -> Dict[str, str]:
         """Build the env dict for subprocess Popen."""
         env = os.environ.copy()
-        if self.sync_options.get("estimate"):
-            # Estimate-mode child syncs must not inherit a cost-log writer: no
-            # billable provider call occurs, so no --output-cost CSV rows may
-            # be created.
-            env.pop("PDD_OUTPUT_COST_PATH", None)
-        else:
-            env["PDD_OUTPUT_COST_PATH"] = cost_file_path
+        env["PDD_OUTPUT_COST_PATH"] = cost_file_path
         env["CI"] = "1"
         env["PDD_FORCE"] = "1"
         env["PDD_AUTO_UPDATE"] = "false"
@@ -2717,23 +2537,6 @@ class AsyncSyncRunner:
 
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)
-
-        # Estimate-mode children write no cost CSV (no billable call); the
-        # estimated total is reported on stdout. Recover the full summary so the
-        # agentic runner can return a real aggregate cost instead of 0.0 while
-        # preserving whether that total is exact, a lower bound, or unknown.
-        if self.sync_options.get("estimate"):
-            est_summary = _parse_estimate_summary_from_stdout(stdout)
-            if est_summary is not None:
-                # Record per-module so _run_estimate can aggregate the
-                # unknown_cost / is_lower_bound flags, not just the number.
-                self._estimate_module_summaries[basename] = est_summary
-                priced = est_summary.get("estimated_cost")
-                if priced is not None:
-                    cost = float(priced)
-                # When priced is None the child total is unknown: leave `cost`
-                # at the CSV 0.0 floor, but the recorded summary marks it unknown
-                # so the aggregate is not reported as an exact $0.00.
 
         success = exit_code == 0
         if success:

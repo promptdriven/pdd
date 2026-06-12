@@ -1,4 +1,4 @@
-<pdd-reason>Coordinates sync workflow execution, state tracking, estimates, and side-effect-safe dry runs.</pdd-reason>
+<pdd-reason>Coordinates sync workflow steps and state management. Manages workflow state, determines next steps, tracks progress, and handles step dependencies.</pdd-reason>
 
 <pdd-interface>
 {
@@ -13,9 +13,6 @@
 
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
-<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
-<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
-<pdd-dependency>core/cli_python.prompt</pdd-dependency>
 <pdd-dependency>compressed_sync_context_python.prompt</pdd-dependency>
 
 # sync_orchestration_python.prompt
@@ -102,7 +99,6 @@ Returns a dictionary containing:
 - `error`: Semicolon-joined error string or None
 - `model_name`: Name of the last model used
 - `log_entries`: List of log entries (only when `dry_run=True`)
-- Estimate mode is unsupported for sync in this generate-only first version; if requested, return a clear unsupported-command error without side effects.
 - `snapshot_manifest_path` / `context_snapshot`: Optional replayable context snapshot metadata when generation ran with `snapshot_context=True`
 - `compression`: Optional per-phase compressed-context metadata when `compressed_context=True`
 - `agentic_fallback`: Optional metadata summarizing whether agentic fallback was attempted or used by repair phases
@@ -126,15 +122,6 @@ Returns a dictionary containing:
     <sync_determine_operation_example>
         <include>context/sync_determine_operation_example.py</include>
     </sync_determine_operation_example>
-    <sync_operation_cost_interface>
-        <include select="def:estimate_operation_cost">pdd/sync_determine_operation.py</include>
-    </sync_operation_cost_interface>
-    <llm_estimate_interface>
-        <include optional mode="interface" select="def:llm_invoke">pdd/llm_invoke.py</include>
-    </llm_estimate_interface>
-    <cli_estimate_interface>
-        <include optional mode="interface" select="def:cli">pdd/core/cli.py</include>
-    </cli_estimate_interface>
     <auto_deps_main_example>
         <include>context/auto_deps_main_example.py</include>
     </auto_deps_main_example>
@@ -206,7 +193,6 @@ from .sync_determine_operation import (
     calculate_sha256,
     calculate_current_hashes,
     _safe_basename,
-    estimate_operation_cost,
 )
 from .auto_deps_main import auto_deps_main
 from .code_generator_main import code_generator_main
@@ -266,10 +252,6 @@ For every call to `sync_determine_operation`, compute `isolated_replay_or_repair
 ### Dry-Run Mode
 
 When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language.lower()}_sync.log` (JSONL format) and return immediately. Normal mode shows concise output; verbose mode shows full details including decision type, confidence, and budget info.
-
-### Estimate Mode
-
-Estimate mode is out of scope for `sync` in the generate-only first version. If an estimate request reaches `sync_orchestration()`, return before acquiring locks, writing files, appending cost logs, calling providers, or entering the normal sync workflow with the clear message: `Estimate mode currently supports `generate` only.`
 
 Dry-run must not write snapshot artifacts. If nondeterministic context can be detected without executing dynamic tags, report that a snapshot would be required, but do not execute shell/web/query tags solely for dry-run detection.
 

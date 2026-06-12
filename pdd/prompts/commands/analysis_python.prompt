@@ -22,14 +22,12 @@
        - Return result payload as `{"passed": passed, "results": results}` plus cost/model.
        - Options: `--stories`, `--stories-dir`, `--prompts-dir`, `--include-llm`, `--fail-fast/--no-fail-fast`.
   2. **conflicts**: Takes two prompt files. Call `conflicts_main`. Options: `--output`.
-     - **Estimate Mode**: If global estimate mode is active (`ctx.obj["estimate"]` or `PDD_ESTIMATE=1`), reject with `click.UsageError` before calling `conflicts_main` because conflict extraction is a dependent multi-call flow; do not present the first request as a total command estimate.
   3. **bug**: Takes either a GitHub issue URL (agentic mode) or `--manual` with 5 positional files.
      - Agentic mode (first arg is URL): Call `run_agentic_bug(issue_url, verbose=..., quiet=..., timeout_adder=..., use_github_state=..., clean_restart=...)`.
      - Manual mode (`--manual` flag): Call `bug_main(ctx, prompt_file, code_file, program_file, current_output, desired_output, ...)`.
      Options: `--manual`, `--output`, `--language`, `--timeout-adder` (float, default 0.0, agentic mode only), `--no-github-state` (flag, disables GitHub state persistence, agentic mode only), `--clean-restart` (flag, discard saved agentic state and start from step 1, agentic mode only). `--clean-restart` MUST raise `click.UsageError` when combined with `--manual` or when the single agentic argument is not a GitHub issue URL.
   4. **crash**: Takes 4 positional files (prompt, code, program, error). Call `crash_main`. Options: `--output`, `--output-program`, `--loop`, `--max-attempts`, `--budget`.
      - Log operation using `@log_operation(operation="crash", clears_run_report=True)`.
-     - **Estimate Mode**: If global estimate mode is active (`ctx.obj["estimate"]` or `PDD_ESTIMATE=1`), reject with `click.UsageError` before calling `crash_main` because crash repair/extraction can require dependent LLM calls; do not present the first request as a total command estimate.
   5. **trace**: Takes prompt file, code file, and code line number (int). Call `trace_main`. Options: `--output`.
 
 % Dependencies
@@ -61,7 +59,6 @@
   - Use `handle_error` for non-click runtime exceptions.
   - Re-raise `click.Abort` and `click.ClickException` to preserve Click semantics.
   - Apply `@track_cost` decorator to all commands.
-  - Provide a small `_estimate_mode_active(ctx)` helper using `ctx.obj["estimate"]` or `PDD_ESTIMATE=1`; use it to fail closed for `conflicts` and `crash` estimate mode before helper dispatch.
   - Access context flags via `ctx.obj.get("key", default)`.
   - Return `Optional[Tuple[result, float, str]]` where float is cost and str is model name.
   - Return `None` when an error is handled.

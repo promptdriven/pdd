@@ -6,4 +6,3 @@ function: summarize_inventory(rows: list[dict[str, str]]) -> dict[str, int]
 
 Implement a Python inventory parser. It should read CSV text, normalize column
 names, skip blank rows, and return a useful summary by category.
-
