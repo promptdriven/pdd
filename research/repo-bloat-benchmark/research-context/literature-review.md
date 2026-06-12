@@ -6,17 +6,32 @@
 
 > **Research question.** Given the same task, model, verifier, and starting code,
 > what happens to an agentic code-patching workflow as the surrounding repository
-> grows with *plausible-but-irrelevant* files? We measure localization **cost**
-> (files/bytes read and tool calls before the first edit), **context-window
-> penetration** of distractors, and **hidden-test success** as a function of
-> repository bloat held at fixed task semantics.
+> grows with *plausible-but-irrelevant* files? We hold task semantics fixed and
+> measure localization **cost** (files/bytes read and tool calls before the first
+> edit), **context-window penetration** of distractors, and **hidden-test
+> success** as a function of repository bloat.
 
-This review situates that question in the published literature. **Every source
-below was independently verified against the authoritative arXiv API** (title,
-authors, submission date) before inclusion — see the provenance table in
-[`README.md`](README.md). Where this review's figures differ from the project's
-earlier working spreadsheet, the spreadsheet number was **not** supported by the
-paper's abstract; the verified figure is used and the discrepancy is footnoted.
+## How to read this review
+
+The field gives us strong reasons to expect repository bloat to hurt agentic
+coding — but the evidence is **scattered across three communities that rarely
+cite each other**: the long-context community (does accuracy survive a big
+window?), the noisy-context / distractor-robustness community (do irrelevant
+tokens mislead reasoning?), and the software-engineering-agent community (can an
+agent fix a real bug in a real repo?). No single paper sits at their
+intersection. This review walks the field in order of *conceptual distance* from
+our design — from the abstract motivation (§2) to the closest methodological
+relatives (§3) to the code-specific benchmarks (§4–§6) — and ends with the
+precise white space we occupy (§8).
+
+**A note on sourcing.** The project's earlier survey lived in a working
+spreadsheet. Treating it as unverified, **every one of the 18 works below was
+checked against the authoritative arXiv API** (title, authors, date), and the
+headline papers were re-read from their full texts so the figures here come from
+the papers themselves, not the spreadsheet. Verification corrected several
+spreadsheet errors; each correction is footnoted at the point of use. Nothing
+here is unverified or fabricated. The provenance summary is in
+[`README.md`](README.md).
 
 ---
 
@@ -43,208 +58,289 @@ paper's abstract; the verified figure is used and the discrepancy is footnoted.
 | 17 | Evaluating AGENTS.md: Are Repository-Level Context Files Helpful for Coding Agents? | Gloaguen et al. (ETH SRI Lab) | Feb 2026 | [2602.11988](https://arxiv.org/abs/2602.11988) | ✅ verified — *spreadsheet "AGENTS.md paper"* |
 | 18 | SlopCodeBench: Benchmarking How Coding Agents Degrade Over Long-Horizon Iterative Tasks | Orlanski, Roy, Yun, et al. | Mar 2026 | [2603.24755](https://arxiv.org/abs/2603.24755) | ✅ verified |
 
-*Author lists are abbreviated where long; full lists are on each arXiv page.*
+*Author lists are abbreviated where long; full lists are on each arXiv page. Figures cited below are drawn from the papers' own text and tables.*
 
 ---
 
-## 2. Static long-context degradation — the theoretical motivation
+## 2. The motivation: accuracy decays inside the advertised window
 
-The foundational result motivating this work is that LLM accuracy falls as
-**total context grows, even within the advertised window**.
+The premise underneath this whole project is that an LLM's *effective* context is
+smaller than its *nominal* context — adding tokens, even within a 128K+ window,
+degrades accuracy. Two results make this concrete.
 
-- **NoLiMa** [1] extends the needle-in-a-haystack paradigm by removing literal
-  lexical overlap between question and "needle," forcing latent-association
-  retrieval. Across 13 models claiming ≥128K support, performance is strong
-  below ~1K tokens but degrades sharply with length: at 32K, 11 of 13 models
-  drop below 50% of their short-context baseline, and even GPT-4o falls from a
-  99.3% baseline to 69.7%. The authors attribute the decline to the attention
-  mechanism's difficulty without literal anchors.
-- **LongBench** [2] establishes the bilingual, multitask long-context evaluation
-  norm, and the **needle-in-a-haystack** pressure test [3] is the widely used
-  informal probe that NoLiMa formalizes and hardens.
+**NoLiMa** [1] is the sharpest demonstration. The standard needle-in-a-haystack
+(NIAH) test [3] is too easy because the "needle" usually shares literal words
+with the query, letting attention shortcut to it. NoLiMa removes that crutch: its
+needle set is built so questions and needles have *minimal lexical overlap*, so
+the model must infer a latent association. Across **13 models that advertise
+≥128K context**, performance is near-perfect below ~1K tokens but falls steeply
+with length — **at 32K, 11 of the 13 drop below 50% of their own short-context
+baseline**, and even GPT-4o, one of the strongest, falls **from a 99.3% baseline
+to 69.7%**. The authors trace this to attention struggling to retrieve without
+literal anchors. **Why it matters to us:** repository bloat is exactly a
+"no-literal-match" haystack — the relevant code does not announce itself, and the
+agent must reason its way to it through plausible look-alikes. NoLiMa is the
+cleanest evidence that the haystack itself, not just task difficulty, is the
+problem. **LongBench** [2] supplies the broader long-context evaluation norm that
+NoLiMa hardens.
 
-**Gap for our design.** These studies use synthetic or document-retrieval tasks,
-not software repositories or coding agents, and none instrument *file-level agent
-search behavior* as the causal mechanism. They justify *why* bloat should hurt;
-they do not measure localization cost in code.
-
----
-
-## 3. Dynamic context growth in agentic settings — the closest design analogue
-
-- **LOCA-bench** [4] is the nearest methodological relative. It holds task
-  semantics fixed while using "automated and scalable control of environment
-  states to regulate the agent's context length," extending context "potentially
-  to infinity in a controlled way." It evaluates agents as *(model × scaffold)*
-  combinations and reports that performance generally degrades as environment
-  state grows, while context-management strategies can substantially recover
-  success. The project is from HKUST-NLP (`github.com/hkust-nlp/LOCA-bench`).
-
-  *Distinction.* LOCA-bench operates on general agentic tasks (its abstract does
-  not commit to the specific "halves from 8K→256K" or per-model rankings recorded
-  in our earlier spreadsheet[^loca]). It does **not** inject source-code
-  distractors, instrument filesystem reads, or measure `files_read` /
-  `bytes_read` before first edit. Our contribution is the *software-repository +
-  filesystem-instrumented + localization-cost* combination. The shared "keep the
-  task fixed, scale the noise variable" principle should be cited explicitly as
-  prior art in our Related Work.
-
-- **Lost in the Noise** [5] (the spreadsheet's "NoisyBench") systematically
-  injects distractors — random documents, irrelevant chat history, and *hard
-  negatives* — across 11 datasets spanning RAG, reasoning, alignment, and
-  tool-use. It reports a **catastrophic drop of up to 80%**, finds that agentic
-  workflows *amplify* errors by over-trusting noisy tool outputs, and uncovers an
-  **inverse-scaling** trend (more test-time compute → worse under noise), with
-  attention visualizations showing models fixate on distractor tokens.
-
-  *Distinction.* Document-level distractors, not source files; no LOC scaling, no
-  filesystem instrumentation, no bug-localization task. Its hard-negative finding
-  directly motivates our **same-package distractor tier** being the most harmful,
-  and its attention finding is the mechanistic hypothesis our per-tier
-  `irrelevant_file_read_ratio` tests *in code*.
-
-[^loca]: The earlier working spreadsheet recorded "agent accuracy halves as
-    context grows from 8K to 256K" and "Claude-4.5-Opus best at short context."
-    Those specifics are **not** stated in the verified LOCA-bench abstract and are
-    omitted here pending confirmation against the paper body.
+**What this leaves open:** NoLiMa and LongBench operate on prose/document
+retrieval, in a single forward pass, with no agent, no source code, and no
+measurement of *what the model did to find the needle*. They tell us bloat should
+hurt; they cannot tell us how a coding agent's search loop pays for it.
 
 ---
 
-## 4. Repository-level coding-agent evaluation — the task precedent
+## 3. The closest relatives: controlled growth of the *noise* variable
 
-- **SWE-bench** [6] established real-repository bug-fixing as a meaningful task
-  and the hidden-test evaluation norm: 2,294 problems from 12 Python repos. At
-  publication the best model (Claude 2) resolved only 1.96%; the leaderboard has
-  since risen dramatically on the Verified subset, which is itself evidence that
-  the task is now tractable enough to study *second-order* effects like bloat.
-- **Agentless** [7] shows a deliberately simple three-phase
-  *localization → repair → validation* pipeline (no autonomous tool loop) reaches
-  32.00% on SWE-bench Lite at ~$0.70/instance, and — importantly for us — its
-  authors manually found SWE-bench Lite issues with leaked ground-truth patches
-  or misleading descriptions, producing the cleaned **Lite-S**. This is direct
-  precedent for our **seed-novelty audit** (a distractor or oracle patch must not
-  be an upstream-code restoration).
+Two 2026 papers share our core experimental move — **hold the task fixed and turn
+a single noise dial** — but in domains other than code repositories. These are
+the works we must cite and differentiate most carefully.
 
-**Gap for our design.** Repository size is *uncontrolled* across SWE-bench issues
-and success/fail is the only first-class metric. Agent *search cost* (files read,
-bytes read, tool calls before first edit) is at most incidental tool-call data in
-agent papers. We make it the primary measurement target.
+### 3.1 LOCA-bench — controlled, near-unbounded context growth for agents
+
+**LOCA-bench** [4] (HKUST-NLP; `github.com/hkust-nlp/LOCA-bench`) is the nearest
+methodological relative. Where NoLiMa grows a *static* prompt, LOCA-bench grows
+the context an *agent* accumulates: it "leverages automated and scalable control
+of environment states to regulate the agent's context length," extending it
+"potentially to infinity in a controlled way while keeping the underlying task
+semantics fixed." It evaluates agents as *(model × scaffold)* pairs over tool-use
+tasks (a Toolathlon-style suite of ~280 tools spanning email, calendar,
+BigQuery/Snowflake, spreadsheets, e-commerce, etc.) using a ReAct scaffold.
+
+The degradation is steep and monotone. Sweeping context across **8K → 16K → 32K →
+64K → 96K → 128K → 256K**, the paper reports (for example) **Claude-4.5-Opus
+falling from 96.0 to 14.7** and **GPT-5.2-Medium from 72.0 to 21.3** over that
+range, and the **frontier-vs-open-source gap widens** with length (frontier
+models reach roughly 2–3× open-source accuracy at 256K). Crucially, LOCA-bench
+shows the decline is *partly recoverable by scaffolding*: context-management
+strategies — tool-result clearing, thinking-block clearing, compaction, memory
+tools, and especially **programmatic tool calling** — claw back substantial
+accuracy (e.g., at 128K, GPT-5.2-Medium 38.7% → 49.3%; DeepSeek-V3.2-Thinking
+10.7% → 24.0%).
+
+**Why it matters to us — and how we differ.** LOCA-bench validates the
+"one-variable" design we adopt, *and* its scaffold-recovery result is a warning:
+our pilot must pin the agent's context-management configuration, or "bloat
+sensitivity" will be confounded with scaffold choice. But LOCA-bench grows context
+by *injecting environment state into the transcript*; it does **not** inject
+*source-code* distractors into a repository, does **not** instrument filesystem
+reads, and does **not** measure cost *before the first edit*. The
+software-repository + filesystem-instrumented + localization-cost combination is
+ours.[^loca]
+
+### 3.2 Lost in the Noise — distractor robustness and inverse scaling
+
+**Lost in the Noise** [5] (the spreadsheet's "NoisyBench") is the distractor-side
+counterpart. It systematically injects **three noise types — random documents
+(RD), random chat history (RC), and hard negatives (HN)** — across **11 datasets
+in four families** (RAG, reasoning, alignment, tool use), and finds a
+**catastrophic drop of up to ~80%** under contextual distractors (e.g., a
+DeepSeek-R1-distilled 8B model degrading ~80.6% under hard negatives; Gemini-2.5-Pro
+falling from 94.0% to 60.5% on one alignment task). Two findings are directly
+load-bearing for our design: (1) an **inverse-scaling** effect — *more* test-time
+reasoning makes things *worse* under hard negatives — and (2) **attention
+visualizations showing models fixate on distractor tokens** on their wrong
+answers. The authors also propose a Rationale-Aware Reward (RARE) that recovers
+robustness, evidence that the failure is learnable signal-selection rather than
+noise per se.
+
+**Why it matters to us — and how we differ.** The HN-vs-RD result is the document
+analogue of our **distractor *tier*** hypothesis: a same-package distractor (a
+"hard negative" in code) should mislead more than a cross-cutting one. The
+attention-fixation finding is the mechanism our per-tier `irrelevant_file_read_ratio`
+tests *in code*, and the inverse-scaling result suggests we should sweep reasoning
+effort as a secondary factor. But the noise here is *documents*, not source files
+in a repository; there is no LOC scaling and no filesystem instrumentation.
+
+[^loca]: The earlier spreadsheet recorded "accuracy halves from 8K to 256K" and
+    "Claude-4.5-Opus best at short context." Re-reading the paper, the direction
+    is right but the magnitude is larger than "halving" (Claude-4.5-Opus 96.0 →
+    14.7, an ~81-point drop); the per-model figures above are taken from the paper
+    text rather than the spreadsheet.
 
 ---
 
-## 5. Repository size vs. agent success — observational evidence
+## 4. The task precedent: repository-level bug-fixing and localization
 
-Two recent benchmarks provide the strongest observational signal that scale hurts
-coding agents:
+**SWE-bench** [6] established the genre: 2,294 real GitHub issues across 12 Python
+repositories, each requiring coordinated edits across functions, classes, and
+files, scored by hidden tests. At publication the best system (Claude 2) resolved
+just **1.96%**; today, agent leaderboards exceed 70% on the curated *Verified*
+subset — which is itself why *second-order* effects like bloat are now worth
+isolating: the base task is no longer the bottleneck. SWE-bench gives us the
+**hidden-test isolation philosophy** we adopt (design §4.4) and a weak prior for
+baseline read-cost from its agent papers.
 
-- **FeatBench** [8] evaluates feature implementation from natural-language
-  requirements only (no code hints), with an evolving anti-contamination
-  pipeline (157 tasks, 27 repos). The highest resolved rate is only **29.94%**,
-  and the dominant failure mode is "aggressive implementation" causing **scope
-  creep and regressions** — agents break existing features by over-reaching.[^feat]
-- **RepoMod-Bench** [9] benchmarks repository modernization with an
-  implementation-agnostic, hidden test suite (21 repos, 8 languages, 1.6M LOC,
-  11,616 tests; repo sizes 14–211K LOC). It reports a **sharp scaling collapse:
-  average pass rate drops from 91.3% on projects under 10K LOC to 15.3% on
-  projects exceeding 50K LOC**.
+**Agentless** [7] is a useful counterpoint and a methodological gift. It shows a
+deliberately *non*-agentic, three-phase pipeline — **localization → repair →
+patch validation**, with no autonomous tool loop — reaches **32.00% on SWE-bench
+Lite at ~$0.70/instance**, competitive with far more complex agents. More
+important for us: its authors **manually audited** SWE-bench Lite, found issues
+with leaked ground-truth patches or misleading descriptions, and released a
+cleaned **Lite-S**. That audit is the direct precedent for our **seed-novelty
+audit** — the requirement that neither an injected distractor nor the oracle patch
+is secretly a restoration of upstream code.
 
-**Gap for our design.** Both are *observational* — different repositories with
-different tasks, so repo size is confounded with task difficulty. Neither holds
-the bug constant while injecting distractor files, and neither measures
-localization cost. Their degradation magnitudes are valuable for sanity-checking
-our pre-registered practical thresholds (design §7.5), and our controlled design
-is the causal follow-on that explains them.
+**What this leaves open:** in both, repository size is *uncontrolled* and pass/fail
+is the only first-class metric. Search cost (files/bytes read, tool calls before
+first edit) is, at best, incidental tool-call data. We promote it to the primary
+measurement.
 
-[^feat]: The earlier spreadsheet recorded a "60–70% (small repos) → 10–30%
-    (large repos)" breakdown. That split is not in the verified FeatBench
+---
+
+## 5. The strongest code-domain signal: size hurts (observationally)
+
+Two recent benchmarks show, in code, that scale degrades agents — but
+*observationally*, by comparing different repositories.
+
+**FeatBench** [8] evaluates feature implementation from **natural-language
+requirements only** (no function signatures or code hints), with an automated,
+*evolving* pipeline that rebuilds the benchmark from recent commits to resist
+contamination (157 tasks across 27 actively-maintained repos). The headline:
+even the best agent/LLM pair resolves only **29.94%**, and the dominant failure
+mode is **"aggressive implementation" → scope creep and regressions** — agents
+break working features by over-reaching. That failure taxonomy informs our own
+failure classification (wrong-file edits, forbidden edits).[^feat]
+
+**RepoMod-Bench** [9] is the cleanest size-effect curve in code. It benchmarks
+repository *modernization* (cross-language translation) using an
+**implementation-agnostic, hidden test suite** that checks functional equivalence
+without exposing language-specific tests — 21 repos, 8 languages, 1.6M LOC,
+11,616 tests, sizes from 14 to 211K LOC. Across four state-of-the-art agent
+configurations it reports a **sharp scaling collapse: average pass rate falls
+from 91.3% on projects under 10K LOC to 15.3% on projects over 50K LOC.** Its
+hidden-equivalence-testing idea is one we can borrow to harden our verifiers.
+
+**Why these matter — and the gap they leave.** They establish that the phenomenon
+is real *in code* and give us magnitudes to calibrate our pre-registered
+thresholds against (design §7.5). But because each compares *different
+repositories with different tasks*, **repo size is confounded with task
+difficulty** — they cannot say whether size *causes* the drop. Our controlled
+design, holding the bug constant and scaling only irrelevant volume, is the causal
+follow-on these papers invite.
+
+[^feat]: The earlier spreadsheet recorded a "60–70% (small) → 10–30% (large)"
+    resolved-rate split for FeatBench. That breakdown is not in the paper's
     abstract; only the 29.94% top resolved rate and the scope-creep finding are
-    cited here.
+    cited here. If the split appears in the paper body it can be added with a page
+    reference.
 
 ---
 
-## 6. Cross-file context, localization accuracy, and code search
+## 6. Localization and retrieval: accuracy, not cost
 
-- **RepoBench** [10] and **CrossCodeEval** [11] show single-file benchmarks
-  understate difficulty: models must retrieve relevant cross-file context. They
-  motivate localization as a core sub-problem but evaluate *completion quality*,
-  not localization *efficiency*, and do not vary repo size.
-- **LocAgent** [12] introduces graph-guided localization (codebase → directed
-  heterogeneous graph) and the **Loc-Bench** evaluation set. **Improving Code
-  Localization with Repository Memory** [13] (the spreadsheet's "RepoMem") adds a
-  commit-history / linked-issue memory on top of LocAgent and improves
-  Accuracy@k on SWE-bench-Verified and SWE-bench-live.
+A cluster of work treats *finding the right code* as the object of study — which
+is half of our dependent variable. The consistent theme is that they measure
+localization **accuracy**, never localization **cost**.
 
-  *Distinction.* Both measure localization **accuracy** (was the right file
-  found?), not localization **cost** (how much was read before finding it?), and
-  neither varies repo size as an independent variable. Our
-  `files_read_before_first_edit` is absent from both. **Note:** the earlier
-  spreadsheet collapsed these into one "RepoMem / LocAgent" row; they are *two
-  distinct papers* and are separated here.
+- **RepoBench** [10] and **CrossCodeEval** [11] showed that single-file
+  benchmarks understate difficulty: realistic completion needs cross-file
+  retrieval. They motivate localization as a core sub-problem but score
+  completion quality and hold repository size fixed.
+- **LocAgent** [12] represents a codebase as a **heterogeneous directed graph**
+  (directory/file/class/function nodes; contain/import/invoke/inherit edges) with
+  BM25 and hierarchical indexes, and gives the agent three tools
+  (`SearchEntity`, `TraverseGraph`, `RetrieveEntity`). It introduces **Loc-Bench
+  — 560 instances** deliberately balanced across bug reports (242), feature
+  requests (150), performance (139), and security (29) issues, collected from
+  GitHub issues *after* October 2024 to limit training-data leakage. It reports
+  strong file-level Acc@5 (e.g., ~94% on SWE-bench-Lite with Claude-3.5; ~83% on
+  Loc-Bench) and large cost savings from fine-tuned small models (~$0.05–0.09 vs.
+  ~$0.66 per example).
+- **Improving Code Localization with Repository Memory** [13] (the spreadsheet's
+  "RepoMem") augments LocAgent with a **non-parametric memory built from commit
+  history and linked issues**, plus functionality summaries of actively-evolving
+  modules, and improves Accuracy@k on SWE-bench-Verified and SWE-bench-live.
 - **CodeSearchNet** [14], **CoSQA** [15], and **CodeXGLUE** [16] ground semantic
-  code retrieval and precision@k baselines — the retrieval analogue of our
-  `irrelevant_file_read_ratio` — but study retrieval decoupled from end-to-end
-  patching and do not control distractor density.
+  code retrieval and precision@k — the retrieval analogue of our
+  `irrelevant_file_read_ratio`.
+
+**The gap.** All of these ask *did the agent find the right file?* None asks *how
+much did it read before finding it, and how much of that was irrelevant?* — and
+none varies repository size as an independent variable. Our
+`files_read_before_first_edit` / `bytes_read_before_first_edit` are absent from
+the entire cluster. **Note:** the earlier spreadsheet merged LocAgent [12] and
+Repository-Memory [13] into a single "RepoMem / LocAgent" row; they are two
+distinct papers and are separated here.
 
 ---
 
-## 7. Adjacent phenomena: context-file overhead and iterative degradation
+## 7. Adjacent mechanisms: context overhead and iterative erosion
 
-- **Evaluating AGENTS.md** [17] (ETH SRI Lab) is the closest *direct* evidence
-  that more repository context can *hurt* coding agents: across multiple agents
-  and LLMs, context files tend to **reduce** task success versus no context while
-  **inflating inference cost by over 20%**, partly by encouraging broader
-  exploration/testing. It studies *instruction* files, not file-count growth, but
-  empirically supports the "more context = noise" hypothesis our work isolates.
-- **SlopCodeBench** [18] measures degradation as agents iteratively extend *their
-  own* solutions (36 problems, 196 checkpoints, 15 agents). **No agent fully
-  solves any problem end-to-end**; the best passes 14.8% of checkpoints;
-  structural erosion rises in 77% and verbosity in 75.5% of trajectories; agent
-  code is ~2.3× more verbose and ~2.0× more eroded than human repos.[^slop]
+Two papers describe related ways agents degrade as repositories grow, via
+different mechanisms than ours — useful Related-Work contrasts.
 
-  *Distinction.* SlopCodeBench's mechanism is code-quality erosion under
-  *self-extension*; ours is localization difficulty under *injected irrelevant
-  files*. Related in spirit, distinct in independent variable — a clean
-  Related-Work contrast.
+**Evaluating AGENTS.md** [17] (ETH Zurich, SRI Lab) is the closest *direct*
+evidence that *more repository context can hurt coding agents*. Testing four
+agent/model pairs (Claude Code + Sonnet-4.5; Codex + GPT-5.2 / GPT-5.1-mini; Qwen
+Code + Qwen3-30b-coder) on SWE-bench Lite (no developer context files) and a new
+**AGENTbench** of 138 instances that *do* carry developer-written context files,
+it finds **LLM-generated context files slightly *reduce* success (−0.5% / −2% on
+the two suites) while inflating cost by ~20–23%**, largely by inducing more
+searching, reading, testing, and reasoning (14–22% more reasoning tokens).
+Developer-written files help modestly (~+4%) at up to ~19% added cost. The
+recommendation — context files should state *minimal* requirements — reinforces
+the "more context = noise" intuition our work isolates. It studies *instruction*
+files, not *file-count* growth, which is precisely our variable.
+
+**SlopCodeBench** [18] (UW–Madison) measures degradation when agents iteratively
+extend **their own** prior solutions: 36 problems, 196 checkpoints, 15 agents.
+**No agent fully solves any problem end-to-end**; the best passes **14.8% of
+checkpoints**; **structural erosion rises in 77% and verbosity in 75.5% of
+trajectories**, and agent code is ~2.3× more verbose and ~2.0× more eroded than
+human repositories. The mechanism is *self-authored* code-quality erosion, not
+*injected* irrelevant files — a clean contrast that sharpens what our independent
+variable is and isn't.[^slop]
 
 [^slop]: The earlier spreadsheet recorded "93 checkpoints," "11 models," and
-    "erosion in 80% of trajectories." The verified abstract states 196
-    checkpoints, 15 agents, and erosion/verbosity in 77% / 75.5% of trajectories;
-    the verified figures are used here.
+    "erosion in 80% of trajectories." The paper states 196 checkpoints, 15
+    agents, and erosion/verbosity in 77% / 75.5% of trajectories; the verified
+    figures are used here.
 
 ---
 
-## 8. Where the gap is — our contribution
+## 8. The white space we occupy
 
-Mapping the field onto our design surfaces three genuine, defensible gaps:
+Laying the field on two axes — *is the noise variable controlled?* and *is it
+source code in a repository?* — shows the empty cell.
 
-1. **A *controlled* repo-bloat experiment with LOC as the sole independent
-   variable.** No prior benchmark holds the target bug constant and scales
-   *irrelevant* file volume at 1×/5×/20×/50× by token budget. LOCA-bench and
-   *Lost in the Noise* do controlled noise growth in **non-code** domains;
-   FeatBench and RepoMod-Bench observe size effects **observationally** in code.
-   The controlled-injection-in-a-code-repo cell is empty.
+| | Non-code domain | Source-code repository |
+|---|---|---|
+| **Controlled noise growth** | LOCA-bench, Lost in the Noise, NoLiMa | **← this benchmark (empty until now)** |
+| **Observational / uncontrolled** | — | SWE-bench, FeatBench, RepoMod-Bench |
+
+Three concrete, defensible contributions follow:
+
+1. **A controlled repo-bloat experiment with irrelevant LOC as the sole
+   independent variable.** No prior benchmark holds the target bug constant and
+   scales *irrelevant* file volume (1×/5×/20×/50× by token budget). The controlled
+   studies (LOCA-bench, Lost in the Noise) are non-code; the code studies
+   (FeatBench, RepoMod-Bench) are observational.
 
 2. **Localization *cost* as a first-class metric.** `files_read`, `bytes_read`,
-   `search_calls`, and `input_tokens_*` split at the first-edit boundary, plus the
-   FS-tap + transcript-tap dual instrumentation (design §6), are not the primary
-   target of any prior coding-agent benchmark — at most incidental tool-call
-   counts (SWE-agent, Agentless).
+   `search_calls`, and `input_tokens_*` split at the first-edit boundary, captured
+   by dual filesystem + transcript instrumentation (design §6), are not the
+   primary target of any prior coding-agent benchmark — the localization cluster
+   (§6) measures *accuracy*, and SWE-bench-style papers report at most incidental
+   tool-call counts.
 
-3. **Distractor-tier analysis** (same-package vs. same-layer vs. cross-cutting)
-   and a **pre-registered practical-threshold** verdict (≥2× cost rise, ≥0.20
-   irrelevant-read-ratio rise, ≥20 pp hidden-pass-rate drop). *Lost in the Noise*
-   uses hard-negative vs. random distractors in documents; the spatial/architectural
-   proximity taxonomy in source code, and the pre-registered thresholds-not-p-values
-   verdict, are original here.
+3. **Distractor-tier analysis and a pre-registered practical-threshold verdict.**
+   The same-package / same-layer / cross-cutting proximity taxonomy translates
+   *Lost in the Noise*'s hard-negative finding into code, and the verdict criterion
+   (≥2× cost rise, ≥0.20 irrelevant-read-ratio rise, ≥20 pp hidden-pass-rate drop —
+   thresholds, not p-values) is methodologically novel for coding-agent benchmarks.
 
-These gaps — and the per-study integration tactics that exploit them — are
-developed in [`integration-with-existing-studies.md`](integration-with-existing-studies.md).
+The per-study tactics that exploit these gaps — what to cite, adapt, reuse, or
+position against — are developed in
+[`integration-with-existing-studies.md`](integration-with-existing-studies.md).
 
 ---
 
 ## 9. References
 
-All entries verified against `export.arxiv.org/api/query` on 2026-06-12.
+All entries verified against `export.arxiv.org/api/query`; headline papers
+re-read from full text. Verified 2026-06-12.
 
 1. Modarressi et al. *NoLiMa: Long-Context Evaluation Beyond Literal Matching.* arXiv:2502.05167.
 2. Bai et al. *LongBench: A Bilingual, Multitask Benchmark for Long Context Understanding.* arXiv:2308.14508.
