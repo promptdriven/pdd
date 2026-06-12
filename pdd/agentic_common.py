@@ -67,6 +67,7 @@ def get_agentic_capabilities() -> Dict[str, Any]:
                 "providerLogDirWritesAudited": True,
                 "auditsDirectoryMetadata": True,
                 "escapedSymlinkTargets": "fail_closed",
+                "unrestrictedBashWithFilesystemRoots": "rejected",
                 "symlinkTargetAllowRoots": [
                     "cwd",
                     "addDirs",
@@ -84,6 +85,17 @@ def get_agentic_capabilities() -> Dict[str, Any]:
             },
         }
     }
+
+
+def _allowed_tools_include_unrestricted_bash(allowed_tools: Optional[str]) -> bool:
+    """Return True when allowedTools grants unrestricted Bash execution."""
+    if allowed_tools is None:
+        return False
+    for token in allowed_tools.split(","):
+        normalized = re.sub(r"\s+", "", token).lower()
+        if normalized in {"bash", "bash(*)"}:
+            return True
+    return False
 
 
 def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudePolicy:
@@ -135,6 +147,12 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
                 f"claude_policy.{key} must not contain empty paths"
             )
         normalized_roots[key] = list(roots)
+    if normalized_roots and _allowed_tools_include_unrestricted_bash(allowed_tools):
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.allowedTools must not include unrestricted Bash when "
+            "writableRoots or readOnlyRoots are declared because PDD cannot "
+            "audit shell writes outside the filesystem policy roots"
+        )
 
     no_session = policy.get("noSessionPersistence", False)
     if not isinstance(no_session, bool):
@@ -291,12 +309,23 @@ def _audit_entry_path(path: Path) -> Path:
     return path.resolve(strict=False)
 
 
-def _resolve_symlink_target_path(link_path: Path, raw_target: str) -> Path:
+def _resolve_symlink_target_path(
+    link_path: Path,
+    raw_target: str,
+    errors: List[str],
+) -> Optional[Path]:
     """Resolve a symlink target path relative to its link parent."""
     target_path = Path(raw_target)
     if not target_path.is_absolute():
         target_path = link_path.parent / target_path
-    return target_path.resolve(strict=False)
+    try:
+        return target_path.resolve(strict=False)
+    except RuntimeError as exc:
+        errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
+        return None
+    except OSError as exc:
+        errors.append(f"{link_path}: {exc}")
+        return None
 
 
 def _filesystem_signature(path: Path, errors: List[str]) -> str:
@@ -372,7 +401,9 @@ def _snapshot_audit_path(
     except OSError as exc:
         errors.append(f"{path}: {exc}")
         return
-    target_path = _resolve_symlink_target_path(path, raw_target)
+    target_path = _resolve_symlink_target_path(path, raw_target, errors)
+    if target_path is None:
+        return
     _record_escaped_symlink_target(
         path,
         target_path,
@@ -512,18 +543,30 @@ def _format_audit_paths(paths: List[str], *, limit: int = 12) -> str:
     return ", ".join(shown) + suffix
 
 
+@dataclass
+class _PddOwnedLogWrite:
+    path: Path
+    before_signature: str
+    after_signature: str
+
+
 def _record_pdd_owned_log_signature(
-    log_file: Optional[Path],
+    log_write: Optional[_PddOwnedLogWrite],
     signatures: Dict[Path, str],
+    baseline: Optional[_FilesystemPolicySnapshot],
 ) -> None:
     """Record the exact post-write signature of a PDD-owned log file."""
-    if log_file is None:
+    if log_write is None:
         return
-    errors: List[str] = []
-    signature = _filesystem_signature(log_file, errors)
-    if errors or signature == "missing":
+    entry_path = _audit_entry_path(log_write.path)
+    baseline_signature = (
+        baseline.files.get(entry_path, "missing")
+        if baseline is not None
+        else log_write.before_signature
+    )
+    if log_write.before_signature != baseline_signature:
         return
-    signatures[_audit_entry_path(log_file)] = signature
+    signatures[entry_path] = log_write.after_signature
 
 
 def _is_trusted_pdd_owned_log_change(
@@ -2128,7 +2171,7 @@ def _log_agentic_interaction(
     model: Optional[str] = None,
     false_positive: bool = False,
     include_bodies: bool = True,
-) -> Optional[Path]:
+) -> Optional[_PddOwnedLogWrite]:
     """
     Append one record per provider attempt to ``.pdd/agentic-logs/session_*.jsonl``.
 
@@ -2157,7 +2200,8 @@ def _log_agentic_interaction(
             ``response_length`` so downstream tooling can still gauge size.
 
     Returns:
-        The log file path when the write succeeds, otherwise ``None``.
+        The PDD-owned log append metadata when the write succeeds, otherwise
+        ``None``.
     """
     global _AGENTIC_SESSION_ID
 
@@ -2171,6 +2215,8 @@ def _log_agentic_interaction(
             _AGENTIC_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         log_file = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
+        before_errors: List[str] = []
+        before_signature = _filesystem_signature(log_file, before_errors)
 
         entry: Dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
@@ -2191,7 +2237,15 @@ def _log_agentic_interaction(
 
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
-        return log_file
+        after_errors: List[str] = []
+        after_signature = _filesystem_signature(log_file, after_errors)
+        if before_errors or after_errors or after_signature == "missing":
+            return None
+        return _PddOwnedLogWrite(
+            path=log_file,
+            before_signature=before_signature,
+            after_signature=after_signature,
+        )
     except Exception:
         return None  # Don't break workflow for logging errors
 
@@ -3807,6 +3861,7 @@ def run_agentic_task(
                                 false_positive=True,
                             ),
                             pdd_owned_log_signatures,
+                            filesystem_snapshot,
                         )
                         any_attempt_logged_inside = True
                         # Multi-provider configs (default): fall through to the
@@ -3925,6 +3980,7 @@ def run_agentic_task(
                             model=effective_model,
                         ),
                         pdd_owned_log_signatures,
+                        filesystem_snapshot,
                     )
                     any_attempt_logged_inside = True
 
