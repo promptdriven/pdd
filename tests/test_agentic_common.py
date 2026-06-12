@@ -726,6 +726,160 @@ def test_run_agentic_task_claude_policy_fails_on_readonly_and_out_of_scope_chang
     ]
 
 
+def test_run_agentic_task_claude_policy_detects_symlink_target_escape(
+    tmp_path, mock_env
+):
+    workspace = tmp_path / "workspace"
+    writable_root = workspace / "src"
+    outside_root = tmp_path / "outside"
+    writable_root.mkdir(parents=True)
+    outside_root.mkdir()
+    target = outside_root / "target.txt"
+    target.write_text("original", encoding="utf-8")
+    symlink_path = writable_root / "target-link.txt"
+    symlink_path.symlink_to(target)
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        symlink_path.write_text("mutated", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Try symlink escape write",
+            workspace,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert "symlink" in result.output_text
+    assert "src/target-link.txt" in result.changed_files
+
+
+def test_run_agentic_task_claude_policy_ignores_internal_retry_logs(
+    tmp_path, mock_env
+):
+    writable_root = tmp_path / "src"
+    writable_root.mkdir()
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    provider_calls = 0
+
+    def fake_provider(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return (True, "Ok", 0.0, "claude-sonnet", None)
+        (writable_root / "result.txt").write_text("generated", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Retry after false positive",
+            tmp_path,
+            max_retries=2,
+            retry_delay=0.0,
+            claude_policy=policy,
+        )
+
+    assert result.success is True
+    assert result.changed_files == ["src/result.txt"]
+    assert provider_calls == 2
+
+
+def test_run_agentic_task_claude_policy_audits_git_metadata_changes(
+    tmp_path, mock_env
+):
+    writable_root = tmp_path / "src"
+    git_dir = tmp_path / ".git"
+    writable_root.mkdir()
+    git_dir.mkdir()
+    git_config = git_dir / "config"
+    git_config.write_text("[core]\n\trepositoryformatversion = 0\n", encoding="utf-8")
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        git_config.write_text(
+            "[core]\n\trepositoryformatversion = 0\n[alias]\n\tpwn = !echo pwn\n",
+            encoding="utf-8",
+        )
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task("Try git metadata write", tmp_path, claude_policy=policy)
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert ".git/config" in result.changed_files
+
+
 def test_anthropic_claude_policy_builds_read_glob_add_dirs_no_session_json_command(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
 ):
