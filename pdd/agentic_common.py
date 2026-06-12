@@ -3695,8 +3695,6 @@ def _validated_anthropic_token_counts(
         or cache_creation is None
     ):
         return None
-    if cache_read + cache_creation > input_tokens:
-        return None
     return input_tokens, output_tokens, cache_read, cache_creation
 
 
@@ -3859,6 +3857,14 @@ def _has_complete_cache_counters(usage: Dict[str, Any]) -> bool:
     )
 
 
+def _has_required_token_counters(usage: Dict[str, Any]) -> bool:
+    """Return True when required input/output counters are explicit and valid."""
+    return (
+        _validated_token_counter(usage, _INPUT_TOKEN_KEYS, required=True) is not None
+        and _validated_token_counter(usage, _OUTPUT_TOKEN_KEYS, required=True) is not None
+    )
+
+
 def _has_nonzero_or_invalid_cache_counter(usage: Dict[str, Any]) -> bool:
     """Return True when aggregate cache counters should not be silently dropped."""
     for aliases in (_CACHE_READ_TOKEN_KEYS, _CACHE_CREATION_TOKEN_KEYS):
@@ -3951,10 +3957,16 @@ def _extract_anthropic_standard_usage(
                 and isinstance(record_usage, dict)
                 and isinstance(aggregate_usage, dict)
             ):
-                record_usage = _merge_missing_cache_counters(
-                    record_usage,
-                    aggregate_usage,
-                )
+                if (
+                    not _has_complete_cache_counters(record_usage)
+                    and _has_required_token_counters(aggregate_usage)
+                ):
+                    record_usage = aggregate_usage
+                else:
+                    record_usage = _merge_missing_cache_counters(
+                        record_usage,
+                        aggregate_usage,
+                    )
             record = (
                 _build_claude_usage_record(model_name, record_usage)
                 if isinstance(record_usage, dict)

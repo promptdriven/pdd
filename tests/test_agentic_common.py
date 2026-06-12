@@ -29,6 +29,7 @@ from pdd.agentic_common import (
     _classify_permanent_error,
     _detect_claude_interactive_auth_failure,
     _estimate_claude_interactive_session_cost,
+    _extract_anthropic_standard_usage,
     _extract_json_from_output,
     _find_cli_binary,
     _is_permanent_error,
@@ -1755,6 +1756,35 @@ def test_standard_claude_policy_json_usage_prefers_complete_aggregate_for_incons
         ],
     }
     json.dumps(provider_result[4])
+
+
+def test_standard_claude_policy_json_usage_accepts_aggregate_cache_larger_than_input():
+    """Aggregate Claude usage buckets can legitimately exceed fresh input tokens."""
+    data = {
+        "result": "ok",
+        "model": "claude-opus-4-8",
+        "usage": {
+            "input_tokens": 2225,
+            "output_tokens": 140,
+            "cache_read_input_tokens": 24991,
+            "cache_creation_input_tokens": 27351,
+        },
+    }
+
+    usage = _extract_anthropic_standard_usage(data, actual_model=None)
+
+    assert usage == {
+        "claude": [
+            {
+                "model": "claude-opus-4-8",
+                "input_tokens": 2225,
+                "output_tokens": 140,
+                "cached_input_tokens": 24991,
+                "cache_creation_input_tokens": 27351,
+            },
+        ],
+    }
+    assert _calculate_anthropic_cost(data) > 0.0
 
 
 def test_standard_claude_policy_json_usage_model_usage_only_counters_estimate_cost(
