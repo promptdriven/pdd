@@ -4658,6 +4658,11 @@ def code_generator_main(
         # User cancelled - re-raise to stop the sync loop
         raise
     except Exception as e:
+        if (
+            e.__class__.__name__ == "EstimateOnlyResult"
+            and isinstance(getattr(e, "estimate", None), dict)
+        ):
+            raise
         if isinstance(e, click.UsageError):
             raise
 

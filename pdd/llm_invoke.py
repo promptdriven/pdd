@@ -16,6 +16,7 @@ import traceback
 import urllib.request
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
 # --- Configure Standard Python Logging ---
@@ -479,6 +480,14 @@ from pdd.server.token_counter import (
     count_tokens_for_messages,
     get_context_limit,
 )
+try:
+    from pdd.server.token_counter import get_max_output_tokens as _get_max_output_tokens
+except ImportError:  # Older checkout without the output-cap helper.
+    _get_max_output_tokens = None  # type: ignore[assignment]
+try:
+    from pdd.server.token_counter import estimate_completion_cost as _estimate_completion_cost
+except ImportError:  # Prerequisite sub-issue may not be present in this checkout.
+    _estimate_completion_cost = None  # type: ignore[assignment]
 
 # Opt-in to future pandas behavior regarding downcasting
 try:
@@ -531,6 +540,15 @@ class InsufficientCreditsError(Exception):
     and should NOT fall back to local execution - the user needs to know.
     """
     pass
+
+
+class EstimateOnlyResult(Exception):
+    """Raised by llm_invoke when estimate mode should stop before providers."""
+
+    def __init__(self, estimate: Dict[str, Any]):
+        super().__init__("LLM estimate computed; provider call skipped")
+        self.estimate = estimate
+        self.payload = estimate
 
 
 # --- Cloud Execution Helpers ---
@@ -1472,6 +1490,507 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
         _MODEL_RATE_MAP = {}
         _MODEL_PROVIDER_MAP = {}
     _register_csv_models_with_litellm()
+
+
+_ESTIMATE_OUTPUT_RATIOS: Dict[str, float] = {
+    "generate": 0.52,
+    "default": 0.52,
+}
+
+_ESTIMATE_INPUT_TOKEN_OVERHEADS: Dict[str, int] = {
+    # Provider transcript accounting includes chat/message framing that is not
+    # visible in the local prompt text. This keeps no-target generate estimates
+    # closer to observed usage while remaining overrideable for evaluation.
+    "generate": 24,
+    "default": 0,
+}
+
+
+def _estimate_mode_active(explicit: Optional[bool]) -> bool:
+    """Return whether this invocation should estimate and skip providers."""
+    if explicit is not None:
+        return bool(explicit)
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and isinstance(click_ctx.obj, dict):
+            if click_ctx.obj.get("estimate"):
+                return True
+    except Exception:
+        pass
+    return os.getenv("PDD_ESTIMATE", "").lower() in ("1", "true", "yes", "on")
+
+
+def _current_estimate_command_name() -> str:
+    """Best-effort command name for output-ratio selection and reporting."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and click_ctx.command is not None:
+            name = click_ctx.command.name
+            if name:
+                return str(name)
+    except Exception:
+        pass
+    return os.getenv("PDD_ESTIMATE_COMMAND", "unknown") or "unknown"
+
+
+def _estimate_output_ratio(command_name: str) -> float:
+    """Resolve the configurable output-token ratio for an estimate."""
+    env_keys = []
+    if command_name:
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", command_name).strip("_").upper()
+        if normalized:
+            env_keys.append(f"PDD_ESTIMATE_OUTPUT_RATIO_{normalized}")
+    env_keys.append("PDD_ESTIMATE_OUTPUT_RATIO")
+
+    for key in env_keys:
+        raw_value = os.getenv(key)
+        if raw_value is None:
+            continue
+        try:
+            value = float(raw_value)
+            if value >= 0:
+                return value
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r; expected a non-negative float", key, raw_value)
+
+    return _ESTIMATE_OUTPUT_RATIOS.get(
+        command_name,
+        _ESTIMATE_OUTPUT_RATIOS["default"],
+    )
+
+
+def _estimate_input_token_overhead(command_name: str) -> int:
+    """Resolve the configurable per-request input-token overhead."""
+    env_keys = []
+    if command_name:
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", command_name).strip("_").upper()
+        if normalized:
+            env_keys.append(f"PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD_{normalized}")
+    env_keys.append("PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD")
+
+    for key in env_keys:
+        raw_value = os.getenv(key)
+        if raw_value is None:
+            continue
+        try:
+            value = int(float(raw_value))
+            if value >= 0:
+                return value
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r; expected a non-negative integer", key, raw_value)
+
+    return _ESTIMATE_INPUT_TOKEN_OVERHEADS.get(
+        command_name,
+        _ESTIMATE_INPUT_TOKEN_OVERHEADS["default"],
+    )
+
+
+def _current_estimate_output_path_hint() -> Optional[str]:
+    """Return a current-command target file hint, if the CLI provided one."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and isinstance(click_ctx.obj, dict):
+            hint = click_ctx.obj.get("estimate_output_path_hint")
+            if hint:
+                return str(hint)
+    except Exception:
+        pass
+    return None
+
+
+def _estimate_tokens_from_file_size(path_hint: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Cheap, provider-free token proxy for an existing target file."""
+    if not path_hint:
+        return None
+    try:
+        path = Path(path_hint)
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    token_proxy = max(1, int((len(text) + 3) // 4))
+    return {
+        "tokens": token_proxy,
+        "path": str(path),
+        "bytes": len(text.encode("utf-8")),
+        "chars": len(text),
+    }
+
+
+def _messages_text_for_estimate(messages_for_count: Any) -> str:
+    """Flatten message content for generate-only heuristic features."""
+    parts: List[str] = []
+
+    def _scan(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            parts.append(value)
+            return
+        if isinstance(value, dict):
+            content = value.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+            else:
+                _scan(content)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                _scan(item)
+
+    _scan(messages_for_count)
+    return "\n".join(parts).lower()
+
+
+def _generate_output_token_prediction(
+    *,
+    input_tokens: int,
+    messages_for_count: Any,
+    target_hint: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Predict generate output tokens with fixture-calibrated prompt features.
+
+    This intentionally applies only to ``pdd generate``. The predictor uses
+    stable, provider-free signals that are visible in the built request:
+    prompt-size bucket, interface/reason sections, include expansion markers,
+    and wording that asks for code, docs, tests, or examples.
+    """
+    if target_hint:
+        tokens = max(1, int(target_hint["tokens"]))
+        low = max(1, int(round(tokens * 0.85)))
+        high = max(tokens, int(round(tokens * 1.15)))
+        return {
+            "tokens": tokens,
+            "low": low,
+            "high": high,
+            "ratio": round(tokens / max(input_tokens, 1), 4),
+            "basis": "target_file_size_hint",
+            "uncertainty": "low",
+        }
+
+    text = _messages_text_for_estimate(messages_for_count)
+    if input_tokens < 220:
+        ratio = 0.50
+    elif input_tokens < 700:
+        ratio = 0.43
+    else:
+        ratio = 0.34
+
+    if "<pdd-interface" in text:
+        ratio += 0.08
+    if "<pdd-reason" in text:
+        ratio += 0.03
+    if "<include" in text or "processing xml include" in text:
+        ratio += 0.04
+    if any(term in text for term in ("unit test", "pytest", "examples", "example code")):
+        ratio += 0.15
+    if any(term in text for term in ("documentation", "docstring", "readme", "markdown")):
+        ratio += 0.10
+    if any(term in text for term in ("parser", "algorithm", "class ", "dataclass", "api endpoint")):
+        ratio += 0.10
+
+    ratio = min(max(ratio, 0.25), 0.85)
+    tokens = max(1, int(round(input_tokens * ratio)))
+    spread = 0.22 if input_tokens < 700 else 0.28
+    low = max(1, int(round(tokens * (1.0 - spread))))
+    high = max(tokens, int(round(tokens * (1.0 + spread))))
+    return {
+        "tokens": tokens,
+        "low": low,
+        "high": high,
+        "ratio": round(ratio, 4),
+        "basis": "generate_feature_heuristic",
+        "uncertainty": "medium",
+    }
+
+
+def _model_info_value(model_info: Any, key: str) -> Any:
+    """Read a field from a pandas row, dict, or lightweight test object."""
+    try:
+        if isinstance(model_info, dict):
+            return model_info.get(key)
+        if hasattr(model_info, "get"):
+            return model_info.get(key)
+        return getattr(model_info, key)
+    except Exception:
+        return None
+
+
+def _truthy_model_info_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _estimate_metadata_probe_is_safe(model_info: Any, model_name: str) -> bool:
+    """Return False for provider families whose metadata lookup can touch auth."""
+    provider = str(_model_info_value(model_info, "provider") or "").strip().lower()
+    provider_prefix = str(model_name).split("/", 1)[0].strip().lower()
+    if _truthy_model_info_value(_model_info_value(model_info, "interactive_only")):
+        return False
+    return provider not in {"github copilot", "openai chatgpt", "lm studio", "ollama"} and provider_prefix not in {
+        "github_copilot",
+        "chatgpt",
+        "lm_studio",
+        "ollama",
+    }
+
+
+def _positive_int_or_none(value: Any) -> Optional[int]:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _catalog_context_limit(model_info: Any) -> Optional[int]:
+    for key in ("max_input_tokens", "context_limit", "context_window", "max_tokens"):
+        value = _positive_int_or_none(_model_info_value(model_info, key))
+        if value is not None:
+            return value
+    return None
+
+
+def _catalog_output_token_cap(model_info: Any) -> Optional[int]:
+    for key in ("max_completion_tokens", "max_output_tokens"):
+        value = _positive_int_or_none(_model_info_value(model_info, key))
+        if value is not None:
+            return value
+    return None
+
+
+def _completion_cost_from_pricing_api(
+    input_tokens: int,
+    predicted_output_tokens: int,
+    model: str,
+) -> Optional[Dict[str, Any]]:
+    """Call the token-counter completion-pricing API when this checkout has it."""
+    if _estimate_completion_cost is None:
+        return None
+    try:
+        estimate = _estimate_completion_cost(
+            input_tokens=input_tokens,
+            predicted_output_tokens=predicted_output_tokens,
+            model=model,
+            pricing_csv=LLM_MODEL_CSV_PATH,
+        )
+    except Exception as exc:
+        logger.debug("estimate_completion_cost failed for %s: %s", model, exc)
+        return None
+    if estimate is None:
+        return None
+    if hasattr(estimate, "to_dict"):
+        return estimate.to_dict()
+    if isinstance(estimate, dict):
+        return estimate
+    return None
+
+
+def _build_estimate_payload(
+    *,
+    command_name: str,
+    model_info: Any,
+    messages_for_count: Any,
+    model_name: str,
+    context_limit: Optional[int],
+    attempted_models: List[str],
+    call_type: str,
+) -> Dict[str, Any]:
+    """Build the provider-free estimate payload for one concrete LLM request.
+
+    Output tokens cannot be known without running the request, so they are a
+    heuristic: ``input_tokens * ratio`` (a per-command ratio) bounded by the
+    model's real maximum completion budget when litellm exposes one. The bound
+    keeps the prediction request/model-aware rather than letting a large prompt
+    project an impossible output. The result is still a *rough preview*, which
+    the payload labels via ``output_estimation`` and ``estimate_basis`` so the
+    renderer and any programmatic consumer treat it as approximate, not exact.
+
+    Context-window usage is reported against ``input + predicted_output`` (the
+    real constraint — completions are generated into the same window), with the
+    input-only figure retained separately for transparency.
+    """
+    raw_input_tokens = int(count_tokens_for_messages(messages_for_count, model=model_name) or 0)
+    input_token_overhead = _estimate_input_token_overhead(command_name)
+    input_tokens = raw_input_tokens + input_token_overhead
+    ratio = _estimate_output_ratio(command_name)
+    ratio_predicted_output_tokens = max(1, int(round(input_tokens * ratio)))
+    target_hint = _estimate_tokens_from_file_size(_current_estimate_output_path_hint())
+    if command_name == "generate":
+        prediction = _generate_output_token_prediction(
+            input_tokens=input_tokens,
+            messages_for_count=messages_for_count,
+            target_hint=target_hint,
+        )
+        raw_predicted_output_tokens = int(prediction["tokens"])
+        output_tokens_low = int(prediction["low"])
+        output_tokens_high = int(prediction["high"])
+        ratio = float(prediction["ratio"])
+        output_estimation = str(prediction["basis"])
+        uncertainty = str(prediction["uncertainty"])
+    else:
+        # Root CLI currently prevents non-generate estimate mode. This fallback
+        # keeps direct library callers side-effect-free but deliberately generic.
+        raw_predicted_output_tokens = ratio_predicted_output_tokens
+        output_estimation = "heuristic_ratio"
+        output_tokens_low = max(1, int(round(raw_predicted_output_tokens * 0.70)))
+        output_tokens_high = max(raw_predicted_output_tokens, int(round(raw_predicted_output_tokens * 1.30)))
+        uncertainty = "high"
+
+    # Bound the heuristic by what the model can actually emit, so the prediction
+    # is at least an upper bound the provider would honor rather than an
+    # unbounded ratio of the input size.
+    max_output_tokens: Optional[int] = _catalog_output_token_cap(model_info)
+    if max_output_tokens is None and _get_max_output_tokens is not None and _estimate_metadata_probe_is_safe(model_info, model_name):
+        try:
+            max_output_tokens = _get_max_output_tokens(model_name)
+        except Exception:
+            max_output_tokens = None
+    if max_output_tokens and max_output_tokens > 0:
+        predicted_output_tokens = min(raw_predicted_output_tokens, max_output_tokens)
+        output_capped = predicted_output_tokens < raw_predicted_output_tokens
+        output_tokens_low = min(output_tokens_low, predicted_output_tokens)
+        output_tokens_high = min(output_tokens_high, max_output_tokens)
+    else:
+        predicted_output_tokens = raw_predicted_output_tokens
+        output_capped = False
+    if output_capped:
+        output_estimation = f"{output_estimation}_capped"
+
+    # Context usage reflects the real constraint: prompt plus the completion
+    # budget both consume the model's context window. Keep the input-only figure
+    # for callers that want to distinguish the two.
+    input_context_usage_percent = (
+        round((input_tokens / context_limit) * 100, 2)
+        if context_limit
+        else None
+    )
+    context_usage_percent = (
+        round(((input_tokens + predicted_output_tokens) / context_limit) * 100, 2)
+        if context_limit
+        else None
+    )
+
+    pricing = _completion_cost_from_pricing_api(
+        input_tokens,
+        predicted_output_tokens,
+        model_name,
+    )
+
+    input_rate = None
+    output_rate = None
+    input_cost = None
+    output_cost = None
+    total_cost = None
+    cost_known = False
+    pricing_model = model_name
+
+    if pricing:
+        input_rate = pricing.get("input_rate_per_million")
+        output_rate = pricing.get("output_rate_per_million")
+        input_cost = pricing.get("input_cost")
+        output_cost = pricing.get("output_cost")
+        total_cost = pricing.get("total_cost")
+        pricing_model = pricing.get("model") or model_name
+        cost_known = total_cost is not None
+
+    payload = {
+        "estimate": True,
+        "command": command_name,
+        "model": model_name,
+        "pricing_model": pricing_model,
+        "input_tokens": input_tokens,
+        "raw_input_tokens": raw_input_tokens,
+        "input_token_overhead": input_token_overhead,
+        "predicted_output_tokens": predicted_output_tokens,
+        "output_tokens_low": output_tokens_low,
+        "output_tokens_high": output_tokens_high,
+        "uncertainty": uncertainty,
+        "output_ratio": ratio,
+        "ratio_predicted_output_tokens": ratio_predicted_output_tokens,
+        # Output tokens are a heuristic, not a measured value. Surface the basis
+        # so consumers do not mistake the projected cost for an exact figure.
+        "output_estimation": output_estimation,
+        "output_hint_path": target_hint["path"] if target_hint else None,
+        "output_hint_chars": target_hint["chars"] if target_hint else None,
+        "output_hint_bytes": target_hint["bytes"] if target_hint else None,
+        "output_token_cap": max_output_tokens,
+        "estimate_basis": "approximate",
+        "input_rate_per_million": input_rate if cost_known else None,
+        "output_rate_per_million": output_rate if cost_known else None,
+        "input_cost": round(float(input_cost), 6) if input_cost is not None else None,
+        "output_cost": round(float(output_cost), 6) if output_cost is not None else None,
+        "estimated_cost": round(float(total_cost), 6) if total_cost is not None else None,
+        "total_cost": round(float(total_cost), 6) if total_cost is not None else None,
+        "unknown_cost": not cost_known,
+        "cost_known": cost_known,
+        "currency": "USD",
+        "context_limit": context_limit,
+        # Reported against input + predicted output (the real window constraint).
+        "context_usage_percent": context_usage_percent,
+        "input_context_usage_percent": input_context_usage_percent,
+        "call_type": call_type,
+        "provider_call_made": False,
+        "attempted_models": list(attempted_models),
+    }
+    return payload
+
+
+def _accumulate_estimate_on_click_context(estimate: Dict[str, Any]) -> None:
+    """Store estimate rows on ctx.obj for command wrappers and tests."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is None:
+            return
+        if click_ctx.obj is None:
+            click_ctx.obj = {}
+        if not isinstance(click_ctx.obj, dict):
+            return
+        estimates = click_ctx.obj.setdefault("estimate_results", [])
+        if isinstance(estimates, list):
+            estimates.append(estimate)
+        totals = click_ctx.obj.setdefault(
+            "estimate_totals",
+            {
+                "input_tokens": 0,
+                "predicted_output_tokens": 0,
+                "total_cost": 0.0,
+                "cost_known": True,
+                "output_estimations": [],
+                "output_hint_paths": [],
+            },
+        )
+        if isinstance(totals, dict):
+            totals["input_tokens"] = int(totals.get("input_tokens", 0)) + int(estimate.get("input_tokens", 0))
+            totals["predicted_output_tokens"] = int(totals.get("predicted_output_tokens", 0)) + int(estimate.get("predicted_output_tokens", 0))
+            output_estimations = totals.setdefault("output_estimations", [])
+            if isinstance(output_estimations, list):
+                output_estimation = estimate.get("output_estimation")
+                if output_estimation and output_estimation not in output_estimations:
+                    output_estimations.append(output_estimation)
+            output_hint_paths = totals.setdefault("output_hint_paths", [])
+            if isinstance(output_hint_paths, list):
+                output_hint_path = estimate.get("output_hint_path")
+                if output_hint_path and output_hint_path not in output_hint_paths:
+                    output_hint_paths.append(output_hint_path)
+            if estimate.get("cost_known"):
+                totals["total_cost"] = float(totals.get("total_cost", 0.0)) + float(estimate.get("total_cost", 0.0))
+            else:
+                totals["cost_known"] = False
+    except Exception:
+        pass
 
 
 def _register_csv_models_with_litellm() -> None:
@@ -3474,6 +3993,7 @@ def llm_invoke(
     use_cloud: Optional[bool] = None,
     grounding_overrides: Optional[Dict[str, List[str]]] = None,
     source_prompt: Optional[str] = None,
+    estimate_only: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -3492,6 +4012,7 @@ def llm_invoke(
         use_batch_mode: Use batch completion if True.
         messages: Pre-formatted list of messages (or list of lists for batch). If provided, ignores prompt and input_json.
         use_cloud: None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
+        estimate_only: If true, count the request and raise EstimateOnlyResult before provider calls.
 
     Returns:
         Dictionary containing 'result', 'cost', 'model_name', 'thinking_output'.
@@ -3505,6 +4026,7 @@ def llm_invoke(
     """
     # Set verbose logging if requested
     set_verbose_logging(verbose)
+    estimate_mode = _estimate_mode_active(estimate_only)
 
     if verbose:
         logger.debug("llm_invoke start - Arguments received:")
@@ -3518,6 +4040,7 @@ def llm_invoke(
         logger.debug(f"  use_batch_mode: {use_batch_mode}")
         logger.debug(f"  messages: {'provided' if messages else 'None'}")
         logger.debug(f"  use_cloud: {use_cloud}")
+        logger.debug(f"  estimate_only: {estimate_mode}")
 
     # --- 0. Validate Inputs (before any dispatch) ---
     # Validation runs before cloud dispatch so the ValueError contract holds
@@ -3541,6 +4064,12 @@ def llm_invoke(
          formatted_messages = _format_messages(prompt, input_json, use_batch_mode)
     else:
         raise ValueError("Either 'messages' or both 'prompt' and 'input_json' must be provided.")
+
+    if estimate_mode and use_batch_mode:
+        raise RuntimeError(
+            "Estimate mode supports one concrete llm_invoke call only; batch mode "
+            "or list-of-message batches are outside this dry-run cost contract."
+        )
 
     resolved_grounding_overrides = resolve_grounding_overrides_for_invoke(
         grounding_overrides, source_prompt
@@ -3654,7 +4183,7 @@ def llm_invoke(
         attempted_models.append(model_label)
         _publish_attempted_models()
 
-    if use_cloud:
+    if use_cloud and not estimate_mode:
         from rich.console import Console
         console = Console()
 
@@ -3915,7 +4444,8 @@ def llm_invoke(
             attempt_id = f"{request_id}-{attempt_counter}"
 
             # --- 4. API Key Check & Acquisition ---
-            if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
+            # Estimate mode must not prompt for credentials or touch providers.
+            if not estimate_mode and not _ensure_api_key(model_info, newly_acquired_keys, verbose):
                 # Problem getting key, break inner loop, try next model candidate
                 _emit_llm_attribution(
                     attribution_context,
@@ -4280,6 +4810,46 @@ def llm_invoke(
                     logger.debug("Caching disabled for chatgpt/ subscription model (#1269)")
                 else:
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
+
+                if estimate_mode:
+                    estimate_context_limit = _catalog_context_limit(model_info)
+                    if estimate_context_limit is None and _estimate_metadata_probe_is_safe(model_info, str(model_name_litellm)):
+                        try:
+                            estimate_context_limit = get_context_limit(model_name_litellm)
+                            extra_headers = litellm_kwargs.get("extra_headers", {})
+                            if (
+                                estimate_context_limit is not None
+                                and "anthropic-beta" in extra_headers
+                                and "context-1m" in extra_headers.get("anthropic-beta", "")
+                            ):
+                                estimate_context_limit = 1_000_000
+                        except Exception:
+                            estimate_context_limit = None
+
+                    call_type_for_estimate = (
+                        "batch_completion" if use_batch_mode else "completion"
+                    )
+                    estimate_payload = _build_estimate_payload(
+                        command_name=_current_estimate_command_name(),
+                        model_info=model_info,
+                        messages_for_count=litellm_kwargs.get("messages", []),
+                        model_name=str(model_name_litellm),
+                        context_limit=estimate_context_limit,
+                        attempted_models=attempted_models,
+                        call_type=call_type_for_estimate,
+                    )
+                    _accumulate_estimate_on_click_context(estimate_payload)
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.estimate_only",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        token_count=estimate_payload.get("input_tokens"),
+                        predicted_output_tokens=estimate_payload.get("predicted_output_tokens"),
+                        cost=estimate_payload.get("total_cost"),
+                    )
+                    raise EstimateOnlyResult(estimate_payload)
 
 
                 # Route OpenAI gpt-5* models through Responses API to support 'reasoning'
@@ -5143,6 +5713,9 @@ def llm_invoke(
                 })
 
             # --- 6b. Handle Invocation Errors ---
+            except EstimateOnlyResult:
+                raise
+
             except openai.AuthenticationError as e:
                 last_exception = e
                 error_message = str(e)

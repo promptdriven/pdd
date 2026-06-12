@@ -1,12 +1,12 @@
-<pdd-reason>CLI commands for the Generate Suite: generate, test, and example, with GitHub URL detection for agentic modes.</pdd-reason>
+<pdd-reason>CLI commands for generate/test/example; dry-run cost estimates are supported for standard generate only.</pdd-reason>
 <pdd-interface>
 {
   "type": "cli",
   "cli": {
     "commands": [
-      {"name": "generate", "description": "Generate code from prompt or trigger agentic architecture from GitHub issue"},
-      {"name": "test", "description": "Generate or enhance unit tests, or generate/link prompt user stories"},
-      {"name": "example", "description": "Generate context examples from prompt and code"}
+      {"name": "generate", "description": "Generate code from a prompt or trigger agentic architecture from a GitHub issue / route PRD modes; support standard dry-run estimates only for the prompt-file code generation path."},
+      {"name": "test", "description": "Generate or enhance unit tests, or generate/link prompt user stories."},
+      {"name": "example", "description": "Generate context examples from prompt and code."}
     ]
   }
 }
@@ -47,11 +47,13 @@
        non-interactive. In strict mode, unresolved deterministic checkup findings
        after an interactive session MUST block downstream generation.
      - **Logic**: Call `code_generator_main` with parsed options.
+     - **Estimate Mode**: If global estimate mode is active (`ctx.obj["estimate"]` or `PDD_ESTIMATE=1`), the standard prompt-file path must temporarily force path resolution/overwrite checks (`ctx.obj["force"] = True`) before calling `code_generator_main`, then restore the previous force value. Also temporarily replace `pdd.code_generator_main.incremental_code_generator_func` with a no-op `(None, False, 0.0, "estimate")` fallback so an existing output file does not route the estimate through the multi-call incremental diff/patch helper. Restore the original incremental function in `finally`. Catch `llm_invoke.EstimateOnlyResult` and return its payload as `(payload, 0.0, payload["model"])` before evidence manifests or command output writes occur. Reject only agentic GitHub issue mode and `--incremental --experimental-prd` mode with `click.UsageError` because they dispatch external/multi-step workflows. Keep command-local `generate --dry-run` as the PRD dry-run flag; do not reinterpret it as cost estimation.
      - **Decorators**: `@log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)`, `@track_cost`.
 
   2. **example**:
      - **Interface**: `prompt_file`, `code_file` (args), `--output`, `--format` (choice: code, md).
      - **Logic**: Call `context_generator_main`.
+     - **Estimate Mode**: unsupported in this first version. The root CLI rejects estimate mode for `example` before dispatch with `Estimate mode currently supports `generate` only.`
      - **Decorators**: `@log_operation(operation="example", clears_run_report=True, updates_fingerprint=True)`, `@track_cost`. The `clears_run_report=True` flag mirrors the `generate` decorator so a successful `pdd example` invalidates any stale `.pdd/meta/<module>_<language>_run.json` for the affected module; without it, fingerprints would be refreshed while runtime verification state could still describe the pre-mutation example output.
 
   3. **test**: Supports Agentic issue testing, user-story validation artifacts, and Manual (`--manual`) unit-test generation.
@@ -60,11 +62,13 @@
      - **Story Generation Mode**: Triggered when not `--manual`, `--issue <url|number|issue.md>` is provided, and every positional arg is a `.prompt` file: `pdd test --issue <url|number|issue.md> <*.prompt>`. Generate a reviewable, LLM-authored `user_stories/story__*.md` user story from the resolved issue text via `generate_user_story`, while withholding prompt file content from the story author. The prompt files are used only as linked artifacts in `pdd-story-prompts` metadata for later validation. Honor `--output` and `PDD_USER_STORIES_DIR`, and surface the generated story path plus linked prompts. Missing/unresolvable issue sources or invalid LLM story output must hard-fail with a clear error; do not fall back to prompt-authored or deterministic story generation.
      - **Story Metadata Linking Mode**: Triggered when not `--manual` and exactly one positional arg is a Markdown story file whose basename starts with `story__`. Call `cache_story_prompt_links` so existing stories receive or refresh `pdd-story-prompts` metadata used by `pdd detect --stories`.
      - **Manual Unit-Test Mode**: Triggered by `--manual`, or by non-URL non-story inputs that fall through to legacy test generation. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
+     - **Estimate Mode**: unsupported in this first version. The root CLI rejects estimate mode for `test` before dispatch with `Estimate mode currently supports `generate` only.`
      - **Decorators**: `@log_operation(operation="test", updates_run_report=True)`, `@track_cost`.
 
 % Implementation Details
   - Use `GenerateCommand(click.Command)` to handle help text for conditionally required arguments.
   - Defer heavy imports (like `code_generator_main`) to avoid slow module load.
+  - Identify `EstimateOnlyResult` without importing `llm_invoke` at module import time; convert it to the normal `(result, cost, model)` command tuple. Early `click.UsageError` guards are only for agentic/external workflows that cannot safely produce a local estimate payload.
   - Use `handle_error(e, command_name, quiet)` for general exceptions.
   - **CRITICAL**: Re-raise `click.Abort` and `click.UsageError` type exceptions; do not swallow them in `handle_error`.
   - Use `rich.console.Console` for stylized output in agentic modes.

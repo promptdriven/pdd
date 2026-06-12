@@ -553,7 +553,8 @@ def process_backtick_includes(
             else:
                 if not _looks_like_user_intent_path(file_path):
                     return match.group(0)
-            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
+            if not _is_quiet_mode():
+                console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             if _failed is not None:
                 _failed.append(file_path)
             return f"```[File not found: {file_path}]```"
@@ -812,7 +813,8 @@ def process_include_tags(
                 encoded_string = base64.b64encode(content).decode('utf-8')
                 return f"data:{mime_type};base64,{encoded_string}"
             else:
-                console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
+                if not _is_quiet_mode():
+                    console.print(f"Processing XML include: [cyan]{full_path}[/cyan]")
                 with open(full_path, 'r', encoding='utf-8') as file:
                     content = file.read()
                     
@@ -1023,7 +1025,8 @@ def process_include_tags(
                 if not _looks_like_user_intent_path(file_path):
                     return match.group(0)
 
-            console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
+            if not _is_quiet_mode():
+                console.print(f"[bold red]Warning:[/bold red] File not found: {file_path}")
             if _failed is not None:
                 _failed.append(file_path)
             return f"[File not found: {file_path}]"
@@ -1357,7 +1360,8 @@ def process_include_many_tags(
                 else:
                     if not _looks_like_user_intent_path(p):
                         continue
-                console.print(f"[bold red]Warning:[/bold red] File not found: {p}")
+                if not _is_quiet_mode():
+                    console.print(f"[bold red]Warning:[/bold red] File not found: {p}")
                 if _failed is not None:
                     _failed.append(p)
                 contents.append(f"[File not found: {p}]")

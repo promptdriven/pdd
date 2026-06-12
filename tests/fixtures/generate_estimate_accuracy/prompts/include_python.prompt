@@ -1,0 +1,5 @@
+Use the included project notes and generate a Python text parser.
+
+<include>../includes/shared_helpers.md</include>
+
+The parser should expose `parse_records(text: str) -> list[dict[str, str]]`.
