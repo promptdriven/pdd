@@ -27,7 +27,6 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
-_PDD_OWNED_AUDIT_LOG_ROOT = Path(".pdd") / "agentic-logs"
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
@@ -63,7 +62,9 @@ def get_agentic_capabilities() -> Dict[str, Any]:
                 "readOnlyRoots": True,
                 "enforcement": "post_run_audit_fail_closed",
                 "auditsGitMetadata": True,
-                "excludedInternalPaths": [".pdd/agentic-logs"],
+                "auditsLinkedGitMetadata": True,
+                "pddOwnedLogChanges": "exact_signature_verified_only",
+                "providerLogDirWritesAudited": True,
                 "escapedSymlinkTargets": "fail_closed",
                 "nonFollowingPolicyRootIdentity": True,
             },
@@ -218,6 +219,51 @@ def _resolve_policy_roots(
         resolved = _resolve_policy_path(cwd, raw_path)
         if resolved not in roots:
             roots.append(resolved)
+    return roots
+
+
+def _resolve_git_metadata_path(base_dir: Path, raw_path: str) -> Path:
+    """Resolve a git metadata path from a gitdir/commondir pointer file."""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = base_dir / path
+    return path.resolve(strict=False)
+
+
+def _linked_git_metadata_roots(cwd: Path) -> List[Path]:
+    """Return linked-worktree git metadata roots referenced by cwd/.git."""
+    git_pointer = cwd / ".git"
+    try:
+        if not git_pointer.is_file():
+            return []
+        line = git_pointer.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+    except (IndexError, OSError, UnicodeError):
+        return []
+
+    if not line.lower().startswith("gitdir:"):
+        return []
+
+    raw_gitdir = line.split(":", 1)[1].strip()
+    if not raw_gitdir:
+        return []
+
+    roots: List[Path] = []
+    git_dir = _resolve_git_metadata_path(git_pointer.parent, raw_gitdir)
+    roots.append(git_dir)
+
+    common_dir_file = git_dir / "commondir"
+    try:
+        raw_common_dir = common_dir_file.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines()[0].strip()
+    except (IndexError, OSError, UnicodeError):
+        raw_common_dir = ""
+
+    if raw_common_dir:
+        common_dir = _resolve_git_metadata_path(git_dir, raw_common_dir)
+        if common_dir not in roots:
+            roots.append(common_dir)
     return roots
 
 
@@ -399,6 +445,7 @@ def _take_filesystem_policy_snapshot(
     roots = [resolved_cwd]
     for key in ("addDirs", "writableRoots", "readOnlyRoots"):
         roots.extend(_resolve_policy_roots(resolved_cwd, policy, key))
+    roots.extend(_linked_git_metadata_roots(resolved_cwd))
 
     files: Dict[Path, str] = {}
     errors: List[str] = []
@@ -435,10 +482,29 @@ def _format_audit_paths(paths: List[str], *, limit: int = 12) -> str:
     return ", ".join(shown) + suffix
 
 
-def _is_pdd_owned_audit_log_path(cwd: Path, path: Path) -> bool:
-    """Return True for PDD's internal agentic log files."""
-    log_root = cwd.resolve(strict=False) / _PDD_OWNED_AUDIT_LOG_ROOT
-    return _path_is_within(path, log_root)
+def _record_pdd_owned_log_signature(
+    log_file: Optional[Path],
+    signatures: Dict[Path, str],
+) -> None:
+    """Record the exact post-write signature of a PDD-owned log file."""
+    if log_file is None:
+        return
+    errors: List[str] = []
+    signature = _filesystem_signature(log_file, errors)
+    if errors or signature == "missing":
+        return
+    signatures[_audit_entry_path(log_file)] = signature
+
+
+def _is_trusted_pdd_owned_log_change(
+    path: Path,
+    after_signature: Optional[str],
+    signatures: Dict[Path, str],
+) -> bool:
+    """Return True only for exact PDD-owned log writes with matching signatures."""
+    if after_signature is None:
+        return False
+    return signatures.get(path) == after_signature
 
 
 def _escaped_symlink_target_for_path(
@@ -456,6 +522,7 @@ def _audit_filesystem_policy(
     cwd: Path,
     policy: Optional[ClaudePolicy],
     before: Optional[_FilesystemPolicySnapshot],
+    pdd_owned_log_signatures: Optional[Dict[Path, str]] = None,
 ) -> Tuple[List[str], Optional[str]]:
     """Compare filesystem snapshots and return changed files plus violation text."""
     if policy is None or before is None:
@@ -471,7 +538,11 @@ def _audit_filesystem_policy(
         (
             path for path in set(before.files) | set(after.files)
             if before.files.get(path) != after.files.get(path)
-            and not _is_pdd_owned_audit_log_path(cwd, path)
+            and not _is_trusted_pdd_owned_log_change(
+                path,
+                after.files.get(path),
+                pdd_owned_log_signatures or {},
+            )
         ),
         key=str,
     )
@@ -1972,7 +2043,7 @@ def _log_agentic_interaction(
     model: Optional[str] = None,
     false_positive: bool = False,
     include_bodies: bool = True,
-) -> None:
+) -> Optional[Path]:
     """
     Append one record per provider attempt to ``.pdd/agentic-logs/session_*.jsonl``.
 
@@ -1999,6 +2070,9 @@ def _log_agentic_interaction(
         include_bodies: When True, include the full ``prompt`` and ``response``
             text. When False, omit them but keep ``prompt_length`` and
             ``response_length`` so downstream tooling can still gauge size.
+
+    Returns:
+        The log file path when the write succeeds, otherwise ``None``.
     """
     global _AGENTIC_SESSION_ID
 
@@ -2032,8 +2106,9 @@ def _log_agentic_interaction(
 
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
+        return log_file
     except Exception:
-        pass  # Don't break workflow for logging errors
+        return None  # Don't break workflow for logging errors
 
 
 # ---------------------------------------------------------------------------
@@ -3499,6 +3574,7 @@ def run_agentic_task(
             f.write(full_instruction)
 
         filesystem_snapshot: Optional[_FilesystemPolicySnapshot] = None
+        pdd_owned_log_signatures: Dict[Path, str] = {}
         if _claude_policy_has_filesystem_roots(normalized_claude_policy):
             filesystem_snapshot = _take_filesystem_policy_snapshot(
                 cwd,
@@ -3632,17 +3708,20 @@ def run_agentic_task(
                         # Issue #1376: log false-positive provider replies so the
                         # heuristic-rejection path leaves the same audit trail
                         # as outright failures (was previously silent).
-                        _log_agentic_interaction(
-                            label=label,
-                            prompt=full_instruction,
-                            response=output,
-                            cost=cost,
-                            provider=provider,
-                            success=False,
-                            duration=time.time() - task_start_time,
-                            cwd=cwd,
-                            model=effective_model,
-                            false_positive=True,
+                        _record_pdd_owned_log_signature(
+                            _log_agentic_interaction(
+                                label=label,
+                                prompt=full_instruction,
+                                response=output,
+                                cost=cost,
+                                provider=provider,
+                                success=False,
+                                duration=time.time() - task_start_time,
+                                cwd=cwd,
+                                model=effective_model,
+                                false_positive=True,
+                            ),
+                            pdd_owned_log_signatures,
                         )
                         any_attempt_logged_inside = True
                         # Multi-provider configs (default): fall through to the
@@ -3691,6 +3770,7 @@ def run_agentic_task(
                             cwd,
                             normalized_claude_policy,
                             filesystem_snapshot,
+                            pdd_owned_log_signatures,
                         )
                         if filesystem_violation is not None:
                             _log_agentic_interaction(
@@ -3747,16 +3827,19 @@ def run_agentic_task(
                 # produces only one JSONL row — exactly the audit-trail gap
                 # this PR set out to close.
                 if not success:
-                    _log_agentic_interaction(
-                        label=label,
-                        prompt=full_instruction,
-                        response=output,
-                        cost=cost,
-                        provider=provider,
-                        success=False,
-                        duration=time.time() - task_start_time,
-                        cwd=cwd,
-                        model=effective_model,
+                    _record_pdd_owned_log_signature(
+                        _log_agentic_interaction(
+                            label=label,
+                            prompt=full_instruction,
+                            response=output,
+                            cost=cost,
+                            provider=provider,
+                            success=False,
+                            duration=time.time() - task_start_time,
+                            cwd=cwd,
+                            model=effective_model,
+                        ),
+                        pdd_owned_log_signatures,
                     )
                     any_attempt_logged_inside = True
 
