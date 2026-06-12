@@ -1,0 +1,2 @@
+{"name":"tiny-generate","command":["generate","--output","/private/tmp/pdd-estimate-replay/tiny.py","tests/fixtures/estimate_accuracy/prompts/tiny_function_python.prompt"]}
+{"name":"parser-generate","command":["generate","--output","/private/tmp/pdd-estimate-replay/parser.py","tests/fixtures/estimate_accuracy/prompts/parser_python.prompt"]}

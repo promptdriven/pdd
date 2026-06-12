@@ -331,6 +331,47 @@ class ModelPricing(NamedTuple):
 
     input_cost_per_million: float
     output_cost_per_million: Optional[float]
+    provider: str = ""
+    interactive_only: bool = False
+
+
+def _is_zero_rate(rates: ModelPricing) -> bool:
+    return (
+        rates.input_cost_per_million == 0.0
+        and rates.output_cost_per_million == 0.0
+    )
+
+
+def _csv_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _zero_rate_is_known_free(model: str, rates: ModelPricing) -> bool:
+    """Return True only for genuinely free/local rows, not subscriptions."""
+    provider = (rates.provider or "").strip().lower().replace(" ", "_")
+    model_lower = (model or "").strip().lower()
+    if provider in {"lm_studio", "ollama", "local"}:
+        return True
+    if model_lower.startswith(("lm_studio/", "ollama/", "local/")):
+        return True
+    return "local" in model_lower or "free" in model_lower
+
+
+def _zero_rate_is_unknown_subscription(model: str, rates: ModelPricing) -> bool:
+    """Return True for zero-rate subscription rows that are not billable prices."""
+    if not _is_zero_rate(rates) or _zero_rate_is_known_free(model, rates):
+        return False
+    provider = (rates.provider or "").strip().lower().replace(" ", "_")
+    model_lower = (model or "").strip().lower()
+    return (
+        rates.interactive_only
+        or provider in {"github_copilot", "openai_chatgpt", "chatgpt"}
+        or model_lower.startswith(("github_copilot/", "chatgpt/"))
+    )
 
 
 PricingCsvPath = Union[str, Path]
@@ -393,6 +434,8 @@ def _load_model_pricing(csv_path: str) -> Dict[str, ModelPricing]:
                     pricing[model] = ModelPricing(
                         float(input_cost),
                         parsed_output,
+                        row.get("provider", "") or "",
+                        _csv_bool(row.get("interactive_only")),
                     )
                 except (TypeError, ValueError):
                     continue
@@ -482,6 +525,8 @@ def estimate_cost(
     if match is None:
         return None
     matched_model, rates = match
+    if _zero_rate_is_unknown_subscription(matched_model, rates):
+        return None
 
     # Pricing is expressed per million tokens
     input_cost = (token_count / 1_000_000) * rates.input_cost_per_million
@@ -532,6 +577,8 @@ def estimate_completion_cost(
         return None
     matched_model, rates = match
     if rates.output_cost_per_million is None:
+        return None
+    if _zero_rate_is_unknown_subscription(matched_model, rates):
         return None
 
     input_cost = (input_tokens / 1_000_000) * rates.input_cost_per_million

@@ -16,6 +16,7 @@ import traceback
 import urllib.request
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
 # --- Configure Standard Python Logging ---
@@ -1492,13 +1493,21 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
 
 
 _ESTIMATE_OUTPUT_RATIOS: Dict[str, float] = {
-    "generate": 0.35,
+    "generate": 0.52,
     "example": 0.30,
     "test": 0.50,
     "fix": 0.40,
     "crash": 0.35,
     "conflicts": 0.25,
     "default": 0.35,
+}
+
+_ESTIMATE_INPUT_TOKEN_OVERHEADS: Dict[str, int] = {
+    # Provider transcript accounting includes chat/message framing that is not
+    # visible in the local prompt text. This keeps no-target generate estimates
+    # closer to observed usage while remaining overrideable for evaluation.
+    "generate": 24,
+    "default": 0,
 }
 
 
@@ -1559,6 +1568,125 @@ def _estimate_output_ratio(command_name: str) -> float:
     )
 
 
+def _estimate_input_token_overhead(command_name: str) -> int:
+    """Resolve the configurable per-request input-token overhead."""
+    env_keys = []
+    if command_name:
+        normalized = re.sub(r"[^A-Za-z0-9]+", "_", command_name).strip("_").upper()
+        if normalized:
+            env_keys.append(f"PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD_{normalized}")
+    env_keys.append("PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD")
+
+    for key in env_keys:
+        raw_value = os.getenv(key)
+        if raw_value is None:
+            continue
+        try:
+            value = int(float(raw_value))
+            if value >= 0:
+                return value
+        except ValueError:
+            logger.warning("Ignoring invalid %s=%r; expected a non-negative integer", key, raw_value)
+
+    return _ESTIMATE_INPUT_TOKEN_OVERHEADS.get(
+        command_name,
+        _ESTIMATE_INPUT_TOKEN_OVERHEADS["default"],
+    )
+
+
+def _current_estimate_output_path_hint() -> Optional[str]:
+    """Return a current-command target file hint, if the CLI provided one."""
+    try:
+        import click as _click
+
+        click_ctx = _click.get_current_context(silent=True)
+        if click_ctx is not None and isinstance(click_ctx.obj, dict):
+            hint = click_ctx.obj.get("estimate_output_path_hint")
+            if hint:
+                return str(hint)
+    except Exception:
+        pass
+    return None
+
+
+def _estimate_tokens_from_file_size(path_hint: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Cheap, provider-free token proxy for an existing target file."""
+    if not path_hint:
+        return None
+    try:
+        path = Path(path_hint)
+        if not path.is_file():
+            return None
+        text = path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+    token_proxy = max(1, int((len(text) + 3) // 4))
+    return {
+        "tokens": token_proxy,
+        "path": str(path),
+        "bytes": len(text.encode("utf-8")),
+        "chars": len(text),
+    }
+
+
+def _model_info_value(model_info: Any, key: str) -> Any:
+    """Read a field from a pandas row, dict, or lightweight test object."""
+    try:
+        if isinstance(model_info, dict):
+            return model_info.get(key)
+        if hasattr(model_info, "get"):
+            return model_info.get(key)
+        return getattr(model_info, key)
+    except Exception:
+        return None
+
+
+def _truthy_model_info_value(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _estimate_metadata_probe_is_safe(model_info: Any, model_name: str) -> bool:
+    """Return False for provider families whose metadata lookup can touch auth."""
+    provider = str(_model_info_value(model_info, "provider") or "").strip().lower()
+    provider_prefix = str(model_name).split("/", 1)[0].strip().lower()
+    if _truthy_model_info_value(_model_info_value(model_info, "interactive_only")):
+        return False
+    return provider not in {"github copilot", "openai chatgpt", "lm studio", "ollama"} and provider_prefix not in {
+        "github_copilot",
+        "chatgpt",
+        "lm_studio",
+        "ollama",
+    }
+
+
+def _positive_int_or_none(value: Any) -> Optional[int]:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _catalog_context_limit(model_info: Any) -> Optional[int]:
+    for key in ("max_input_tokens", "context_limit", "context_window", "max_tokens"):
+        value = _positive_int_or_none(_model_info_value(model_info, key))
+        if value is not None:
+            return value
+    return None
+
+
+def _catalog_output_token_cap(model_info: Any) -> Optional[int]:
+    for key in ("max_completion_tokens", "max_output_tokens"):
+        value = _positive_int_or_none(_model_info_value(model_info, key))
+        if value is not None:
+            return value
+    return None
+
+
 def _completion_cost_from_pricing_api(
     input_tokens: int,
     predicted_output_tokens: int,
@@ -1610,16 +1738,24 @@ def _build_estimate_payload(
     real constraint — completions are generated into the same window), with the
     input-only figure retained separately for transparency.
     """
-    _ = model_info
-    input_tokens = int(count_tokens_for_messages(messages_for_count, model=model_name) or 0)
+    raw_input_tokens = int(count_tokens_for_messages(messages_for_count, model=model_name) or 0)
+    input_token_overhead = _estimate_input_token_overhead(command_name)
+    input_tokens = raw_input_tokens + input_token_overhead
     ratio = _estimate_output_ratio(command_name)
-    raw_predicted_output_tokens = max(1, int(round(input_tokens * ratio)))
+    ratio_predicted_output_tokens = max(1, int(round(input_tokens * ratio)))
+    target_hint = _estimate_tokens_from_file_size(_current_estimate_output_path_hint())
+    if target_hint:
+        raw_predicted_output_tokens = int(target_hint["tokens"])
+        output_estimation = "target_file_size_hint"
+    else:
+        raw_predicted_output_tokens = ratio_predicted_output_tokens
+        output_estimation = "heuristic_ratio"
 
     # Bound the heuristic by what the model can actually emit, so the prediction
     # is at least an upper bound the provider would honor rather than an
     # unbounded ratio of the input size.
-    max_output_tokens: Optional[int] = None
-    if _get_max_output_tokens is not None:
+    max_output_tokens: Optional[int] = _catalog_output_token_cap(model_info)
+    if max_output_tokens is None and _get_max_output_tokens is not None and _estimate_metadata_probe_is_safe(model_info, model_name):
         try:
             max_output_tokens = _get_max_output_tokens(model_name)
         except Exception:
@@ -1630,6 +1766,8 @@ def _build_estimate_payload(
     else:
         predicted_output_tokens = raw_predicted_output_tokens
         output_capped = False
+    if output_capped:
+        output_estimation = f"{output_estimation}_capped"
 
     # Context usage reflects the real constraint: prompt plus the completion
     # budget both consume the model's context window. Keep the input-only figure
@@ -1674,11 +1812,17 @@ def _build_estimate_payload(
         "model": model_name,
         "pricing_model": pricing_model,
         "input_tokens": input_tokens,
+        "raw_input_tokens": raw_input_tokens,
+        "input_token_overhead": input_token_overhead,
         "predicted_output_tokens": predicted_output_tokens,
         "output_ratio": ratio,
+        "ratio_predicted_output_tokens": ratio_predicted_output_tokens,
         # Output tokens are a heuristic, not a measured value. Surface the basis
         # so consumers do not mistake the projected cost for an exact figure.
-        "output_estimation": "heuristic_ratio_capped" if output_capped else "heuristic_ratio",
+        "output_estimation": output_estimation,
+        "output_hint_path": target_hint["path"] if target_hint else None,
+        "output_hint_chars": target_hint["chars"] if target_hint else None,
+        "output_hint_bytes": target_hint["bytes"] if target_hint else None,
         "output_token_cap": max_output_tokens,
         "estimate_basis": "approximate",
         "input_rate_per_million": input_rate if cost_known else None,
@@ -1723,11 +1867,23 @@ def _accumulate_estimate_on_click_context(estimate: Dict[str, Any]) -> None:
                 "predicted_output_tokens": 0,
                 "total_cost": 0.0,
                 "cost_known": True,
+                "output_estimations": [],
+                "output_hint_paths": [],
             },
         )
         if isinstance(totals, dict):
             totals["input_tokens"] = int(totals.get("input_tokens", 0)) + int(estimate.get("input_tokens", 0))
             totals["predicted_output_tokens"] = int(totals.get("predicted_output_tokens", 0)) + int(estimate.get("predicted_output_tokens", 0))
+            output_estimations = totals.setdefault("output_estimations", [])
+            if isinstance(output_estimations, list):
+                output_estimation = estimate.get("output_estimation")
+                if output_estimation and output_estimation not in output_estimations:
+                    output_estimations.append(output_estimation)
+            output_hint_paths = totals.setdefault("output_hint_paths", [])
+            if isinstance(output_hint_paths, list):
+                output_hint_path = estimate.get("output_hint_path")
+                if output_hint_path and output_hint_path not in output_hint_paths:
+                    output_hint_paths.append(output_hint_path)
             if estimate.get("cost_known"):
                 totals["total_cost"] = float(totals.get("total_cost", 0.0)) + float(estimate.get("total_cost", 0.0))
             else:
@@ -4555,18 +4711,19 @@ def llm_invoke(
                     logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
 
                 if estimate_mode:
-                    estimate_context_limit = None
-                    try:
-                        estimate_context_limit = get_context_limit(model_name_litellm)
-                        extra_headers = litellm_kwargs.get("extra_headers", {})
-                        if (
-                            estimate_context_limit is not None
-                            and "anthropic-beta" in extra_headers
-                            and "context-1m" in extra_headers.get("anthropic-beta", "")
-                        ):
-                            estimate_context_limit = 1_000_000
-                    except Exception:
-                        estimate_context_limit = None
+                    estimate_context_limit = _catalog_context_limit(model_info)
+                    if estimate_context_limit is None and _estimate_metadata_probe_is_safe(model_info, str(model_name_litellm)):
+                        try:
+                            estimate_context_limit = get_context_limit(model_name_litellm)
+                            extra_headers = litellm_kwargs.get("extra_headers", {})
+                            if (
+                                estimate_context_limit is not None
+                                and "anthropic-beta" in extra_headers
+                                and "context-1m" in extra_headers.get("anthropic-beta", "")
+                            ):
+                                estimate_context_limit = 1_000_000
+                        except Exception:
+                            estimate_context_limit = None
 
                     call_type_for_estimate = (
                         "batch_completion" if use_batch_mode else "completion"

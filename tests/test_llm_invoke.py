@@ -527,6 +527,7 @@ def test_llm_invoke_estimate_only_skips_provider_call(mock_load_models, mock_set
     monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
     monkeypatch.setenv("PDD_ESTIMATE_COMMAND", "generate")
     monkeypatch.setenv("PDD_ESTIMATE_OUTPUT_RATIO_GENERATE", "0.5")
+    monkeypatch.setenv("PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD_GENERATE", "0")
     pricing = {
         "model": "gpt-5-nano",
         "input_rate_per_million": 2.0,
@@ -569,6 +570,122 @@ def test_llm_invoke_estimate_only_skips_provider_call(mock_load_models, mock_set
     # Output tokens are explicitly labelled as a heuristic projection.
     assert payload["output_estimation"] == "heuristic_ratio"
     assert payload["estimate_basis"] == "approximate"
+
+
+def test_llm_invoke_estimate_only_uses_target_file_size_hint(
+    mock_load_models,
+    mock_set_llm_cache,
+    monkeypatch,
+    tmp_path,
+):
+    import click
+    import pdd.llm_invoke as _llm_mod
+
+    EstimateOnlyResult = _llm_mod.EstimateOnlyResult
+    llm_invoke = _llm_mod.llm_invoke
+
+    target = tmp_path / "demo.py"
+    target.write_text("x" * 400, encoding="utf-8")
+
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("PDD_ESTIMATE_OUTPUT_RATIO_GENERATE", "0.5")
+    monkeypatch.setenv("PDD_ESTIMATE_INPUT_TOKEN_OVERHEAD_GENERATE", "0")
+    pricing = {
+        "model": "gpt-5-nano",
+        "input_rate_per_million": 2.0,
+        "output_rate_per_million": 4.0,
+        "input_cost": 0.0002,
+        "output_cost": 0.0004,
+        "total_cost": 0.0006,
+        "currency": "USD",
+    }
+
+    command = click.Command("generate")
+    ctx = click.Context(
+        command,
+        obj={"estimate": True, "estimate_output_path_hint": str(target)},
+    )
+    with ctx, \
+         patch("pdd.llm_invoke.count_tokens_for_messages", return_value=100), \
+         patch("pdd.llm_invoke.get_context_limit", return_value=1000), \
+         patch("pdd.llm_invoke._get_max_output_tokens", return_value=None), \
+         patch("pdd.llm_invoke._estimate_completion_cost", return_value=pricing) as mock_pricing, \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        with pytest.raises(EstimateOnlyResult) as exc_info:
+            llm_invoke(
+                prompt="Estimate {thing}",
+                input_json={"thing": "cost"},
+                strength=0.5,
+                temperature=0.0,
+                verbose=False,
+                estimate_only=True,
+            )
+
+    mock_completion.assert_not_called()
+    mock_pricing.assert_called_once()
+    _, kwargs = mock_pricing.call_args
+    assert kwargs["predicted_output_tokens"] == 100
+    payload = exc_info.value.estimate
+    assert payload["input_tokens"] == 100
+    assert payload["ratio_predicted_output_tokens"] == 50
+    assert payload["predicted_output_tokens"] == 100
+    assert payload["output_estimation"] == "target_file_size_hint"
+    assert payload["output_hint_path"] == str(target)
+    assert payload["output_hint_chars"] == 400
+    assert payload["context_usage_percent"] == 20.0
+    assert payload["provider_call_made"] is False
+
+
+def test_llm_invoke_estimate_only_skips_interactive_provider_metadata_probes(
+    mock_load_models,
+    mock_set_llm_cache,
+    monkeypatch,
+):
+    """Estimate mode must not touch auth-managed provider metadata paths."""
+    import pdd.llm_invoke as _llm_mod
+
+    EstimateOnlyResult = _llm_mod.EstimateOnlyResult
+    llm_invoke = _llm_mod.llm_invoke
+
+    model_info = {
+        "provider": "Github Copilot",
+        "model": "github_copilot/claude-opus-4.6-fast",
+        "input": 0.0,
+        "output": 0.0,
+        "coding_arena_elo": 1500,
+        "structured_output": True,
+        "base_url": "",
+        "api_key": "",
+        "reasoning_type": "none",
+        "max_reasoning_tokens": 0,
+        "interactive_only": True,
+    }
+    mock_load_models.return_value = pd.DataFrame([model_info])
+
+    monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "github_copilot/claude-opus-4.6-fast")
+
+    with patch("pdd.llm_invoke.count_tokens_for_messages", return_value=100), \
+         patch("pdd.llm_invoke.get_context_limit", side_effect=AssertionError("context probe")), \
+         patch("pdd.llm_invoke._get_max_output_tokens", side_effect=AssertionError("output-cap probe")), \
+         patch("pdd.llm_invoke._estimate_completion_cost", return_value=None), \
+         patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+        with pytest.raises(EstimateOnlyResult) as exc_info:
+            llm_invoke(
+                prompt="Estimate {thing}",
+                input_json={"thing": "cost"},
+                strength=1.0,
+                temperature=0.0,
+                verbose=False,
+                estimate_only=True,
+            )
+
+    mock_completion.assert_not_called()
+    payload = exc_info.value.estimate
+    assert payload["model"] == "github_copilot/claude-opus-4.6-fast"
+    assert payload["context_limit"] is None
+    assert payload["output_token_cap"] is None
+    assert payload["provider_call_made"] is False
 
 
 def test_llm_invoke_estimate_only_rejects_batch_before_provider_call():

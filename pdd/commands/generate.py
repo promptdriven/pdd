@@ -57,6 +57,77 @@ def _estimate_result_tuple(exception: Exception) -> Tuple[Dict[str, Any], float,
     return payload, 0.0, model
 
 
+def _strip_prompt_language_suffix(path: Path) -> Optional[str]:
+    stem = path.stem
+    for suffix in _prompt_target_extensions(path):
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return None
+
+
+def _prompt_target_extensions(path: Path) -> Dict[str, str]:
+    return {
+        "_python": ".py",
+        "_Python": ".py",
+        "_typescript": ".ts",
+        "_TypeScript": ".ts",
+        "_typescriptreact": ".tsx",
+        "_TypeScriptReact": ".tsx",
+        "_javascript": ".js",
+        "_JavaScript": ".js",
+    }
+
+
+def _estimate_output_path_hint(prompt_file: Optional[str], output: Optional[str]) -> Optional[str]:
+    """Best-effort existing target file hint for output-token estimation."""
+    if output:
+        output_path = Path(output)
+        if output_path.is_file():
+            return str(output_path)
+
+    if not prompt_file:
+        return None
+    prompt_path = Path(prompt_file)
+    basename = _strip_prompt_language_suffix(prompt_path)
+    if not basename:
+        return None
+    suffix_to_extension = _prompt_target_extensions(prompt_path)
+    extension = next(
+        (
+            target_extension
+            for prompt_suffix, target_extension in suffix_to_extension.items()
+            if prompt_path.stem.endswith(prompt_suffix)
+        ),
+        ".py",
+    )
+
+    candidates: List[Path] = []
+    parts = prompt_path.parts
+    if "pdd" in parts and "prompts" in parts:
+        try:
+            prompts_index = parts.index("prompts")
+            rel_dir = Path(*parts[prompts_index + 1 : -1])
+            repo_prefix = Path(*parts[:prompts_index])
+            candidates.append(repo_prefix / rel_dir / f"{basename}{extension}")
+        except (TypeError, ValueError):
+            pass
+
+    candidates.extend(
+        [
+            prompt_path.with_name(f"{basename}{extension}"),
+            prompt_path.parent.parent / "src" / f"{basename}{extension}",
+            prompt_path.parent.parent / f"{basename}{extension}",
+        ]
+    )
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
 def _maybe_run_prompt_gate(
     *,
     output_files: Tuple[str, ...] | List[str],
@@ -462,6 +533,8 @@ def generate(
         # 4. Call Code Generator
         force_was_present = False
         original_force = None
+        output_hint_was_present = False
+        original_output_hint = None
         incremental_module = None
         original_incremental_func = None
         had_incremental_func = False
@@ -470,6 +543,13 @@ def generate(
                 force_was_present = "force" in ctx.obj
                 original_force = ctx.obj.get("force")
                 ctx.obj["force"] = True
+                output_hint_was_present = "estimate_output_path_hint" in ctx.obj
+                original_output_hint = ctx.obj.get("estimate_output_path_hint")
+                output_path_hint = _estimate_output_path_hint(target_prompt_file, output)
+                if output_path_hint:
+                    ctx.obj["estimate_output_path_hint"] = output_path_hint
+                else:
+                    ctx.obj.pop("estimate_output_path_hint", None)
                 try:
                     import importlib
 
@@ -512,6 +592,10 @@ def generate(
                     ctx.obj["force"] = original_force
                 else:
                     ctx.obj.pop("force", None)
+                if output_hint_was_present:
+                    ctx.obj["estimate_output_path_hint"] = original_output_hint
+                else:
+                    ctx.obj.pop("estimate_output_path_hint", None)
             if estimate_mode and incremental_module is not None:
                 if had_incremental_func:
                     incremental_module.incremental_code_generator_func = original_incremental_func

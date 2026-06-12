@@ -189,6 +189,7 @@ def _estimate_payload(command: str = "generate"):
         "input_tokens": 100,
         "predicted_output_tokens": 75,
         "output_ratio": 0.75,
+        "output_estimation": "heuristic_ratio",
         "input_rate_per_million": 2.0,
         "output_rate_per_million": 4.0,
         "input_cost": 0.0002,
@@ -204,6 +205,41 @@ def _estimate_payload(command: str = "generate"):
         "provider_call_made": False,
         "attempted_models": ["gpt-5-nano"],
     }
+
+
+def test_generate_estimate_output_path_hint_prefers_existing_targets(tmp_path):
+    from pdd.commands.generate import _estimate_output_path_hint
+
+    repo_prompt = tmp_path / "pdd" / "prompts" / "server" / "token_counter_python.prompt"
+    repo_target = tmp_path / "pdd" / "server" / "token_counter.py"
+    repo_prompt.parent.mkdir(parents=True)
+    repo_target.parent.mkdir(parents=True)
+    repo_prompt.write_text("% Generate token counter\n", encoding="utf-8")
+    repo_target.write_text("def estimate():\n    return 1\n", encoding="utf-8")
+
+    assert _estimate_output_path_hint(str(repo_prompt), None) == str(repo_target)
+
+    explicit_output = tmp_path / "custom.py"
+    explicit_output.write_text("print('custom')\n", encoding="utf-8")
+    assert _estimate_output_path_hint(str(repo_prompt), str(explicit_output)) == str(explicit_output)
+
+    app_prompt = tmp_path / "feature" / "prompts" / "widget_python.prompt"
+    app_target = tmp_path / "feature" / "src" / "widget.py"
+    app_prompt.parent.mkdir(parents=True)
+    app_target.parent.mkdir(parents=True)
+    app_prompt.write_text("% Generate widget\n", encoding="utf-8")
+    app_target.write_text("class Widget:\n    pass\n", encoding="utf-8")
+
+    assert _estimate_output_path_hint(str(app_prompt), None) == str(app_target)
+
+    ts_prompt = tmp_path / "web" / "prompts" / "component_typescriptreact.prompt"
+    ts_target = tmp_path / "web" / "src" / "component.tsx"
+    ts_prompt.parent.mkdir(parents=True)
+    ts_target.parent.mkdir(parents=True)
+    ts_prompt.write_text("% Generate component\n", encoding="utf-8")
+    ts_target.write_text("export function Component() { return null }\n", encoding="utf-8")
+
+    assert _estimate_output_path_hint(str(ts_prompt), None) == str(ts_target)
 
 
 def test_cli_estimate_generate_prints_table_and_writes_no_files(tmp_path, monkeypatch):
@@ -256,6 +292,7 @@ def test_cli_estimate_generate_prints_table_and_writes_no_files(tmp_path, monkey
     assert "Provider call made: false" in result.output
     assert not output.exists()
     assert not cost_csv.exists()
+    assert not (tmp_path / ".pdd" / "meta").exists()
 
 
 def test_cli_estimate_json_generate_outputs_machine_payload(tmp_path):
@@ -280,9 +317,11 @@ def test_cli_estimate_json_generate_outputs_machine_payload(tmp_path):
     assert payload["estimate"] is True
     assert payload["estimated_cost"] == 0.0005
     assert payload["unknown_cost"] is False
+    assert payload["output_estimations"] == ["heuristic_ratio"]
     assert payload["records"][0]["provider_call_made"] is False
     assert "Command Execution Summary" not in result.output
     assert "Generate demo code" not in result.output
+    assert not (tmp_path / ".pdd" / "meta").exists()
 
 
 def test_cli_estimate_mode_does_not_leak_into_next_invocation(tmp_path, monkeypatch):

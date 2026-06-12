@@ -180,6 +180,16 @@ def _build_estimate_summary(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     total_predicted = sum(int(record.get("predicted_output_tokens", 0) or 0) for record in records)
     total_cost = _estimate_total_cost(records)
     any_unknown = any(not _record_cost_known(record) for record in records)
+    output_estimations = sorted({
+        str(record.get("output_estimation"))
+        for record in records
+        if record.get("output_estimation")
+    })
+    output_hint_paths = [
+        str(record.get("output_hint_path"))
+        for record in records
+        if record.get("output_hint_path")
+    ]
     # The total is a lower bound when it sums some, but not all, priced steps.
     is_lower_bound = total_cost is not None and any_unknown
     return {
@@ -193,6 +203,8 @@ def _build_estimate_summary(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         # priced steps still produce a (lower-bound) number.
         "unknown_cost": total_cost is None or any_unknown,
         "is_lower_bound": is_lower_bound,
+        "output_estimations": output_estimations,
+        "output_hint_paths": output_hint_paths,
         "currency": records[0].get("currency", "USD") if records else "USD",
     }
 

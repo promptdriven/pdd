@@ -338,6 +338,88 @@ def test_estimate_completion_cost_zero_rates_are_known_prices(mock_pricing_csv):
     assert estimate.total_cost == pytest.approx(0.0)
 
 
+def test_estimate_completion_cost_subscription_zero_rates_are_unknown(tmp_path):
+    """Subscription-backed zero-rate rows are not trustworthy billable costs."""
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join(
+            [
+                "provider,model,input,output,interactive_only",
+                "Github Copilot,github_copilot/claude-opus-4.6-fast,0.0,0.0,True",
+                "OpenAI ChatGPT,chatgpt/gpt-5.1,0.0,0.0,True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    token_counter._load_model_pricing.cache_clear()
+
+    assert (
+        estimate_completion_cost(
+            1000,
+            2000,
+            "github_copilot/claude-opus-4.6-fast",
+            pricing_csv,
+        )
+        is None
+    )
+    assert estimate_cost(1000, "chatgpt/gpt-5.1", pricing_csv) is None
+
+
+def test_estimate_completion_cost_legacy_subscription_zero_rates_are_unknown(tmp_path):
+    """Older user CSVs may lack interactive_only but still list subscription rows."""
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join(
+            [
+                "provider,model,input,output",
+                "Github Copilot,github_copilot/claude-opus-4.6-fast,0.0,0.0",
+                "OpenAI ChatGPT,chatgpt/gpt-5.1,0.0,0.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    token_counter._load_model_pricing.cache_clear()
+
+    assert (
+        estimate_completion_cost(
+            1000,
+            2000,
+            "github_copilot/claude-opus-4.6-fast",
+            pricing_csv,
+        )
+        is None
+    )
+    assert estimate_cost(1000, "chatgpt/gpt-5.1", pricing_csv) is None
+
+
+def test_estimate_completion_cost_local_zero_rates_remain_known_free(tmp_path):
+    """Local/offline zero-rate rows are intentionally known free."""
+    pricing_csv = tmp_path / "llm_model.csv"
+    pricing_csv.write_text(
+        "\n".join(
+            [
+                "provider,model,input,output,interactive_only",
+                "lm_studio,lm_studio/qwen3-coder-next,0.0,0.0,True",
+                "ollama,ollama/qwen3-coder,0.0,0.0,True",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    token_counter._load_model_pricing.cache_clear()
+
+    estimate = estimate_completion_cost(
+        1000,
+        2000,
+        "lm_studio/qwen3-coder-next",
+        pricing_csv,
+    )
+    assert estimate is not None
+    assert estimate.total_cost == pytest.approx(0.0)
+
+
 def test_estimate_completion_cost_requires_output_rate(mock_pricing_csv):
     """Completion estimates are unknown when only input pricing is available."""
     token_counter._load_model_pricing.cache_clear()

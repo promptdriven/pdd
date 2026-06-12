@@ -1,0 +1,17 @@
+<pdd-reason>Generate a small parser utility with validation and tests-friendly behavior.</pdd-reason>
+<pdd-interface>
+parse_kv_lines(text: str) -> dict[str, str]
+format_kv_pairs(items: dict[str, str]) -> str
+</pdd-interface>
+
+Build a Python module for key/value configuration snippets.
+
+Rules:
+- parse_kv_lines accepts newline-separated lines in the form key=value.
+- Blank lines and lines beginning with # are ignored.
+- Keys are stripped and must be non-empty.
+- Values are stripped but may be empty.
+- Duplicate keys raise ValueError naming the key.
+- Lines without = raise ValueError naming the 1-based line number.
+- format_kv_pairs emits keys in sorted order as key=value lines joined by "\n".
+- Do not perform file I/O.
