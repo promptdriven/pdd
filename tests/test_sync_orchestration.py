@@ -231,7 +231,8 @@ def test_sync_estimate_request_gap_short_circuits_before_side_effects(
     ).lower()
     assert result["success"] is False
     assert "estimate" in result_text
-    assert "prerequisite" in result_text
+    assert "generate" in result_text
+    assert "only" in result_text
 
 
 def test_happy_path_full_sync(orchestration_fixture):
