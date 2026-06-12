@@ -15,13 +15,15 @@ branch; the worktree is created before the first loop iteration.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from rich.console import Console
 
@@ -638,6 +640,37 @@ def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
     )
 
     return fn(worktree)
+
+
+def _companion_source_of_truth_paths(
+    worktree: Path, pr_file_set: Set[str]
+) -> Set[str]:
+    """Owning prompt (+ ``architecture.json``) for each PR-changed code file.
+
+    Issue #2047. The Layer 1 scope guard refuses any fixer edit outside the
+    PR's changed-file set. That dead-ends a legitimate source-of-truth repair:
+    when the fixer must edit the OWNING PROMPT of a code file that IS in the PR
+    diff (so the generated-code/source-of-truth contract holds), the prompt is
+    not itself in the PR diff and the guard blocks it. This returns exactly
+    those companion source-of-truth paths so they flow INTO the fixer, while
+    every other out-of-scope edit stays blocked: only a prompt that OWNS a
+    PR-changed code file is admitted — never an arbitrary unrelated prompt.
+    """
+    code_to_prompt = _load_prompt_source_map(worktree)
+    if not code_to_prompt:
+        return set()
+    pr_norm = {str(p) for p in pr_file_set}
+    companions: Set[str] = {
+        prompt_path
+        for code_path, prompt_path in code_to_prompt.items()
+        if code_path in pr_norm
+    }
+    if companions:
+        # The architecture entry is the registry side of the same contract;
+        # admit it so the fixer can update interface/dependency metadata for a
+        # repaired prompt without tripping the scope guard.
+        companions.add("architecture.json")
+    return companions
 
 
 def _git_rev_parse_head(worktree: Path) -> str:
@@ -1367,6 +1400,12 @@ def _parse_changed_files(output: str) -> List[str]:
 
 
 _STEP5_SKIPPED_STATUSES = frozenset({"skipped", "skip", "no_tests", "n/a", "n_a"})
+STEP5_SHELL_EVIDENCE_SCHEMA = "pdd.checkup.layer1_step5_evidence.v1"
+STEP5_SHELL_EVIDENCE_FILENAME = "layer1-step5-evidence.json"
+_STEP5_SHELL_TIMEOUT_SECONDS = 180.0
+_STEP5_SHELL_OUTPUT_MAX_CHARS = 12000
+_STEP5_SHELL_ACTIONABLE_STATUSES = frozenset({"failed", "error", "timeout_partial"})
+_STEP5_SHELL_EVIDENCE_MEMORY: Dict[Tuple[str, int], Dict[str, Any]] = {}
 
 
 def _step5_failure_signal_status(step_output_value: str) -> str:
@@ -2154,6 +2193,279 @@ def _pr_changed_paths_for_targeted_checks(changed_files_text: str) -> List[str]:
     return paths
 
 
+def _step5_shell_evidence_path(cwd: Path, pr_number: int) -> Path:
+    """Return the legacy Layer 1 shell-first Step 5 evidence artifact path."""
+    return cwd / ".pdd" / f"checkup-pr-{pr_number}" / STEP5_SHELL_EVIDENCE_FILENAME
+
+
+def _step5_shell_evidence_memory_key(cwd: Path, pr_number: int) -> Tuple[str, int]:
+    """Return a stable key for same-process Step 5 evidence handoff."""
+    try:
+        root = str(cwd.resolve())
+    except OSError:
+        root = str(cwd)
+    return root, pr_number
+
+
+def _load_step5_shell_evidence_from_memory(
+    cwd: Path,
+    pr_number: Optional[int],
+) -> Optional[Dict[str, Any]]:
+    """Load same-process shell-first Step 5 evidence for final-gate Layer 2."""
+    if pr_number is None:
+        return None
+    payload = _STEP5_SHELL_EVIDENCE_MEMORY.get(
+        _step5_shell_evidence_memory_key(cwd, pr_number)
+    )
+    return dict(payload) if isinstance(payload, dict) else None
+
+
+def _safe_repo_rel_path(path: str) -> Optional[Path]:
+    """Normalize a prompt/API path and reject absolute or escaping paths."""
+    cleaned = path.strip().strip("`'\"").lstrip("./")
+    if not cleaned:
+        return None
+    rel = Path(cleaned)
+    if rel.is_absolute() or ".." in rel.parts:
+        return None
+    return Path(rel.as_posix())
+
+
+def _is_python_test_path(path: Path) -> bool:
+    """Return True when ``path`` is a Python test file."""
+    if path.suffix != ".py":
+        return False
+    if path.name.startswith("test_") or path.name.endswith("_test.py"):
+        return True
+    return "tests" in path.parts and path.suffix == ".py"
+
+
+def _select_step5_python_tests(
+    worktree: Path,
+    changed_paths: Sequence[str],
+) -> List[str]:
+    """Select a bounded Python pytest target set from concrete PR paths.
+
+    The selector is intentionally conservative: changed test files run
+    directly, and changed Python modules add only sibling/conventional
+    ``tests/test_<module>.py`` candidates that already exist. When no concrete
+    target exists, the caller records ``not_found`` instead of broadening into a
+    repo-wide suite.
+    """
+    selected: List[str] = []
+    seen: Set[str] = set()
+
+    def _add(candidate: Path) -> None:
+        rel = _safe_repo_rel_path(candidate.as_posix())
+        if rel is None:
+            return
+        rel_posix = rel.as_posix()
+        if rel_posix in seen:
+            return
+        if (worktree / rel).is_file():
+            selected.append(rel_posix)
+            seen.add(rel_posix)
+
+    for raw_path in changed_paths:
+        rel = _safe_repo_rel_path(raw_path)
+        if rel is None or rel.suffix != ".py":
+            continue
+        if _is_python_test_path(rel):
+            _add(rel)
+            continue
+
+        stem = rel.stem
+        candidates = [
+            Path("tests") / f"test_{stem}.py",
+            Path("tests") / rel.parent / f"test_{stem}.py",
+        ]
+        if len(rel.parts) > 1:
+            candidates.append(
+                Path("tests").joinpath(*rel.parts[1:-1], f"test_{stem}.py")
+            )
+        if len(rel.parts) > 2:
+            joined = "_".join((*rel.parts[:-1], stem))
+            candidates.append(Path("tests") / f"test_{joined}.py")
+        for candidate in candidates:
+            _add(candidate)
+
+    return selected
+
+
+def _truncate_step5_shell_output(text: str) -> Tuple[str, bool]:
+    """Scrub and truncate Step 5 shell output before prompt/report use."""
+    scrubbed = _scrub_secrets(text or "")
+    token = _github_token_from_env()
+    if token:
+        scrubbed = _redact_secret(scrubbed, token)
+    if len(scrubbed) <= _STEP5_SHELL_OUTPUT_MAX_CHARS:
+        return scrubbed, False
+    half = max(1, (_STEP5_SHELL_OUTPUT_MAX_CHARS - 80) // 2)
+    return (
+        scrubbed[:half].rstrip()
+        + "\n...[step5 shell output truncated]...\n"
+        + scrubbed[-half:].lstrip(),
+        True,
+    )
+
+
+def _storage_safe_step5_shell_evidence_value(value: Any) -> Any:
+    """Recursively scrub secret-like strings before evidence persistence."""
+    if isinstance(value, str):
+        scrubbed = _scrub_secrets(value)
+        token = _github_token_from_env()
+        if token:
+            scrubbed = _redact_secret(scrubbed, token)
+        return scrubbed
+    if isinstance(value, list):
+        return [_storage_safe_step5_shell_evidence_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_storage_safe_step5_shell_evidence_value(item) for item in value)
+    if isinstance(value, dict):
+        safe_dict: Dict[str, Any] = {}
+        for key, item in value.items():
+            safe_key = str(_storage_safe_step5_shell_evidence_value(key))
+            safe_dict[safe_key] = _storage_safe_step5_shell_evidence_value(item)
+        return safe_dict
+    return value
+
+
+def _storage_safe_step5_shell_evidence(evidence: Dict[str, Any]) -> Dict[str, Any]:
+    """Return Step 5 shell evidence safe for disk and prompt context."""
+    safe = _storage_safe_step5_shell_evidence_value(evidence)
+    return safe if isinstance(safe, dict) else {}
+
+
+def _write_step5_shell_evidence(
+    cwd: Path,
+    pr_number: int,
+    evidence: Dict[str, Any],
+) -> None:
+    """Record shell-first Step 5 evidence for final-gate Layer 2."""
+    _STEP5_SHELL_EVIDENCE_MEMORY[_step5_shell_evidence_memory_key(cwd, pr_number)] = (
+        _storage_safe_step5_shell_evidence(evidence)
+    )
+
+
+def _run_step5_shell_first_evidence(
+    context: Dict[str, str],
+    step_cwd: Path,
+    cwd: Path,
+    *,
+    pr_number: Optional[int],
+    iteration: int,
+    quiet: bool,
+) -> Optional[Dict[str, Any]]:
+    """Run a bounded shell-first Step 5 probe and record its evidence.
+
+    This does not replace the existing agentic Step 5. It gives the final gate
+    a deterministic test artifact that can be promoted into a Layer 2 fixer
+    finding when the shell command observes a real failure.
+    """
+    if context.get("pr_mode") != "true" or pr_number is None:
+        return None
+
+    changed_files_text = (
+        context.get("pr_changed_files")
+        or context.get("pr_scope_changed_files")
+        or ""
+    )
+    changed_paths = _pr_changed_paths_for_targeted_checks(changed_files_text)
+    selected_tests = _select_step5_python_tests(step_cwd, changed_paths)
+    command_parts = [sys.executable, "-m", "pytest", "-q", *selected_tests]
+    display_command = " ".join(
+        shlex.quote("python" if idx == 0 else part)
+        for idx, part in enumerate(["python", "-m", "pytest", "-q", *selected_tests])
+    )
+    artifact_rel = (
+        Path(".pdd") / f"checkup-pr-{pr_number}" / STEP5_SHELL_EVIDENCE_FILENAME
+    )
+    evidence: Dict[str, Any] = {
+        "schema": STEP5_SHELL_EVIDENCE_SCHEMA,
+        "iteration": iteration,
+        "status": "not_found",
+        "command": display_command,
+        "exit_code": None,
+        "changed_files": changed_paths,
+        "selected_tests": selected_tests,
+        "artifact_path": artifact_rel.as_posix(),
+        "timeout_seconds": _STEP5_SHELL_TIMEOUT_SECONDS,
+        "output": (
+            "No concrete Python pytest targets were discoverable from the PR "
+            "changed-file list; agentic Step 5 remains responsible for broader "
+            "project-specific discovery."
+        ),
+        "output_truncated": False,
+    }
+
+    if selected_tests:
+        env = os.environ.copy()
+        prior_pythonpath = env.get("PYTHONPATH")
+        env["PYTHONPATH"] = (
+            str(step_cwd)
+            if not prior_pythonpath
+            else str(step_cwd) + os.pathsep + prior_pythonpath
+        )
+        try:
+            completed = subprocess.run(
+                command_parts,
+                cwd=step_cwd,
+                capture_output=True,
+                env=env,
+                text=True,
+                timeout=_STEP5_SHELL_TIMEOUT_SECONDS,
+            )
+            raw_output = ((completed.stdout or "") + (completed.stderr or "")).strip()
+            output, truncated = _truncate_step5_shell_output(raw_output)
+            status = "passed" if completed.returncode == 0 else "failed"
+            if completed.returncode == 5:
+                status = "not_found"
+            evidence.update(
+                {
+                    "status": status,
+                    "exit_code": completed.returncode,
+                    "output": output,
+                    "output_truncated": truncated,
+                }
+            )
+        except subprocess.TimeoutExpired as exc:
+            raw_output = (
+                ((exc.stdout or "") if isinstance(exc.stdout, str) else "")
+                + ((exc.stderr or "") if isinstance(exc.stderr, str) else "")
+            ).strip()
+            output, truncated = _truncate_step5_shell_output(raw_output)
+            evidence.update(
+                {
+                    "status": "timeout_partial",
+                    "exit_code": "timeout",
+                    "output": output or "pytest timed out before producing output.",
+                    "output_truncated": truncated,
+                }
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            output, truncated = _truncate_step5_shell_output(
+                f"{type(exc).__name__}: {exc}"
+            )
+            evidence.update(
+                {
+                    "status": "error",
+                    "exit_code": "error",
+                    "output": output,
+                    "output_truncated": truncated,
+                }
+            )
+
+    evidence = _storage_safe_step5_shell_evidence(evidence)
+    _write_step5_shell_evidence(cwd, pr_number, evidence)
+    context["step5_shell_evidence"] = json.dumps(evidence, indent=2, sort_keys=True)
+    if not quiet and evidence.get("status") in _STEP5_SHELL_ACTIONABLE_STATUSES:
+        console.print(
+            "[yellow]Step 5 shell-first tests produced actionable evidence; "
+            f"status={evidence.get('status')} command={evidence.get('command')}[/yellow]"
+        )
+    return evidence
+
+
 def _is_obviously_non_code_pr_path(path: str) -> bool:
     """Return True only for paths that should not trigger executable tests."""
     normalized = path.strip().strip("/").lower()
@@ -2446,6 +2758,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # succeeded or has not run yet.
         "step5_failure_signal": "",
         "step5_failure_signal_missing": "",
+        "step5_shell_evidence": "",
     }
     for step in STEP_ORDER:
         step_key = str(step).replace(".", "_")
@@ -3722,6 +4035,16 @@ def _run_agentic_checkup_orchestrator_inner(
                         f"{description} (iter {fix_verify_iteration})..."
                     )
 
+                if step_num == 5:
+                    _run_step5_shell_first_evidence(
+                        context,
+                        step_cwd,
+                        cwd,
+                        pr_number=pr_number,
+                        iteration=fix_verify_iteration,
+                        quiet=quiet,
+                    )
+
                 result = (
                     _targeted_non_code_step5_result(
                         context,
@@ -4407,8 +4730,19 @@ def _run_agentic_checkup_orchestrator_inner(
                             r"(?:tests?/|pdd/|src/)[\w/._-]+\.py",
                             step5_for_scope,
                         ))
+                    # Issue #2047: admit the owning prompt + architecture entry
+                    # for any code file already in the PR diff so a source-of-
+                    # truth repair (edit the prompt that owns a PR-changed code
+                    # file) flows into the fixer instead of dead-ending at the
+                    # scope guard. Unrelated prompts are NOT admitted.
+                    companion_sot_paths = _companion_source_of_truth_paths(
+                        worktree_path, pr_file_set
+                    )
                     scope_allowed: set = (
-                        pr_file_set | scope_failure_paths | justified_paths_set
+                        pr_file_set
+                        | scope_failure_paths
+                        | justified_paths_set
+                        | companion_sot_paths
                     )
                     out_of_scope = [
                         f for f in guard_changed_files
