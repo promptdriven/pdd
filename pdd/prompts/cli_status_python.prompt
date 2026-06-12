@@ -1,0 +1,90 @@
+<pdd-reason>Centralizes PDD CLI status & progress messaging so every command reports start, current step, waiting-on-IO/LLM, success, and failure with one consistent, skimmable, non-duplicative, brand-themed vocabulary instead of ad-hoc per-module prints.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "constants": [
+      {"name": "GLYPHS", "type": "dict"},
+      {"name": "ROLES", "type": "dict"}
+    ],
+    "classes": [
+      {"name": "Status", "kind": "enum", "members": ["START", "STEP", "WAITING", "SUCCESS", "FAILURE"]},
+      {"name": "StatusMessage", "kind": "dataclass"},
+      {"name": "StatusReporter"}
+    ],
+    "functions": [
+      {"name": "from_context", "signature": "(ctx, command: str | None = None) -> StatusReporter"}
+    ]
+  }
+}
+</pdd-interface>
+
+% You are an expert Python engineer. Your goal is to write `pdd/cli_status.py`.
+
+% Role & Scope
+  This module is the single source of truth for PDD CLI *status and progress*
+  messaging. Commands route their human-facing progress through it so that, in
+  every command, the user can always tell: (1) what is happening now, (2) what
+  step comes next, (3) whether the tool is waiting on IO/network/LLM, and
+  (4) what succeeded or failed and what to do about it.
+
+  Color must come from the central color system in `pdd/cli_theme.py` (EPIC
+  #1540, workstream 1) — obtain consoles via `get_console` and style by semantic
+  role. This module must never pick raw colors.
+
+% Design rules
+  - Exactly five message primitives, modeled as a `Status` enum: START, STEP,
+    WAITING, SUCCESS, FAILURE. Each maps to one glyph (`GLYPHS`) and one semantic
+    theme role (`ROLES`) so the same event type looks identical across commands.
+  - Messages are short, skimmable, and action-oriented.
+  - Output is non-duplicative: an identical rendered line emitted twice in a row
+    is collapsed so retry loops do not spam the terminal.
+  - Machine-readable output is protected: in `quiet` mode print nothing; in
+    `json_mode` send status to stderr so stdout stays payload-only.
+  - Deterministic & testable: the reporter records every emitted message so tests
+    can assert on message *shape* without wall-clock, spinner-frame, or
+    captured-ANSI assertions.
+
+% Requirements
+  1. `Status(enum.Enum)` with members START, STEP, WAITING, SUCCESS, FAILURE.
+  2. `GLYPHS`: dict mapping each `Status` to a single glyph — START "▶",
+     STEP "→", WAITING "…", SUCCESS "✓", FAILURE "✗".
+  3. `ROLES`: dict mapping each `Status` to a semantic role string from
+     `cli_theme`: START "command.strong", STEP "info", WAITING "muted",
+     SUCCESS "success.strong", FAILURE "error".
+  4. `StatusMessage` (frozen dataclass) with fields: `status: Status`,
+     `text: str`, `next_step: str | None`, `waiting_on: str | None`,
+     `reason: str | None`, `suggestions: tuple[str, ...]`, `command: str | None`.
+     Provide `glyph` and `role` properties (from GLYPHS/ROLES) and two renderers:
+       - `render_plain()` -> markup-free multi-line string for logs/quiet/tests.
+       - `render_markup()` -> Rich-markup string themed by `role`.
+     Both must include, when present: a "(waiting on <x>)" suffix on WAITING, a
+     "Why:" line for `reason`, one "Try:" line per suggestion, and a "Next:" line
+     for `next_step`. A START message whose reporter has a `command` renders the
+     headline as "<command>: <text>". User/content text must be escaped so it
+     cannot inject Rich markup.
+  5. `StatusReporter(command=None, *, console=None, quiet=False, json_mode=False)`:
+       - Defaults `console` to `get_console(stderr=json_mode)`.
+       - `messages: list[StatusMessage]` records everything emitted.
+       - `emit(message)`: record it; skip printing if `quiet`; collapse a line
+         identical to the immediately previous one; otherwise print
+         `render_markup()`.
+       - `start(text, *, next_step=None)`, `step(text)`,
+         `success(text, *, next_step=None)`,
+         `failure(text, *, reason=None, suggestions=())` convenience methods, each
+         returning the recorded `StatusMessage`.
+       - `waiting(text, *, on="LLM")`: a context manager that records a WAITING
+         message and, only on an interactive TTY that is not quiet, shows a Rich
+         `console.status` spinner for the duration. It must be inert (no spinner,
+         no timing dependence) when quiet, redirected, or non-TTY.
+  6. `from_context(ctx, command=None) -> StatusReporter`: read `quiet` from
+     `ctx.obj` (default False) and construct a reporter; leave `json_mode` to the
+     caller.
+  7. Define `__all__` listing Status, StatusMessage, StatusReporter, from_context,
+     GLYPHS, ROLES.
+  8. No side effects at import beyond defining the constants/classes. No
+     environment access, no printing at import time.
+
+% Deliverables
+  - Code: `pdd/cli_status.py`

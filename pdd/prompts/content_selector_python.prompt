@@ -115,7 +115,7 @@ Deterministic content extraction from files based on line ranges, Python AST str
 - If `mode="compressed"` is combined with selectors, apply compression only to the resulting extracted spans.
 
 % Error Reporting
-- Use `rich.console.Console` with a custom theme for formatted error messages. Print error context (including file path when available) before raising `SelectorError`.
+- Obtain the module-level Rich console from the central PDD color system via `from .cli_theme import get_console` and `console = get_console()`, rather than constructing a `Console` with an inline theme. This keeps error styling (`info`, `warning`, `error`, `success`, `path`, `selector`) consistent with the rest of the CLI. Print error context (including file path when available) before raising `SelectorError`.
 
 % Dependencies
 <pytest_slicer_interface>
