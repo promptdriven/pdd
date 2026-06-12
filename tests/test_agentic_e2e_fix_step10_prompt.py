@@ -13,6 +13,8 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
+from pdd._selector_parse import parse_selectors_string
+from pdd.content_selector import ContentSelector
 from pdd.load_prompt_template import load_prompt_template
 
 
@@ -46,6 +48,31 @@ def _read_repo_text(relative_path: str) -> str:
     if not path.exists():
         pytest.skip(f"Repository file not available in this environment: {relative_path}")
     return path.read_text(encoding="utf-8")
+
+
+def _agentic_common_example_selector_includes() -> list[tuple[str, str, list[str]]]:
+    """Return prompt includes that select from the shared agentic example."""
+    repo_root = _find_repo_root()
+    include_re = re.compile(
+        r'<include\b(?=[^>]*\bselect="([^"]+)")[^>]*>\s*'
+        r'context/agentic_common_example\.py\s*</include>'
+    )
+    includes: list[tuple[str, str, list[str]]] = []
+    for prompt_root in ("prompts", "pdd/prompts"):
+        root_path = repo_root / prompt_root
+        if not root_path.exists():
+            continue
+        for prompt_path in sorted(root_path.rglob("*.prompt")):
+            text = prompt_path.read_text(encoding="utf-8")
+            for match in include_re.finditer(text):
+                includes.append(
+                    (
+                        prompt_path.relative_to(repo_root).as_posix(),
+                        match.group(1),
+                        parse_selectors_string(match.group(1)),
+                    )
+                )
+    return includes
 
 
 def _get_step10_architecture_entry() -> dict:
@@ -128,6 +155,78 @@ def test_agentic_common_example_demonstrates_post_pr_comment():
     assert "post_pr_comment" in example
     assert "def example_post_pr_comment():" in example
     assert "posted = post_pr_comment(" in example
+
+
+def test_agentic_common_example_satisfies_prompt_selectors():
+    """Root and packaged prompts should be able to select shared example symbols."""
+    example = _read_repo_text("context/agentic_common_example.py")
+    includes = _agentic_common_example_selector_includes()
+    prompt_paths = {path for path, _selector, _selectors in includes}
+
+    required_prompt_paths = {
+        "prompts/agentic_e2e_fix_orchestrator_python.prompt",
+        "prompts/agentic_sync_python.prompt",
+        "prompts/agentic_update_python.prompt",
+        "pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt",
+        "pdd/prompts/agentic_sync_python.prompt",
+        "pdd/prompts/agentic_update_python.prompt",
+    }
+    assert required_prompt_paths <= prompt_paths
+
+    failures: list[str] = []
+    for prompt_path, selector, selectors in includes:
+        try:
+            ContentSelector.select(
+                example,
+                selectors,
+                file_path="context/agentic_common_example.py",
+            )
+        except Exception as exc:
+            failures.append(f"{prompt_path} select={selector!r}: {exc}")
+
+    assert not failures, "\n".join(failures)
+
+
+def test_agentic_common_architecture_exposes_prompt_required_public_helpers():
+    """architecture.json should preserve public helpers selected by prompts."""
+    entries = json.loads(_read_repo_text("architecture.json"))
+    entry = next(
+        item for item in entries if item.get("filepath") == "pdd/agentic_common.py"
+    )
+    functions = {
+        function["name"]
+        for function in entry["interface"]["module"]["functions"]
+    }
+
+    required = {
+        "extract_step_report",
+        "normalize_step_comments_state",
+        "post_step_comment_once",
+    }
+    assert required <= functions
+
+
+def test_agentic_common_architecture_validate_claude_policy_signature_matches_public_api():
+    """architecture.json should expose the interactive Claude policy contract."""
+    from pdd.agentic_common import validate_claude_policy
+
+    entries = json.loads(_read_repo_text("architecture.json"))
+    entry = next(
+        item for item in entries if item.get("filepath") == "pdd/agentic_common.py"
+    )
+    function = next(
+        item
+        for item in entry["interface"]["module"]["functions"]
+        if item["name"] == "validate_claude_policy"
+    )
+
+    assert str(inspect.signature(validate_claude_policy)) == (
+        "(policy: 'Any', *, interactive: 'bool' = False) -> 'ClaudePolicy'"
+    )
+    assert function["signature"] == (
+        "(policy: Any, *, interactive: bool = False) -> ClaudePolicy"
+    )
+    assert function["returns"] == "ClaudePolicy"
 
 
 def test_ci_failure_comments_use_shared_pr_helper(tmp_path):

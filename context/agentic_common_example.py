@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from typing import Any, Dict, Optional, Tuple
 from unittest.mock import patch
 
 from rich.console import Console
@@ -15,20 +17,108 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from pdd.agentic_common import (
+    clear_workflow_state as _clear_workflow_state,
     get_agent_provider_preference,
     github_load_state,
     github_save_state,
+    load_workflow_state as _load_workflow_state,
+    post_final_comment,
     post_pr_comment,
     post_step_comment,
-    run_agentic_task,
+    run_agentic_task as _run_agentic_task,
     validate_cached_state,
 )
 
 console = Console()
 
 
+def run_agentic_task(*args: Any, **kwargs: Any) -> Any:
+    """Delegate to the public agentic task runner for selector-based prompts."""
+    return _run_agentic_task(*args, **kwargs)
+
+
+def load_workflow_state(
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool = True,
+) -> Tuple[Optional[Dict], Optional[int]]:
+    """Delegate to the shared workflow-state loader."""
+    return _load_workflow_state(
+        cwd,
+        issue_number,
+        workflow_type,
+        state_dir,
+        repo_owner,
+        repo_name,
+        use_github_state,
+    )
+
+
+def clear_workflow_state(
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool = True,
+) -> bool:
+    """Delegate to the shared workflow-state clearer."""
+    return _clear_workflow_state(
+        cwd,
+        issue_number,
+        workflow_type,
+        state_dir,
+        repo_owner,
+        repo_name,
+        use_github_state,
+    )
+
+
+def _fetch_comments(comments_url: str) -> str:
+    """Small deterministic example of a comments fetch helper."""
+    if not comments_url:
+        return "[]"
+    return json.dumps([{"body": "Looks good", "user": {"login": "reviewer"}}])
+
+
+def _escape_format_braces(text: str) -> str:
+    """Escape braces before putting arbitrary text through str.format."""
+    return text.replace("{", "{{").replace("}", "}}")
+
+
+def _extract_json_from_text(text: str) -> dict[str, Any] | None:
+    """Extract the first JSON object embedded in free-form text."""
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _parse_pr_url(url: str) -> Optional[Tuple[str, str, int]]:
+    """Parse a GitHub PR URL into owner, repository, and PR number."""
+    match = re.match(r"https://github\.com/([^/]+)/([^/]+)/pull/(\d+)$", url)
+    if not match:
+        return None
+    owner, repo, number = match.groups()
+    return owner, repo, int(number)
+
+
+def _is_github_issue_url(value: str) -> bool:
+    """Return True for a canonical GitHub issue URL."""
+    return re.match(r"https://github\.com/[^/]+/[^/]+/issues/\d+$", value) is not None
+
+
 def example_provider_preference() -> None:
-    """Show the default provider order and an env override."""
+    """Show the default provider order and an environment override."""
     console.print("[bold blue]Provider Preference[/bold blue]")
     console.print(f"Default: {get_agent_provider_preference()}")
 
@@ -85,7 +175,7 @@ def example_validate_cached_state() -> None:
 
 
 def example_post_step_comment(cwd: Path) -> None:
-    """Show the issue comment helper with a mocked gh CLI."""
+    """Show the issue step-comment helper with a mocked gh CLI."""
     console.print("\n[bold blue]post_step_comment()[/bold blue]")
     with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
          patch("pdd.agentic_common.subprocess.run") as mock_run:
@@ -108,9 +198,8 @@ def example_post_step_comment(cwd: Path) -> None:
     console.print(f"Issue comment posted: {posted}")
 
 
-def _example_post_pr_comment(cwd: Path) -> None:
-    """Show the PR comment helper used by CI validation."""
-    console.print("\n[bold blue]post_pr_comment()[/bold blue]")
+def example_post_pr_comment():
+    """Demonstrate the PR comment helper used by CI validation."""
     with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
          patch("pdd.agentic_common.subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(
@@ -124,14 +213,34 @@ def _example_post_pr_comment(cwd: Path) -> None:
             repo_name="example-repo",
             pr_number=42,
             body="CI validation exhausted retries; lint is still failing.",
-            cwd=cwd,
+            cwd=Path.cwd(),
         )
+
     console.print(f"PR comment posted: {posted}")
 
 
-def example_post_pr_comment():
-    """Compatibility wrapper retained for prompt-level example assertions."""
-    _example_post_pr_comment(Path.cwd())
+def example_post_final_comment(cwd: Path) -> None:
+    """Show the final workflow comment helper with a mocked gh CLI."""
+    console.print("\n[bold blue]post_final_comment()[/bold blue]")
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+         patch("pdd.agentic_common.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["gh"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        posted = post_final_comment(
+            repo_owner="example-owner",
+            repo_name="example-repo",
+            issue_number=822,
+            reason="NOT_A_BUG",
+            total_cost=0.25,
+            steps_completed=4,
+            total_steps=5,
+            cwd=cwd,
+        )
+    console.print(f"Final comment posted: {posted}")
 
 
 def example_github_state_helpers(cwd: Path) -> None:
@@ -171,16 +280,29 @@ def example_github_state_helpers(cwd: Path) -> None:
     console.print(f"Loaded comment id: {loaded_comment_id}")
 
 
+def example_consecutive_provider_failures_guard() -> None:
+    """Show the provider-failure counter used by agentic orchestrators."""
+    consecutive_provider_failures = 0
+    for step_success in [False, False, True]:
+        if step_success:
+            consecutive_provider_failures = 0
+        else:
+            consecutive_provider_failures += 1
+    console.print(f"Consecutive provider failures: {consecutive_provider_failures}")
+
+
 def main() -> None:
-    """Run the example in a temporary working directory."""
-    with TemporaryDirectory() as temp_dir:
+    """Run deterministic examples in a temporary working directory."""
+    with TemporaryDirectory(prefix="pdd-agentic-common-example-") as temp_dir:
         cwd = Path(temp_dir)
         example_provider_preference()
         example_run_agentic_task(cwd)
         example_validate_cached_state()
         example_post_step_comment(cwd)
-        _example_post_pr_comment(cwd)
+        example_post_pr_comment()
+        example_post_final_comment(cwd)
         example_github_state_helpers(cwd)
+        example_consecutive_provider_failures_guard()
 
 
 if __name__ == "__main__":
