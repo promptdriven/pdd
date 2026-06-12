@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import os
 import signal
@@ -25,6 +26,8 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+_FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
+_AUDIT_SKIP_DIR_NAMES: Set[str] = {".git"}
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
@@ -35,10 +38,12 @@ def get_agentic_capabilities() -> Dict[str, Any]:
     """Return machine-checkable agentic capability contracts for callers."""
     return {
         "claude_policy": {
-            "schema_version": 1,
+            "schema_version": 2,
             "fields": {
                 "allowedTools": ["string", "null"],
                 "addDirs": "list[string]",
+                "writableRoots": "list[string]",
+                "readOnlyRoots": "list[string]",
                 "noSessionPersistence": {
                     "standard": "boolean",
                     "interactive": False,
@@ -50,6 +55,19 @@ def get_agentic_capabilities() -> Dict[str, Any]:
                 "interactive": {
                     "noSessionPersistence": False,
                     "usageSource": "persisted_session_transcript",
+                },
+            },
+            "filesystemPolicy": {
+                "schemaVersion": 1,
+                "writableRoots": True,
+                "readOnlyRoots": True,
+                "enforcement": "post_run_audit_fail_closed",
+            },
+            "result": {
+                "schemaVersion": 1,
+                "changedFiles": {
+                    "pythonAttribute": "changed_files",
+                    "dictKey": "changed_files",
                 },
             },
         }
@@ -64,6 +82,8 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
     allowed_keys = {
         "allowedTools",
         "addDirs",
+        "writableRoots",
+        "readOnlyRoots",
         "noSessionPersistence",
         "outputFormat",
     }
@@ -89,6 +109,21 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
             "claude_policy.addDirs must be a list of strings"
         )
 
+    normalized_roots: Dict[str, List[str]] = {}
+    for key in _FILESYSTEM_POLICY_KEYS:
+        if key not in policy:
+            continue
+        roots = policy.get(key)
+        if not isinstance(roots, list) or not all(isinstance(p, str) for p in roots):
+            raise AgenticUnsupportedSemanticsError(
+                f"claude_policy.{key} must be a list of strings"
+            )
+        if any(not p.strip() for p in roots):
+            raise AgenticUnsupportedSemanticsError(
+                f"claude_policy.{key} must not contain empty paths"
+            )
+        normalized_roots[key] = list(roots)
+
     no_session = policy.get("noSessionPersistence", False)
     if not isinstance(no_session, bool):
         raise AgenticUnsupportedSemanticsError(
@@ -107,12 +142,14 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
             "claude_policy.outputFormat must be json"
         )
 
-    return {
+    normalized = {
         "allowedTools": allowed_tools,
         "addDirs": list(add_dirs),
         "noSessionPersistence": no_session,
         "outputFormat": "json",
     }
+    normalized.update(normalized_roots)
+    return normalized
 
 
 def _append_claude_policy_args(cmd: List[str], claude_policy: ClaudePolicy) -> None:
@@ -122,10 +159,243 @@ def _append_claude_policy_args(cmd: List[str], claude_policy: ClaudePolicy) -> N
         cmd.extend(["--tools", ""])
     else:
         cmd.extend(["--allowedTools", allowed_tools])
-    for add_dir in claude_policy["addDirs"]:
+    add_dirs: List[str] = []
+    for key in ("addDirs", "writableRoots", "readOnlyRoots"):
+        for path in claude_policy.get(key, []):
+            if path not in add_dirs:
+                add_dirs.append(path)
+    for add_dir in add_dirs:
         cmd.extend(["--add-dir", add_dir])
     if claude_policy["noSessionPersistence"]:
         cmd.append("--no-session-persistence")
+
+
+@dataclass
+class _FilesystemPolicySnapshot:
+    files: Dict[Path, str]
+    errors: List[str]
+
+
+def _claude_policy_has_filesystem_roots(policy: Optional[ClaudePolicy]) -> bool:
+    """Return True when caller requested the filesystem audit policy."""
+    return bool(
+        policy is not None and any(key in policy for key in _FILESYSTEM_POLICY_KEYS)
+    )
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return True when *path* is equal to or contained by *root*."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _resolve_policy_path(cwd: Path, raw_path: str) -> Path:
+    """Resolve a policy path, treating relative roots as relative to *cwd*."""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = cwd / path
+    return path.resolve(strict=False)
+
+
+def _resolve_policy_roots(
+    cwd: Path,
+    policy: ClaudePolicy,
+    key: str,
+) -> List[Path]:
+    """Resolve and deduplicate root paths from a normalized policy key."""
+    roots: List[Path] = []
+    for raw_path in policy.get(key, []):
+        resolved = _resolve_policy_path(cwd, raw_path)
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _collapse_audit_roots(roots: List[Path]) -> List[Path]:
+    """Remove duplicate/nested audit roots so recursive snapshots stay bounded."""
+    collapsed: List[Path] = []
+    for root in sorted(set(roots), key=lambda p: (len(p.parts), str(p))):
+        if any(_path_is_within(root, existing) for existing in collapsed):
+            continue
+        collapsed.append(root)
+    return collapsed
+
+
+def _filesystem_signature(path: Path, errors: List[str]) -> str:
+    """Return a content-aware signature for an audited filesystem path."""
+    try:
+        stat_result = path.lstat()
+    except FileNotFoundError:
+        return "missing"
+    except OSError as exc:
+        errors.append(f"{path}: {exc}")
+        return "error"
+
+    if path.is_symlink():
+        try:
+            target = os.readlink(path)
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            target = "<unreadable>"
+        return f"symlink:{stat_result.st_mode}:{target}"
+
+    if path.is_file():
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            return f"file-error:{stat_result.st_mode}:{stat_result.st_size}"
+        return f"file:{stat_result.st_mode}:{stat_result.st_size}:{digest.hexdigest()}"
+
+    return (
+        f"other:{stat_result.st_mode}:{stat_result.st_size}:"
+        f"{stat_result.st_mtime_ns}"
+    )
+
+
+def _snapshot_audit_root(
+    root: Path,
+    files: Dict[Path, str],
+    errors: List[str],
+) -> None:
+    """Add all auditable files under *root* to *files*."""
+    if not root.exists():
+        return
+    if root.is_file() or root.is_symlink():
+        resolved = root.resolve(strict=False)
+        files[resolved] = _filesystem_signature(root, errors)
+        return
+    if not root.is_dir():
+        resolved = root.resolve(strict=False)
+        files[resolved] = _filesystem_signature(root, errors)
+        return
+
+    def on_walk_error(exc: OSError) -> None:
+        errors.append(f"{root}: {exc}")
+
+    for current, dirnames, filenames in os.walk(
+        root,
+        topdown=True,
+        onerror=on_walk_error,
+    ):
+        dirnames[:] = [
+            name for name in dirnames if name not in _AUDIT_SKIP_DIR_NAMES
+        ]
+        current_path = Path(current)
+        for dirname in list(dirnames):
+            dir_path = current_path / dirname
+            if dir_path.is_symlink():
+                resolved = dir_path.resolve(strict=False)
+                files[resolved] = _filesystem_signature(dir_path, errors)
+        for filename in filenames:
+            file_path = current_path / filename
+            resolved = file_path.resolve(strict=False)
+            files[resolved] = _filesystem_signature(file_path, errors)
+
+
+def _take_filesystem_policy_snapshot(
+    cwd: Path,
+    policy: ClaudePolicy,
+) -> _FilesystemPolicySnapshot:
+    """Snapshot files under cwd, addDirs, writable roots, and read-only roots."""
+    resolved_cwd = cwd.resolve(strict=False)
+    roots = [resolved_cwd]
+    for key in ("addDirs", "writableRoots", "readOnlyRoots"):
+        roots.extend(_resolve_policy_roots(resolved_cwd, policy, key))
+
+    files: Dict[Path, str] = {}
+    errors: List[str] = []
+    for root in _collapse_audit_roots(roots):
+        _snapshot_audit_root(root, files, errors)
+    return _FilesystemPolicySnapshot(files=files, errors=errors)
+
+
+def _display_audit_path(cwd: Path, path: Path) -> str:
+    """Render cwd-contained paths as POSIX relative paths, else absolute paths."""
+    resolved_cwd = cwd.resolve(strict=False)
+    try:
+        return path.relative_to(resolved_cwd).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _format_audit_paths(paths: List[str], *, limit: int = 12) -> str:
+    """Format changed paths for concise policy messages."""
+    shown = paths[:limit]
+    suffix = f" (+{len(paths) - limit} more)" if len(paths) > limit else ""
+    return ", ".join(shown) + suffix
+
+
+def _audit_filesystem_policy(
+    cwd: Path,
+    policy: Optional[ClaudePolicy],
+    before: Optional[_FilesystemPolicySnapshot],
+) -> Tuple[List[str], Optional[str]]:
+    """Compare filesystem snapshots and return changed files plus violation text."""
+    if policy is None or before is None:
+        return [], None
+
+    after = _take_filesystem_policy_snapshot(cwd, policy)
+    if before.errors or after.errors:
+        errors = before.errors + after.errors
+        detail = _format_audit_paths(errors)
+        return [], f"Filesystem policy audit failed; refusing result: {detail}"
+
+    changed_paths = sorted(
+        (
+            path for path in set(before.files) | set(after.files)
+            if before.files.get(path) != after.files.get(path)
+        ),
+        key=str,
+    )
+    changed_files = [_display_audit_path(cwd, path) for path in changed_paths]
+    if not changed_paths:
+        return changed_files, None
+
+    resolved_cwd = cwd.resolve(strict=False)
+    writable_roots = _resolve_policy_roots(resolved_cwd, policy, "writableRoots")
+    read_only_roots = _resolve_policy_roots(resolved_cwd, policy, "readOnlyRoots")
+
+    outside_writable = [
+        path for path in changed_paths
+        if not any(_path_is_within(path, root) for root in writable_roots)
+    ]
+    inside_read_only = [
+        path for path in changed_paths
+        if any(_path_is_within(path, root) for root in read_only_roots)
+    ]
+    if not outside_writable and not inside_read_only:
+        return changed_files, None
+
+    lines = [
+        "Filesystem policy violation: changed files must stay inside "
+        "caller-declared writable roots and outside declared read-only roots.",
+    ]
+    if outside_writable:
+        lines.append(
+            "Changed files outside writable roots: "
+            + _format_audit_paths(
+                [_display_audit_path(cwd, path) for path in outside_writable]
+            )
+        )
+    if inside_read_only:
+        lines.append(
+            "Changed files inside read-only roots: "
+            + _format_audit_paths(
+                [_display_audit_path(cwd, path) for path in inside_read_only]
+            )
+        )
+    lines.append("Changed files: " + _format_audit_paths(changed_files))
+    return changed_files, "\n".join(lines)
 
 
 def _interactive_allowed_tools(allowed_tools: Optional[str]) -> Optional[str]:
@@ -226,7 +496,8 @@ class AgenticTaskResult(tuple):
     structured usage with ``isinstance(result, tuple)``, ``len(result) >= 5``,
     and ``result[4]``. Iteration intentionally yields the historical four
     fields to preserve existing ``success, output, cost, provider = ...``
-    callers.
+    callers. Changed-file metadata is stored as an attribute so the indexed
+    usage slot remains stable.
     """
 
     def __new__(
@@ -236,11 +507,15 @@ class AgenticTaskResult(tuple):
         cost_usd: float,
         provider: str,
         usage: AgenticUsage = None,
+        *,
+        changed_files: Optional[List[str]] = None,
     ) -> "AgenticTaskResult":
-        return tuple.__new__(
+        result = tuple.__new__(
             cls,
             (success, output_text, cost_usd, provider, usage),
         )
+        result._changed_files = list(changed_files or [])
+        return result
 
     def __iter__(self):
         return (tuple.__getitem__(self, i) for i in range(4))
@@ -265,6 +540,10 @@ class AgenticTaskResult(tuple):
     def usage(self) -> AgenticUsage:
         return tuple.__getitem__(self, 4)
 
+    @property
+    def changed_files(self) -> List[str]:
+        return list(getattr(self, "_changed_files", []))
+
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable mapping shape for structured consumers."""
         return {
@@ -273,6 +552,7 @@ class AgenticTaskResult(tuple):
             "cost_usd": self.cost_usd,
             "provider": self.provider,
             "usage": self.usage,
+            "changed_files": self.changed_files,
         }
 
 
@@ -3079,6 +3359,23 @@ def run_agentic_task(
         with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(full_instruction)
 
+        filesystem_snapshot: Optional[_FilesystemPolicySnapshot] = None
+        if _claude_policy_has_filesystem_roots(normalized_claude_policy):
+            filesystem_snapshot = _take_filesystem_policy_snapshot(
+                cwd,
+                normalized_claude_policy or {},
+            )
+            if filesystem_snapshot.errors:
+                detail = _format_audit_paths(filesystem_snapshot.errors)
+                return AgenticTaskResult(
+                    False,
+                    "Filesystem policy audit failed before provider run; "
+                    f"refusing to execute: {detail}",
+                    0.0,
+                    "",
+                    None,
+                )
+
         provider_errors: List[str] = []
 
         for provider in candidates:
@@ -3251,6 +3548,33 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
+                        changed_files, filesystem_violation = _audit_filesystem_policy(
+                            cwd,
+                            normalized_claude_policy,
+                            filesystem_snapshot,
+                        )
+                        if filesystem_violation is not None:
+                            _log_agentic_interaction(
+                                label=label,
+                                prompt=full_instruction,
+                                response=filesystem_violation,
+                                cost=cost,
+                                provider=provider,
+                                success=False,
+                                duration=time.time() - task_start_time,
+                                cwd=cwd,
+                                model=effective_model,
+                                include_bodies=verbose,
+                            )
+                            return AgenticTaskResult(
+                                False,
+                                filesystem_violation,
+                                cost,
+                                provider,
+                                usage,
+                                changed_files=changed_files,
+                            )
+
                         # Issue #1376: always emit a summary record so the audit
                         # log answers "which provider/model produced step N?"
                         # without --verbose. Full prompt+response bodies stay
@@ -3268,7 +3592,14 @@ def run_agentic_task(
                             model=effective_model,
                             include_bodies=verbose,
                         )
-                        return AgenticTaskResult(True, output, cost, provider, usage)
+                        return AgenticTaskResult(
+                            True,
+                            output,
+                            cost,
+                            provider,
+                            usage,
+                            changed_files=changed_files,
+                        )
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
                 # Issue #1376 codex round 2: log each failed attempt inside
