@@ -934,6 +934,53 @@ def test_run_agentic_task_claude_policy_ignores_internal_retry_logs(
     assert provider_calls == 2
 
 
+def test_run_agentic_task_claude_policy_reports_provider_log_dir_writes(
+    tmp_path, mock_env
+):
+    writable_root = tmp_path / "src"
+    provider_log_file = tmp_path / ".pdd" / "agentic-logs" / "provider-owned.txt"
+    writable_root.mkdir()
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        provider_log_file.parent.mkdir(parents=True)
+        provider_log_file.write_text("provider artifact", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Write provider artifact under log dir",
+            tmp_path,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert ".pdd/agentic-logs/provider-owned.txt" in result.changed_files
+
+
 def test_run_agentic_task_claude_policy_audits_git_metadata_changes(
     tmp_path, mock_env
 ):
@@ -980,6 +1027,68 @@ def test_run_agentic_task_claude_policy_audits_git_metadata_changes(
     assert result.success is False
     assert "Filesystem policy violation" in result.output_text
     assert ".git/config" in result.changed_files
+
+
+def test_run_agentic_task_claude_policy_audits_linked_worktree_git_metadata(
+    tmp_path, mock_env
+):
+    workspace = tmp_path / "workspace"
+    writable_root = workspace / "src"
+    common_git_dir = tmp_path / "repo.git"
+    worktree_git_dir = common_git_dir / "worktrees" / "workspace"
+    refs_dir = common_git_dir / "refs" / "heads"
+    writable_root.mkdir(parents=True)
+    worktree_git_dir.mkdir(parents=True)
+    refs_dir.mkdir(parents=True)
+    (workspace / ".git").write_text(
+        f"gitdir: {worktree_git_dir}\n",
+        encoding="utf-8",
+    )
+    (worktree_git_dir / "commondir").write_text("../..\n", encoding="utf-8")
+    worktree_index = worktree_git_dir / "index"
+    common_ref = refs_dir / "main"
+    worktree_index.write_text("original index", encoding="utf-8")
+    common_ref.write_text("0" * 40 + "\n", encoding="utf-8")
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        worktree_index.write_text("mutated index", encoding="utf-8")
+        common_ref.write_text("1" * 40 + "\n", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Try linked worktree git metadata write",
+            workspace,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert str(worktree_index) in result.changed_files
+    assert str(common_ref) in result.changed_files
 
 
 def test_anthropic_claude_policy_builds_read_glob_add_dirs_no_session_json_command(
