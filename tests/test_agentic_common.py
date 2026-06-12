@@ -881,6 +881,64 @@ def test_run_agentic_task_claude_policy_reports_new_escaped_symlink(
     assert "src/created-link" in result.changed_files
 
 
+def test_run_agentic_task_claude_policy_rejects_symlink_to_linked_git_audit_root(
+    tmp_path, mock_env
+):
+    workspace = tmp_path / "workspace"
+    writable_root = workspace / "src"
+    common_git_dir = tmp_path / "repo.git"
+    worktree_git_dir = common_git_dir / "worktrees" / "workspace"
+    writable_root.mkdir(parents=True)
+    worktree_git_dir.mkdir(parents=True)
+    (workspace / ".git").write_text(
+        f"gitdir: {worktree_git_dir}\n",
+        encoding="utf-8",
+    )
+    (worktree_git_dir / "commondir").write_text("../..\n", encoding="utf-8")
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        (writable_root / "git-metadata-link").symlink_to(
+            common_git_dir,
+            target_is_directory=True,
+        )
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Create symlink to linked git metadata",
+            workspace,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert "symlink" in result.output_text
+    assert "src/git-metadata-link" in result.changed_files
+
+
 def test_run_agentic_task_claude_policy_ignores_internal_retry_logs(
     tmp_path, mock_env
 ):
@@ -934,6 +992,65 @@ def test_run_agentic_task_claude_policy_ignores_internal_retry_logs(
     assert provider_calls == 2
 
 
+def test_run_agentic_task_claude_policy_reports_deleted_internal_retry_log(
+    tmp_path, mock_env
+):
+    writable_root = tmp_path / "src"
+    writable_root.mkdir()
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    provider_calls = 0
+
+    def fake_provider(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls == 1:
+            return (True, "Ok", 0.0, "claude-sonnet", None)
+        for log_file in (tmp_path / ".pdd" / "agentic-logs").glob("*.jsonl"):
+            log_file.unlink()
+        (writable_root / "result.txt").write_text("generated", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Retry after false positive then delete log",
+            tmp_path,
+            max_retries=2,
+            retry_delay=0.0,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert any(
+        path.startswith(".pdd/agentic-logs/session_")
+        for path in result.changed_files
+    )
+    assert provider_calls == 2
+
+
 def test_run_agentic_task_claude_policy_reports_provider_log_dir_writes(
     tmp_path, mock_env
 ):
@@ -979,6 +1096,52 @@ def test_run_agentic_task_claude_policy_reports_provider_log_dir_writes(
     assert result.success is False
     assert "Filesystem policy violation" in result.output_text
     assert ".pdd/agentic-logs/provider-owned.txt" in result.changed_files
+
+
+def test_run_agentic_task_claude_policy_reports_out_of_scope_directory_creation(
+    tmp_path, mock_env
+):
+    writable_root = tmp_path / "src"
+    outside_dir = tmp_path / "generated-dir"
+    writable_root.mkdir()
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        outside_dir.mkdir()
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Create out-of-scope directory",
+            tmp_path,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert "generated-dir" in result.changed_files
 
 
 def test_run_agentic_task_claude_policy_audits_git_metadata_changes(
