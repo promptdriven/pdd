@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -505,3 +506,48 @@ def test_total_budget_keeps_durable_runner_single_worker(tmp_path: Path):
     )
 
     assert runner.max_workers == 1
+
+
+# ---------------------------------------------------------------------------
+# Issue #1565 — DurableSyncRunner sibling: PDD_SYNC_MAX_WORKERS env var
+# ---------------------------------------------------------------------------
+
+# Scope addition: covers expansion item "pdd/durable_sync_runner.py:82 —
+# DurableSyncRunner.__init__ else-branch also falls back to MAX_WORKERS without
+# checking PDD_SYNC_MAX_WORKERS" identified by Step 6 but absent from Step 8's
+# primary test plan.
+def test_durable_runner_fallback_max_workers_reads_pdd_sync_max_workers_env_var():
+    """PDD_SYNC_MAX_WORKERS must also limit DurableSyncRunner.max_workers when
+    durable_max_parallel is not set (the else-branch at durable_sync_runner.py:82).
+
+    DurableSyncRunner imports MAX_WORKERS from agentic_sync_runner at module
+    level (line 23).  Once agentic_sync_runner.MAX_WORKERS becomes env-var-
+    driven, the import automatically propagates the correct value to the sibling
+    without any additional change to durable_sync_runner.py.
+
+    Fails on buggy code: agentic_sync_runner.MAX_WORKERS is always 4, so the
+    imported durable_sync_runner.MAX_WORKERS is also always 4 regardless of the
+    env var.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os; os.environ['PDD_SYNC_MAX_WORKERS'] = '2'; "
+                "from pdd.durable_sync_runner import MAX_WORKERS; "
+                "print(MAX_WORKERS)"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"Import subprocess failed: stderr={result.stderr!r}"
+    )
+    assert result.stdout.strip() == "2", (
+        f"DurableSyncRunner's MAX_WORKERS should be 2 when "
+        f"PDD_SYNC_MAX_WORKERS=2; got {result.stdout.strip()!r}. "
+        "Bug: durable_sync_runner imports MAX_WORKERS from agentic_sync_runner "
+        "which is hardcoded to 4; the env var never reaches the durable runner."
+    )

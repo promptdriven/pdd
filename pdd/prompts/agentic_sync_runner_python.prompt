@@ -41,7 +41,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
    - `initial_cost: float` — pre-runner cost (LLM module identification and dry-run fallback) to include in total cost display and return value (default 0.0)
    - Tracks per-module state: pending -> running -> success | failed
 2. Method: `run() -> Tuple[bool, str, float]` — returns (all_success, summary_message, total_cost) where total_cost includes initial_cost + per-module costs
-3. Use `concurrent.futures.ThreadPoolExecutor` with `MAX_WORKERS = 4`; when `sync_options["total_budget"]` is set, run sequentially and pass only the remaining total budget to each child process so the total budget is not multiplied per module.
+3. Use `concurrent.futures.ThreadPoolExecutor` with `MAX_WORKERS` (default 4); read `PDD_SYNC_MAX_WORKERS` from the environment using the same safe-int pattern as `MODULE_TIMEOUT`: `try: MAX_WORKERS = max(1, min(4, int(os.environ.get("PDD_SYNC_MAX_WORKERS", "4")))) except ValueError: MAX_WORKERS = 4`; when `sync_options["total_budget"]` is set, run sequentially and pass only the remaining total budget to each child process so the total budget is not multiplied per module.
 4. Dependency-aware scheduling, SCC-aware so legitimate dependency cycles (Python late-imports, etc.) do not deadlock the runner:
    - At construction, compute strongly connected components of the basename-induced subgraph of `dep_graph` via `pdd.sync_order.compute_sccs`. Build:
      - `self._scc_of: Dict[str, frozenset[str]]` mapping every in-target basename to its SCC (frozenset of co-cyclic peers).
@@ -168,6 +168,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - Parse `PDD_PHASE:` markers from stdout lines in reader thread
 - Heartbeat: poll with timeout every 60s; print last informative output line (skip box-drawing chars)
 - Box-drawing filter: `_BOX_CHARS_RE` matches lines with only `╠╗║╔═║╔╗║║╠╣╦╩╦-|+` and whitespace
+- Bound child output capture: use `collections.deque(maxlen=STDOUT_CAPTURE_LINE_LIMIT)` (module-level constant `STDOUT_CAPTURE_LINE_LIMIT = 5000`) instead of unbounded `List[str]` for `stdout_lines` and `stderr_lines`; track `stdout_dropped_lines` and `stderr_dropped_lines` integer counters (increment before each append that displaces an entry once the deque is full); `"".join(...)` materialization at exit produces a naturally bounded string sufficient for `_parse_conformance_failure`, `_parse_public_surface_failure`, and `_parse_test_churn_failure`; clear both deques and reset counters at the start of each repair-retry attempt so full output from previous retries is not retained across retries in memory
 
 % Dependencies
 <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
