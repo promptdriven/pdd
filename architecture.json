@@ -1,6 +1,6 @@
 [
   {
-    "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode.",
+    "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode, with mid-run steering and state persistence.",
     "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
       "llm_invoke_python.prompt",
@@ -19,6 +19,25 @@
     "interface": {
       "type": "module",
       "module": {
+        "dataclasses": [
+          {
+            "name": "SteerEntry",
+            "fields": [
+              {
+                "name": "comment_id",
+                "type": "str"
+              },
+              {
+                "name": "author",
+                "type": "str"
+              },
+              {
+                "name": "body",
+                "type": "str"
+              }
+            ]
+          }
+        ],
         "functions": [
           {
             "name": "get_agent_provider_preference",
@@ -31,9 +50,19 @@
             "returns": "List[str]"
           },
           {
+            "name": "get_agentic_capabilities",
+            "signature": "() -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "validate_claude_policy",
+            "signature": "(policy: Any) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          },
+          {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]"
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None) -> AgenticTaskResult",
+            "returns": "AgenticTaskResult"
           },
           {
             "name": "detect_control_token",
@@ -81,21 +110,6 @@
             "returns": "Optional[str]"
           },
           {
-            "name": "extract_step_report",
-            "signature": "(text: Optional[str]) -> Optional[str]",
-            "returns": "Optional[str]"
-          },
-          {
-            "name": "normalize_step_comments_state",
-            "signature": "(raw: Any) -> Set[int]",
-            "returns": "Set[int]"
-          },
-          {
-            "name": "post_step_comment_once",
-            "signature": "(*, repo_owner: str, repo_name: str, issue_number: int, step_num: int, body: str, posted_steps: Set[int], cwd: Path) -> bool",
-            "returns": "bool"
-          },
-          {
             "name": "_sanitize_comment_body",
             "signature": "(body: Optional[str], max_chars: int = 25_000) -> str",
             "returns": "str"
@@ -129,6 +143,11 @@
             "name": "github_clear_state",
             "signature": "(repo_owner: str, repo_name: str, issue_number: int, workflow_type: str, cwd: Path) -> bool",
             "returns": "bool"
+          },
+          {
+            "name": "drain_issue_steers",
+            "signature": "(repo_owner: str, repo_name: str, issue_number: int, state: Dict, *, cwd: Path) -> List[SteerEntry]",
+            "returns": "List[SteerEntry]"
           },
           {
             "name": "load_workflow_state",
