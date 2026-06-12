@@ -3603,19 +3603,10 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
     Tries modelUsage per-model costUSD first, then falls back to token-based
     estimation from the usage field.
     """
-    # Try 1: Sum costUSD from modelUsage (most accurate)
     raw_model_usage = data.get("modelUsage", {})
     model_usage = raw_model_usage if isinstance(raw_model_usage, dict) else {}
-    if model_usage:
-        total = sum(
-            float(info.get("costUSD", 0.0))
-            for info in model_usage.values()
-            if isinstance(info, dict)
-        )
-        if total > 0:
-            return total
 
-    # Try 2: Token-based estimation from validated per-model modelUsage fields.
+    # Try 1: Per-model modelUsage costUSD/token estimates.
     usage = data.get("usage", {})
     aggregate_usage = usage if isinstance(usage, dict) else None
     model_usage_cost = _calculate_anthropic_model_usage_token_cost(
@@ -3704,7 +3695,22 @@ def _validated_anthropic_token_counts(
         or cache_creation is None
     ):
         return None
+    if cache_read + cache_creation > input_tokens:
+        return None
     return input_tokens, output_tokens, cache_read, cache_creation
+
+
+def _positive_model_usage_cost_usd(usage: Dict[str, Any]) -> Optional[float]:
+    """Return a positive provider-reported model cost, or None."""
+    if "costUSD" not in usage:
+        return None
+    try:
+        cost = float(usage["costUSD"])
+    except (TypeError, ValueError):
+        return None
+    if cost <= 0:
+        return None
+    return cost
 
 
 def _anthropic_pricing_family_from_model_name(model_name: Optional[str]) -> Optional[str]:
@@ -3768,12 +3774,16 @@ def _calculate_anthropic_model_usage_token_cost(
     *,
     aggregate_usage: Optional[Dict[str, Any]] = None,
 ) -> Optional[float]:
-    """Estimate cost from validated per-model modelUsage token counters."""
+    """Estimate cost from per-model costUSD or validated token counters."""
     if not model_usage:
         return None
 
     if not any(
-        isinstance(usage, dict) and _has_token_counter_key(usage)
+        isinstance(usage, dict)
+        and (
+            _positive_model_usage_cost_usd(usage) is not None
+            or _has_token_counter_key(usage)
+        )
         for usage in model_usage.values()
     ):
         return None
@@ -3784,8 +3794,14 @@ def _calculate_anthropic_model_usage_token_cost(
     )
     total = 0.0
     for model_name, usage in model_usage.items():
-        if not isinstance(usage, dict) or not _has_token_counter_key(usage):
-            return None
+        if not isinstance(usage, dict):
+            continue
+        direct_cost = _positive_model_usage_cost_usd(usage)
+        if direct_cost is not None:
+            total += direct_cost
+            continue
+        if not _has_token_counter_key(usage):
+            continue
         if aggregate_has_nonzero_cache and not _has_complete_cache_counters(usage):
             return None
         family = (
@@ -3946,7 +3962,6 @@ def _extract_anthropic_standard_usage(
             )
             if (
                 record is None
-                and not has_per_model_counters
                 and len(names) == 1
                 and isinstance(aggregate_usage, dict)
             ):
