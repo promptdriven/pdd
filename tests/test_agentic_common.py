@@ -1706,6 +1706,101 @@ def test_standard_claude_policy_json_usage_merges_issue686_partial_model_usage_c
     json.dumps(provider_result[4])
 
 
+def test_standard_claude_policy_json_usage_model_usage_only_counters_estimate_cost(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_model_only.txt"
+    prompt_path.write_text("Audit modelUsage-only billing usage", encoding="utf-8")
+    model = "claude-opus-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned with per-model counters only.",
+        "modelUsage": {
+            model: {
+                "inputTokens": 2000,
+                "outputTokens": 300,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    expected_cost = (
+        (2000 / 1_000_000) * pricing.input_per_million
+        + (300 / 1_000_000) * pricing.output_per_million
+    )
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 2000,
+                "output_tokens": 300,
+                "cached_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+            },
+        ],
+    }
+    assert provider_result[2] == pytest.approx(expected_cost)
+
+
+def test_standard_claude_policy_json_usage_rejects_ambiguous_multi_model_partial_cache(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_ambiguous_cache.txt"
+    prompt_path.write_text("Audit ambiguous multi-model cache usage", encoding="utf-8")
+    model_haiku = "claude-haiku-3-5-20241022"
+    model_opus = "claude-opus-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for ambiguous cached model routing.",
+        "usage": {
+            "input_tokens": 3000,
+            "output_tokens": 300,
+            "cache_read_input_tokens": 1000,
+            "cache_creation_input_tokens": 200,
+        },
+        "modelUsage": {
+            model_haiku: {
+                "inputTokens": 1000,
+                "outputTokens": 100,
+            },
+            model_opus: {
+                "inputTokens": 2000,
+                "outputTokens": 200,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] is None
+
+
 @pytest.mark.parametrize(
     "model_fields",
     [
@@ -7753,6 +7848,29 @@ def test_anthropic_cost_token_based_fallback_accepts_camel_case_usage():
     cost = _calculate_anthropic_cost(data)
     expected = 0.0075 + 0.0006 + 0.001875 + 0.015
     assert cost == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    "model_fields",
+    [
+        {"model": "claude-opus-4-20250514"},
+        {"message": {"model": "claude-opus-4-20250514"}},
+    ],
+)
+def test_anthropic_cost_aggregate_usage_uses_observed_opus_model(model_fields):
+    """Aggregate usage without modelUsage should price by the observed model."""
+    data = {
+        "usage": {
+            "input_tokens": 1_000_000,
+            "output_tokens": 1_000_000,
+        },
+        "result": "Done",
+        **model_fields,
+    }
+    cost = _calculate_anthropic_cost(data)
+    pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
+    expected = pricing.input_per_million + pricing.output_per_million
+    assert cost == pytest.approx(expected)
 
 
 def test_anthropic_cost_opus_model_detection():
