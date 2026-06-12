@@ -3755,12 +3755,14 @@ def _extract_anthropic_model_from_envelope(data: Dict[str, Any]) -> Optional[str
 
 
 def _extract_anthropic_standard_usage(
-    data: Dict[str, Any],
+    data: Any,
     *,
     actual_model: Optional[str],
-    fallback_model: Optional[str],
 ) -> AgenticUsage:
     """Extract GVS-compatible usage from a Claude Code JSON envelope."""
+    if not isinstance(data, dict):
+        return None
+
     model_usage = data.get("modelUsage")
     if isinstance(model_usage, dict) and model_usage:
         records: List[Dict[str, Any]] = []
@@ -3797,7 +3799,6 @@ def _extract_anthropic_standard_usage(
     model_name = (
         _extract_anthropic_model_from_envelope(data)
         or actual_model
-        or fallback_model
     )
     if not model_name:
         return None
@@ -5986,7 +5987,6 @@ def _run_with_provider(
                 _extract_anthropic_standard_usage(
                     data,
                     actual_model=actual_model,
-                    fallback_model=env.get("CLAUDE_MODEL"),
                 ),
             )
         return success, text, cost, actual_model

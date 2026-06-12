@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
 from rich.console import Console
 
 # Ensure the pdd package is discoverable relative to this script
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
 from pdd.agentic_common import (
+    post_pr_comment,
     get_agent_provider_preference,
     get_available_agents,
     run_agentic_task,
@@ -21,8 +25,8 @@ console = Console()
 
 def main() -> None:
     """
-    Demonstrates how to discover available agentic providers, validate an Anthropic 
-    execution policy, run a simple code modification task, and detect control tokens 
+    Demonstrates how to discover available agentic providers, validate an Anthropic
+    execution policy, run a simple code modification task, and detect control tokens
     from the output.
     """
     # Create output directory for temporary run files as requested
@@ -33,7 +37,7 @@ def main() -> None:
     console.print("[bold]1. Checking Agent Preferences & Availability[/bold]")
     provider_prefs = get_agent_provider_preference()
     available_agents = get_available_agents()
-    
+
     console.print(f"  Configured provider preference order: {provider_prefs}")
     console.print(f"  Available local agents (CLI + Auth present): {available_agents}")
 
@@ -47,14 +51,14 @@ def main() -> None:
     console.print("\n[bold]2. Validating Claude Policy Contract[/bold]")
     # This restricts what tools Claude can run and audits modifications post-run
     raw_policy = {
-        "allowedTools": "Read,Write,Bash",
+        "allowedTools": "Read,Write",
         "addDirs": [str(output_dir.resolve())],
         "writableRoots": [str(output_dir.resolve())],
         "readOnlyRoots": [],
         "noSessionPersistence": True,
         "outputFormat": "json"
     }
-    
+
     try:
         validated_policy = validate_claude_policy(raw_policy, interactive=False)
         console.print("  Policy validated successfully!")
@@ -103,6 +107,28 @@ def main() -> None:
         console.print(f"  [green]✓ Detected control token[/green] via tier: [bold]{match.tier}[/bold]")
     else:
         console.print("  [red]✗ Control token 'ALL_TESTS_PASS' not found in response.[/red]")
+
+
+def example_post_pr_comment():
+    """Demonstrate the PR comment helper used by CI validation."""
+    with patch("pdd.agentic_common.shutil.which", return_value="/usr/bin/gh"), \
+         patch("pdd.agentic_common.subprocess.run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=["gh"],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+        posted = post_pr_comment(
+            repo_owner="example-owner",
+            repo_name="example-repo",
+            pr_number=42,
+            body="CI validation exhausted retries; lint is still failing.",
+            cwd=Path.cwd(),
+        )
+
+    console.print(f"PR comment posted: {posted}")
+
 
 if __name__ == "__main__":
     main()
