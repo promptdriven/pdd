@@ -464,10 +464,12 @@ def test_claude_policy_capability_contract_declared_and_validated():
     )
 
     caps = get_agentic_capabilities()
-    assert caps["claude_policy"]["schema_version"] == 1
+    assert caps["claude_policy"]["schema_version"] == 2
     assert caps["claude_policy"]["fields"] == {
         "allowedTools": ["string", "null"],
         "addDirs": "list[string]",
+        "writableRoots": "list[string]",
+        "readOnlyRoots": "list[string]",
         "noSessionPersistence": {
             "standard": "boolean",
             "interactive": False,
@@ -482,12 +484,16 @@ def test_claude_policy_capability_contract_declared_and_validated():
     normalized = validate_claude_policy({
         "allowedTools": "Read,Glob",
         "addDirs": ["/tmp/references"],
+        "writableRoots": ["/tmp/project/src"],
+        "readOnlyRoots": ["/tmp/project/references"],
         "noSessionPersistence": True,
         "outputFormat": "json",
     })
     assert normalized == {
         "allowedTools": "Read,Glob",
         "addDirs": ["/tmp/references"],
+        "writableRoots": ["/tmp/project/src"],
+        "readOnlyRoots": ["/tmp/project/references"],
         "noSessionPersistence": True,
         "outputFormat": "json",
     }
@@ -497,6 +503,13 @@ def test_claude_policy_capability_contract_declared_and_validated():
 
     with pytest.raises(AgenticUnsupportedSemanticsError):
         validate_claude_policy({"allowedTools": ["Read"], "outputFormat": "json"})
+
+    with pytest.raises(AgenticUnsupportedSemanticsError):
+        validate_claude_policy({
+            "allowedTools": "Read",
+            "writableRoots": "src",
+            "outputFormat": "json",
+        })
 
 
 def test_run_agentic_task_claude_policy_rejects_when_anthropic_unavailable(
@@ -607,6 +620,110 @@ def test_run_agentic_task_forwards_claude_policy_to_provider(
 
     assert result.success
     assert mock_provider.call_args.kwargs["claude_policy"] == policy
+
+
+def test_run_agentic_task_claude_policy_allows_writable_roots_and_reports_changes(
+    tmp_path, mock_env
+):
+    writable_root = tmp_path / "src"
+    read_only_root = tmp_path / "references"
+    writable_root.mkdir()
+    read_only_root.mkdir()
+    usage = {"claude": [{"model": "claude-sonnet", "input_tokens": 10}]}
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [str(read_only_root)],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        (writable_root / "result.txt").write_text("generated", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            usage,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task("Write generated file", tmp_path, claude_policy=policy)
+
+    success, output, cost, provider = result
+    assert (success, output, cost, provider) == (
+        True,
+        "Detailed provider output that is long enough to pass validation.",
+        0.05,
+        "anthropic",
+    )
+    assert len(result) == 5
+    assert result[4] == usage
+    assert result.changed_files == ["src/result.txt"]
+    assert result.to_dict()["changed_files"] == ["src/result.txt"]
+
+
+def test_run_agentic_task_claude_policy_fails_on_readonly_and_out_of_scope_changes(
+    tmp_path, mock_env
+):
+    writable_root = tmp_path / "src"
+    read_only_root = tmp_path / "references"
+    outside_root = tmp_path / "outside"
+    writable_root.mkdir()
+    read_only_root.mkdir()
+    outside_root.mkdir()
+    (read_only_root / "context.txt").write_text("original", encoding="utf-8")
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [str(read_only_root)],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        (read_only_root / "context.txt").write_text("mutated", encoding="utf-8")
+        (outside_root / "leak.txt").write_text("leak", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task("Try unsafe writes", tmp_path, claude_policy=policy)
+
+    assert result.success is False
+    assert "Filesystem policy violation" in result.output_text
+    assert "outside writable roots" in result.output_text
+    assert "read-only roots" in result.output_text
+    assert result.changed_files == [
+        "outside/leak.txt",
+        "references/context.txt",
+    ]
 
 
 def test_anthropic_claude_policy_builds_read_glob_add_dirs_no_session_json_command(
@@ -1219,7 +1336,14 @@ def test_agentic_task_result_exposes_usage_while_preserving_four_unpack():
         ]
     }
 
-    result = AgenticTaskResult(True, "done", 0.123, "anthropic", usage)
+    result = AgenticTaskResult(
+        True,
+        "done",
+        0.123,
+        "anthropic",
+        usage,
+        changed_files=["src/app.py"],
+    )
     success, output, cost, provider = result
 
     assert (success, output, cost, provider) == (True, "done", 0.123, "anthropic")
@@ -1227,12 +1351,14 @@ def test_agentic_task_result_exposes_usage_while_preserving_four_unpack():
     assert len(result) == 5
     assert result[4] == usage
     assert result.usage == usage
+    assert result.changed_files == ["src/app.py"]
     assert result.to_dict() == {
         "success": True,
         "output_text": "done",
         "cost_usd": 0.123,
         "provider": "anthropic",
         "usage": usage,
+        "changed_files": ["src/app.py"],
     }
 
 
