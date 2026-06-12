@@ -187,6 +187,25 @@ def test_agentic_common_example_satisfies_prompt_selectors():
     assert not failures, "\n".join(failures)
 
 
+def test_agentic_common_architecture_exposes_prompt_required_public_helpers():
+    """architecture.json should preserve public helpers selected by prompts."""
+    entries = json.loads(_read_repo_text("architecture.json"))
+    entry = next(
+        item for item in entries if item.get("filepath") == "pdd/agentic_common.py"
+    )
+    functions = {
+        function["name"]
+        for function in entry["interface"]["module"]["functions"]
+    }
+
+    required = {
+        "extract_step_report",
+        "normalize_step_comments_state",
+        "post_step_comment_once",
+    }
+    assert required <= functions
+
+
 def test_ci_failure_comments_use_shared_pr_helper(tmp_path):
     """CI failure summaries should be posted through the shared PR comment helper."""
     from pdd.ci_validation import post_ci_failure_comment

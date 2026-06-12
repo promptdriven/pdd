@@ -1655,6 +1655,57 @@ def test_standard_claude_policy_json_usage_preserves_model_usage_records(
     json.dumps(provider_result[4])
 
 
+def test_standard_claude_policy_json_usage_merges_issue686_partial_model_usage_cache_counters(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_issue686.txt"
+    prompt_path.write_text("Audit partial modelUsage billing usage", encoding="utf-8")
+    model = "claude-sonnet-4-20250514"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Structured billing usage returned for a cached Claude run.",
+        "usage": {
+            "input_tokens": 50000,
+            "output_tokens": 5000,
+            "cache_read_input_tokens": 40000,
+            "cache_creation_input_tokens": 8000,
+        },
+        "modelUsage": {
+            model: {
+                "inputTokens": 50000,
+                "outputTokens": 5000,
+            },
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[4] == {
+        "claude": [
+            {
+                "model": model,
+                "input_tokens": 50000,
+                "output_tokens": 5000,
+                "cached_input_tokens": 40000,
+                "cache_creation_input_tokens": 8000,
+            },
+        ],
+    }
+    json.dumps(provider_result[4])
+
+
 @pytest.mark.parametrize(
     "model_fields",
     [
@@ -7683,6 +7734,23 @@ def test_anthropic_cost_token_based_fallback():
     # cache_read_cost = 2000/1M * 3 * 0.1 = 0.0006
     # cache_write_cost = 500/1M * 3 * 1.25 = 0.001875
     # output_cost = 1000/1M * 15 = 0.015
+    expected = 0.0075 + 0.0006 + 0.001875 + 0.015
+    assert cost == pytest.approx(expected, abs=1e-6)
+
+
+def test_anthropic_cost_token_based_fallback_accepts_camel_case_usage():
+    """Token-based estimation should match structured usage aliases."""
+    data = {
+        "usage": {
+            "inputTokens": 5000,
+            "outputTokens": 1000,
+            "cacheReadInputTokens": 2000,
+            "cacheCreationInputTokens": 500,
+        },
+        "modelUsage": {"claude-sonnet-4-20250514": {}},
+        "result": "Done",
+    }
+    cost = _calculate_anthropic_cost(data)
     expected = 0.0075 + 0.0006 + 0.001875 + 0.015
     assert cost == pytest.approx(expected, abs=1e-6)
 
