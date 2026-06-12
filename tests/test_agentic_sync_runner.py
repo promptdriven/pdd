@@ -80,22 +80,20 @@ def _make_mock_popen(stdout_text: str = "", stderr_text: str = "", exit_code: in
 # ---------------------------------------------------------------------------
 
 def test_agentic_sync_estimate_mode_prompt_contract_strips_write_surfaces():
-    """The agentic sync prompt must keep child estimate runs side-effect free."""
+    """The agentic sync prompt must mark estimate mode out of scope."""
     prompt_text = Path("pdd/prompts/agentic_sync_runner_python.prompt").read_text(
         encoding="utf-8"
     )
 
     required_fragments = [
-        "Estimate mode",
-        "global `--estimate` flag before the `sync` subcommand",
-        "Do not set `PDD_OUTPUT_COST_PATH`",
-        "create temporary cost CSV files",
-        "Do not save or delete `.pdd/agentic_sync_state.json`",
-        "update or create GitHub comments",
-        "launch repair retries",
-        "write generated files or contact providers",
-        "approximate total",
-        "Contract gap handling",
+        "Estimate mode is out of scope for agentic sync",
+        "generate-only first version",
+        "Estimate mode currently supports `generate` only.",
+        "do not launch child syncs",
+        "create cost CSV files",
+        "write state",
+        "update GitHub comments",
+        "contact providers",
     ]
 
     for fragment in required_fragments:
@@ -103,7 +101,7 @@ def test_agentic_sync_estimate_mode_prompt_contract_strips_write_surfaces():
 
 
 def test_agentic_sync_estimate_child_command_strips_cost_log_env(tmp_path, monkeypatch):
-    """Runtime contract: child estimate syncs use --estimate and do not inherit cost-log writers."""
+    """Child command builder no longer broadens estimate mode into sync."""
     monkeypatch.chdir(tmp_path)
     runner = AsyncSyncRunner(
         basenames=["calculator"],
@@ -115,7 +113,8 @@ def test_agentic_sync_estimate_child_command_strips_cost_log_env(tmp_path, monke
 
     cmd = runner._build_command("calculator")
     sync_index = cmd.index("sync")
-    assert "--estimate" in cmd[:sync_index]
+    assert "--estimate" not in cmd[:sync_index]
+    assert "--estimate-json" not in cmd[:sync_index]
 
     env = runner._build_env(str(tmp_path / "run.csv"))
     assert "PDD_OUTPUT_COST_PATH" not in env
@@ -125,7 +124,7 @@ def test_agentic_sync_estimate_request_skips_state_and_github_writes(
     tmp_path,
     monkeypatch,
 ):
-    """Runtime contract: agentic estimate mode reports locally without state or GitHub writes."""
+    """Runtime contract: agentic estimate mode fails closed without side effects."""
     monkeypatch.chdir(tmp_path)
     runner = AsyncSyncRunner(
         basenames=["calculator"],
@@ -146,8 +145,8 @@ def test_agentic_sync_estimate_request_skips_state_and_github_writes(
     save_state.assert_not_called()
     delete_state.assert_not_called()
     assert not (tmp_path / STATE_FILE_PATH).exists()
-    assert success is True
-    assert "estimate" in summary.lower()
+    assert success is False
+    assert summary == "Estimate mode currently supports `generate` only."
     assert total_cost == pytest.approx(0.0)
 
 

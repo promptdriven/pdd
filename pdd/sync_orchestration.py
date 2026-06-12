@@ -1974,20 +1974,7 @@ def _display_sync_log(
 
 
 def _sync_estimate_requested(explicit: bool = False) -> bool:
-    """Return True when sync should run in dry-run cost-estimate mode.
-
-    Detection order, consistent with the other command wrappers
-    (``generate``/``fix``/``analysis``/``modify``): an explicit caller flag,
-    then the shared ``--estimate`` state stored on the active Click context by
-    the root CLI, then the process-wide ``PDD_ESTIMATE`` env var. The env var is
-    the cross-process signal the root CLI exports so library-level calls and
-    spawned ``pdd`` subprocesses inherit the intent. Consulting it here is safe
-    because the root CLI now snapshots and restores it on context teardown (see
-    ``pdd/core/cli.py``), so it can no longer persist across CliRunner-based
-    tests and wrongly short-circuit an unrelated direct ``sync_orchestration``
-    call. Any failure to read the context degrades to the env check, so behavior
-    no longer depends on which command path reached estimate mode.
-    """
+    """Return True when an unsupported sync estimate request is present."""
     if explicit:
         return True
     try:
@@ -2066,15 +2053,8 @@ def sync_orchestration(
             return _display_sync_log(basename, language, verbose, paths=_dry_paths)
         return _display_sync_log(basename, language, verbose)
 
-    # --- Estimate mode: short-circuit before any side effects ---
-    # When the global --estimate flag is active, sync must not acquire sync
-    # locks, run any operation, create generated code/example/test files,
-    # append --output-cost CSV rows, or call an LLM provider. Producing an
-    # exact per-step sync breakdown additionally depends on the shared
-    # estimate collector/sentinel API reaching this layer; when that
-    # prerequisite is not wired through we report the contract gap rather than
-    # silently running or fabricating a breakdown (see the "Contract gap
-    # handling" section of sync_orchestration_python.prompt).
+    # Estimate mode is intentionally scoped to `pdd generate` in this PR. Sync
+    # is multi-step and any partial lower-bound preview is out of scope.
     if _sync_estimate_requested(estimate):
         return {
             "success": False,
@@ -2084,19 +2064,12 @@ def sync_orchestration(
             "total_cost": 0.0,
             "total_time": 0.0,
             "errors": [
-                "estimate mode prerequisite (shared --estimate collector) is "
-                "not available to sync_orchestration in this checkout",
+                "Estimate mode currently supports `generate` only.",
             ],
-            "error": (
-                "Sync estimate unavailable: the per-step estimate breakdown "
-                "prerequisite (shared --estimate collector/sentinel) is not "
-                "wired through to sync_orchestration. No operations, locks, "
-                "generated files, or --output-cost rows were written."
-            ),
+            "error": "Estimate mode currently supports `generate` only.",
             "summary": (
-                "Sync estimate skipped: estimate-mode prerequisite not "
-                "available at the orchestration layer; no provider calls, "
-                "lock acquisitions, file writes, or cost-log rows performed."
+                "Sync estimate skipped: estimate mode currently supports "
+                "`generate` only."
             ),
         }
 

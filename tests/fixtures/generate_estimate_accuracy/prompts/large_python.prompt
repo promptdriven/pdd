@@ -1,0 +1,13 @@
+Create a Python module that manages a local task registry.
+
+The module should include:
+- a `Task` dataclass with id, title, tags, completed, created_at, and updated_at
+- a `TaskRegistry` class that stores tasks in memory
+- methods to add, update, complete, delete, filter by tag, and export JSON
+- validation helpers that produce readable ValueError messages
+- deterministic sorting by creation time then id
+- no network calls and no third-party dependencies
+
+The code should be production quality with clear names and small helper methods.
+Include docstrings for public methods and keep all datetime handling timezone aware.
+

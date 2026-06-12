@@ -1,0 +1,122 @@
+[
+  {
+    "name": "tiny",
+    "prompt": "prompts/tiny_python.prompt",
+    "model": "fixture/generate-known",
+    "actual_input_tokens": 46,
+    "actual_output_tokens": 24,
+    "actual_cost": 0.000142,
+    "expected_input_min": 39,
+    "expected_input_max": 53,
+    "expected_output_min": 17,
+    "expected_output_max": 27
+  },
+  {
+    "name": "medium",
+    "prompt": "prompts/medium_python.prompt",
+    "model": "fixture/generate-known",
+    "actual_input_tokens": 100,
+    "actual_output_tokens": 52,
+    "actual_cost": 0.000308,
+    "expected_input_min": 85,
+    "expected_input_max": 115,
+    "expected_output_min": 38,
+    "expected_output_max": 60
+  },
+  {
+    "name": "large",
+    "prompt": "prompts/large_python.prompt",
+    "model": "fixture/generate-known",
+    "actual_input_tokens": 165,
+    "actual_output_tokens": 118,
+    "actual_cost": 0.000637,
+    "expected_input_min": 140,
+    "expected_input_max": 190,
+    "expected_output_min": 87,
+    "expected_output_max": 135
+  },
+  {
+    "name": "interface",
+    "prompt": "prompts/interface_python.prompt",
+    "model": "fixture/generate-known",
+    "actual_input_tokens": 112,
+    "actual_output_tokens": 80,
+    "actual_cost": 0.000432,
+    "expected_input_min": 95,
+    "expected_input_max": 129,
+    "expected_output_min": 58,
+    "expected_output_max": 90
+  },
+  {
+    "name": "reason",
+    "prompt": "prompts/reason_python.prompt",
+    "model": "fixture/generate-known",
+    "actual_input_tokens": 110,
+    "actual_output_tokens": 70,
+    "actual_cost": 0.00039,
+    "expected_input_min": 94,
+    "expected_input_max": 127,
+    "expected_output_min": 52,
+    "expected_output_max": 82
+  },
+  {
+    "name": "include",
+    "prompt": "prompts/include_python.prompt",
+    "model": "fixture/generate-known",
+    "actual_input_tokens": 77,
+    "actual_output_tokens": 47,
+    "actual_cost": 0.000265,
+    "expected_input_min": 65,
+    "expected_input_max": 89,
+    "expected_output_min": 34,
+    "expected_output_max": 54
+  },
+  {
+    "name": "code-heavy",
+    "prompt": "prompts/code_heavy_python.prompt",
+    "model": "fixture/generate-known",
+    "actual_input_tokens": 91,
+    "actual_output_tokens": 57,
+    "actual_cost": 0.000319,
+    "expected_input_min": 77,
+    "expected_input_max": 105,
+    "expected_output_min": 41,
+    "expected_output_max": 63
+  },
+  {
+    "name": "docs-heavy",
+    "prompt": "prompts/docs_heavy_python.prompt",
+    "model": "fixture/generate-known",
+    "actual_input_tokens": 85,
+    "actual_output_tokens": 54,
+    "actual_cost": 0.000301,
+    "expected_input_min": 72,
+    "expected_input_max": 98,
+    "expected_output_min": 38,
+    "expected_output_max": 60
+  },
+  {
+    "name": "tests-examples",
+    "prompt": "prompts/tests_examples_python.prompt",
+    "model": "fixture/generate-known",
+    "actual_input_tokens": 84,
+    "actual_output_tokens": 65,
+    "actual_cost": 0.000344,
+    "expected_input_min": 71,
+    "expected_input_max": 97,
+    "expected_output_min": 47,
+    "expected_output_max": 73
+  },
+  {
+    "name": "unknown-price",
+    "prompt": "prompts/unknown_price_python.prompt",
+    "model": "fixture/generate-unknown",
+    "actual_input_tokens": 46,
+    "actual_output_tokens": 24,
+    "actual_cost": null,
+    "expected_input_min": 39,
+    "expected_input_max": 53,
+    "expected_output_min": 17,
+    "expected_output_max": 27
+  }
+]

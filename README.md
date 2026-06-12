@@ -738,7 +738,7 @@ These options can be used with any command:
 - `--verbose`: Increase output verbosity for more detailed information. Includes token count and context window usage for each LLM call.
 - `--quiet`: Decrease output verbosity for minimal information.
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
-- `--estimate`, `--dry-run-cost`: Preview the LLM token and cost estimate for supported single-call command forms without calling a provider, writing command outputs, or appending cost CSV rows.
+- `--estimate`, `--dry-run-cost`: Preview the LLM token and rough cost estimate for `pdd generate` without calling a provider, writing command outputs, or appending cost CSV rows.
 - `--estimate-json`: Emit the estimate result as machine-readable JSON instead of the human-readable table.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
@@ -861,18 +861,16 @@ The `PATH_TO_CSV_FILE` should be the desired location and filename for the CSV o
 
 ### Dry-Run Cost Estimates
 
-Use the global `--estimate` flag, or its alias `--dry-run-cost`, to preview the LLM cost for command forms that can be represented as one concrete LLM request before running them.
+Use the global `--estimate` flag, or its alias `--dry-run-cost`, to preview the LLM cost for `pdd generate` before running it.
 
 ```
 pdd --estimate generate prompts/example_python.prompt
 pdd --estimate-json generate prompts/example_python.prompt
 ```
 
-Estimate mode assembles the messages that would be sent to the provider, counts input tokens, predicts output tokens using command-specific ratios, and prints the selected model, input tokens, predicted output tokens, known input/output rates, total estimated cost or `unknown`, and context-window usage percentage. It exits before provider invocation and before command output files are written.
+Estimate mode assembles the generate messages that would be sent to the provider, counts input tokens, predicts output tokens with a generate-specific heuristic, and prints the selected model, input tokens, predicted output tokens, uncertainty range, known input/output rates, rough estimated cost or `unknown`, and context-window usage percentage. It exits before provider invocation and before command output files are written.
 
-Supported standard/manual command paths include `generate`, `example`, manual `test`, and single-file `update`. PDD rejects agentic, PRD-propagation, repository-wide, metadata-sync, `conflicts`, `crash`, and `fix` modes that could invoke external agents or require provider output before the next request can be assembled.
-
-For multi-step flows such as `sync`, estimate mode prints a per-step breakdown: the first known step is estimated exactly from the built messages, and later steps are labelled approximate because they depend on output that has not been generated yet.
+This first version supports `generate` only. Other commands, including `sync`, agentic sync, `example`, `test`, `update`, `conflicts`, `crash`, and `fix`, fail closed with a clear unsupported-command message rather than showing a partial first-call or lower-bound estimate.
 
 `--estimate-json` prints the same estimate fields as JSON for scripts. Estimate mode does not append rows to `--output-cost` CSV files; use `--output-cost` for actual-run accounting. Cost CSV rows are written only for real command executions, because no billable LLM call occurs in estimate mode.
 
@@ -980,7 +978,7 @@ Options:
 - `--no-resume`: Durable mode only. Ignore existing `PDD-Sync-Checkpoint-V1` commit trailers on the durable branch and re-run every selected module. By default, durable sync reads checkpoint trailers (`PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>`) and skips modules already checkpointed for the same issue, which is what makes a cloud rerun safely resume completed work after a partial failure.
 - `--durable-max-parallel INT`: Durable mode only. Cap how many module worktrees run concurrently. Defaults to the standard runner concurrency. A total budget still forces sequential execution.
 
-Estimate-mode note: the sync prompt contract for the prerequisite-backed `--estimate` implementation requires an exact first-step estimate from built messages when available, then labelled approximate downstream estimates for generation, example, crash, test, verify, fix, update, and issue-sync child modules whose prompts depend on generated artifacts. The total must be labelled approximate when any heuristic row contributes, and estimate mode must preserve no-provider-call and no-file-write semantics.
+Estimate-mode note: global `--estimate` currently supports `pdd generate` only. `pdd sync` and agentic sync do not expose cost estimates in this first version because downstream prompts depend on generated artifacts that do not exist during a side-effect-free preview.
 
 **Durable Issue Sync** (`--durable`):
 

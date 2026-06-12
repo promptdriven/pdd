@@ -196,10 +196,7 @@ def conflicts(
     """Check for conflicts between two prompt files."""
     try:
         if _estimate_mode_active(ctx):
-            raise click.UsageError(
-                "Estimate mode is not supported for conflicts because the extraction request "
-                "depends on provider output from the first request."
-            )
+            raise click.UsageError("Estimate mode currently supports `generate` only.")
         result, total_cost, model_name = conflicts_main(
             ctx=ctx,
             prompt1=prompt1,
@@ -392,10 +389,7 @@ def crash(
     """Analyze a crash and fix the code and program."""
     try:
         if _estimate_mode_active(ctx):
-            raise click.UsageError(
-                "Estimate mode is not supported for crash because the repair/extraction flow "
-                "can require later requests assembled from provider output."
-            )
+            raise click.UsageError("Estimate mode currently supports `generate` only.")
         # crash_main returns: success, final_code, final_program, attempts, total_cost, model_name
         success, final_code, final_program, attempts, total_cost, model_name = crash_main(
             ctx=ctx,

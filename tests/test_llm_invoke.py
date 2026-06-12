@@ -568,8 +568,9 @@ def test_llm_invoke_estimate_only_skips_provider_call(mock_load_models, mock_set
     assert payload["context_usage_percent"] == 15.0
     assert payload["input_context_usage_percent"] == 10.0
     # Output tokens are explicitly labelled as a heuristic projection.
-    assert payload["output_estimation"] == "heuristic_ratio"
+    assert payload["output_estimation"] == "generate_feature_heuristic"
     assert payload["estimate_basis"] == "approximate"
+    assert payload["output_tokens_low"] <= payload["predicted_output_tokens"] <= payload["output_tokens_high"]
 
 
 def test_llm_invoke_estimate_only_uses_target_file_size_hint(

@@ -1494,12 +1494,7 @@ def _set_model_rate_map(df: pd.DataFrame) -> None:
 
 _ESTIMATE_OUTPUT_RATIOS: Dict[str, float] = {
     "generate": 0.52,
-    "example": 0.30,
-    "test": 0.50,
-    "fix": 0.40,
-    "crash": 0.35,
-    "conflicts": 0.25,
-    "default": 0.35,
+    "default": 0.52,
 }
 
 _ESTIMATE_INPUT_TOKEN_OVERHEADS: Dict[str, int] = {
@@ -1629,6 +1624,93 @@ def _estimate_tokens_from_file_size(path_hint: Optional[str]) -> Optional[Dict[s
     }
 
 
+def _messages_text_for_estimate(messages_for_count: Any) -> str:
+    """Flatten message content for generate-only heuristic features."""
+    parts: List[str] = []
+
+    def _scan(value: Any) -> None:
+        if value is None:
+            return
+        if isinstance(value, str):
+            parts.append(value)
+            return
+        if isinstance(value, dict):
+            content = value.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+            else:
+                _scan(content)
+            return
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                _scan(item)
+
+    _scan(messages_for_count)
+    return "\n".join(parts).lower()
+
+
+def _generate_output_token_prediction(
+    *,
+    input_tokens: int,
+    messages_for_count: Any,
+    target_hint: Optional[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Predict generate output tokens with fixture-calibrated prompt features.
+
+    This intentionally applies only to ``pdd generate``. The predictor uses
+    stable, provider-free signals that are visible in the built request:
+    prompt-size bucket, interface/reason sections, include expansion markers,
+    and wording that asks for code, docs, tests, or examples.
+    """
+    if target_hint:
+        tokens = max(1, int(target_hint["tokens"]))
+        low = max(1, int(round(tokens * 0.85)))
+        high = max(tokens, int(round(tokens * 1.15)))
+        return {
+            "tokens": tokens,
+            "low": low,
+            "high": high,
+            "ratio": round(tokens / max(input_tokens, 1), 4),
+            "basis": "target_file_size_hint",
+            "uncertainty": "low",
+        }
+
+    text = _messages_text_for_estimate(messages_for_count)
+    if input_tokens < 220:
+        ratio = 0.50
+    elif input_tokens < 700:
+        ratio = 0.43
+    else:
+        ratio = 0.34
+
+    if "<pdd-interface" in text:
+        ratio += 0.08
+    if "<pdd-reason" in text:
+        ratio += 0.03
+    if "<include" in text or "processing xml include" in text:
+        ratio += 0.04
+    if any(term in text for term in ("unit test", "pytest", "examples", "example code")):
+        ratio += 0.15
+    if any(term in text for term in ("documentation", "docstring", "readme", "markdown")):
+        ratio += 0.10
+    if any(term in text for term in ("parser", "algorithm", "class ", "dataclass", "api endpoint")):
+        ratio += 0.10
+
+    ratio = min(max(ratio, 0.25), 0.85)
+    tokens = max(1, int(round(input_tokens * ratio)))
+    spread = 0.22 if input_tokens < 700 else 0.28
+    low = max(1, int(round(tokens * (1.0 - spread))))
+    high = max(tokens, int(round(tokens * (1.0 + spread))))
+    return {
+        "tokens": tokens,
+        "low": low,
+        "high": high,
+        "ratio": round(ratio, 4),
+        "basis": "generate_feature_heuristic",
+        "uncertainty": "medium",
+    }
+
+
 def _model_info_value(model_info: Any, key: str) -> Any:
     """Read a field from a pandas row, dict, or lightweight test object."""
     try:
@@ -1744,12 +1826,26 @@ def _build_estimate_payload(
     ratio = _estimate_output_ratio(command_name)
     ratio_predicted_output_tokens = max(1, int(round(input_tokens * ratio)))
     target_hint = _estimate_tokens_from_file_size(_current_estimate_output_path_hint())
-    if target_hint:
-        raw_predicted_output_tokens = int(target_hint["tokens"])
-        output_estimation = "target_file_size_hint"
+    if command_name == "generate":
+        prediction = _generate_output_token_prediction(
+            input_tokens=input_tokens,
+            messages_for_count=messages_for_count,
+            target_hint=target_hint,
+        )
+        raw_predicted_output_tokens = int(prediction["tokens"])
+        output_tokens_low = int(prediction["low"])
+        output_tokens_high = int(prediction["high"])
+        ratio = float(prediction["ratio"])
+        output_estimation = str(prediction["basis"])
+        uncertainty = str(prediction["uncertainty"])
     else:
+        # Root CLI currently prevents non-generate estimate mode. This fallback
+        # keeps direct library callers side-effect-free but deliberately generic.
         raw_predicted_output_tokens = ratio_predicted_output_tokens
         output_estimation = "heuristic_ratio"
+        output_tokens_low = max(1, int(round(raw_predicted_output_tokens * 0.70)))
+        output_tokens_high = max(raw_predicted_output_tokens, int(round(raw_predicted_output_tokens * 1.30)))
+        uncertainty = "high"
 
     # Bound the heuristic by what the model can actually emit, so the prediction
     # is at least an upper bound the provider would honor rather than an
@@ -1763,6 +1859,8 @@ def _build_estimate_payload(
     if max_output_tokens and max_output_tokens > 0:
         predicted_output_tokens = min(raw_predicted_output_tokens, max_output_tokens)
         output_capped = predicted_output_tokens < raw_predicted_output_tokens
+        output_tokens_low = min(output_tokens_low, predicted_output_tokens)
+        output_tokens_high = min(output_tokens_high, max_output_tokens)
     else:
         predicted_output_tokens = raw_predicted_output_tokens
         output_capped = False
@@ -1815,6 +1913,9 @@ def _build_estimate_payload(
         "raw_input_tokens": raw_input_tokens,
         "input_token_overhead": input_token_overhead,
         "predicted_output_tokens": predicted_output_tokens,
+        "output_tokens_low": output_tokens_low,
+        "output_tokens_high": output_tokens_high,
+        "uncertainty": uncertainty,
         "output_ratio": ratio,
         "ratio_predicted_output_tokens": ratio_predicted_output_tokens,
         # Output tokens are a heuristic, not a measured value. Surface the basis

@@ -424,9 +424,7 @@ def generate(
 
         if is_incremental_prd:
             if estimate_mode:
-                raise click.UsageError(
-                    "Estimate mode is not supported for agentic or incremental PRD generate modes."
-                )
+                raise click.UsageError("Estimate mode currently supports standard prompt-file `generate` only.")
             from .. import DEFAULT_STRENGTH, DEFAULT_TIME
             from ..agentic_architecture import run_incremental_architecture
 
@@ -486,9 +484,7 @@ def generate(
         # Detect GitHub issue URL -> agentic architecture mode
         if is_github_issue:
             if estimate_mode:
-                raise click.UsageError(
-                    "Estimate mode is not supported for agentic GitHub issue generate mode."
-                )
+                raise click.UsageError("Estimate mode currently supports standard prompt-file `generate` only.")
             from ..agentic_architecture import run_agentic_architecture
 
             success, message, cost, model, output_files = run_agentic_architecture(
@@ -790,9 +786,7 @@ def test(
                 and Path(args[0]).suffix.lower() == ".md"
                 and Path(args[0]).name.startswith("story__")):
             if estimate_mode:
-                raise click.UsageError(
-                    "Estimate mode is not supported for story metadata linking because it rewrites story files."
-                )
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
             story_path = Path(args[0])
             obj = ctx.obj or {}
             success, message, cost, model, linked_prompts = cache_story_prompt_links(
@@ -832,9 +826,7 @@ def test(
         # Story generation: pdd test prompt1.prompt [prompt2.prompt ...]
         if not manual and args and all(Path(arg).suffix.lower() == ".prompt" for arg in args):
             if estimate_mode:
-                raise click.UsageError(
-                    "Estimate mode is not supported for story generation because it writes story files before prompt-link detection."
-                )
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
             obj = ctx.obj or {}
             story_prompt_args = [str(Path(arg)) for arg in args]
             success, message, cost, model, generated_story_file, linked_prompts = generate_user_story(
@@ -876,7 +868,7 @@ def test(
 
         if is_url and not manual:
             if estimate_mode:
-                raise click.UsageError("Estimate mode is not supported for agentic test mode.")
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
             # Agentic Mode
             if len(args) != 1:
                 raise click.UsageError("Agentic mode requires exactly one argument (the GitHub issue URL).")

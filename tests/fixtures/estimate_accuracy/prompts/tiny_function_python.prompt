@@ -1,7 +1,0 @@
-<pdd-reason>Generate a tiny pure Python arithmetic helper.</pdd-reason>
-<pdd-interface>
-add_tax(subtotal: float, tax_rate: float) -> float
-</pdd-interface>
-
-Write a Python module that exposes add_tax. It returns subtotal plus tax,
-rounded to two decimals. Reject negative subtotal or tax_rate with ValueError.

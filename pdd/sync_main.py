@@ -881,12 +881,11 @@ def sync_main(
     if max_attempts is not None and max_attempts < 0:
         raise click.BadParameter("Max attempts must be a non-negative integer.", param_hint="--max-attempts")
 
-    # Estimate mode: produce a side-effect-free dry-run cost preview and return
-    # before any prompt-discovery side effects, lock acquisition, generation, or
-    # cost-log writes (sub-issue #1359). The shared --estimate state is set on
-    # ctx.obj by the root CLI (sub-issue #1358).
+    # Estimate mode is intentionally scoped to `pdd generate` in this first
+    # version. Keep sync fail-closed so partial lower-bound previews cannot be
+    # mistaken for full multi-step estimates.
     if isinstance(ctx.obj, dict) and ctx.obj.get("estimate"):
-        return _run_sync_estimate(ctx, basename, quiet=quiet, verbose=verbose)
+        raise click.UsageError("Estimate mode currently supports `generate` only.")
 
     # 3. Try template-based prompt discovery first (uses outputs.prompt.path from .pddrc)
     template_result = _find_prompt_in_contexts(basename)

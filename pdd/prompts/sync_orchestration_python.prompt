@@ -102,11 +102,7 @@ Returns a dictionary containing:
 - `error`: Semicolon-joined error string or None
 - `model_name`: Name of the last model used
 - `log_entries`: List of log entries (only when `dry_run=True`)
-- Estimate-mode fields when the shared estimate context is active:
-    - `estimate_breakdown`: List of per-step estimate rows, each labelled `exact` or `approximate`
-    - `estimate_total_cost`: Projected total cost, labelled approximate when any heuristic row is present
-    - `estimate_context_usage`: Context-window usage summary from the shared estimate collector when available
-    - `approximate`: bool indicating whether any downstream heuristic estimate contributed to the total
+- Estimate mode is unsupported for sync in this generate-only first version; if requested, return a clear unsupported-command error without side effects.
 - `snapshot_manifest_path` / `context_snapshot`: Optional replayable context snapshot metadata when generation ran with `snapshot_context=True`
 - `compression`: Optional per-phase compressed-context metadata when `compressed_context=True`
 - `agentic_fallback`: Optional metadata summarizing whether agentic fallback was attempted or used by repair phases
@@ -273,15 +269,7 @@ When `dry_run=True`, display the sync log at `.pdd/meta/{basename}_{language.low
 
 ### Estimate Mode
 
-When the shared estimate state exposed by `pdd/core/cli.py` and `pdd/llm_invoke.py` is active, `sync_orchestration()` must collect and print a per-step estimate breakdown instead of executing the normal workflow.
-
-- Consume the existing per-run estimate collector and the `llm_invoke` estimate short-circuit/sentinel from the prerequisite estimate-mode implementation. Do not introduce a second estimate flag, environment variable, CSV writer, provider stub, or independent collector.
-- Contract gap handling: if estimate mode is requested but the included `pdd/core/cli.py` and `pdd/llm_invoke.py` interfaces do not expose a concrete shared estimate-mode API, report that prerequisite gap explicitly and return before acquiring locks, writing files, appending cost logs, calling providers, or entering the normal sync workflow. Keep normal sync behavior unchanged only when estimate mode is not requested.
-- Estimate the first known LLM step from the actual constructed messages by entering the shared `llm_invoke` estimate path whenever that step can be safely built without generated downstream artifacts. Record this row as `exact`.
-- Label every downstream sync, generation, example, test, verify, crash, fix, or update projection as `approximate` when its prompt would depend on generated code, verification output, test output, or other artifacts not produced in estimate mode. Each approximate row must include the assumption used, such as `estimate_operation_cost(operation, language)` ratios or a one-round generate/example/test/fix assumption.
-- Print an approximate total and a context usage summary from the shared collector. If tokens, cost, model, or context window data is unavailable for a heuristic row, mark the row as heuristic or unavailable rather than fabricating exact usage.
-- Preserve normal return keys (`success`, `summary`, `total_cost`, `model_name`, `errors`) while adding estimate-oriented fields described in the Return Value section. `total_cost` may mirror the projected total for compatibility, but user-visible text must make the total approximate when any heuristic row is present.
-- Estimate mode must be side-effect free: MUST NOT acquire or write sync locks, append operation logs, write lifecycle log events, save fingerprints, save or clear run reports, create generated code/example/test files, write `--output-cost` CSV rows, auto-submit examples, run subprocess verification/tests, invoke TUI steering, call cloud/agentic subprocesses, or call an LLM provider.
+Estimate mode is out of scope for `sync` in the generate-only first version. If an estimate request reaches `sync_orchestration()`, return before acquiring locks, writing files, appending cost logs, calling providers, or entering the normal sync workflow with the clear message: `Estimate mode currently supports `generate` only.`
 
 Dry-run must not write snapshot artifacts. If nondeterministic context can be detected without executing dynamic tags, report that a snapshot would be required, but do not execute shell/web/query tags solely for dry-run detection.
 

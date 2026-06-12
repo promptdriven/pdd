@@ -159,21 +159,19 @@ def orchestration_fixture(tmp_path):
 # --- Test Cases ---
 
 def test_sync_estimate_mode_prompt_contract_keeps_no_side_effect_guarantees():
-    """The sync prompt must keep estimate mode side-effect free."""
+    """The sync prompt must mark estimate mode out of scope without side effects."""
     prompt_text = Path("pdd/prompts/sync_orchestration_python.prompt").read_text(
         encoding="utf-8"
     )
 
     required_fragments = [
-        "estimate_breakdown",
-        "Record this row as `exact`",
-        "Label every downstream sync, generation, example, test, verify, crash, fix, or update projection as `approximate`",
-        "Print an approximate total and a context usage summary",
-        "MUST NOT acquire or write sync locks",
-        "create generated code/example/test files",
-        "write `--output-cost` CSV rows",
-        "call an LLM provider",
-        "Contract gap handling",
+        "Estimate mode is out of scope for `sync`",
+        "generate-only first version",
+        "before acquiring locks",
+        "writing files",
+        "appending cost logs",
+        "calling providers",
+        "Estimate mode currently supports `generate` only.",
     ]
 
     for fragment in required_fragments:

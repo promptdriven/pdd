@@ -398,7 +398,7 @@ def test_cli_estimate_test_story_generation_rejected_without_writes(tmp_path):
         )
 
     assert result.exit_code == 2, result.output
-    assert "Estimate mode is not supported for story generation" in result.output
+    assert "Estimate mode currently supports `generate` only." in result.output
     assert not story_output.exists()
     mock_generate_story.assert_not_called()
 
@@ -418,7 +418,7 @@ def test_cli_estimate_test_story_metadata_rejected_without_writes(tmp_path):
         )
 
     assert result.exit_code == 2, result.output
-    assert "Estimate mode is not supported for story metadata linking" in result.output
+    assert "Estimate mode currently supports `generate` only." in result.output
     assert story.read_text(encoding="utf-8") == original
     mock_link_story.assert_not_called()
 
@@ -469,7 +469,7 @@ def test_cli_estimate_json_conflicts_rejected_before_template_loading(tmp_path):
         )
 
     assert result.exit_code == 2, result.output
-    assert "Estimate mode is not supported for conflicts" in result.output
+    assert "Estimate mode currently supports `generate` only." in result.output
     assert "Successfully loaded prompt" not in result.output
     assert not output.exists()
     mock_conflicts_main.assert_not_called()
@@ -507,7 +507,7 @@ def test_cli_estimate_crash_rejected_without_writes(tmp_path):
         )
 
     assert result.exit_code == 2, result.output
-    assert "Estimate mode is not supported for crash" in result.output
+    assert "Estimate mode currently supports `generate` only." in result.output
     assert not output.exists()
     assert not output_program.exists()
     mock_crash_main.assert_not_called()
@@ -544,6 +544,6 @@ def test_cli_estimate_fix_rejected_before_manual_helper(tmp_path):
     )
 
     assert result.exit_code == 2, result.output
-    assert "Estimate mode is not supported for manual fix" in result.output
+    assert "Estimate mode currently supports `generate` only." in result.output
     assert not output_code.exists()
     assert not output_test.exists()

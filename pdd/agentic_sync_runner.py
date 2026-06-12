@@ -1880,7 +1880,7 @@ class AsyncSyncRunner:
             return True, "No modules to sync", self.initial_cost
 
         if self.sync_options.get("estimate"):
-            return self._run_estimate()
+            return False, "Estimate mode currently supports `generate` only.", 0.0
 
         if self._resumed_modules and not self.quiet:
             resumed = sorted(self._resumed_modules)
@@ -2139,15 +2139,8 @@ class AsyncSyncRunner:
         temperature = self.sync_options.get("temperature")
         if temperature is not None:
             cmd.extend(["--temperature", str(temperature)])
-        # --estimate is a global flag and must precede the `sync` subcommand so
-        # the child runs a side-effect-free dry-run cost preview. --estimate-json
-        # makes the child emit a machine-readable estimate summary on stdout so
-        # the parent can aggregate the real per-module estimated cost (the child
-        # writes no cost CSV in estimate mode). --estimate-json implies
-        # --estimate; both are passed for an explicit, stable command contract.
-        if self.sync_options.get("estimate"):
-            cmd.append("--estimate")
-            cmd.append("--estimate-json")
+        # Estimate mode is generate-only in this first version. Do not propagate
+        # estimate flags into child sync commands.
         cmd.append("sync")
 
         # Module-specific flags

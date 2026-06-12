@@ -139,7 +139,7 @@ def split(
         quiet = ctx.obj.get("quiet", False)
         verbose = ctx.obj.get("verbose", False)
         if _estimate_mode_active(ctx):
-            raise click.UsageError("Estimate mode is not supported for split.")
+            raise click.UsageError("Estimate mode currently supports `generate` only.")
 
         if legacy:
             # Legacy mode: 3 positional args required
@@ -303,7 +303,7 @@ def change(
         # Set budget in context for manual mode usage
         ctx.obj["budget"] = budget
         if _estimate_mode_active(ctx):
-            raise click.UsageError("Estimate mode is not supported for change.")
+            raise click.UsageError("Estimate mode currently supports `generate` only.")
         
         quiet = ctx.obj.get("quiet", False)
         verbose = ctx.obj.get("verbose", False)
@@ -570,9 +570,7 @@ def update(
                     "Cannot use --output in repository-wide mode"
                 )
             if estimate_mode:
-                raise click.UsageError(
-                    "Estimate mode is not supported for repository-wide update."
-                )
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
         else:
             # File modes: --extensions, --directory, and --base-branch are not allowed
             if extensions:
@@ -597,7 +595,7 @@ def update(
                 )
 
         if estimate_mode and sync_metadata:
-            raise click.UsageError("Estimate mode is not supported with update --sync-metadata.")
+            raise click.UsageError("Estimate mode currently supports `generate` only.")
         if estimate_mode:
             simple = True
 

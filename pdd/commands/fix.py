@@ -193,7 +193,7 @@ def fix(
 
         if not manual and _is_issue_url(first_arg):
             if _estimate_mode_active(ctx):
-                raise click.UsageError("Estimate mode is not supported for agentic fix mode.")
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
             from ..agentic_e2e_fix import run_agentic_e2e_fix
 
             success, message, cost, model, changed_files = run_agentic_e2e_fix(
@@ -233,10 +233,7 @@ def fix(
 
         if not manual and len(args) == 1 and _is_user_story_file(first_arg):
             if _estimate_mode_active(ctx):
-                raise click.UsageError(
-                    "Estimate mode is not supported for user-story fix because later requests "
-                    "depend on provider output from earlier fix steps."
-                )
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
             from ..user_story_tests import run_user_story_fix
 
             try:
@@ -272,10 +269,7 @@ def fix(
             )
 
         if _estimate_mode_active(ctx):
-            raise click.UsageError(
-                "Estimate mode is not supported for manual fix because the repair flow can "
-                "require later requests assembled from provider output."
-            )
+            raise click.UsageError("Estimate mode currently supports `generate` only.")
         from ..fix_main import fix_main
 
         min_args = 3 if loop else 4

@@ -1194,9 +1194,9 @@ def run_global_sync(
             "strength": strength,
             "temperature": temperature,
             "context": context_override,
-            # Propagate the global --estimate flag so child syncs run as
-            # side-effect-free dry-run previews (sub-issue #1359).
-            "estimate": _estimate_mode_active(),
+            # Estimate mode is scoped to `pdd generate` in this first version;
+            # sync/agentic sync estimates are intentionally disabled.
+            "estimate": False,
             "compressed_context": compressed_context,
         },
         github_info=None,
@@ -2235,9 +2235,9 @@ def run_agentic_sync(
         "strength": strength,
         "temperature": temperature,
         "context": context_override,
-        # Propagate the global --estimate flag so child syncs run as
-        # side-effect-free dry-run previews (sub-issue #1359).
-        "estimate": _estimate_mode_active(),
+        # Estimate mode is scoped to `pdd generate` in this first version;
+        # sync/agentic sync estimates are intentionally disabled.
+        "estimate": False,
         "compressed_context": compressed_context,
     }
 

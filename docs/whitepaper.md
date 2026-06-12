@@ -237,7 +237,7 @@ A typical PDD workflow involves a **batch-oriented, synchronized cycle**, contra
 
 The fundamental unit is often considered the prompt and its generated code, example, and test file – all kept in sync. If a prompt is too complex to generate correctly in one shot (even with fixing), it should be split (`split`) into smaller, manageable units.
 
-For multi-step flows, planning-only estimate modes can preview likely cost and context usage before generation begins. The first built LLM request can be estimated from concrete messages, while downstream steps that depend on generated artifacts should be labelled approximate and must not call providers or write generated files during estimation.
+For `pdd generate`, planning-only estimate mode can preview likely token usage and rough cost before generation begins without calling providers or writing generated files. Multi-step command estimates are intentionally deferred until their downstream generated-artifact dependencies can be represented honestly.
 
 ## Future Directions
 

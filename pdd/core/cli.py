@@ -178,6 +178,8 @@ def _build_estimate_summary(records: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Build stable machine-readable estimate output without prompt text."""
     total_input = sum(int(record.get("input_tokens", 0) or 0) for record in records)
     total_predicted = sum(int(record.get("predicted_output_tokens", 0) or 0) for record in records)
+    total_output_low = sum(int(record.get("output_tokens_low", 0) or 0) for record in records)
+    total_output_high = sum(int(record.get("output_tokens_high", 0) or 0) for record in records)
     total_cost = _estimate_total_cost(records)
     any_unknown = any(not _record_cost_known(record) for record in records)
     output_estimations = sorted({
@@ -197,6 +199,8 @@ def _build_estimate_summary(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "records": records,
         "input_tokens": total_input,
         "predicted_output_tokens": total_predicted,
+        "output_tokens_low": total_output_low or None,
+        "output_tokens_high": total_output_high or None,
         "estimated_cost": total_cost,
         "total_cost": total_cost,
         # unknown_cost stays True whenever any step is unpriced, even if the
@@ -216,6 +220,34 @@ def _fmt_estimate_value(value: Any, *, money: bool = False) -> str:
     if money:
         return f"${float(value):.6f}"
     return str(value)
+
+
+def _estimate_requested_subcommand(ctx: click.Context) -> Optional[str]:
+    """Return the first requested subcommand for estimate-mode scope checks."""
+    tokens: List[str] = []
+    try:
+        tokens = list(ctx.meta.get("pdd_cli_tokens", []) or [])
+    except Exception:
+        tokens = []
+    if not tokens:
+        try:
+            tokens = list(ctx.protected_args) + list(ctx.args)
+        except Exception:
+            tokens = list(getattr(ctx, "args", []) or [])
+    for token in tokens:
+        if token and not str(token).startswith("-"):
+            return str(token)
+    return None
+
+
+def _validate_generate_only_estimate_mode(ctx: click.Context, estimate_mode: bool) -> None:
+    """Fail closed while estimate mode is intentionally scoped to generate."""
+    if not estimate_mode:
+        return
+    command_name = _estimate_requested_subcommand(ctx)
+    if command_name in (None, "generate"):
+        return
+    raise click.UsageError("Estimate mode currently supports `generate` only.")
 
 
 def _render_estimate_output(ctx: click.Context, records: List[Dict[str, Any]]) -> None:
@@ -640,6 +672,7 @@ def cli(
         or estimate_json
     )
     quiet = quiet or json_mode or estimate_mode
+    _validate_generate_only_estimate_mode(ctx, estimate_mode)
     # Estimate mode is a read-only dry-run preview; suppress the diagnostic
     # core dump so previews never write to .pdd/core_dumps.
     core_dump = core_dump and not json_mode and not estimate_mode
