@@ -1712,6 +1712,39 @@ def test_standard_claude_policy_json_usage_infers_model_without_model_usage(
     json.dumps(provider_result[4])
 
 
+def test_standard_claude_policy_json_usage_rejects_requested_model_fallback(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_no_model.txt"
+    prompt_path.write_text("Audit aggregate usage with no observed model", encoding="utf-8")
+    mock_env["CLAUDE_MODEL"] = "claude-sonnet-requested-only"
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({
+        "result": "Claude returned aggregate usage without an observed model.",
+        "usage": {
+            "input_tokens": 123,
+            "output_tokens": 45,
+        },
+    })
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[3] is None
+    assert provider_result[4] is None
+
+
 @pytest.mark.parametrize(
     "usage",
     [
@@ -1751,6 +1784,33 @@ def test_standard_claude_policy_json_usage_rejects_invalid_required_counters(
         },
     )
 
+    assert provider_result[4] is None
+
+
+def test_standard_claude_policy_json_usage_ignores_non_object_json(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess
+):
+    prompt_path = mock_cwd / ".agentic_prompt_policy_usage_array.txt"
+    prompt_path.write_text("Audit non-object Claude JSON", encoding="utf-8")
+    mock_shutil_which.return_value = "/bin/claude"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps([])
+    mock_subprocess.return_value.stderr = ""
+
+    provider_result = _run_with_provider(
+        "anthropic",
+        prompt_path,
+        mock_cwd,
+        claude_policy={
+            "allowedTools": "Read,Glob",
+            "addDirs": [],
+            "noSessionPersistence": True,
+            "outputFormat": "json",
+        },
+    )
+
+    assert provider_result[0] is False
+    assert "Error parsing anthropic JSON" in provider_result[1]
     assert provider_result[4] is None
 
 
