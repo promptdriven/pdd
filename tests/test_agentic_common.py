@@ -940,6 +940,55 @@ def test_run_agentic_task_claude_policy_fails_closed_on_symlink_loop(
     assert "symlink loop" in result.output_text
 
 
+def test_run_agentic_task_claude_policy_fails_closed_on_root_parent_loop(
+    tmp_path, mock_env
+):
+    workspace = tmp_path / "workspace"
+    parent = tmp_path / "policy-roots"
+    writable_root = parent / "src"
+    workspace.mkdir()
+    parent.mkdir()
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    def fake_provider(*_args, **_kwargs):
+        parent.rmdir()
+        parent.symlink_to(parent, target_is_directory=True)
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Replace root parent with symlink loop",
+            workspace,
+            claude_policy=policy,
+        )
+
+    assert result.success is False
+    assert "Filesystem policy audit failed" in result.output_text
+    assert "symlink loop" in result.output_text
+
+
 def test_run_agentic_task_claude_policy_rejects_symlink_to_linked_git_audit_root(
     tmp_path, mock_env
 ):
@@ -1049,6 +1098,59 @@ def test_run_agentic_task_claude_policy_ignores_internal_retry_logs(
     assert result.success is True
     assert result.changed_files == ["src/result.txt"]
     assert provider_calls == 2
+
+
+def test_run_agentic_task_claude_policy_chains_internal_retry_logs(
+    tmp_path, mock_env
+):
+    writable_root = tmp_path / "src"
+    writable_root.mkdir()
+    policy = {
+        "allowedTools": "Read,Write,Edit",
+        "addDirs": [],
+        "writableRoots": [str(writable_root)],
+        "readOnlyRoots": [],
+        "noSessionPersistence": False,
+        "outputFormat": "json",
+    }
+
+    provider_calls = 0
+
+    def fake_provider(*_args, **_kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        if provider_calls < 3:
+            return (True, "Ok", 0.0, "claude-sonnet", None)
+        (writable_root / "result.txt").write_text("generated", encoding="utf-8")
+        return (
+            True,
+            "Detailed provider output that is long enough to pass validation.",
+            0.05,
+            "claude-sonnet",
+            None,
+        )
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_provider,
+    ):
+        result = run_agentic_task(
+            "Retry twice after false positives",
+            tmp_path,
+            max_retries=3,
+            retry_delay=0.0,
+            claude_policy=policy,
+        )
+
+    assert result.success is True
+    assert result.changed_files == ["src/result.txt"]
+    assert provider_calls == 3
 
 
 def test_run_agentic_task_claude_policy_reports_deleted_internal_retry_log(
