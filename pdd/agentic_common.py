@@ -65,6 +65,7 @@ def get_agentic_capabilities() -> Dict[str, Any]:
                 "auditsGitMetadata": True,
                 "excludedInternalPaths": [".pdd/agentic-logs"],
                 "escapedSymlinkTargets": "fail_closed",
+                "nonFollowingPolicyRootIdentity": True,
             },
             "result": {
                 "schemaVersion": 1,
@@ -197,11 +198,13 @@ def _path_is_within(path: Path, root: Path) -> bool:
 
 
 def _resolve_policy_path(cwd: Path, raw_path: str) -> Path:
-    """Resolve a policy path, treating relative roots as relative to *cwd*."""
+    """Resolve a policy path without following its final symlink component."""
     path = Path(raw_path).expanduser()
     if not path.is_absolute():
         path = cwd / path
-    return path.resolve(strict=False)
+    if path.name in ("", os.pardir):
+        return path.resolve(strict=False)
+    return path.parent.resolve(strict=False) / path.name
 
 
 def _resolve_policy_roots(
@@ -327,9 +330,18 @@ def _snapshot_audit_root(
     escaped_symlink_targets: Dict[Path, Path],
 ) -> None:
     """Add all auditable files under *root* to *files*."""
+    if root.is_symlink():
+        _snapshot_audit_path(
+            root,
+            files,
+            errors,
+            audit_roots,
+            escaped_symlink_targets,
+        )
+        return
     if not root.exists():
         return
-    if root.is_file() or root.is_symlink():
+    if root.is_file():
         _snapshot_audit_path(
             root,
             files,
@@ -429,6 +441,17 @@ def _is_pdd_owned_audit_log_path(cwd: Path, path: Path) -> bool:
     return _path_is_within(path, log_root)
 
 
+def _escaped_symlink_target_for_path(
+    path: Path,
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+) -> Path:
+    """Return the known escaped symlink target without assuming snapshot side."""
+    if path in after.escaped_symlink_targets:
+        return after.escaped_symlink_targets[path]
+    return before.escaped_symlink_targets[path]
+
+
 def _audit_filesystem_policy(
     cwd: Path,
     policy: Optional[ClaudePolicy],
@@ -460,12 +483,7 @@ def _audit_filesystem_policy(
     escaped_symlink_files = [
         (
             _display_audit_path(cwd, path),
-            str(
-                after.escaped_symlink_targets.get(
-                    path,
-                    before.escaped_symlink_targets[path],
-                )
-            ),
+            str(_escaped_symlink_target_for_path(path, before, after)),
         )
         for path in escaped_symlink_paths
     ]
