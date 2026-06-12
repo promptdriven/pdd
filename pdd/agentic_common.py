@@ -65,7 +65,14 @@ def get_agentic_capabilities() -> Dict[str, Any]:
                 "auditsLinkedGitMetadata": True,
                 "pddOwnedLogChanges": "exact_signature_verified_only",
                 "providerLogDirWritesAudited": True,
+                "auditsDirectoryMetadata": True,
                 "escapedSymlinkTargets": "fail_closed",
+                "symlinkTargetAllowRoots": [
+                    "cwd",
+                    "addDirs",
+                    "writableRoots",
+                    "readOnlyRoots",
+                ],
                 "nonFollowingPolicyRootIdentity": True,
             },
             "result": {
@@ -324,6 +331,12 @@ def _filesystem_signature(path: Path, errors: List[str]) -> str:
             return f"file-error:{stat_result.st_mode}:{stat_result.st_size}"
         return f"file:{stat_result.st_mode}:{stat_result.st_size}:{digest.hexdigest()}"
 
+    if path.is_dir():
+        return (
+            f"dir:{stat_result.st_mode}:{stat_result.st_size}:"
+            f"{stat_result.st_mtime_ns}"
+        )
+
     return (
         f"other:{stat_result.st_mode}:{stat_result.st_size}:"
         f"{stat_result.st_mtime_ns}"
@@ -333,11 +346,11 @@ def _filesystem_signature(path: Path, errors: List[str]) -> str:
 def _record_escaped_symlink_target(
     link_path: Path,
     target_path: Path,
-    audit_roots: List[Path],
+    symlink_target_roots: List[Path],
     escaped_symlink_targets: Dict[Path, Path],
 ) -> None:
-    """Record symlinks whose targets leave the declared audit roots."""
-    if any(_path_is_within(target_path, root) for root in audit_roots):
+    """Record symlinks whose targets leave the caller-allowed target roots."""
+    if any(_path_is_within(target_path, root) for root in symlink_target_roots):
         return
     escaped_symlink_targets[_audit_entry_path(link_path)] = target_path
 
@@ -346,7 +359,7 @@ def _snapshot_audit_path(
     path: Path,
     files: Dict[Path, str],
     errors: List[str],
-    audit_roots: List[Path],
+    symlink_target_roots: List[Path],
     escaped_symlink_targets: Dict[Path, Path],
 ) -> None:
     """Add one filesystem path to the snapshot and track symlink escapes."""
@@ -363,7 +376,7 @@ def _snapshot_audit_path(
     _record_escaped_symlink_target(
         path,
         target_path,
-        audit_roots,
+        symlink_target_roots,
         escaped_symlink_targets,
     )
 
@@ -372,7 +385,7 @@ def _snapshot_audit_root(
     root: Path,
     files: Dict[Path, str],
     errors: List[str],
-    audit_roots: List[Path],
+    symlink_target_roots: List[Path],
     escaped_symlink_targets: Dict[Path, Path],
 ) -> None:
     """Add all auditable files under *root* to *files*."""
@@ -381,7 +394,7 @@ def _snapshot_audit_root(
             root,
             files,
             errors,
-            audit_roots,
+            symlink_target_roots,
             escaped_symlink_targets,
         )
         return
@@ -392,7 +405,7 @@ def _snapshot_audit_root(
             root,
             files,
             errors,
-            audit_roots,
+            symlink_target_roots,
             escaped_symlink_targets,
         )
         return
@@ -401,10 +414,17 @@ def _snapshot_audit_root(
             root,
             files,
             errors,
-            audit_roots,
+            symlink_target_roots,
             escaped_symlink_targets,
         )
         return
+    _snapshot_audit_path(
+        root,
+        files,
+        errors,
+        symlink_target_roots,
+        escaped_symlink_targets,
+    )
 
     def on_walk_error(exc: OSError) -> None:
         errors.append(f"{root}: {exc}")
@@ -422,7 +442,15 @@ def _snapshot_audit_root(
                     dir_path,
                     files,
                     errors,
-                    audit_roots,
+                    symlink_target_roots,
+                    escaped_symlink_targets,
+                )
+            else:
+                _snapshot_audit_path(
+                    dir_path,
+                    files,
+                    errors,
+                    symlink_target_roots,
                     escaped_symlink_targets,
                 )
         for filename in filenames:
@@ -431,7 +459,7 @@ def _snapshot_audit_root(
                 file_path,
                 files,
                 errors,
-                audit_roots,
+                symlink_target_roots,
                 escaped_symlink_targets,
             )
 
@@ -442,21 +470,23 @@ def _take_filesystem_policy_snapshot(
 ) -> _FilesystemPolicySnapshot:
     """Snapshot files under cwd, addDirs, writable roots, and read-only roots."""
     resolved_cwd = cwd.resolve(strict=False)
-    roots = [resolved_cwd]
+    symlink_target_roots = [resolved_cwd]
     for key in ("addDirs", "writableRoots", "readOnlyRoots"):
-        roots.extend(_resolve_policy_roots(resolved_cwd, policy, key))
-    roots.extend(_linked_git_metadata_roots(resolved_cwd))
+        symlink_target_roots.extend(_resolve_policy_roots(resolved_cwd, policy, key))
+    snapshot_roots = list(symlink_target_roots)
+    snapshot_roots.extend(_linked_git_metadata_roots(resolved_cwd))
 
     files: Dict[Path, str] = {}
     errors: List[str] = []
     escaped_symlink_targets: Dict[Path, Path] = {}
-    audit_roots = _collapse_audit_roots(roots)
+    audit_roots = _collapse_audit_roots(snapshot_roots)
+    collapsed_symlink_target_roots = _collapse_audit_roots(symlink_target_roots)
     for root in audit_roots:
         _snapshot_audit_root(
             root,
             files,
             errors,
-            audit_roots,
+            collapsed_symlink_target_roots,
             escaped_symlink_targets,
         )
     return _FilesystemPolicySnapshot(
@@ -507,6 +537,42 @@ def _is_trusted_pdd_owned_log_change(
     return signatures.get(path) == after_signature
 
 
+def _is_directory_signature(signature: Optional[str]) -> bool:
+    """Return True when a snapshot signature describes a directory."""
+    return bool(signature and signature.startswith("dir:"))
+
+
+def _is_directory_change(
+    path: Path,
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+) -> bool:
+    """Return True when a changed path is a directory in either snapshot."""
+    return (
+        _is_directory_signature(before.files.get(path))
+        or _is_directory_signature(after.files.get(path))
+    )
+
+
+def _filter_redundant_directory_changes(
+    paths: List[Path],
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+    explained_paths: Optional[Set[Path]] = None,
+) -> List[Path]:
+    """Drop directory mtime changes when a changed descendant is also reported."""
+    all_explained_paths = list(paths) + list(explained_paths or set())
+    filtered: List[Path] = []
+    for path in paths:
+        if _is_directory_change(path, before, after) and any(
+            other != path and _path_is_within(other, path)
+            for other in all_explained_paths
+        ):
+            continue
+        filtered.append(path)
+    return filtered
+
+
 def _escaped_symlink_target_for_path(
     path: Path,
     before: _FilesystemPolicySnapshot,
@@ -534,15 +600,34 @@ def _audit_filesystem_policy(
         detail = _format_audit_paths(errors)
         return [], f"Filesystem policy audit failed; refusing result: {detail}"
 
+    pdd_owned_log_signatures = pdd_owned_log_signatures or {}
+    comparison_paths = (
+        set(before.files) | set(after.files) | set(pdd_owned_log_signatures)
+    )
+    trusted_pdd_log_paths = {
+        path for path, signature in pdd_owned_log_signatures.items()
+        if after.files.get(path) == signature
+    }
     changed_paths = sorted(
-        (
-            path for path in set(before.files) | set(after.files)
-            if before.files.get(path) != after.files.get(path)
-            and not _is_trusted_pdd_owned_log_change(
-                path,
-                after.files.get(path),
-                pdd_owned_log_signatures or {},
-            )
+        _filter_redundant_directory_changes(
+            [
+                path for path in comparison_paths
+                if (
+                    before.files.get(path) != after.files.get(path)
+                    or (
+                        path in pdd_owned_log_signatures
+                        and after.files.get(path) != pdd_owned_log_signatures[path]
+                    )
+                )
+                and not _is_trusted_pdd_owned_log_change(
+                    path,
+                    after.files.get(path),
+                    pdd_owned_log_signatures,
+                )
+            ],
+            before,
+            after,
+            trusted_pdd_log_paths,
         ),
         key=str,
     )
