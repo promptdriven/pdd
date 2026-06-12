@@ -6,6 +6,7 @@ updates a live GitHub issue comment with progress, and pauses on failure.
 """
 from __future__ import annotations
 
+import collections
 import csv as _csv
 import datetime
 import json
@@ -39,8 +40,15 @@ console = Console()
 # Module-level constants and helpers
 # ---------------------------------------------------------------------------
 
-# Maximum concurrent syncs
-MAX_WORKERS = 4
+# Maximum concurrent syncs — read from PDD_SYNC_MAX_WORKERS, default 4, clamped 1–4
+try:
+    MAX_WORKERS = max(1, min(4, int(os.environ.get("PDD_SYNC_MAX_WORKERS", "4"))))
+except ValueError:
+    MAX_WORKERS = 4
+
+# Maximum lines to retain per stream when capturing child subprocess output.
+# Uses a tail buffer (collections.deque) to bound memory under verbose children.
+STDOUT_CAPTURE_LINE_LIMIT = 5000
 
 # Heartbeat interval for printing progress hints during long-running modules
 HEARTBEAT_INTERVAL = 60
@@ -2339,8 +2347,8 @@ class AsyncSyncRunner:
             except Exception:
                 pass
 
-        stdout_lines: List[str] = []
-        stderr_lines: List[str] = []
+        stdout_lines: collections.deque = collections.deque(maxlen=STDOUT_CAPTURE_LINE_LIMIT)
+        stderr_lines: collections.deque = collections.deque(maxlen=STDOUT_CAPTURE_LINE_LIMIT)
         verbose_print = self.verbose and not self.quiet
         line_lock = threading.Lock()
 

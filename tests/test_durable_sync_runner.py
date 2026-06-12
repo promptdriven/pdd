@@ -529,6 +529,8 @@ def test_durable_runner_fallback_max_workers_reads_pdd_sync_max_workers_env_var(
     imported durable_sync_runner.MAX_WORKERS is also always 4 regardless of the
     env var.
     """
+    _project_root = str(Path(__file__).resolve().parent.parent)
+    _pythonpath = f"{_project_root}:{os.environ.get('PYTHONPATH', '')}"
     result = subprocess.run(
         [
             sys.executable,
@@ -541,6 +543,7 @@ def test_durable_runner_fallback_max_workers_reads_pdd_sync_max_workers_env_var(
         ],
         capture_output=True,
         text=True,
+        env={**os.environ, "PYTHONPATH": _pythonpath},
     )
     assert result.returncode == 0, (
         f"Import subprocess failed: stderr={result.stderr!r}"
