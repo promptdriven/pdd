@@ -3647,12 +3647,111 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
     return input_cost + cache_read_cost + cache_write_cost + output_cost
 
 
-def _safe_token_int(value: Any) -> int:
-    """Return a JSON-safe, non-negative integer token count."""
-    try:
-        return max(0, int(value or 0))
-    except (TypeError, ValueError):
-        return 0
+_INPUT_TOKEN_KEYS: Tuple[str, ...] = ("input_tokens", "inputTokens")
+_OUTPUT_TOKEN_KEYS: Tuple[str, ...] = ("output_tokens", "outputTokens")
+_CACHE_READ_TOKEN_KEYS: Tuple[str, ...] = (
+    "cache_read_input_tokens",
+    "cached_input_tokens",
+    "cacheReadInputTokens",
+    "cachedInputTokens",
+)
+_CACHE_CREATION_TOKEN_KEYS: Tuple[str, ...] = (
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+)
+
+
+def _validated_token_counter(
+    usage: Dict[str, Any],
+    aliases: Tuple[str, ...],
+    *,
+    required: bool,
+) -> Optional[int]:
+    """Return a non-negative token count, or None for missing/invalid required data."""
+    value = None
+    found = False
+    for key in aliases:
+        if key in usage:
+            value = usage[key]
+            found = True
+            break
+
+    if not found:
+        return None if required else 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _build_claude_usage_record(
+    model_name: str,
+    usage: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Build one JSON-serializable Claude usage record from validated counters."""
+    input_tokens = _validated_token_counter(
+        usage,
+        _INPUT_TOKEN_KEYS,
+        required=True,
+    )
+    output_tokens = _validated_token_counter(
+        usage,
+        _OUTPUT_TOKEN_KEYS,
+        required=True,
+    )
+    cached_input_tokens = _validated_token_counter(
+        usage,
+        _CACHE_READ_TOKEN_KEYS,
+        required=False,
+    )
+    cache_creation_input_tokens = _validated_token_counter(
+        usage,
+        _CACHE_CREATION_TOKEN_KEYS,
+        required=False,
+    )
+    if (
+        input_tokens is None
+        or output_tokens is None
+        or cached_input_tokens is None
+        or cache_creation_input_tokens is None
+    ):
+        return None
+
+    return {
+        "model": model_name,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+    }
+
+
+def _has_token_counter_key(usage: Dict[str, Any]) -> bool:
+    """Return True when a usage object contains any known token counter key."""
+    aliases = (
+        _INPUT_TOKEN_KEYS
+        + _OUTPUT_TOKEN_KEYS
+        + _CACHE_READ_TOKEN_KEYS
+        + _CACHE_CREATION_TOKEN_KEYS
+    )
+    return any(key in usage for key in aliases)
+
+
+def _extract_anthropic_model_from_envelope(data: Dict[str, Any]) -> Optional[str]:
+    """Extract a concrete Claude model from known JSON envelope locations."""
+    model = data.get("model")
+    if isinstance(model, str) and model:
+        return model
+
+    for key in ("message", "response", "result", "advisor"):
+        value = data.get(key)
+        if not isinstance(value, dict):
+            continue
+        model = value.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return None
 
 
 def _extract_anthropic_standard_usage(
@@ -3662,39 +3761,51 @@ def _extract_anthropic_standard_usage(
     fallback_model: Optional[str],
 ) -> AgenticUsage:
     """Extract GVS-compatible usage from a Claude Code JSON envelope."""
+    model_usage = data.get("modelUsage")
+    if isinstance(model_usage, dict) and model_usage:
+        records: List[Dict[str, Any]] = []
+        names = sorted(str(name) for name in model_usage if name)
+        aggregate_usage = data.get("usage")
+        for model_name in names:
+            per_model_usage = model_usage.get(model_name)
+            has_per_model_counters = (
+                isinstance(per_model_usage, dict)
+                and _has_token_counter_key(per_model_usage)
+            )
+            record = (
+                _build_claude_usage_record(model_name, per_model_usage)
+                if isinstance(per_model_usage, dict)
+                else None
+            )
+            if (
+                record is None
+                and not has_per_model_counters
+                and len(names) == 1
+                and isinstance(aggregate_usage, dict)
+            ):
+                record = _build_claude_usage_record(model_name, aggregate_usage)
+            if record is None:
+                return None
+            records.append(record)
+        if records:
+            return {"claude": records}
+
     usage = data.get("usage")
     if not isinstance(usage, dict):
         return None
 
-    model_name: Optional[str] = None
-    model_usage = data.get("modelUsage")
-    if isinstance(model_usage, dict) and model_usage:
-        names = sorted(str(name) for name in model_usage.keys() if name)
-        if names:
-            model_name = "+".join(names)
-    if not model_name:
-        model_name = actual_model or fallback_model
+    model_name = (
+        _extract_anthropic_model_from_envelope(data)
+        or actual_model
+        or fallback_model
+    )
     if not model_name:
         return None
 
-    return {
-        "claude": [
-            {
-                "model": model_name,
-                "input_tokens": _safe_token_int(usage.get("input_tokens")),
-                "output_tokens": _safe_token_int(usage.get("output_tokens")),
-                "cached_input_tokens": _safe_token_int(
-                    usage.get(
-                        "cache_read_input_tokens",
-                        usage.get("cached_input_tokens"),
-                    )
-                ),
-                "cache_creation_input_tokens": _safe_token_int(
-                    usage.get("cache_creation_input_tokens")
-                ),
-            }
-        ]
-    }
+    record = _build_claude_usage_record(model_name, usage)
+    if record is None:
+        return None
+    return {"claude": [record]}
 
 
 def run_agentic_task(
@@ -5965,6 +6076,9 @@ def _extract_provider_model_from_data(provider: str, data: Dict[str, Any]) -> Op
                 names = [str(k) for k in usage.keys() if k]
                 if names:
                     return "+".join(sorted(names)) if len(names) > 1 else names[0]
+            model = _extract_anthropic_model_from_envelope(data)
+            if model:
+                return model
         elif provider == "google":
             models = (data.get("stats") or {}).get("models")
             if isinstance(models, dict) and models:
