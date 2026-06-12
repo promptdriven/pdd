@@ -3604,7 +3604,8 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
     estimation from the usage field.
     """
     # Try 1: Sum costUSD from modelUsage (most accurate)
-    model_usage = data.get("modelUsage", {})
+    raw_model_usage = data.get("modelUsage", {})
+    model_usage = raw_model_usage if isinstance(raw_model_usage, dict) else {}
     if model_usage:
         total = sum(
             float(info.get("costUSD", 0.0))
@@ -3616,13 +3617,36 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
 
     # Try 2: Token-based estimation from usage field
     usage = data.get("usage", {})
-    if not usage:
+    if not isinstance(usage, dict) or not usage:
         return 0.0
 
-    input_tokens = usage.get("input_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_creation = usage.get("cache_creation_input_tokens", 0)
+    input_tokens = _validated_token_counter(
+        usage,
+        _INPUT_TOKEN_KEYS,
+        required=True,
+    )
+    output_tokens = _validated_token_counter(
+        usage,
+        _OUTPUT_TOKEN_KEYS,
+        required=True,
+    )
+    cache_read = _validated_token_counter(
+        usage,
+        _CACHE_READ_TOKEN_KEYS,
+        required=False,
+    )
+    cache_creation = _validated_token_counter(
+        usage,
+        _CACHE_CREATION_TOKEN_KEYS,
+        required=False,
+    )
+    if (
+        input_tokens is None
+        or output_tokens is None
+        or cache_read is None
+        or cache_creation is None
+    ):
+        return 0.0
 
     # Determine pricing family from modelUsage keys or default to sonnet
     family = "sonnet"  # default
@@ -3738,6 +3762,22 @@ def _has_token_counter_key(usage: Dict[str, Any]) -> bool:
     return any(key in usage for key in aliases)
 
 
+def _merge_missing_cache_counters(
+    per_model_usage: Dict[str, Any],
+    aggregate_usage: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Fill absent per-model cache counters from aggregate Claude usage."""
+    merged = dict(per_model_usage)
+    for aliases in (_CACHE_READ_TOKEN_KEYS, _CACHE_CREATION_TOKEN_KEYS):
+        if any(key in merged for key in aliases):
+            continue
+        for key in aliases:
+            if key in aggregate_usage:
+                merged[key] = aggregate_usage[key]
+                break
+    return merged
+
+
 def _extract_anthropic_model_from_envelope(data: Dict[str, Any]) -> Optional[str]:
     """Extract a concrete Claude model from known JSON envelope locations."""
     model = data.get("model")
@@ -3770,13 +3810,23 @@ def _extract_anthropic_standard_usage(
         aggregate_usage = data.get("usage")
         for model_name in names:
             per_model_usage = model_usage.get(model_name)
+            record_usage = per_model_usage
+            if (
+                len(names) == 1
+                and isinstance(record_usage, dict)
+                and isinstance(aggregate_usage, dict)
+            ):
+                record_usage = _merge_missing_cache_counters(
+                    record_usage,
+                    aggregate_usage,
+                )
             has_per_model_counters = (
                 isinstance(per_model_usage, dict)
                 and _has_token_counter_key(per_model_usage)
             )
             record = (
-                _build_claude_usage_record(model_name, per_model_usage)
-                if isinstance(per_model_usage, dict)
+                _build_claude_usage_record(model_name, record_usage)
+                if isinstance(record_usage, dict)
                 else None
             )
             if (
