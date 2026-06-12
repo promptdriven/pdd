@@ -1784,7 +1784,7 @@ def test_standard_claude_policy_json_usage_accepts_aggregate_cache_larger_than_i
             },
         ],
     }
-    assert _calculate_anthropic_cost(data) > 0.0
+    assert _calculate_anthropic_cost(data) == pytest.approx(0.59419275)
 
 
 def test_standard_claude_policy_json_usage_model_usage_only_counters_estimate_cost(
@@ -4073,12 +4073,13 @@ def test_anthropic_cost_cache_creation_not_double_counted():
     """Test that cache_creation tokens are NOT double-counted.
 
     Bug #686: cache_creation tokens were charged at both the regular input
-    rate (1.0x) AND the cache write rate (1.25x), totaling 2.25x instead
-    of just 1.25x. The fix subtracts cache_creation from new_input.
+    rate (1.0x) AND the cache write rate (1.25x). Anthropic usage reports
+    input_tokens as the fresh input bucket, so cache_creation is added only
+    at the cache write rate.
     """
     data = {
         "usage": {
-            "input_tokens": 1000,
+            "input_tokens": 200,
             "output_tokens": 200,
             "cache_read_input_tokens": 500,
             "cache_creation_input_tokens": 300,
@@ -4087,10 +4088,8 @@ def test_anthropic_cost_cache_creation_not_double_counted():
     cost = _calculate_anthropic_cost(data)
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
-    # new_input should be 1000 - 500 (cache_read) - 300 (cache_creation) = 200
-    new_input = 200
     expected = (
-        (new_input / 1e6) * pricing.input_per_million
+        (200 / 1e6) * pricing.input_per_million
         + (500 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
         + (300 / 1e6) * pricing.input_per_million * 1.25
         + (200 / 1e6) * pricing.output_per_million
@@ -4122,7 +4121,7 @@ def test_anthropic_cost_cache_read_only():
     """Test cost calculation with cache_read but no cache_creation."""
     data = {
         "usage": {
-            "input_tokens": 1000,
+            "input_tokens": 400,
             "output_tokens": 200,
             "cache_read_input_tokens": 600,
         }
@@ -4162,7 +4161,7 @@ def test_anthropic_cost_opus_pricing():
             "claude-opus-4-20250514": {}  # No costUSD → falls through to token math
         },
         "usage": {
-            "input_tokens": 2000,
+            "input_tokens": 800,
             "output_tokens": 500,
             "cache_read_input_tokens": 800,
             "cache_creation_input_tokens": 400,
@@ -4171,10 +4170,8 @@ def test_anthropic_cost_opus_pricing():
     cost = _calculate_anthropic_cost(data)
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY["opus"]
-    # new_input should be 2000 - 800 - 400 = 800
-    new_input = 800
     expected = (
-        (new_input / 1e6) * pricing.input_per_million
+        (800 / 1e6) * pricing.input_per_million
         + (800 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
         + (400 / 1e6) * pricing.input_per_million * 1.25
         + (500 / 1e6) * pricing.output_per_million
@@ -4188,7 +4185,7 @@ def test_anthropic_cost_all_tokens_cached():
     """Test edge case where all input tokens are cached (read + creation = total)."""
     data = {
         "usage": {
-            "input_tokens": 1000,
+            "input_tokens": 0,
             "output_tokens": 100,
             "cache_read_input_tokens": 700,
             "cache_creation_input_tokens": 300,
@@ -4197,9 +4194,8 @@ def test_anthropic_cost_all_tokens_cached():
     cost = _calculate_anthropic_cost(data)
 
     pricing = ANTHROPIC_PRICING_BY_FAMILY["sonnet"]
-    # new_input should be 1000 - 700 - 300 = 0
     expected = (
-        0  # no regular input cost
+        0  # no fresh input cost
         + (700 / 1e6) * pricing.input_per_million * pricing.cached_input_multiplier
         + (300 / 1e6) * pricing.input_per_million * 1.25
         + (100 / 1e6) * pricing.output_per_million
@@ -7915,7 +7911,7 @@ def test_anthropic_cost_token_based_fallback():
     """Token-based estimation when no costUSD or total_cost_usd."""
     data = {
         "usage": {
-            "input_tokens": 5000,
+            "input_tokens": 2500,
             "output_tokens": 1000,
             "cache_read_input_tokens": 2000,
             "cache_creation_input_tokens": 500,
@@ -7925,7 +7921,6 @@ def test_anthropic_cost_token_based_fallback():
     }
     cost = _calculate_anthropic_cost(data)
     # Sonnet pricing: $3/M input, $15/M output, cache read 10%, cache write 1.25x input
-    # new_input = 5000 - 2000 - 500 = 2500 (subtract both cache_read and cache_creation)
     # input_cost = 2500/1M * 3 = 0.0075
     # cache_read_cost = 2000/1M * 3 * 0.1 = 0.0006
     # cache_write_cost = 500/1M * 3 * 1.25 = 0.001875
@@ -7938,7 +7933,7 @@ def test_anthropic_cost_token_based_fallback_accepts_camel_case_usage():
     """Token-based estimation should match structured usage aliases."""
     data = {
         "usage": {
-            "inputTokens": 5000,
+            "inputTokens": 2500,
             "outputTokens": 1000,
             "cacheReadInputTokens": 2000,
             "cacheCreationInputTokens": 500,
