@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import enum
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterator, List, Optional, Sequence, Tuple
 
 from rich.console import Console
@@ -103,10 +103,12 @@ class StatusMessage:
 
     @property
     def glyph(self) -> str:
+        """The one glyph for this message's primitive (from :data:`GLYPHS`)."""
         return GLYPHS[self.status]
 
     @property
     def role(self) -> str:
+        """The semantic theme role for this primitive (from :data:`ROLES`)."""
         return ROLES[self.status]
 
     def render_plain(self) -> str:

@@ -135,13 +135,7 @@ def test_no_color_matches_direct_render(patched, fake_audit, prompt_file):
     cli_out = "\n".join(
         ln for ln in raw.split("\n") if not ln.startswith("WARN:")
     ).rstrip("\n")
-    direct = _render_usage_box(
-        fake_audit.rows,
-        fake_audit.total_tokens,
-        fake_audit.context_limit,
-        fake_audit.model,
-        fake_audit.percent_used,
-    )
+    direct = _render_usage_box(fake_audit)
     assert cli_out == direct
 
 
@@ -261,11 +255,13 @@ def test_painter_enabled_wraps_in_given_color():
 
 
 # --------------------------------------------------------------------------- #
-# Glyph scheme: counted categories share ONE glyph (color tells them apart);
-# unavailable and free space keep their own distinct glyphs.
+# Glyph scheme: each counted source gets its own glyph (so the grid keeps
+# source attribution with color off); unavailable and free keep their own.
+# _glyph_for picks the glyph only for the reserved override rows.
 # --------------------------------------------------------------------------- #
 def test_glyph_for_scheme():
-    # Every counted category collapses to the one shared glyph.
+    # _glyph_for is the override-row picker: the base glyph for any non-cloud
+    # override status, the distinct one for unavailable.
     for status in ("body", "resolved", "deferred", "unresolved"):
         assert _glyph_for(status) == _USED_GLYPH
     # unavailable is the lone status with its own glyph.
@@ -286,15 +282,18 @@ def _audit_with_unavailable():
     )
 
 
-def test_counted_categories_share_glyph_in_legend():
+def test_counted_sources_get_distinct_glyphs_in_legend():
     audit = _audit_with_unavailable()
-    box = _render_usage_box(
-        audit.rows, audit.total_tokens, audit.context_limit, audit.model, audit.percent_used
-    )
-    # body + two resolved rows all lead with the same shared glyph...
-    for label in ("prompt_body", "context/a.txt", "context/b.txt"):
+    box = _render_usage_box(audit)
+    # body + two resolved rows each lead with their own position glyph, so the
+    # no-color legend still tells them apart (the grid keeps attribution)...
+    counted = ("prompt_body", "context/a.txt", "context/b.txt")
+    leads = []
+    for i, label in enumerate(counted):
         line = next(ln for ln in box.splitlines() if f"{label}:" in ln)
-        assert line.strip().startswith(_USED_GLYPH)
+        assert line.strip().startswith(_SOURCE_GLYPHS[i])
+        leads.append(_SOURCE_GLYPHS[i])
+    assert len(set(leads)) == len(leads)  # mutually distinct
     # ...while unavailable and free keep their own.
     unavail = next(ln for ln in box.splitlines() if "grounding:" in ln)
     free = next(ln for ln in box.splitlines() if "Free space:" in ln)
@@ -302,12 +301,12 @@ def test_counted_categories_share_glyph_in_legend():
     assert free.strip().startswith(_FREE_GLYPH)
 
 
-def test_color_distinguishes_the_shared_glyph(patched, prompt_file):
-    """Same glyph, different source → different color in front of it."""
+def test_color_and_glyph_both_distinguish_sources(patched, prompt_file):
+    """Each counted source wears its own (color, glyph) pair."""
     out = _invoke(["--color"], prompt_file).output
-    # The two counted sources both wear _USED_GLYPH, told apart by color.
-    assert f"{_SOURCE_CYCLE[0]}{_USED_GLYPH}" in out
-    assert f"{_SOURCE_CYCLE[1]}{_USED_GLYPH}" in out
+    # The two counted sources differ in BOTH channels.
+    assert f"{_SOURCE_CYCLE[0]}{_SOURCE_GLYPHS[0]}" in out
+    assert f"{_SOURCE_CYCLE[1]}{_SOURCE_GLYPHS[1]}" in out
 
 
 # --------------------------------------------------------------------------- #
@@ -338,10 +337,7 @@ def test_row_colors_assignment():
 def test_two_resolved_sources_get_distinct_colors():
     """The reported confusion fix: two includes must not be the same color."""
     audit = _audit_with_unavailable()  # has context/a.txt and context/b.txt
-    box = _render_usage_box(
-        audit.rows, audit.total_tokens, audit.context_limit, audit.model,
-        audit.percent_used, _make_painter(True),
-    )
+    box = _render_usage_box(audit, _make_painter(True))
     # (colored: an ANSI reset sits between the source name and the ":", so match
     # on the bare name)
     a_line = next(ln for ln in box.splitlines() if "context/a.txt" in ln)
@@ -352,16 +348,17 @@ def test_two_resolved_sources_get_distinct_colors():
 
 
 # --------------------------------------------------------------------------- #
-# Glyph as a SECOND per-source channel: once the color palette wraps, the glyph
-# advances, so a counted source keeps a unique (glyph, color) identity past the
-# palette size — and the no-color render still tells wrapped sources apart.
+# Glyph as a PARALLEL per-source channel: every counted source gets its own
+# glyph too, so the no-color grid keeps source attribution. Like the colors, the
+# glyphs cycle (wrap) past the palette size, so two sources that share a glyph
+# also share a color.
 # --------------------------------------------------------------------------- #
 def test_source_glyphs_are_distinct_single_cells():
     import unicodedata
 
-    # The variants are mutually distinct and lead with the base used glyph, so the
-    # common case (<= palette-size sources) is unchanged.
+    # One distinct glyph per palette hue, leading with the base used glyph.
     assert len(set(_SOURCE_GLYPHS)) == len(_SOURCE_GLYPHS)
+    assert len(_SOURCE_GLYPHS) == len(_SOURCE_CYCLE)
     assert _SOURCE_GLYPHS[0] == _USED_GLYPH
     # All are Neutral-width (like _USED_GLYPH) so the grid stays aligned.
     for g in _SOURCE_GLYPHS:
@@ -380,40 +377,39 @@ def _many_resolved(n):
     )
 
 
-def test_row_styles_first_palette_sources_share_base_glyph():
-    # The first len(_SOURCE_CYCLE) sources all wear the base glyph and cycle color
-    # — i.e. behaviour is byte-identical to before until the palette wraps.
-    rows = _many_resolved(len(_SOURCE_CYCLE)).rows
+def test_row_styles_first_palette_sources_get_distinct_glyphs():
+    # The first len(_SOURCE_GLYPHS) sources each get their own glyph AND color, so
+    # they are mutually distinct in both channels (no-color grid stays attributed).
+    rows = _many_resolved(len(_SOURCE_GLYPHS)).rows
     styles = _row_styles(rows)
     for i, (glyph, color) in enumerate(styles):
-        assert glyph == _SOURCE_GLYPHS[0]
+        assert glyph == _SOURCE_GLYPHS[i]
         assert color == _SOURCE_CYCLE[i % len(_SOURCE_CYCLE)]
+    assert len({g for g, _c in styles}) == len(styles)  # glyphs mutually distinct
 
 
-def test_row_styles_glyph_advances_when_palette_wraps():
-    n = len(_SOURCE_CYCLE)
-    rows = _many_resolved(n + 1).rows  # one past a full palette
+def test_row_styles_glyph_and_color_wrap_together():
+    n = len(_SOURCE_GLYPHS)
+    rows = _many_resolved(n + 1).rows  # one past a full glyph/color cycle
     styles = _row_styles(rows)
-    first, wrapped = styles[0], styles[n]
-    # The wrapped source reuses the first color but takes the NEXT glyph, so its
-    # combined identity is still unique.
-    assert wrapped[1] == first[1] == _SOURCE_CYCLE[0]  # same color
-    assert wrapped[0] == _SOURCE_GLYPHS[1]             # different glyph
-    assert wrapped != first
+    # The (n+1)-th source wraps both channels back to the first source's pair, so
+    # a shared glyph always implies a shared color (consistent with the palette).
+    assert styles[n] == styles[0]
+    assert styles[n] == (_SOURCE_GLYPHS[0], _SOURCE_CYCLE[0])
 
 
-def test_wrapped_source_distinguishable_without_color():
-    """No-color legend: the 5th source still reads differently from the 1st."""
-    n = len(_SOURCE_CYCLE)
-    audit = _many_resolved(n + 1)
-    box = _render_usage_box(  # no painter -> uncolored
-        audit.rows, audit.total_tokens, audit.context_limit, audit.model,
-        audit.percent_used,
-    )
-    first_line = next(ln for ln in box.splitlines() if "src0.txt:" in ln)
-    wrapped_line = next(ln for ln in box.splitlines() if f"src{n}.txt:" in ln)
-    assert first_line.strip().startswith(_SOURCE_GLYPHS[0])
-    assert wrapped_line.strip().startswith(_SOURCE_GLYPHS[1])
+def test_counted_sources_distinguishable_without_color():
+    """No-color grid: the common case (<= palette size) tells sources apart by
+    glyph alone, the contract the monochrome usage grid must keep."""
+    n = len(_SOURCE_GLYPHS)
+    audit = _many_resolved(n)
+    box = _render_usage_box(audit)  # no painter -> uncolored
+    leads = []
+    for i in range(n):
+        line = next(ln for ln in box.splitlines() if f"src{i}.txt:" in ln)
+        assert line.strip().startswith(_SOURCE_GLYPHS[i])
+        leads.append(_SOURCE_GLYPHS[i])
+    assert len(set(leads)) == n  # every counted source reads differently
 
 
 def test_row_styles_color_half_matches_row_colors():

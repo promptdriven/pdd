@@ -17,6 +17,22 @@ OUT.mkdir(parents=True, exist_ok=True)
 WIDTH = 92
 
 
+def save_clean_svg(con, name, title):
+    """Export an SVG and strip trailing whitespace per line.
+
+    Rich's SVG template leaves whitespace-only indented lines between structural
+    elements; they are insignificant in SVG but trip ``git diff --check``. We
+    write the capture, then rewrite it without trailing whitespace so the
+    committed demos stay clean (and regeneration does not reintroduce the noise).
+    """
+    path = OUT / name
+    con.save_svg(str(path), title=title)
+    text = path.read_text(encoding="utf-8")
+    cleaned = "\n".join(line.rstrip() for line in text.split("\n"))
+    path.write_text(cleaned, encoding="utf-8")
+    print(f"wrote {name}")
+
+
 def new_console():
     # record=True so we can export SVG; force_terminal so themed colors render.
     from pdd.cli_theme import get_console
@@ -51,8 +67,7 @@ def demo_pr1():
         con.print(f"  [{role}]{text:<22}[/{role}]  [muted]role=[/muted][tag]{role:<10}[/tag] [muted]{desc}[/muted]")
     con.print()
     con.print("[muted]Helper:[/muted] style(\"command\", \"pdd sync\") -> " + style("command", "pdd sync"))
-    con.save_svg(str(OUT / "demo-pr1-color-system.svg"), title="pdd — command color system (PR #1)")
-    print("wrote demo-pr1-color-system.svg")
+    save_clean_svg(con, "demo-pr1-color-system.svg", "pdd — command color system (PR #1)")
 
 
 # ---------------------------------------------------------------------------
@@ -100,8 +115,7 @@ def demo_pr2():
     r3.success("1 conflict(s) found between the two prompts",
                next_step="review the conflicts below and reconcile the prompts")
 
-    con.save_svg(str(OUT / "demo-pr2-status-messaging.svg"), title="pdd — status & progress messaging (PR #2)")
-    print("wrote demo-pr2-status-messaging.svg")
+    save_clean_svg(con, "demo-pr2-status-messaging.svg", "pdd — status & progress messaging (PR #2)")
 
 
 # ---------------------------------------------------------------------------
@@ -128,15 +142,18 @@ def demo_pr3():
     pct = round(100 * total / limit, 1)
     paint = _make_painter(True)
 
-    box = _render_usage_box(rows, total, limit, "claude-opus-4-8", pct, paint=paint)
+    audit = ContextAudit(
+        model="claude-opus-4-8", total_tokens=total, context_limit=limit,
+        percent_used=pct, rows=rows,
+    )
+    box = _render_usage_box(audit, paint=paint)
     con.print(Text.from_ansi(box))
     con.print()
     con.print("[heading]--table view — per-source attribution[/heading]")
-    table = _render_table(rows, total, limit, "claude-opus-4-8", pct, paint=paint)
+    table = _render_table(audit, paint=paint)
     con.print(Text.from_ansi(table))
 
-    con.save_svg(str(OUT / "demo-pr3-context-tokens.svg"), title="pdd context — token visualization (PR #3)")
-    print("wrote demo-pr3-context-tokens.svg")
+    save_clean_svg(con, "demo-pr3-context-tokens.svg", "pdd context — token visualization (PR #3)")
 
 
 if __name__ == "__main__":

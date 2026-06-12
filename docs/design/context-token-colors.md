@@ -38,9 +38,10 @@ hand-writes ANSI codes (every escape is `cli_theme.hex_to_ansi` / `ANSI_FAINT` /
 Electric-Cyan → Prompt-Magenta → Build-Green → Lumen-Purple — assigned by its
 position among counted rows (overrides don't consume a slot). Distinct sources
 therefore get distinct colors; with more sources than palette entries the cycle
-wraps, but neighbours always differ — and a **second glyph channel** (below)
-keeps wrapped sources distinguishable too. Assignment is deterministic because
-the core returns rows in a stable order (largest first).
+wraps, but neighbours always differ — and a **parallel glyph channel** (below)
+gives every counted source its own glyph too, so the grid keeps source
+attribution even with color off. Assignment is deterministic because the core
+returns rows in a stable order (largest first).
 
 Color and glyph are paired by a single `_row_styles(rows) -> [(glyph, color)]`
 helper (the source of truth); `_row_colors` is a thin projection of its colour
@@ -50,26 +51,27 @@ the legend the `glyph + source` marker is painted; in `--table` only the
 width-padded `Source` cell is painted, so column alignment is unaffected by
 escape bytes.
 
-## Glyphs: a second per-source channel
+## Glyphs: a parallel per-source channel
 
-Colour is the primary per-source channel, but it only has four palette hues, so
-glyph is a **secondary** channel that kicks in when the palette wraps. Counted
-sources draw from `_SOURCE_GLYPHS` — two Neutral-width white-draughts variants,
-the stacked "king" `⛁` (U+26C1, also Claude Code's `/context` used cell) then the
-single "man" `⛀` (U+26C0) — indexed so the **glyph advances only each time the
-colour cycle wraps**. So sources 1–4 are `⛁` in the four hues (byte-identical to
-before), source 5 is `⛀` back at the first hue, and so on: a counted source keeps
-a unique `(glyph, color)` identity past the palette size, and even the no-colour
-render tells the 5th source from the 1st. The reserved rows don't vary —
-`unresolved`/`deferred` keep the base `⛁` (their red/yellow marks them),
-`unavailable` a faint `▨`, and free space a faint `⛶` (U+26F6).
+Colour is the primary per-source channel, but it must keep working with color
+off (pipes, CI, `NO_COLOR`), so the glyph is a **parallel** channel: every
+counted source gets its own glyph too. Counted sources draw from `_SOURCE_GLYPHS`
+— four Neutral-width draughts pieces, one per palette hue: the white "king" `⛁`
+(U+26C1, also Claude Code's `/context` used cell), the white "man" `⛀` (U+26C0),
+and the filled "black" pair `⛃`/`⛂` (U+26C3/U+26C2). Glyph and colour cycle their
+own tables **in lockstep**, so the first four distinct sources differ in *both*
+channels — and the glyph alone keeps the monochrome grid source-attributed.
+Like the colours, the glyphs wrap when there are more sources than entries, so
+two sources that share a glyph also share a colour (the 5th source repeats the
+1st in both). The reserved rows don't participate in the cycle — `unresolved` /
+`deferred` keep the base `⛁` (their red/yellow marks them), `unavailable` a faint
+`▨`, and free space a faint `⛶` (U+26F6).
 
 On macOS, Terminal.app's CoreText font fallback (Apple Symbols) renders every one
 of these as a single narrow cell (all four draughts glyphs U+26C0–C3 are
 Neutral-width, like `⛁`), so the grid stays aligned. `_glyph_for(status)` picks
 the glyph for the override/non-cycle rows; `_row_styles` owns the counted-source
-glyph. Two further variants (`⛂`/`⛃`, the filled "black" pair) remain available
-if the source channel ever needs more capacity.
+glyph.
 
 ## Color detection (`--color` / `--no-color` / auto)
 
@@ -81,6 +83,10 @@ The `--color/--no-color` flag is tri-state (default = auto):
   (<https://no-color.org>, any value including empty) is unset. So piping,
   redirecting, and CI logs stay plain by default.
 
-When color is off, the `paint` seam returns text unchanged, so the output is
-**byte-for-byte identical** to the previous monochrome rendering — pipes and CI
-logs are unaffected, and `--json` is never colored regardless of the flag.
+When color is off, the `paint` seam returns text unchanged, so the output
+carries **no ANSI at all** — pipes and CI logs stay plain, and `--json` is never
+colored regardless of the flag. The glyph channel still runs, so the monochrome
+grid keeps its per-source attribution (each counted source leads with its own
+draughts glyph); only the color is dropped. The glyphs themselves are identical
+with color on or off, so stripping the ANSI from a `--color` render yields
+exactly the `--no-color` render — the invariant the tests pin.
