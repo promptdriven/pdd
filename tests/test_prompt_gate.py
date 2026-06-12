@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import patch
 
+import click
 import pytest
 import yaml
 
@@ -10,6 +11,7 @@ from pdd.prompt_gate import (
     _normalize_prompt_gate_mode,
     filter_changed_prompt_paths,
     load_prompt_gate_config,
+    maybe_run_workflow_prompt_gate,
     parse_prompt_gate_block_exit,
     prompt_gate_block_message,
     resolve_prompt_gate_mode,
@@ -171,3 +173,119 @@ def test_load_prompt_gate_config_unquoted_off_in_pddrc(tmp_path: Path) -> None:
     )
     (tmp_path / ".pddrc").write_text(pddrc_content, encoding="utf-8")
     assert load_prompt_gate_config(tmp_path) == "off"
+
+
+def test_interactive_gate_exit_is_caught_and_returns_failure(tmp_path: Path) -> None:
+    """click.exceptions.Exit from run_interactive_checkup must be caught so pdd generate
+    / pdd change do not disappear without a user-visible message (#1519 finding #2)."""
+    prompt = tmp_path / "prompts" / "foo_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% test\n", encoding="utf-8")
+
+    with patch(
+        "pdd.checkup_interactive_main.run_interactive_checkup",
+        side_effect=click.exceptions.Exit(1),
+    ) as _mock_ic, patch(
+        "sys.stdin.isatty", return_value=True
+    ), patch(
+        "sys.stdout.isatty", return_value=True
+    ):
+        should_continue, exit_code = maybe_run_workflow_prompt_gate(
+            [prompt],
+            cli_prompt_checkup=None,
+            no_prompt_checkup=False,
+            project_root=tmp_path,
+            interactive=True,
+            quiet=True,
+        )
+
+    assert should_continue is False
+    assert exit_code == 1
+
+
+def test_interactive_gate_success_returns_continue(tmp_path: Path) -> None:
+    """Successful interactive checkup must return (True, 0) — unchanged behavior."""
+    prompt = tmp_path / "prompts" / "foo_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% test\n", encoding="utf-8")
+
+    with patch(
+        "pdd.checkup_interactive_main.run_interactive_checkup",
+        return_value=("done", 0.0, "mock"),
+    ), patch("sys.stdin.isatty", return_value=True), patch(
+        "sys.stdout.isatty", return_value=True
+    ):
+        should_continue, exit_code = maybe_run_workflow_prompt_gate(
+            [prompt],
+            cli_prompt_checkup=None,
+            no_prompt_checkup=False,
+            project_root=tmp_path,
+            interactive=True,
+            quiet=True,
+        )
+
+    assert should_continue is True
+    assert exit_code == 0
+
+
+def test_interactive_strict_gate_rechecks_and_blocks_unresolved(
+    tmp_path: Path,
+) -> None:
+    prompt = tmp_path / "prompts" / "foo_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% test\n", encoding="utf-8")
+
+    with patch(
+        "pdd.checkup_interactive_main.run_interactive_checkup",
+        return_value=("preview only", 0.0, "mock"),
+    ), patch(
+        "pdd.prompt_gate.run_automatic_prompt_gate",
+        return_value=(False, 2),
+    ) as mock_recheck, patch(
+        "sys.stdin.isatty", return_value=True
+    ), patch(
+        "sys.stdout.isatty", return_value=True
+    ):
+        should_continue, exit_code = maybe_run_workflow_prompt_gate(
+            [prompt],
+            cli_prompt_checkup="strict",
+            no_prompt_checkup=False,
+            project_root=tmp_path,
+            interactive=True,
+            quiet=True,
+        )
+
+    assert should_continue is False
+    assert exit_code == 2
+    mock_recheck.assert_called_once()
+
+
+def test_interactive_strict_gate_continues_after_resolved_recheck(
+    tmp_path: Path,
+) -> None:
+    prompt = tmp_path / "prompts" / "foo_python.prompt"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("% test\n", encoding="utf-8")
+
+    with patch(
+        "pdd.checkup_interactive_main.run_interactive_checkup",
+        return_value=("fixed", 0.0, "mock"),
+    ), patch(
+        "pdd.prompt_gate.run_automatic_prompt_gate",
+        return_value=(True, 0),
+    ), patch(
+        "sys.stdin.isatty", return_value=True
+    ), patch(
+        "sys.stdout.isatty", return_value=True
+    ):
+        should_continue, exit_code = maybe_run_workflow_prompt_gate(
+            [prompt],
+            cli_prompt_checkup="strict",
+            no_prompt_checkup=False,
+            project_root=tmp_path,
+            interactive=True,
+            quiet=True,
+        )
+
+    assert should_continue is True
+    assert exit_code == 0

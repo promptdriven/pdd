@@ -1,0 +1,11 @@
+<pdd-reason>Database configuration and connection management.</pdd-reason>
+
+% Goal
+Define the database configuration prompt fixture used by the architecture include validator.
+
+% Requirements
+- The implementation MUST read database settings from the environment.
+- The implementation MUST configure connection pooling and timeouts.
+
+% Deliverable
+- `src/database/config.py`

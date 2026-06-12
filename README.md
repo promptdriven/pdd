@@ -63,6 +63,8 @@ For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/cov
 
 For non-interactive bounded prompt repair after a failed prompt source-set checkup, see [docs/prompt_repair.md](docs/prompt_repair.md).
 
+For the deterministic prompt source-set quality gate and its `pdd.prompt_source_set_report.v1` JSON schema (including the per-finding `requires_clarification` / `clarification_reason` clarification signal), see [docs/checkup_prompt_quality_gate.md](docs/checkup_prompt_quality_gate.md).
+
 ## Installation
 
 ### Prerequisites for macOS
@@ -2333,6 +2335,16 @@ For the agentic fallback to function, you need to have at least one of the suppo
 
 You can configure environment-variable keys using `pdd setup` or by setting them in your shell. For OAuth/subscription auth, run each CLI's login command once interactively.
 
+**Provider-limit marker for automation:**
+
+When an agentic provider or credential hits a real rate, usage, session, or credential limit, PDD emits a single secret-safe marker line on plain stdout that automation can parse without scraping raw provider stderr. Quiet mode may suppress the explanatory diagnostic, but it does not suppress this scheduling marker.
+
+```text
+PDD_PROVIDER_LIMIT provider=<anthropic|openai|google|antigravity|opencode> status=<429|credential_limit> reason=<rate_limit|usage_limit|session_limit|credential_limit> reset_at=<UTC ISO-8601 timestamp or empty> reset_source=<provider|parsed_text|estimated|none>
+```
+
+`reset_at` is normalized to UTC (`YYYY-MM-DDTHH:MM:SSZ`) when PDD can read or infer a reset time, for example from Claude Code limit text — `reset_source=parsed_text` for an explicit date/timestamp, `estimated` when only a time-of-day was given and the date was inferred. Generic provider 429s without reset metadata still emit the marker with an empty `reset_at` and `reset_source=none`. The marker fires once per provider after its retry budget is spent (a 429 that recovers on retry emits nothing). It is a **per-provider detection signal, not a job-failure signal**: in a multi-provider run PDD can emit a marker for a limited provider and still succeed via the next provider, so consumers should combine the marker with the command's exit status before rescheduling. It is additive: existing `credential-limit` classification text remains for backward compatibility. The marker never includes raw provider stderr, tokens, API keys, user prompt content, or other untrusted provider text. (Antigravity runs under the `google` provider slot; PDD reports `provider=antigravity` only when the selected Google CLI is `agy`. An unmappable provider is reported as the literal `unknown` rather than any raw text.)
+
 #### Agentic E2E Fix Mode
 
 For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates an iterative 11-step workflow followed by a final PR-mode checkup gate, fixing both unit tests and e2e tests across your codebase, validating CI, and cleaning up code.
@@ -3005,7 +3017,7 @@ Options:
 - `--fixer ROLE`: Fixer role for `--review-loop` (for example, `claude`). The fixer must be different from the reviewer unless `--review-only` is used.
 - `--reviewers ROLES`: Legacy comma-separated review-loop role order, interpreted as `reviewer,fixer` (default: `codex,claude`).
 - `--reviewer-fallback ROLE`: Optional secondary reviewer role to invoke once if the primary reviewer cannot complete (for example, because of auth, network, sandbox, or CLI failures). The fallback must resolve to a role different from the reviewer and fixer; if it succeeds, it becomes the active reviewer for the remaining loop and the superseded primary's row in the final report is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters drop the failed primary from the required-reviewer set and resolve to `ship_degraded` instead of `unknown`.
-- `--fixer-fallback ROLE`: Optional secondary fixer role to invoke once if the primary fixer cannot complete (for example, Claude Code subscription-tier `credential-limit` failures). Role aliases are normalized so `claude` and `anthropic` resolve to the same identity; the fallback must resolve to a role different from the active fixer, the active reviewer, AND the originally configured reviewer (so `--reviewer codex --reviewer-fallback gemini --fixer-fallback codex` is skipped even after gemini takes over reviewing). Before the fallback runs the worktree is reset so the primary fixer's partial edits do not leak; on success the fallback takes over as the active fixer for the remaining rounds.
+- `--fixer-fallback ROLE`: Optional secondary fixer role to invoke once if the primary fixer cannot complete (for example, Claude Code subscription-tier `credential-limit` failures). Provider-limit attempts also emit the secret-safe `PDD_PROVIDER_LIMIT ...` marker described in [Agentic Fallback Mode](#agentic-fallback-mode), including `reset_at` when PDD can parse or infer the provider reset time. Role aliases are normalized so `claude` and `anthropic` resolve to the same identity; the fallback must resolve to a role different from the active fixer, the active reviewer, AND the originally configured reviewer (so `--reviewer codex --reviewer-fallback gemini --fixer-fallback codex` is skipped even after gemini takes over reviewing). Before the fallback runs the worktree is reset so the primary fixer's partial edits do not leak; on success the fallback takes over as the active fixer for the remaining rounds.
 - `--max-review-rounds INT`: Maximum primary-reviewer/fixer rounds (default: 5).
 - `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 50.0).
 - `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).

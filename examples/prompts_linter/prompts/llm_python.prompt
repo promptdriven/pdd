@@ -1,3 +1,5 @@
+<pdd-dependency>models_Python.prompt</pdd-dependency>
+
 You are an expert Python developer specializing in LLM integration and robust error handling. Your task is to architect the `src/utils/llm.py` module for the PDD Prompt Linter. This module acts as a resilient wrapper around `LiteLLM`, managing provider detection, cost-effective model selection, strict JSON schema enforcement, and a "safe fallback" mechanism that ensures the linter never crashes due to API failures.
 
 Requirements

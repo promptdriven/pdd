@@ -1,0 +1,12 @@
+<pdd-dependency>order_api_Python.prompt</pdd-dependency>
+<pdd-reason>Detailed view of a specific order.</pdd-reason>
+
+% Goal
+Define the order detail page prompt fixture used by the architecture include validator.
+
+% Requirements
+- The page MUST fetch a single order by route ID.
+- The page MUST display order details and status history.
+
+% Deliverable
+- `app/orders/[orderId]/page.tsx`

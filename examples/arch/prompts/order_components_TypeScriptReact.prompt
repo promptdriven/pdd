@@ -1,0 +1,11 @@
+<pdd-reason>Reusable order-related UI components.</pdd-reason>
+
+% Goal
+Define order UI component prompt fixtures used by the architecture include validator.
+
+% Requirements
+- Components MUST render order lists and status updates.
+- Components MUST expose typed props for order data.
+
+% Deliverable
+- `src/components/orders/OrderList.tsx`

@@ -1,0 +1,36 @@
+<pdd-reason>Grouping, risk classification, accounting, and artifact helpers for agentic prompt checkup sessions.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {"name": "FindingGroup", "kind": "dataclass"},
+      {"name": "CheckupAccounting", "kind": "dataclass"}
+    ],
+    "functions": [
+      {"name": "repair_risk_for", "signature": "(finding: SourceSetFinding | None) -> str", "returns": "str"},
+      {"name": "group_findings", "signature": "(findings: Sequence[SourceSetFinding]) -> list[FindingGroup]", "returns": "list[FindingGroup]"},
+      {"name": "decision_for", "signature": "(status: str, *, strict: bool, blocking: bool) -> tuple[str, bool]", "returns": "tuple[str, bool]"},
+      {"name": "write_artifacts", "returns": "dict[str, Path]"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>checkup_prompt_main_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/checkup_report.py`.
+
+% Requirements
+- Group findings by source check and code while preserving first-seen order.
+- Classify repair risk deterministically: high risk for errors, medium for clarification/evidence-policy findings, low for mechanical lint-style fixes.
+- Produce concise human summaries and truthful accounting of queued, applied, skipped, saved-for-review, failed, and remaining repairs.
+- Write checkup artifacts only under `.pdd/evidence/checkups/`.
+
+<contract_rules>
+R1 - Truthful accounting
+Summary accounting MUST NOT report findings as fixed when they were skipped, saved for review, rejected, or left unresolved.
+</contract_rules>
+
+% Deliverables
+- Code: `pdd/checkup_report.py`
