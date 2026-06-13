@@ -187,6 +187,28 @@ def test_agentic_common_example_satisfies_prompt_selectors():
     assert not failures, "\n".join(failures)
 
 
+def test_agentic_common_prompt_documents_example_selector_contract():
+    """The source prompt should preserve shared-example selectors during auto-heal."""
+    required_symbols: set[str] = set()
+    for _prompt_path, _selector, selectors in _agentic_common_example_selector_includes():
+        for selector in selectors:
+            if selector.startswith("def:"):
+                required_symbols.add(selector.split(":", 1)[1])
+            elif selector == "pattern:/consecutive_provider_failures/":
+                required_symbols.add("consecutive_provider_failures")
+
+    assert required_symbols
+
+    for prompt_path in (
+        "prompts/agentic_common_python.prompt",
+        "pdd/prompts/agentic_common_python.prompt",
+    ):
+        prompt = _read_repo_text(prompt_path)
+        missing = sorted(symbol for symbol in required_symbols if symbol not in prompt)
+        assert "Example selector contract" in prompt
+        assert not missing, f"{prompt_path} omits selector contract symbols: {missing}"
+
+
 def test_agentic_common_architecture_exposes_prompt_required_public_helpers():
     """architecture.json should preserve public helpers selected by prompts."""
     entries = json.loads(_read_repo_text("architecture.json"))
