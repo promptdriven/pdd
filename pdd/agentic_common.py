@@ -1677,6 +1677,11 @@ _RESET_TIME_RE = re.compile(
 _RELATIVE_RESET_GAP_RE = re.compile(r"\b(?:in|after|within|every)\b", re.IGNORECASE)
 # Explicit numeric UTC/GMT offset, e.g. "UTC+02:00", "GMT-5", "+0530".
 _TZ_OFFSET_RE = re.compile(r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
+# Some minimal tzdata installs omit IANA backward-link aliases even when the
+# canonical zone exists.
+_RESET_TZ_ALIASES: Dict[str, str] = {
+    "us/pacific": "America/Los_Angeles",
+}
 
 
 def _format_utc(dt: datetime) -> str:
@@ -1698,6 +1703,7 @@ def _resolve_reset_tz(name: Optional[str]) -> Optional[tzinfo]:
     if not name:
         return timezone.utc
     cleaned = name.strip()
+    cleaned = _RESET_TZ_ALIASES.get(cleaned.lower(), cleaned)
     if cleaned.upper() in ("UTC", "GMT", "Z", "UT"):
         return timezone.utc
     offset = _TZ_OFFSET_RE.match(cleaned)
