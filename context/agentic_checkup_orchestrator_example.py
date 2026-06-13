@@ -26,7 +26,7 @@ def main() -> None:
         # (success, message, total_cost, model_used)
         mock_inner.return_value = (True, "Checkup complete", 0.15, "gpt-4o")
 
-        success, message, cost, model = run_agentic_checkup_orchestrator(
+        success, *_rest = run_agentic_checkup_orchestrator(
             issue_url="https://github.com/example/repo/issues/1",
             issue_content="Bug: application crashes on startup due to missing import.",
             repo_owner="example",
@@ -42,10 +42,12 @@ def main() -> None:
             use_github_state=False # Don't try to post state to GitHub issues in this example
         )
 
-        print(f"Success: {success}")
-        print(f"Message: {message}")
-        print(f"Total Cost: ${cost:.4f}")
-        print(f"Model Used: {model}")
+        # The orchestrator return — especially the `message` and `model` fields
+        # in `_rest` — can echo scrubbed-but-verbose command / LLM output, so it
+        # is intentionally NOT printed in clear text here. Clear-text logging of
+        # those values trips secret-scanning gates (e.g. CodeQL "clear-text
+        # logging of sensitive information"). Show only a non-sensitive summary.
+        print("Checkup orchestrator finished:", "success" if success else "did not pass")
 
 if __name__ == "__main__":
     main()
