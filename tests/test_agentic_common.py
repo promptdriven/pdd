@@ -9225,6 +9225,28 @@ class TestProviderLimitMarker:
             assert reset_at == "2026-06-11T22:30:00Z", text
             assert source == "estimated", text
 
+    def test_parse_reset_legacy_iana_alias_survives_missing_zoneinfo_link(self, monkeypatch):
+        """Some runtimes omit legacy IANA links such as ``US/Pacific`` even
+        though canonical zones are available."""
+        from zoneinfo import ZoneInfoNotFoundError
+
+        from pdd import agentic_common
+
+        real_zone_info = agentic_common.ZoneInfo
+
+        def zone_info_without_legacy_links(name):
+            if name == "US/Pacific":
+                raise ZoneInfoNotFoundError(f"No time zone found with key {name}")
+            return real_zone_info(name)
+
+        monkeypatch.setattr(agentic_common, "ZoneInfo", zone_info_without_legacy_links)
+
+        reset_at, source = agentic_common._parse_reset_at(
+            "resets 3:30pm US/Pacific", now=self.NOW
+        )
+        assert reset_at == "2026-06-11T22:30:00Z"
+        assert source == "estimated"
+
     def test_parse_reset_bare_iana_capture_does_not_eat_prose(self):
         """The IANA capture is anchored on the closed set of IANA area prefixes,
         so a slash-containing prose token ("and/or") is NOT mistaken for a zone
