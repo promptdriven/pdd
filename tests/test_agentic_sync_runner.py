@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import time
@@ -3638,3 +3639,246 @@ class TestSyncOneModuleE2E:
         )
         assert success
         assert error == ""
+
+
+# ============================================================================
+# Tests for Issue #1565 — PDD_SYNC_MAX_WORKERS env var and bounded output
+# ============================================================================
+
+
+class TestPddSyncMaxWorkersEnvVar:
+    """Tests for Bug 1: PDD_SYNC_MAX_WORKERS environment variable is silently
+    ignored.
+
+    ``agentic_sync_runner.py`` line 43 declares ``MAX_WORKERS = 4`` as a
+    hard-coded constant.  Line 1011 assigns ``self.max_workers`` from that
+    constant with no ``os.environ.get("PDD_SYNC_MAX_WORKERS", ...)`` call
+    anywhere, so setting ``PDD_SYNC_MAX_WORKERS=2`` has zero effect; the
+    runner always launches up to 4 concurrent module syncs.
+    """
+
+    def test_max_workers_constant_reads_pdd_sync_max_workers_env_var(self):
+        """PDD_SYNC_MAX_WORKERS=2 must produce MAX_WORKERS==2 on a fresh import.
+
+        A subprocess sets the env var *before* the module is imported so the
+        module-level constant is evaluated with the env var present.
+        Fails on buggy code where MAX_WORKERS is unconditionally 4.
+        """
+        _project_root = str(Path(__file__).resolve().parent.parent)
+        _pythonpath = f"{_project_root}:{os.environ.get('PYTHONPATH', '')}"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os; os.environ['PDD_SYNC_MAX_WORKERS'] = '2'; "
+                    "from pdd.agentic_sync_runner import MAX_WORKERS; "
+                    "print(MAX_WORKERS)"
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONPATH": _pythonpath},
+        )
+        assert result.returncode == 0, (
+            f"Import subprocess failed; stderr={result.stderr!r}"
+        )
+        assert result.stdout.strip() == "2", (
+            f"Expected MAX_WORKERS==2 when PDD_SYNC_MAX_WORKERS=2; "
+            f"got {result.stdout.strip()!r}. "
+            "Bug: MAX_WORKERS is hardcoded to 4 and the env var is never read."
+        )
+
+    def test_total_budget_forces_single_worker_overriding_max_workers(
+        self, monkeypatch
+    ):
+        """total_budget must force max_workers=1 even when MAX_WORKERS > 1.
+
+        After the env-var fix, the budget override in __init__ must still win
+        and enforce serial execution.
+        """
+        monkeypatch.setattr("pdd.agentic_sync_runner.MAX_WORKERS", 3)
+        runner = AsyncSyncRunner(
+            basenames=["a", "b"],
+            dep_graph={"a": [], "b": []},
+            sync_options={"total_budget": 5.0},
+            github_info=None,
+            quiet=True,
+        )
+        assert runner.max_workers == 1, (
+            f"total_budget must force max_workers=1; got {runner.max_workers}"
+        )
+
+    @patch.object(AsyncSyncRunner, "_sync_one_module")
+    @patch.object(AsyncSyncRunner, "_update_github_comment")
+    def test_peak_concurrency_bounded_by_max_workers_value(
+        self, mock_comment, mock_sync, monkeypatch
+    ):
+        """At most max_workers module syncs may execute concurrently.
+
+        With MAX_WORKERS=2 and 4 independent modules the runner must submit
+        at most 2 tasks at the same time.  Reproduces the #1565 Cloud Run
+        symptom where PDD_SYNC_MAX_WORKERS=2 was set but 4 modules still
+        ran concurrently because the env var was ignored.
+        """
+        import threading as _threading
+
+        monkeypatch.setattr("pdd.agentic_sync_runner.MAX_WORKERS", 2)
+
+        peak = [0]
+        running = [0]
+        count_lock = _threading.Lock()
+
+        def counting_sync(basename):
+            with count_lock:
+                running[0] += 1
+                peak[0] = max(peak[0], running[0])
+            time.sleep(0.05)
+            with count_lock:
+                running[0] -= 1
+            return (True, 0.0, "")
+
+        mock_sync.side_effect = counting_sync
+
+        runner = AsyncSyncRunner(
+            basenames=["a", "b", "c", "d"],
+            dep_graph={"a": [], "b": [], "c": [], "d": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        success, msg, cost = runner.run()
+
+        assert success, f"Expected success; msg={msg!r}"
+        assert peak[0] <= 2, (
+            f"Peak concurrency {peak[0]} exceeded MAX_WORKERS=2. "
+            "The runner must not submit more tasks than max_workers allows."
+        )
+
+
+class TestBoundedSubprocessOutputCapture:
+    """Tests for Bug 2: stdout_lines / stderr_lines are unbounded in memory.
+
+    ``_run_attempt`` accumulates all child output in plain ``List[str]``
+    buffers with no capacity limit (``agentic_sync_runner.py`` lines
+    2342-2343, 2353).  With 4 concurrent workers and a verbose/retrying
+    child, these buffers can grow to tens of MB, causing heap spikes that
+    lead to SIGKILL on Cloud Run.
+    """
+
+    def _make_runner(self) -> AsyncSyncRunner:
+        return AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_stdout_capture_bounded_under_large_child_output(
+        self, mock_popen, _mock_exe
+    ):
+        """Captured stdout must be bounded when the child emits many lines.
+
+        Sends 10,000 stdout lines through the mock child process.
+        On buggy code all 10,000 lines are captured (stdout_lines is an
+        unbounded list).  After the fix, the deque cap limits capture to at
+        most STDOUT_CAPTURE_LINE_LIMIT lines, so the assertion < 10_000 passes.
+        """
+        large_stdout = "".join(f"line {i}\n" for i in range(10_000))
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=large_stdout,
+            stderr_text="",
+            exit_code=0,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        assert success, f"Expected success for exit_code=0; error={error!r}"
+        captured_lines = len(stdout.splitlines())
+        assert captured_lines < 10_000, (
+            f"Captured {captured_lines} lines — stdout_lines buffer is "
+            "unbounded. Fix: replace List[str] with "
+            "collections.deque(maxlen=STDOUT_CAPTURE_LINE_LIMIT)."
+        )
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_conformance_failure_details_survive_output_truncation(
+        self, mock_popen, _mock_exe
+    ):
+        """Conformance errors near the end of a long child output must still
+        be detectable after the bounded-capture fix is applied.
+
+        Guards against a regression where the tail buffer is too short to
+        retain the conformance-error marker line, preventing repair retries.
+        """
+        # Conformance-error line matching _MISSING_DECLARED_MARKER
+        error_line = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: Foo.run. "
+            "Output: pdd/foo.py. Expected: ['Foo', 'Foo.run']. Found: ['Foo'].\n"
+        )
+        # 5,100 padding lines then the conformance error on the last line.
+        # Any reasonable tail buffer (>= 200 lines) will retain the error.
+        padding = "".join(f"padding {i}\n" for i in range(5_100))
+        first_proc = _make_mock_popen(
+            stdout_text=padding + error_line,
+            stderr_text="",
+            exit_code=1,
+        )
+        second_proc = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            stderr_text="",
+            exit_code=0,
+        )
+        mock_popen.side_effect = [first_proc, second_proc]
+
+        runner = self._make_runner()
+        success, cost, error = runner._sync_one_module("foo")
+
+        # A second Popen call proves the conformance error was detected from
+        # the tail and a repair retry was triggered.
+        assert mock_popen.call_count == 2, (
+            f"Expected 2 Popen calls (first attempt + conformance repair "
+            f"retry); got {mock_popen.call_count}. The bounded tail buffer "
+            "must still contain the conformance-error marker line."
+        )
+        assert success, (
+            f"Expected success after conformance repair; error={error!r}"
+        )
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_failed_child_stdout_capture_is_bounded(
+        self, mock_popen, _mock_exe
+    ):
+        """Even on a failed child exit, captured stdout must be bounded.
+
+        Sends 10,001 lines through a child that exits with code 1.  On buggy
+        code all 10,001 lines accumulate in memory (the unbounded list path
+        at lines 2538-2539 is hit on normal exit).  After the fix, captured
+        stdout is shorter than the input, confirming truncation occurred.
+        """
+        line_count_in = 10_001
+        large_stdout = "".join(f"logline {i}\n" for i in range(line_count_in))
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=large_stdout,
+            stderr_text="fatal error\n",
+            exit_code=1,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        assert not success, "Expected failure for exit_code=1"
+        captured_lines = len(stdout.splitlines())
+        assert captured_lines < line_count_in, (
+            f"Captured all {captured_lines} lines from the failed child — "
+            "stdout_lines buffer is unbounded on the normal-exit failure path. "
+            "Fix: the deque cap must apply to both the timeout path (lines "
+            "2519-2520) and the normal-exit path (lines 2538-2539)."
+        )

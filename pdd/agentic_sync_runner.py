@@ -6,6 +6,7 @@ updates a live GitHub issue comment with progress, and pauses on failure.
 """
 from __future__ import annotations
 
+import collections
 import csv as _csv
 import datetime
 import json
@@ -39,8 +40,15 @@ console = Console()
 # Module-level constants and helpers
 # ---------------------------------------------------------------------------
 
-# Maximum concurrent syncs
-MAX_WORKERS = 4
+# Maximum concurrent syncs — read from PDD_SYNC_MAX_WORKERS, default 4, clamped 1–4
+try:
+    MAX_WORKERS = max(1, min(4, int(os.environ.get("PDD_SYNC_MAX_WORKERS", "4"))))
+except ValueError:
+    MAX_WORKERS = 4
+
+# Maximum lines to retain per stream when capturing child subprocess output.
+# Uses a tail buffer (collections.deque) to bound memory under verbose children.
+STDOUT_CAPTURE_LINE_LIMIT = 5000
 
 # Heartbeat interval for printing progress hints during long-running modules
 HEARTBEAT_INTERVAL = 60
@@ -2339,17 +2347,53 @@ class AsyncSyncRunner:
             except Exception:
                 pass
 
-        stdout_lines: List[str] = []
-        stderr_lines: List[str] = []
+        # Bounded tail buffers: cap retained child output so a verbose or
+        # retrying child cannot grow these to tens of MB and trigger a SIGKILL.
+        # Allocated fresh per attempt, so output from a previous repair-retry
+        # attempt is not retained across retries in memory.
+        stdout_lines: collections.deque = collections.deque(maxlen=STDOUT_CAPTURE_LINE_LIMIT)
+        stderr_lines: collections.deque = collections.deque(maxlen=STDOUT_CAPTURE_LINE_LIMIT)
+        # Lines discarded by the bounded buffers, surfaced for truncation
+        # diagnostics. Reset per attempt alongside the deques above.
+        dropped_lines = {"out": 0, "err": 0}
         verbose_print = self.verbose and not self.quiet
         line_lock = threading.Lock()
 
-        def _read_stream(stream, lines_list: List[str], prefix: str = "") -> None:
+        def _log_dropped_output() -> None:
+            """Emit a diagnostic when bounded capture discarded child output.
+
+            The count is logged to the runner's own stdout, never injected into
+            the captured child stdout/stderr, so conformance/public-surface/
+            test-churn parsing and the success scan keep seeing exactly what the
+            child emitted.
+            """
+            out_dropped = dropped_lines["out"]
+            err_dropped = dropped_lines["err"]
+            if (out_dropped or err_dropped) and not self.quiet:
+                try:
+                    print(
+                        f"  {basename}: bounded child output capture dropped "
+                        f"{out_dropped} stdout / {err_dropped} stderr line(s) "
+                        f"(kept last {STDOUT_CAPTURE_LINE_LIMIT} of each)"
+                    )
+                except Exception:
+                    pass
+
+        def _read_stream(
+            stream,
+            lines_list: collections.deque,
+            drop_key: str,
+            prefix: str = "",
+        ) -> None:
             try:
                 for line in iter(stream.readline, ''):
                     if not line:
                         break
                     with line_lock:
+                        # A full bounded deque silently evicts its oldest entry
+                        # on the next append; record that drop before it occurs.
+                        if len(lines_list) == lines_list.maxlen:
+                            dropped_lines[drop_key] += 1
                         lines_list.append(line)
                     stripped = line.strip()
                     if stripped.startswith("PDD_PHASE: "):
@@ -2410,12 +2454,12 @@ class AsyncSyncRunner:
 
         t_out = threading.Thread(
             target=_read_stream,
-            args=(process.stdout, stdout_lines, ""),
+            args=(process.stdout, stdout_lines, "out", ""),
             daemon=True,
         )
         t_err = threading.Thread(
             target=_read_stream,
-            args=(process.stderr, stderr_lines, "err:"),
+            args=(process.stderr, stderr_lines, "err", "err:"),
             daemon=True,
         )
         t_out.start()
@@ -2518,6 +2562,7 @@ class AsyncSyncRunner:
                 pass
             stdout = "".join(stdout_lines)
             stderr = "".join(stderr_lines)
+            _log_dropped_output()
             return (
                 False,
                 cost,
@@ -2537,6 +2582,7 @@ class AsyncSyncRunner:
 
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)
+        _log_dropped_output()
 
         success = exit_code == 0
         if success:
