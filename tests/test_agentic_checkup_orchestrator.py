@@ -6792,6 +6792,30 @@ class TestStep7PassedMeritReview:
         '"changed_files": ["docs/checkup.md"]}\n'
         '```'
     )
+    TARGETED_OUT_OF_DIFF_NONBLOCKING_NO_REASON_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "frontend/src/ missing; TS18003 no inputs found", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"scope": "out-of-scope"}], '
+        '"changed_files": ["README.md"]}\n'
+        '```'
+    )
+    TARGETED_BLOCKING_FALSE_NO_REASON_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "pre-existing baseline failure", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"blocking": false}], '
+        '"changed_files": ["README.md"]}\n'
+        '```'
+    )
     TARGETED_CHANGED_FILE_CRITICAL_VERDICT = (
         '```json\n'
         '{"success": true, '
@@ -6854,6 +6878,28 @@ class TestStep7PassedMeritReview:
 
         passed, reason = _step7_passed(
             self.TARGETED_OUT_OF_DIFF_EXPLICITLY_NONBLOCKING_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed, reason
+
+    def test_targeted_pr_allows_out_of_scope_critical_without_reason(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_DIFF_NONBLOCKING_NO_REASON_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed, reason
+
+    def test_targeted_pr_allows_blocking_false_critical_without_reason(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_BLOCKING_FALSE_NO_REASON_VERDICT,
             pr_mode=True,
             has_issue=True,
             pr_test_scope="targeted",

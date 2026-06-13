@@ -100,10 +100,10 @@ def main() -> None:
     pddrc_content = "[pdd]\nlang = \"python\"\n"
 
     print("Executing run_agentic_checkup_orchestrator in --no-fix mode...")
-    
+
     # We patch run_agentic_task to avoid needing active OpenAI/Anthropic credentials
     with patch("pdd.agentic_checkup_orchestrator.run_agentic_task", side_effect=mock_run_agentic_task):
-        success, message, total_cost, model_used = run_agentic_checkup_orchestrator(
+        _success, _message, _total_cost, _model_used = run_agentic_checkup_orchestrator(
             issue_url="https://github.com/example-owner/example-repo/issues/101",
             issue_content="The add function should support simple summation.",
             repo_owner="example-owner",
@@ -119,17 +119,15 @@ def main() -> None:
             use_github_state=False  # Do not attempt to read/write real GitHub comments
         )
 
-    print("\n[bold green]Checkup Results Summary:[/bold green]")
-    print(f"Success Status : {success}")
-    print(f"Final Message  : {message}")
-    print(f"Total Cost     : ${total_cost:.4f} USD")
-    print(f"Model Utilized : {model_used}")
+    # The returned message can contain raw step output from the checked
+    # repository. Do not print it in examples; callers that need details should
+    # redact before logging.
+    print("Agentic checkup orchestrator completed.")
 
     # Clean up the output directory
     if output_dir.exists():
         shutil.rmtree(output_dir, ignore_errors=True)
         print("\nCleaned up simulated workspace.")
-
 
 if __name__ == "__main__":
     main()
