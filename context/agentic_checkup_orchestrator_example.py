@@ -1,51 +1,95 @@
+import json
 import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
+# Ensure the parent directory is in the sys.path so we can import from the 'pdd' package
+current_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+project_root = current_dir.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
+
+def setup_mock_environment(temp_dir: Path) -> None:
+    """Initializes a temporary git repository with mock files for the checkup."""
+    temp_dir.mkdir(parents=True, exist_ok=True)
+
+    # Initialize Git repository
+    subprocess.run(["git", "init"], cwd=temp_dir, capture_output=True, check=True)
+    subprocess.run(["git", "config", "user.name", "Test Bot"], cwd=temp_dir, check=True)
+    subprocess.run(["git", "config", "user.email", "bot@example.com"], cwd=temp_dir, check=True)
+
+    # Create a basic codebase file
+    code_file = temp_dir / "main.py"
+    code_file.write_text("def add(a, b):\n    return a + b\n", encoding="utf-8")
+
+    # Create a basic test file
+    test_file = temp_dir / "test_main.py"
+    test_file.write_text("def test_add():\n    from main import add\n    assert add(1, 2) == 3\n", encoding="utf-8")
+
+    # Commit initial repository structure
+    subprocess.run(["git", "add", "."], cwd=temp_dir, check=True)
+    subprocess.run(["git", "commit", "-m", "initial commit"], cwd=temp_dir, check=True)
+
+
 def main() -> None:
-    """
-    Example showing how to invoke the agentic checkup orchestrator.
+    """Demonstrates executing the agentic checkup orchestrator."""
+    output_dir = current_dir / "output"
+    repo_dir = output_dir / "mock_repo"
 
-    This function coordinates the 8-step process (discover, deps, build,
-    interfaces, test, fix, verify, create_pr) used by the `pdd checkup` command.
-    """
-    # We mock the inner orchestrator here so the example runs quickly and
-    # doesn't attempt real LLM calls, git worktree setups, or GitHub API interactions.
-    # In a real scenario, you would ensure `cwd` is a valid git repository.
+    # Clean up any stale output directories
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
 
-    output_dir = Path("./output/dummy_repo")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    setup_mock_environment(repo_dir)
 
-    print("--- Running Agentic Checkup Orchestrator (Issue Mode) ---")
+    # Mock inputs for the orchestrator
+    issue_url = "https://github.com/example-owner/example-repo/issues/101"
+    issue_content = "Fix addition logic in main.py"
+    repo_owner = "example-owner"
+    repo_name = "example-repo"
+    issue_number = 101
+    issue_title = "Fix add function"
+    
+    # Define simple mock project metadata
+    architecture_json = json.dumps({
+        "modules": {"main": {"dependencies": []}}
+    })
+    pddrc_content = "[pdd]\nlang = python\n"
 
-    with patch("pdd.agentic_checkup_orchestrator._run_agentic_checkup_orchestrator_inner") as mock_inner:
-        # Setup the mock to return a successful tuple:
-        # (success, message, total_cost, model_used)
-        mock_inner.return_value = (True, "Checkup complete", 0.15, "gpt-4o")
+    print(f"[Orchestrator] Starting checkup in mock repo: {repo_dir}")
 
-        success, message, cost, model = run_agentic_checkup_orchestrator(
-            issue_url="https://github.com/example/repo/issues/1",
-            issue_content="Bug: application crashes on startup due to missing import.",
-            repo_owner="example",
-            repo_name="repo",
-            issue_number=1,
-            issue_title="Crash on startup",
-            architecture_json="{}",
-            pddrc_content="",
-            cwd=output_dir,
-            verbose=True,
-            quiet=False,
-            no_fix=False,          # Set to True to only analyze, without generating fixes
-            use_github_state=False # Don't try to post state to GitHub issues in this example
-        )
+    # Mock the run_agentic_task function to simulate successful LLM responses for each step.
+    # This prevents real LLM pricing cost and API key dependency during the run.
+    def mock_run_agentic_task(*args, **kwargs):
+        label = kwargs.get("label", "unknown_step")
+        print(f"  -> [LLM Mock] Running task for: {label}")
+        
+        # Step 7 (Verify) requires a specific structured report to pass the gate
+        if "step7" in label:
+            step7_output = """<step_report>
+Verification Summary:
+All tests passed successfully!
+</step_report>
+```json
+{
+  "success": true,
+  "issue_aligned": true,
+  "issues": []
+}
+```"""
+            return True, step7_output, 0.0015, "mock-gpt-4o"
+        
+        # Default success report with expected XML tag wrapping
+        success_report = """<step_report>
+Step completed successfully.
+</step_report>
+"""
+        return True, success_report, 0.0005, "mock-gpt-4o"
 
-        print(f"Success: {success}")
-        print(f"Message: {message}")
-        print(f"Total Cost: ${cost:.4f}")
-        print(f"Model Used: {model}")
-
-if __name__ == "__main__":
-    main()
+    # Mock Git/GitHub utilities to bypass remote interaction

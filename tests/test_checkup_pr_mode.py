@@ -2490,6 +2490,73 @@ class TestStep7PassedHelper:
         passed, _reason = _step7_passed(out, pr_mode=True)
         assert passed is True
 
+    # --- issue #1574: targeted-PR out-of-scope / non-blocking criticals -------
+
+    def test_targeted_pr_out_of_scope_critical_flags_only_does_not_block(self) -> None:
+        # A pre-existing, out-of-scope, non-blocking critical carrying ONLY the
+        # structured flags (no free-text *_reason) must not fail a targeted PR.
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "frontend",
+                 "description": "TS18003: frontend/src/ missing (pre-existing).",
+                 "scope": "out-of-scope", "blocking": False},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
+        assert passed is True, reason
+
+    def test_targeted_pr_blocking_false_flag_alone_does_not_block(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "app",
+                 "description": "pre-existing build break", "blocking": False},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
+        assert passed is True, reason
+
+    def test_targeted_pr_in_scope_blocking_critical_still_blocks(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "auth",
+                 "description": "PR introduces token leak", "scope": "pr-diff",
+                 "blocking": True},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
+        assert passed is False
+        assert "unfixed critical" in reason
+
+    def test_full_scope_out_of_scope_critical_still_blocks(self) -> None:
+        # The exclusion is targeted-mode only; a full-scope run keeps failing on
+        # any unfixed critical (there the full suite IS the source of truth).
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "frontend",
+                 "description": "build break", "scope": "out-of-scope",
+                 "blocking": False},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="full")
+        assert passed is False
+        assert "unfixed critical" in reason
+
 
 def _run_orch_with_fake_step7(
     tmp_path: Path,

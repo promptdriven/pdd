@@ -917,21 +917,31 @@ def _step7_nonblocking_reason(issue: Dict[str, Any]) -> str:
     return ""
 
 
-def _step7_unfixed_critical_blocks_targeted_pr(
+def _step7_unfixed_critical_blocks_pr(
     issue: Dict[str, Any],
     *,
     changed_files: List[str],
     payload_message: str,
 ) -> bool:
-    """Decide whether an unfixed critical Step 7 finding blocks targeted PR mode."""
+    """Decide whether an unfixed critical Step 7 finding blocks PR mode.
+
+    A critical finding blocks by default, but an explicit non-blocking signal
+    from the verifier is authoritative in PR mode: ``blocking: false``,
+    ``in_scope: false``, or a non-blocking ``scope`` value. This applies even
+    when a full suite was attempted locally, because the final Step 7 verdict
+    owns the distinction between PR-introduced failures and pre-existing
+    baseline failures. A structured free-text reason is treated as an
+    *additional* corroborating signal, never a precondition — the Step 7 verify
+    prompt emits the flags without a separate ``*_reason`` field, so requiring
+    one (the previous ``... and reason`` guard) let pre-existing, out-of-scope
+    criticals fail clean PRs (issue #1574).
+    """
     del changed_files, payload_message
-    reason = _step7_nonblocking_reason(issue)
-    blocking = issue.get("blocking")
-    if blocking is False and reason:
+
+    if issue.get("blocking") is False:
         return False
 
-    in_scope = issue.get("in_scope")
-    if in_scope is False and reason:
+    if issue.get("in_scope") is False:
         return False
 
     scope = str(
@@ -952,11 +962,13 @@ def _step7_unfixed_critical_blocks_targeted_pr(
         "repository",
         "global",
     }
-    if scope in explicit_nonblocking_scopes and reason:
+    if scope in explicit_nonblocking_scopes:
         return False
-    if scope in {"pr", "pr-diff", "changed-file", "changed-files", "in-scope", "blocking"}:
-        return True
+    # No explicit flag/scope, but a structured non-blocking reason still excludes.
+    if _step7_nonblocking_reason(issue):
+        return False
 
+    # Default: an unfixed critical with no non-blocking signal blocks.
     return True
 
 
@@ -988,9 +1000,8 @@ def _step7_passed(
       ``True``; with no issue (#1292) the alignment gate is dropped and the
       verdict rests on code findings alone (review the PR on its own merits);
     * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
-      In targeted PR mode, unfixed critical findings outside the PR diff are
-      informational because the full-suite truth comes from the GitHub checks
-      gate.
+      In PR mode, unfixed critical findings explicitly marked non-blocking or
+      outside the PR scope are informational; all other unfixed criticals block.
 
     Fails closed: if no JSON object can be extracted, returns
     ``(False, "Step 7 verdict JSON could not be parsed: ...")`` so the
@@ -1043,7 +1054,7 @@ def _step7_passed(
             if _normalise_step7_path(path)
         ]
     payload_message = str(payload.get("message") or "").lower()
-    targeted_pr_mode = pr_mode and pr_test_scope == "targeted"
+    del pr_test_scope
 
     issues = payload.get("issues")
     if isinstance(issues, list):
@@ -1056,7 +1067,7 @@ def _step7_passed(
                 continue
             if issue.get("fixed") is True:
                 continue
-            if targeted_pr_mode and not _step7_unfixed_critical_blocks_targeted_pr(
+            if pr_mode and not _step7_unfixed_critical_blocks_pr(
                 issue,
                 changed_files=changed_files,
                 payload_message=payload_message,

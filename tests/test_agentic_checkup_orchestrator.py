@@ -6792,6 +6792,43 @@ class TestStep7PassedMeritReview:
         '"changed_files": ["docs/checkup.md"]}\n'
         '```'
     )
+    TARGETED_OUT_OF_DIFF_NONBLOCKING_NO_REASON_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "frontend/src/ missing; TS18003 no inputs found", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"scope": "out-of-scope"}], '
+        '"changed_files": ["README.md"]}\n'
+        '```'
+    )
+    TARGETED_BLOCKING_FALSE_NO_REASON_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "pre-existing baseline failure", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"blocking": false}], '
+        '"changed_files": ["README.md"]}\n'
+        '```'
+    )
+    FULL_ATTEMPT_OUT_OF_SCOPE_NONBLOCKING_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: full suite attempted — Python passed; '
+        'frontend TS18003 is pre-existing and outside the PR diff.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "frontend/src/ missing; TS18003 no inputs found", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"scope": "out-of-scope", "blocking": false}], '
+        '"changed_files": ["README.md"]}\n'
+        '```'
+    )
     TARGETED_CHANGED_FILE_CRITICAL_VERDICT = (
         '```json\n'
         '{"success": true, '
@@ -6860,6 +6897,39 @@ class TestStep7PassedMeritReview:
         )
         assert passed, reason
 
+    def test_targeted_pr_allows_out_of_scope_critical_without_reason(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_DIFF_NONBLOCKING_NO_REASON_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed, reason
+
+    def test_targeted_pr_allows_blocking_false_critical_without_reason(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_BLOCKING_FALSE_NO_REASON_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed, reason
+
+    def test_full_pr_scope_allows_explicit_nonblocking_out_of_scope_critical(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.FULL_ATTEMPT_OUT_OF_SCOPE_NONBLOCKING_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="full",
+        )
+        assert passed, reason
+
     def test_targeted_pr_still_blocks_changed_file_critical(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
@@ -6872,7 +6942,7 @@ class TestStep7PassedMeritReview:
         assert not passed
         assert "package is invalid" in reason
 
-    def test_full_pr_scope_still_blocks_out_of_diff_critical(self):
+    def test_full_pr_scope_still_blocks_critical_without_nonblocking_signal(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
         passed, reason = _step7_passed(
