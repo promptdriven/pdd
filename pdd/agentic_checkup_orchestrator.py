@@ -923,15 +923,24 @@ def _step7_unfixed_critical_blocks_targeted_pr(
     changed_files: List[str],
     payload_message: str,
 ) -> bool:
-    """Decide whether an unfixed critical Step 7 finding blocks targeted PR mode."""
+    """Decide whether an unfixed critical Step 7 finding blocks targeted PR mode.
+
+    In targeted PR mode the full-suite truth comes from the GitHub-checks gate,
+    so a critical finding the verifier explicitly tagged out-of-scope /
+    non-blocking is informational and must not block the PR. An explicit signal
+    from the verifier is sufficient on its own: ``blocking: false``,
+    ``in_scope: false``, or a non-blocking ``scope`` value. A structured
+    free-text reason is treated as an *additional* corroborating signal, never a
+    precondition — the Step 7 verify prompt emits the flags without a separate
+    ``*_reason`` field, so requiring one (the previous ``... and reason`` guard)
+    let pre-existing, out-of-scope criticals fail clean PRs (issue #1574).
+    """
     del changed_files, payload_message
-    reason = _step7_nonblocking_reason(issue)
-    blocking = issue.get("blocking")
-    if blocking is False and reason:
+
+    if issue.get("blocking") is False:
         return False
 
-    in_scope = issue.get("in_scope")
-    if in_scope is False and reason:
+    if issue.get("in_scope") is False:
         return False
 
     scope = str(
@@ -952,11 +961,13 @@ def _step7_unfixed_critical_blocks_targeted_pr(
         "repository",
         "global",
     }
-    if scope in explicit_nonblocking_scopes and reason:
+    if scope in explicit_nonblocking_scopes:
         return False
-    if scope in {"pr", "pr-diff", "changed-file", "changed-files", "in-scope", "blocking"}:
-        return True
+    # No explicit flag/scope, but a structured non-blocking reason still excludes.
+    if _step7_nonblocking_reason(issue):
+        return False
 
+    # Default: an unfixed critical with no non-blocking signal blocks.
     return True
 
 
