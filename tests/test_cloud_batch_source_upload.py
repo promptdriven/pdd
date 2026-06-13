@@ -1,3 +1,5 @@
+"""Regression tests for the Cloud Batch source upload allowlist."""
+
 from __future__ import annotations
 
 import subprocess
@@ -47,6 +49,7 @@ def _git_ls_files(*paths: str) -> set[str]:
 
 
 def test_cloud_batch_source_upload_includes_checkup_interactive_demo() -> None:
+    """The uploaded source tarball must include demo fixtures used by tests."""
     tracked_demo_files = _git_ls_files("demos/checkup_interactive")
     assert tracked_demo_files, "expected tracked checkup interactive demo fixtures"
 
