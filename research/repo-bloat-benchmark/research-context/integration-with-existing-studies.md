@@ -3,22 +3,6 @@
 **Epic:** [#1429](https://github.com/promptdriven/pdd/issues/1429) (item 2)
 **Reads with:** [`literature-review.md`](literature-review.md) · [`../design.md`](../design.md)
 
-This document turns the literature review into an **action plan**: for each
-verified study, *how* the Repo-Bloat Localization Benchmark should connect to it —
-cite it, adapt its method, reuse its artifact, or position against it — and what
-remains our own work. Integration types:
-
-- **Cite-motivate** — use as theoretical/empirical grounding in §1 / Related Work.
-- **Adapt-method** — borrow a methodology or protocol.
-- **Reuse-artifact** — use a released dataset, harness, or code component.
-- **Position-against** — explicit Related-Work contrast that defends novelty.
-- **Calibrate** — use the study's reported magnitudes to sanity-check our
-  pre-registered thresholds (design §7.5).
-
-All arXiv IDs were verified (see [`README.md`](README.md)).
-
----
-
 ## 1. Integration matrix
 
 | Study | Integration type | Concrete action | What it does *not* give us |
