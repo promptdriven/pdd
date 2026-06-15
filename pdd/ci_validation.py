@@ -861,7 +861,26 @@ def run_ci_validation_loop(
         if status == "passed":
             return True, "Required CI checks passed", total_cost
         if status == "no_checks":
-            return True, "No CI checks detected", total_cost
+            # Requirement 12: cross-check the live PR head's real check runs before
+            # treating "no_checks" as ready. _poll_required_checks returns "no_checks"
+            # for several distinct situations that are NOT "genuinely no required
+            # checks" (App-token-unreadable status rollup, required checks not yet
+            # reported, or a poll timeout with nothing read). Failing open on all of
+            # these silently green-lights a PR whose live head actually has failing
+            # checks. Reuse the REST Checks API path the final gate uses.
+            cross_status, cross_checks = _poll_check_runs_for_head(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                head_sha=head_sha,
+                cwd=cwd,
+                quiet=quiet,
+            )
+            # Only treat as genuinely having no checks if the cross-check confirms it.
+            if cross_status == "no_checks" or (cross_status == "passed" and not cross_checks):
+                return True, "No CI checks detected", total_cost
+            # Otherwise the PR is not ready; fall through with the real check status.
+            status = cross_status
+            checks = cross_checks
         if status == "timeout":
             if checks:
                 last_failures = checks
