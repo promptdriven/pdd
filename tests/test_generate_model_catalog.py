@@ -512,6 +512,23 @@ def test_infer_reasoning_type_returns_adaptive_for_opus_47_azure_ai():
     assert gmc._infer_reasoning_type("azure_ai/claude-opus-4-7", "azure_ai", entry) == "adaptive"
 
 
+@pytest.mark.parametrize(
+    "model_id,provider",
+    [
+        ("claude-opus-4.7", "anthropic"),
+        ("azure_ai/claude-opus-4.7", "azure_ai"),
+        ("claude-opus-4.8", "anthropic"),
+        ("azure_ai/claude-opus-4.8", "azure_ai"),
+    ],
+)
+def test_infer_reasoning_type_returns_adaptive_for_opus_dot_aliases(
+    model_id, provider
+):
+    """Dot-separated direct Anthropic/Azure Opus aliases are adaptive too."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_reasoning_type(model_id, provider, entry) == "adaptive"
+
+
 def test_infer_reasoning_type_returns_budget_for_other_anthropic_models():
     """Models not in the adaptive allowlist stay on budget."""
     entry = {"supports_reasoning": True}
@@ -529,6 +546,23 @@ def test_infer_max_reasoning_tokens_returns_16000_for_opus_47_azure_ai():
     """Azure AI adaptive Opus rows use the same 16000 catalog value."""
     entry = {"supports_reasoning": True}
     assert gmc._infer_max_reasoning_tokens("azure_ai/claude-opus-4-7", "azure_ai", entry) == 16000
+
+
+@pytest.mark.parametrize(
+    "model_id,provider",
+    [
+        ("claude-opus-4.7", "anthropic"),
+        ("azure_ai/claude-opus-4.7", "azure_ai"),
+        ("claude-opus-4.8", "anthropic"),
+        ("azure_ai/claude-opus-4.8", "azure_ai"),
+    ],
+)
+def test_infer_max_reasoning_tokens_returns_16000_for_opus_dot_aliases(
+    model_id, provider
+):
+    """Dot-separated direct Anthropic/Azure Opus aliases use 16000."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_max_reasoning_tokens(model_id, provider, entry) == 16000
 
 
 def test_infer_max_reasoning_tokens_returns_128000_for_other_anthropic_models():
