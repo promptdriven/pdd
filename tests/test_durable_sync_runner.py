@@ -520,11 +520,6 @@ def test_durable_runner_fallback_max_workers_reads_pdd_sync_max_workers_env_var(
     """PDD_SYNC_MAX_WORKERS must also limit DurableSyncRunner.max_workers when
     durable_max_parallel is not set (the else-branch at durable_sync_runner.py:82).
 
-    DurableSyncRunner imports MAX_WORKERS from agentic_sync_runner at module
-    level (line 23).  Once agentic_sync_runner.MAX_WORKERS becomes env-var-
-    driven, the import automatically propagates the correct value to the sibling
-    without any additional change to durable_sync_runner.py.
-
     Fails on buggy code: agentic_sync_runner.MAX_WORKERS is always 4, so the
     imported durable_sync_runner.MAX_WORKERS is also always 4 regardless of the
     env var.
@@ -554,3 +549,15 @@ def test_durable_runner_fallback_max_workers_reads_pdd_sync_max_workers_env_var(
         "Bug: durable_sync_runner imports MAX_WORKERS from agentic_sync_runner "
         "which is hardcoded to 4; the env var never reaches the durable runner."
     )
+
+
+def test_durable_runner_reads_pdd_sync_max_workers_when_constructed(
+    tmp_path: Path, monkeypatch
+):
+    """DurableSyncRunner must see env changes made after module import."""
+    repo = _init_repo_with_remote(tmp_path)
+    monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
+
+    runner = _runner(repo)
+
+    assert runner.max_workers == 2

@@ -21,6 +21,7 @@ from pdd.agentic_sync_runner import (
     GITHUB_COMMENT_BODY_LIMIT,
     MAX_WORKERS,
     STATE_FILE_PATH,
+    STDOUT_CAPTURE_BYTE_LIMIT,
     AsyncSyncRunner,
     ModuleState,
     _BOX_CHARS_RE,
@@ -3697,7 +3698,7 @@ class TestPddSyncMaxWorkersEnvVar:
         After the env-var fix, the budget override in __init__ must still win
         and enforce serial execution.
         """
-        monkeypatch.setattr("pdd.agentic_sync_runner.MAX_WORKERS", 3)
+        monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "3")
         runner = AsyncSyncRunner(
             basenames=["a", "b"],
             dep_graph={"a": [], "b": []},
@@ -3708,6 +3709,20 @@ class TestPddSyncMaxWorkersEnvVar:
         assert runner.max_workers == 1, (
             f"total_budget must force max_workers=1; got {runner.max_workers}"
         )
+
+    def test_runner_reads_pdd_sync_max_workers_when_constructed(
+        self, monkeypatch
+    ):
+        """Runner construction must see env changes made after module import."""
+        monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
+        runner = AsyncSyncRunner(
+            basenames=["a", "b"],
+            dep_graph={"a": [], "b": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        assert runner.max_workers == 2
 
     @patch.object(AsyncSyncRunner, "_sync_one_module")
     @patch.object(AsyncSyncRunner, "_update_github_comment")
@@ -3723,7 +3738,7 @@ class TestPddSyncMaxWorkersEnvVar:
         """
         import threading as _threading
 
-        monkeypatch.setattr("pdd.agentic_sync_runner.MAX_WORKERS", 2)
+        monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
 
         peak = [0]
         running = [0]
@@ -3882,3 +3897,41 @@ class TestBoundedSubprocessOutputCapture:
             "Fix: the deque cap must apply to both the timeout path (lines "
             "2519-2520) and the normal-exit path (lines 2538-2539)."
         )
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_single_long_line_capture_is_byte_bounded(
+        self, mock_popen, _mock_exe
+    ):
+        """A single newline-free output record must not bypass the line cap."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="x" * (STDOUT_CAPTURE_BYTE_LIMIT * 2),
+            stderr_text="",
+            exit_code=0,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        assert success, f"Expected success for exit_code=0; error={error!r}"
+        assert len(stdout.encode("utf-8")) <= STDOUT_CAPTURE_BYTE_LIMIT
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_quiet_failure_summary_reports_truncated_capture(
+        self, mock_popen, _mock_exe
+    ):
+        """Quiet runs must still surface truncation in the failure summary."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="x" * (STDOUT_CAPTURE_BYTE_LIMIT * 2),
+            stderr_text="fatal error\n",
+            exit_code=1,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        assert not success
+        assert "bounded child output capture dropped" in error
+        assert "bounded child output capture dropped" not in stdout
+        assert "bounded child output capture dropped" not in stderr
