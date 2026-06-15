@@ -4744,7 +4744,8 @@ def llm_invoke(
                             logger.info(f"[INFO] Requesting generic reasoning_effort='{effort}' for {model_name_litellm}")
 
                 elif reasoning_type == 'adaptive':
-                    # Anthropic Claude Opus 4.7 (and onward) removed the legacy
+                    # Claude Opus 4.7 (and onward) on Anthropic and Azure AI
+                    # removed the legacy
                     # `thinking={"type":"enabled","budget_tokens":N}` shape and
                     # only accepts the new adaptive thinking API:
                     # `thinking={"type":"adaptive"}` + `output_config.effort`.
@@ -4758,17 +4759,25 @@ def llm_invoke(
                     from .reasoning import time_to_effort_level
                     effort = time_to_effort_level(time)
                     provider_lower = str(provider).lower()
-                    if provider_lower == 'anthropic':
+                    if provider_lower in ('anthropic', 'azure ai'):
                         thinking_param = {"type": "adaptive", "display": "summarized"}
                         litellm_kwargs["thinking"] = thinking_param
                         time_kwargs["thinking"] = thinking_param
                         litellm_kwargs["reasoning_effort"] = effort
                         time_kwargs["reasoning_effort"] = effort
                         if verbose:
-                            logger.info(f"[INFO] Requesting Anthropic adaptive thinking with effort='{effort}' for {model_name_litellm}")
+                            logger.info(
+                                "[INFO] Requesting Anthropic/Azure AI adaptive "
+                                f"thinking with effort='{effort}' for {model_name_litellm}"
+                            )
                     else:
                         if verbose:
-                            logger.warning(f"[WARN] reasoning_type='adaptive' but provider '{provider}' is not Anthropic; reasoning parameter not sent for {model_name_litellm}.")
+                            logger.warning(
+                                "[WARN] reasoning_type='adaptive' but provider "
+                                f"'{provider}' is not Anthropic or Azure AI; "
+                                "reasoning parameter not sent for "
+                                f"{model_name_litellm}."
+                            )
 
                 elif reasoning_type == 'none':
                     if verbose:

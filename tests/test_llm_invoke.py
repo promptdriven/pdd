@@ -6576,8 +6576,8 @@ class TestReasoningParameters:
 
     def test_adaptive_reasoning_non_anthropic_provider_skipped(self, llm_mod, tmp_path, monkeypatch):
         """`reasoning_type=adaptive` on a non-Anthropic provider must warn and
-        skip the reasoning payload — adaptive thinking is currently an
-        Anthropic-only API and we don't want to silently misroute."""
+        skip the reasoning payload — adaptive thinking is currently supported
+        only for Anthropic and Azure AI rows in this path."""
         csv_path = self._make_csv_with_reasoning(tmp_path, "adaptive", "openai", "gpt-4")
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
