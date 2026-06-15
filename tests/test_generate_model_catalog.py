@@ -651,6 +651,35 @@ def test_opus_48_azure_ai_seeded_when_litellm_unaware():
     assert row["coding_arena_elo"] >= gmc.ELO_CUTOFF
 
 
+def test_build_rows_seeds_azure_ai_opus_47_and_48_when_litellm_unaware(monkeypatch):
+    """Azure AI adaptive Opus rows must survive catalog refresh before LiteLLM
+    ships the ids in model_cost."""
+    fake_litellm = type("L", (), {"model_cost": {
+        "gpt-5": {
+            "mode": "chat",
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 1e-6,
+            "litellm_provider": "openai",
+            "supports_function_calling": True,
+        },
+    }})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {})
+    monkeypatch.setattr(gmc, "_fetch_deepswe_elo", lambda **_kw: {})
+
+    rows = gmc.build_rows(refresh_elo=False)
+    by_model = {row["model"]: row for row in rows}
+
+    for model in ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"):
+        row = by_model.get(model)
+        assert row is not None, f"{model} must be seeded when LiteLLM lacks it"
+        assert row["provider"] == "Azure AI"
+        assert row["reasoning_type"] == "adaptive"
+        assert row["max_reasoning_tokens"] == 16000
+        assert row["api_key"] == "AZURE_AI_API_KEY"
+        assert row["coding_arena_elo"] >= gmc.ELO_CUTOFF
+
+
 def test_opus_48_relays_deduped_once_litellm_knows_them():
     """Once litellm registers the relay ids, the mandatory seed must not
     duplicate them."""
