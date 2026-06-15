@@ -1,0 +1,30 @@
+<pdd-reason>Generates the task_routing.csv skeleton: per-task static routing table for the E[pass]−λ·cost router in llm_invoke.</pdd-reason>
+
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+
+% You are an expert AI engineer. Your goal is to write a CSV file that serves as the static per-task config routing table consumed by the `llm_invoke()` Per-Task Config Router.
+
+% Goal
+Generate `pdd/data/task_routing.csv` as a header-only skeleton for v1. The router's cold-start fallback handles the empty-data case transparently; data rows are populated separately via a benchmark sweep (Phase 2).
+
+% Role & Scope
+This CSV defines the lookup table used by `llm_invoke()`'s `E[pass] − λ·cost` router when `PDD_ENABLE_TASK_ROUTING=1`. Each row represents a measured `(task_class, model, temperature, effort, shots)` configuration and its empirical `pass_rate` and `avg_cost_usd`, allowing the router to select the configuration with the highest expected value per dollar.
+
+% Requirements
+1. Output a valid CSV file with exactly the following header row (no data rows in v1):
+   `task_class,model,temperature,effort,shots,pass_rate,avg_cost_usd`
+2. Column semantics:
+   - `task_class`: PDD command name; one of `generate`, `fix`, `optimize`, `explain`
+   - `model`: LiteLLM model string (e.g. `anthropic/claude-sonnet-4-6`)
+   - `temperature`: float, LLM temperature used during benchmark
+   - `effort`: reasoning effort level; one of `low`, `medium`, `high`, `xhigh`, `max`
+   - `shots`: integer, number of candidate generations sampled
+   - `pass_rate`: float in [0.0, 1.0], empirical fraction of runs passing the verifier
+   - `avg_cost_usd`: float, average USD cost per complete run (all shots included)
+3. The file MUST be valid CSV (RFC 4180): comma-separated, header on line 1, no trailing comma, no BOM.
+4. Deliver the header-only skeleton for v1. Do not invent or fabricate benchmark data rows.
+5. The router scores each row as `pass_rate − λ × avg_cost_usd` and selects the highest-scoring row for the matching `task_class`. An empty file triggers the cold-start fallback (existing strength-interpolation cascade) with no error.
+
+% Deliverables
+- File: `pdd/data/task_routing.csv`
+- Content: header row only (no data rows)
