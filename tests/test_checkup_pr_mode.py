@@ -2539,9 +2539,10 @@ class TestStep7PassedHelper:
         assert passed is False
         assert "unfixed critical" in reason
 
-    def test_full_scope_out_of_scope_critical_still_blocks(self) -> None:
-        # The exclusion is targeted-mode only; a full-scope run keeps failing on
-        # any unfixed critical (there the full suite IS the source of truth).
+    def test_full_scope_out_of_scope_critical_flags_only_does_not_block(self) -> None:
+        # Step 7's explicit non-blocking signal is authoritative in PR mode,
+        # including after a full-suite attempt: the verifier owns the distinction
+        # between PR-introduced failures and pre-existing baseline failures.
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
         out = _step7_output(
@@ -2554,8 +2555,7 @@ class TestStep7PassedHelper:
             ],
         )
         passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="full")
-        assert passed is False
-        assert "unfixed critical" in reason
+        assert passed is True, reason
 
 
 def _run_orch_with_fake_step7(
