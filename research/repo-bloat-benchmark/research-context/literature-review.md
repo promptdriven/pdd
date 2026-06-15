@@ -25,9 +25,12 @@ relatives (§3) to the code-specific benchmarks (§4–§6) — and ends with th
 precise white space we occupy (§8).
 
 **A note on sourcing.** The project's earlier survey lived in a working
-spreadsheet. Treating it as unverified, **every one of the 18 works below was
-checked against the authoritative arXiv API** (title, authors, date), and the
-headline papers were re-read from their full texts so the figures here come from
+spreadsheet. Treating it as unverified, every one of the 18 works below was
+checked at its primary source: the **17 arXiv papers were checked against the
+authoritative arXiv API** (title, authors, date), while the one non-arXiv
+entry — the **Needle-in-a-Haystack (NIAH) software source [3] — was verified via
+GitHub** (the current `github.com/gkamradt/LLMTest_NeedleInAHaystack` redirect).
+The headline papers were re-read from their full texts so the figures here come from
 the papers themselves, not the spreadsheet. Verification corrected several
 spreadsheet errors; each correction is footnoted at the point of use. Nothing
 here is unverified or fabricated. The provenance summary is in
@@ -339,8 +342,9 @@ position against — are developed in
 
 ## 9. References
 
-All entries verified against `export.arxiv.org/api/query`; headline papers
-re-read from full text. Verified 2026-06-12.
+The 17 arXiv entries verified against `export.arxiv.org/api/query`; the one
+non-arXiv entry (NIAH [3]) verified via GitHub. Headline papers re-read from
+full text. Verified 2026-06-12.
 
 1. Modarressi et al. *NoLiMa: Long-Context Evaluation Beyond Literal Matching.* arXiv:2502.05167.
 2. Bai et al. *LongBench: A Bilingual, Multitask Benchmark for Long Context Understanding.* arXiv:2308.14508.
