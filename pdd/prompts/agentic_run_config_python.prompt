@@ -1,0 +1,70 @@
+<pdd-reason>Typed per-task agentic run config schema and static escalation ladder for harness/model/effort routing.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "dataclasses": [
+      {
+        "name": "AgenticRunConfig",
+        "fields": [
+          {"name": "harness", "type": "str"},
+          {"name": "model", "type": "Optional[str]"},
+          {"name": "effort", "type": "Optional[str]"},
+          {"name": "shots", "type": "int"}
+        ]
+      }
+    ],
+    "functions": [
+      {"name": "get_escalation_ladder", "signature": "() -> List[AgenticRunConfig]", "returns": "List[AgenticRunConfig]"},
+      {"name": "get_agentic_router_mode", "signature": "() -> str", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_run_config.py` module.
+
+% Role & Scope
+Typed per-task agentic run configuration schema and static escalation ladder for harness/model/effort routing. Provides `AgenticRunConfig`, per-harness capability flags, and the v1 escalation ladder used by `agentic_common` and future routing callers to select the cheapest viable harness/model/effort/shots configuration for each task.
+
+% Requirements
+
+1. **`AgenticRunConfig`** — Pydantic v2 `BaseModel` with fields:
+   - `harness: str` — provider key (`"anthropic"`, `"openai"`, `"google"`, `"opencode"`).
+   - `model: Optional[str] = None` — optional model override passed to the harness.
+   - `effort: Optional[str] = None` — optional effort/reasoning level. Validated against the valid set for the given harness (see below) or `None`. Raise `ValueError` if a non-`None` effort is supplied for a harness that does not support it (`"google"`, `"opencode"`).
+   - `shots: int = 1` — number of independent sampling runs. Field validator: must be ≥ 1; raise `ValueError` for values < 1.
+   - Valid effort values per harness: `anthropic`: `{"low", "medium", "high", "xhigh", "max"}`; `openai`: `{"minimal", "low", "medium", "high", "xhigh"}`; `google`: effort MUST be `None` (no effort flag); `opencode`: effort MUST be `None` (no effort flag).
+
+2. **`HARNESS_CAPABILITIES: Dict[str, Dict[str, bool]]`** — module-level constant mapping each harness to its supported routing dimensions. Export for use by `agentic_common` and routing callers:
+   ```python
+   HARNESS_CAPABILITIES = {
+       "anthropic": {"effort": True,  "model": True},
+       "openai":    {"effort": True,  "model": True},
+       "google":    {"effort": False, "model": False},
+       "opencode":  {"effort": False, "model": True},
+   }
+   ```
+   This is the authoritative per-harness capability declaration for routing. `cli_detector.HARNESS_EFFORT_SUPPORT` carries the same effort flags; `HARNESS_CAPABILITIES` is the superset for all routing dimensions.
+
+3. **`get_escalation_ladder() -> List[AgenticRunConfig]`** — returns the static cheapest-first escalation ladder. Hard-coded v1 default (in cost-ascending order):
+   - `AgenticRunConfig(harness="anthropic", effort="low",    shots=1)` — fast/cheap
+   - `AgenticRunConfig(harness="openai",    effort="medium", shots=1)` — Codex medium
+   - `AgenticRunConfig(harness="anthropic", effort="high",   shots=1)` — Claude Code high
+   - `AgenticRunConfig(harness="anthropic", effort="max",    shots=2)` — Claude Code max + 2-shot
+
+   May be overridden via `PDD_ESCALATION_LADDER_JSON` env var (JSON array of objects with keys `harness`, `model`, `effort`, `shots`). On parse errors or validation failures, fall back to the hard-coded default and emit a one-line warning via `rprint` naming the env var and the error.
+
+4. **`get_agentic_router_mode() -> str`** — returns the value of `PDD_AGENTIC_ROUTER` env var (default `"static"`). Supported values: `"static"` (current preference-order behavior in `agentic_common`) and `"escalation"` (use the ladder returned by `get_escalation_ladder()`). Callers that read this value are responsible for acting on it; this function only surfaces the configured mode.
+
+5. **`ESCALATION_COST_SENSITIVITY: float`** — module-level constant for the reward function `E[pass] - λ·cost` used by the escalation router. Default `1/50`. Overridable via `PDD_ESCALATION_LAMBDA` env var (parsed as `float`; invalid values fall back to default with a one-line `rprint` warning).
+
+% Dependencies
+<include>context/python_preamble.prompt</include>
+
+% Deliverables
+- `pdd/agentic_run_config.py`

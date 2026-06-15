@@ -10,6 +10,13 @@
     ],
     "dataclasses": [
       {"name": "CliBootstrapResult", "fields": ["cli_name: str", "provider: str", "cli_path: str", "api_key_configured: bool", "skipped: bool"]}
+    ],
+    "constants": [
+      {"name": "PROVIDER_PRIMARY_KEY", "type": "Dict[str, Optional[str]]"},
+      {"name": "PROVIDER_DISPLAY", "type": "Dict[str, str]"},
+      {"name": "CLI_PREFERENCE", "type": "List[str]"},
+      {"name": "SHELL_RC_MAP", "type": "Dict[str, str]"},
+      {"name": "HARNESS_EFFORT_SUPPORT", "type": "Dict[str, bool]"}
     ]
   }
 }
@@ -50,6 +57,8 @@ Detects and bootstraps agentic CLI harnesses (Claude CLI, Codex CLI, Gemini CLI,
    `_has_provider_oauth("opencode")` parses `~/.local/share/opencode/auth.json` when present and returns True only when it contains non-empty provider credentials. It also parses OpenCode JSON/JSONC config sources (`~/.config/opencode/opencode.json`, nearest project `opencode.json`, `OPENCODE_CONFIG`, or `OPENCODE_CONFIG_CONTENT`) and returns True only when the parsed config declares a usable selected `model`/`provider` pairing backed by a resolvable credential (`options.apiKey`, `{env:...}` with a set env var, `{file:...}` with a readable non-empty file) or by explicit local/no-key provider semantics. Bare config file existence, valid config containing only preferences, and non-empty `OPENCODE_CONFIG_CONTENT` without a usable provider/model MUST NOT make credential status green. `OPENCODE_MODEL`, `OPENCODE_AGENT`, and `OPENCODE_VARIANT` are not credentials and must not make the key status green by themselves.
 
 7. Module-level constants: `PROVIDER_PRIMARY_KEY`, `PROVIDER_DISPLAY`, `CLI_PREFERENCE`, `SHELL_RC_MAP` exposed for use by other modules. Extend `PROVIDER_PRIMARY_KEY`, `PROVIDER_DISPLAY`, and `CLI_PREFERENCE` to include `opencode`; `PROVIDER_PRIMARY_KEY` must be typed as `Dict[str, Optional[str]]`. Display string is `"OpenCode CLI"`; CLI preference keeps Claude as the default first row and includes OpenCode as a first-class selectable option. CLI preference also lists the Antigravity CLI (`agy`) immediately above the legacy Gemini CLI (`gemini`) — both map to the `google` provider — so the table reflects PDD's binary preference order during the migration. `PROVIDER_DISPLAY["google"]` should label the row as the Google (Gemini family) provider when both binaries are present so users see the rollback option.
+
+   Add `HARNESS_EFFORT_SUPPORT: Dict[str, bool]` — maps provider key to whether `--effort` / `CLAUDE_CODE_EFFORT_LEVEL` routing is supported at runtime: `{"anthropic": True, "openai": True, "google": False, "opencode": False}`. Export alongside `PROVIDER_PRIMARY_KEY` and `CLI_PREFERENCE`. The `google` entry is `False` because the resolved binary (`agy`) has no `--effort` flag and no analogous knob; any config specifying `effort` for the `google` harness must be skipped by routing logic. This constant is the authoritative per-provider capability declaration for effort routing; `agentic_run_config.py` imports it (or replicates the same values in its own `HARNESS_CAPABILITIES` constant, with `cli_detector.py`'s value as the reference).
 
 % Dependencies
 
