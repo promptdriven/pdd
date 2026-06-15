@@ -8055,11 +8055,10 @@ def test_azure_ai_studio_adapter_opus_47_and_48_preserves_adaptive_wire_payload(
     """AzureAIStudioConfig maps through OpenAI by default and drops
     unsupported kwargs before transform_request. The PDD patch must preserve
     Azure AI Opus adaptive thinking all the way into the request body."""
-    import pdd.llm_invoke  # noqa: F401
+    __import__("pdd.llm_invoke")
     try:
         from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
     except ImportError:
-        import pytest
         pytest.skip("LiteLLM does not expose AzureAIStudioConfig in this env")
 
     cfg = AzureAIStudioConfig()

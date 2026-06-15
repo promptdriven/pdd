@@ -97,8 +97,8 @@ except Exception:
 # native opus-4-7 matching.
 #
 # Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig,
-# so none of these patches reach the Azure adapter. Azure Opus 4.7
-# callers need a separate code-path fix (stock CSV row is `budget`).
+# so none of these patches reach the Azure adapter. A dedicated wrapper
+# below preserves adaptive thinking for Azure AI Opus 4.7/4.8.
 try:
     from litellm.llms.anthropic.chat.transformation import (
         AnthropicConfig as _AnthropicConfigOpus47,
@@ -381,6 +381,55 @@ except Exception as _vertex_transform_patch_err:  # pylint: disable=broad-except
     logger.error(
         "[opus_4_7_patch] Failed to patch VertexAIAnthropicConfig.transform_request: %s",
         _vertex_transform_patch_err,
+    )
+
+# Azure AI Studio maps through OpenAI parameter handling, which drops Anthropic-
+# style `thinking` and generic `reasoning_effort` before transform_request sees
+# them. The Azure transform itself will send `thinking` and `output_config` if
+# they reach optional_params, so wrap map_openai_params for only the adaptive
+# Azure Opus aliases and convert PDD's kwargs to the body shape Foundry expects.
+try:
+    from litellm.llms.azure_ai.chat.transformation import (
+        AzureAIStudioConfig as _AzureAIStudioConfigOpusAdaptive,
+    )
+    _existing_azure_ai_map = _AzureAIStudioConfigOpusAdaptive.map_openai_params
+    if not getattr(_existing_azure_ai_map, "_pdd_opus_adaptive_azure_ai_patched", False):
+        _orig_azure_ai_map = _existing_azure_ai_map
+        _AZURE_AI_OPUS_ADAPTIVE_ALIASES = _RELAY_OPUS_ADAPTIVE_ALIASES
+
+        def _patched_azure_ai_map(  # pylint: disable=function-redefined
+            self, non_default_params, optional_params, model, drop_params
+        ):
+            result = _orig_azure_ai_map(
+                self, non_default_params, optional_params, model, drop_params
+            )
+            m = model.lower() if isinstance(model, str) else ""
+            if not any(alias in m for alias in _AZURE_AI_OPUS_ADAPTIVE_ALIASES):
+                return result
+
+            user_params = non_default_params if isinstance(non_default_params, dict) else {}
+            user_thinking = user_params.get("thinking")
+            if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
+                result["thinking"] = dict(user_thinking)
+            elif user_params.get("reasoning_effort"):
+                result["thinking"] = {"type": "adaptive"}
+
+            effort = user_params.get("reasoning_effort")
+            user_output_config = user_params.get("output_config")
+            if isinstance(user_output_config, dict):
+                result["output_config"] = dict(user_output_config)
+            elif isinstance(effort, str):
+                result["output_config"] = {"effort": effort}
+
+            result.pop("reasoning_effort", None)
+            return result
+
+        _patched_azure_ai_map._pdd_opus_adaptive_azure_ai_patched = True
+        _AzureAIStudioConfigOpusAdaptive.map_openai_params = _patched_azure_ai_map
+except Exception as _azure_ai_patch_err:  # pylint: disable=broad-except
+    logger.error(
+        "[opus_adaptive_patch] Failed to patch AzureAIStudioConfig.map_openai_params: %s",
+        _azure_ai_patch_err,
     )
 
 # Add a console handler if none exists

@@ -139,7 +139,7 @@
     - CSV columns: reasoning_type ('budget', 'effort', 'adaptive', 'none'), max_reasoning_tokens.
     - 'budget': Calculate budget_tokens = int(time * max_reasoning_tokens), pass provider-specific thinking parameters (e.g., Anthropic 'thinking' param with type="enabled").
     - 'effort': Map time to "low"/"medium"/"high". OpenAI gpt-5*: pass reasoning={effort, summary:"auto"} for Responses API. Other models: pass reasoning_effort.
-    - 'adaptive': Anthropic and Azure AI Claude Opus 4.7+. Trigger when `provider_lower in ('anthropic', 'azure ai')`. Map time to effort and send thinking={type:"adaptive", display:"summarized"} plus reasoning_effort; compatibility wrappers must ensure output_config.effort is present for Opus 4.7+ when LiteLLM drops it. Legacy thinking.type="enabled" 400s on these models.
+    - 'adaptive': Anthropic and Azure AI Claude Opus 4.7+. Trigger when `provider_lower in ('anthropic', 'azure ai')`. Map time to effort and send thinking={type:"adaptive", display:"summarized"} plus reasoning_effort; compatibility wrappers must ensure output_config.effort is present for Opus 4.7+ when LiteLLM drops it. AzureAIStudioConfig maps through OpenAI and drops unsupported kwargs by default, so wrap its map_openai_params for Azure AI Opus 4.7/4.8 to preserve thinking and convert reasoning_effort into output_config.effort before transform_request. Legacy thinking.type="enabled" 400s on these models.
     - 'none': No reasoning parameters.
 
 % LLM Invocation:
