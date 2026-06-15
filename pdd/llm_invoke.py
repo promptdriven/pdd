@@ -4419,7 +4419,6 @@ def llm_invoke(
 
     # Initialize variables for retry section
     response_format = None
-    time_kwargs = {}
 
     # Update global rate map for callback cost fallback
     try:
@@ -4451,6 +4450,7 @@ def llm_invoke(
         while retry_with_same_model:
             retry_with_same_model = False # Assume success unless auth error on new key
             attempt_counter += 1
+            time_kwargs: Dict[str, Any] = {}
             request_id = attribution_context.get("request_id", "no-attribution") if attribution_context else "no-attribution"
             attempt_id = f"{request_id}-{attempt_counter}"
 

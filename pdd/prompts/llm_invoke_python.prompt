@@ -219,6 +219,7 @@
       cost and token counts from _LAST_CALLBACK_DATA before the retry call. After the retry,
       add the retry's cost/tokens to the saved values. This ensures the final reported cost
       reflects all API calls, not just the last one.
+    - Keep retry reasoning kwargs candidate-local so provider-specific payloads (e.g. Azure AI adaptive extra_body) cannot leak into later fallback candidates.
 
 % Retry and Fallback:
     - Define SchemaValidationError exception that triggers model fallback.
