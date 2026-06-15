@@ -2445,6 +2445,13 @@ class AsyncSyncRunner:
         verbose_print = self.verbose and not self.quiet
         line_lock = threading.Lock()
 
+        # Sticky capture of the child's "Overall status: ... Failed" verdict.
+        # Recorded as each stdout line streams in (see _process_child_line) so a
+        # failure marker followed by a flood of output that evicts it from the
+        # bounded tail still yields a failed verdict and a correct failure
+        # reason. Only the stdout reader thread writes it, so no lock is needed.
+        streamed_failure_markers: List[str] = []
+
         def _dropped_output_message() -> str:
             out_lines = stdout_capture.dropped_lines
             out_bytes = stdout_capture.dropped_bytes
@@ -2483,6 +2490,16 @@ class AsyncSyncRunner:
 
         def _process_child_line(line: str, prefix: str = "") -> None:
             stripped = line.strip()
+            # Record the failure verdict on the stdout stream (prefix == "") the
+            # moment it is seen, mirroring the success-scan predicate, so it is
+            # not lost if later output evicts the line from the bounded tail.
+            if (
+                prefix == ""
+                and not streamed_failure_markers
+                and "Overall status:" in stripped
+                and "Failed" in stripped
+            ):
+                streamed_failure_markers.append(stripped)
             if stripped.startswith("PDD_PHASE: "):
                 phase = stripped[len("PDD_PHASE: "):]
                 try:
@@ -2702,11 +2719,14 @@ class AsyncSyncRunner:
         _log_dropped_output()
 
         success = exit_code == 0
-        if success:
-            for line in stdout.splitlines():
-                if "Overall status:" in line and "Failed" in line:
-                    success = False
-                    break
+        if success and (
+            streamed_failure_markers
+            or any(
+                "Overall status:" in line and "Failed" in line
+                for line in stdout.splitlines()
+            )
+        ):
+            success = False
 
         if not self.quiet:
             try:
@@ -2723,10 +2743,13 @@ class AsyncSyncRunner:
 
         # Build failure-summary
         failure_reason = f"Exit code {exit_code}"
-        for line in stdout.splitlines():
-            if "Overall status:" in line and "Failed" in line:
-                failure_reason = line.strip()
-                break
+        if streamed_failure_markers:
+            failure_reason = streamed_failure_markers[0]
+        else:
+            for line in stdout.splitlines():
+                if "Overall status:" in line and "Failed" in line:
+                    failure_reason = line.strip()
+                    break
 
         all_output = (stderr or "") + "\n" + (stdout or "")
         info_debug_re = re.compile(

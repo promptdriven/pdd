@@ -22,6 +22,7 @@ from pdd.agentic_sync_runner import (
     MAX_WORKERS,
     STATE_FILE_PATH,
     STDOUT_CAPTURE_BYTE_LIMIT,
+    STDOUT_CAPTURE_LINE_LIMIT,
     AsyncSyncRunner,
     ModuleState,
     _BOX_CHARS_RE,
@@ -3935,3 +3936,45 @@ class TestBoundedSubprocessOutputCapture:
         assert "bounded child output capture dropped" in error
         assert "bounded child output capture dropped" not in stdout
         assert "bounded child output capture dropped" not in stderr
+
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/fake/pdd")
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    def test_overall_failed_verdict_survives_tail_eviction(
+        self, mock_popen, _mock_exe
+    ):
+        """A clean-exit child whose 'Overall status: Failed' marker scrolls out
+        of the bounded tail must still be classified as failed.
+
+        Failure detection cannot depend on the marker surviving in the retained
+        tail: if the child exits 0, prints the failure marker, then floods more
+        than STDOUT_CAPTURE_LINE_LIMIT lines, a tail-only scan would miss the
+        marker and report success. The verdict must be captured as stdout
+        streams in, so the failed status and its reason both survive eviction.
+        """
+        marker = "Overall status: Failed\n"
+        flood = "".join(
+            f"trailing {i}\n" for i in range(STDOUT_CAPTURE_LINE_LIMIT + 200)
+        )
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text=marker + flood,
+            stderr_text="",
+            exit_code=0,
+        )
+
+        runner = self._make_runner()
+        success, cost, error, stdout, stderr = runner._run_attempt("foo")
+
+        # Precondition: the marker really was evicted from the retained tail,
+        # otherwise a tail-only scan would pass and the test would prove nothing.
+        assert "Overall status:" not in stdout, (
+            "Test precondition failed: marker still in retained tail; raise flood"
+        )
+        assert not success, (
+            "Child reported 'Overall status: Failed' but the runner returned "
+            "success: the verdict was read from the bounded tail, which had "
+            "evicted the marker. Capture the failure marker as stdout streams in."
+        )
+        assert "Overall status: Failed" in error, (
+            "Failure reason must preserve the streamed 'Overall status: Failed' "
+            "marker even after it is evicted from the bounded tail."
+        )
