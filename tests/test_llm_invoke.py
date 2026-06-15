@@ -6527,10 +6527,250 @@ class TestReasoningParameters:
         # Legacy budget_tokens must not leak through
         assert "budget_tokens" not in captured_kwargs.get("thinking", {})
 
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
+    def test_adaptive_reasoning_azure_ai_opus_47_and_48(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """Azure AI Foundry Opus 4.7/4.8 use extra_body adaptive thinking."""
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "adaptive", "Azure AI", model_name
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,  # -> "medium"
+                use_cloud=False,
+            )
+
+        expected_extra_body = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "medium"},
+        }
+        assert captured_kwargs["extra_body"] == expected_extra_body
+        assert "thinking" not in captured_kwargs
+        assert "reasoning_effort" not in captured_kwargs
+        assert "budget_tokens" not in captured_kwargs["extra_body"]["thinking"]
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
+    def test_adaptive_reasoning_azure_ai_provider_token_opus_47_and_48(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """Custom rows may use LiteLLM's provider token azure_ai."""
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "adaptive", "azure_ai", model_name
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,  # -> "medium"
+                use_cloud=False,
+            )
+
+        expected_extra_body = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "medium"},
+        }
+        assert captured_kwargs["extra_body"] == expected_extra_body
+        assert "thinking" not in captured_kwargs
+        assert "reasoning_effort" not in captured_kwargs
+
+    def test_azure_ai_adaptive_extra_body_does_not_leak_to_fallback_retry(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Azure adaptive retry kwargs must not leak into later candidates."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Azure AI,azure_ai/claude-opus-4-7,5,25,1565,TEST_KEY,True,adaptive,4096,4096,16000\n"
+            "openai,gpt-4,1,2,1300,TEST_KEY,True,none,4096,4096,0\n"
+        )
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(content)
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "azure_ai/claude-opus-4-7")
+
+        mock_message_none = MagicMock()
+        mock_message_none.content = None
+        mock_choice_none = MagicMock()
+        mock_choice_none.message = mock_message_none
+        mock_response_none = MagicMock()
+        mock_response_none.choices = [mock_choice_none]
+        mock_response_none._hidden_params = {}
+
+        mock_message_ok = MagicMock()
+        mock_message_ok.content = "fallback retry success"
+        mock_choice_ok = MagicMock()
+        mock_choice_ok.message = mock_message_ok
+        mock_choice_ok.finish_reason = "stop"
+        mock_response_ok = MagicMock()
+        mock_response_ok.choices = [mock_choice_ok]
+        mock_response_ok._hidden_params = {}
+
+        captured_kwargs_list = []
+
+        def fail_azure_then_retry_gpt(**kwargs):
+            captured_kwargs_list.append(dict(kwargs))
+            if len(captured_kwargs_list) == 1:
+                raise Exception("azure unavailable")
+            if len(captured_kwargs_list) == 2:
+                return mock_response_none
+            return mock_response_ok
+
+        with patch.object(
+            llm_mod.litellm,
+            "completion",
+            side_effect=fail_azure_then_retry_gpt,
+        ):
+            result = llm_mod.llm_invoke(
+                prompt="Say {greeting}",
+                input_json={"greeting": "hello"},
+                strength=0.5,
+                time=0.5,
+                use_cloud=False,
+            )
+
+        assert result["result"] == "fallback retry success"
+        assert captured_kwargs_list[0]["model"] == "azure_ai/claude-opus-4-7"
+        assert "extra_body" in captured_kwargs_list[0]
+        assert captured_kwargs_list[1]["model"] == "gpt-4"
+        assert "extra_body" not in captured_kwargs_list[1]
+        assert captured_kwargs_list[2]["model"] == "gpt-4"
+        assert "extra_body" not in captured_kwargs_list[2]
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
+    def test_adaptive_reasoning_azure_ai_survives_litellm_optional_param_route(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """PDD's Azure AI adaptive payload must use LiteLLM extra_body."""
+        try:
+            from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+        except ImportError:
+            pytest.skip("LiteLLM does not expose AzureAIStudioConfig in this env")
+
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "adaptive", "Azure AI", model_name
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,  # -> "medium"
+                use_cloud=False,
+            )
+
+        optional_param_kwargs = {}
+        for key in ("thinking", "reasoning_effort", "extra_body"):
+            if key in captured_kwargs:
+                optional_param_kwargs[key] = captured_kwargs[key]
+        optional_params = litellm.get_optional_params(
+            model=model_name,
+            custom_llm_provider="azure_ai",
+            drop_params=True,
+            **optional_param_kwargs,
+        )
+        expected_extra_body = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "medium"},
+        }
+        assert optional_params.get("extra_body") == expected_extra_body, (
+            model_name,
+            optional_params,
+        )
+        body = AzureAIStudioConfig().transform_request(
+            model=model_name,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=dict(optional_params),
+            litellm_params={},
+            headers={},
+        )
+
+        assert body.get("thinking") == {
+            "type": "adaptive",
+            "display": "summarized",
+        }, (model_name, body)
+        assert body.get("output_config") == {"effort": "medium"}, (model_name, body)
+
     def test_adaptive_reasoning_non_anthropic_provider_skipped(self, llm_mod, tmp_path, monkeypatch):
         """`reasoning_type=adaptive` on a non-Anthropic provider must warn and
-        skip the reasoning payload — adaptive thinking is currently an
-        Anthropic-only API and we don't want to silently misroute."""
+        skip the reasoning payload — adaptive thinking is currently supported
+        only for Anthropic and Azure AI rows in this path."""
         csv_path = self._make_csv_with_reasoning(tmp_path, "adaptive", "openai", "gpt-4")
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
@@ -6830,6 +7070,110 @@ class TestVertexAIClaudeTemperatureFix:
             f"Expected retry temperature=1 for Vertex AI Claude with reasoning_effort, "
             f"got {captured_kwargs_list[1].get('temperature')}"
         )
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
+    def test_azure_ai_adaptive_extra_body_thinking_forces_temperature_1(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """The Claude temperature guard must detect Azure extra_body thinking."""
+        csv_path = self._make_csv(tmp_path, "Azure AI", model_name, "adaptive")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+        monkeypatch.setattr(llm_mod, "_model_disallows_temperature", lambda _model: False)
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                temperature=0.7,
+                time=0.5,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs["extra_body"]["thinking"] == {
+            "type": "adaptive",
+            "display": "summarized",
+        }
+        assert "thinking" not in captured_kwargs
+        assert "reasoning_effort" not in captured_kwargs
+        assert captured_kwargs["temperature"] == 1
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
+    def test_azure_ai_adaptive_extra_body_retry_uses_temperature_1(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """The retry classifier must detect Azure extra_body thinking."""
+        csv_path = self._make_csv(tmp_path, "Azure AI", model_name, "adaptive")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+
+        call_count = 0
+        captured_kwargs_list = []
+        attribution_events = []
+
+        def capture_attribution(context, event, **fields):
+            attribution_events.append((context, event, fields))
+
+        def failing_then_success(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            captured_kwargs_list.append(dict(kwargs))
+            if call_count == 1:
+                mock_request = MagicMock(spec=httpx.Request)
+                mock_request.url = "https://ai.azure.com/models"
+                mock_resp = MagicMock(spec=httpx.Response)
+                mock_resp.request = mock_request
+                mock_resp.status_code = 400
+                mock_resp.headers = {"content-type": "application/json"}
+                raise openai.BadRequestError(
+                    message="temperature must be 1 when thinking is enabled",
+                    response=mock_resp,
+                    body={"error": "temperature must be 1 when thinking is enabled"},
+                )
+            return self._make_mock_response()
+
+        with (
+            patch.object(llm_mod.litellm, "completion", side_effect=failing_then_success),
+            patch.object(llm_mod, "_emit_llm_attribution", side_effect=capture_attribution),
+        ):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,
+                use_cloud=False,
+            )
+
+        assert call_count == 2
+        assert captured_kwargs_list[0]["extra_body"]["thinking"] == {
+            "type": "adaptive",
+            "display": "summarized",
+        }
+        retry_events = [
+            fields
+            for _context, event, fields in attribution_events
+            if event == "llm_invoke.temperature_retry"
+        ]
+        assert retry_events
+        assert retry_events[-1]["adjusted_temperature"] == 1
+        assert captured_kwargs_list[1]["temperature"] == 1
 
 
 # ============================================================================
@@ -8002,6 +8346,44 @@ def test_map_openai_params_direct_opus_48_emits_adaptive_shape():
         )
         assert thinking == {"type": "adaptive"}, (model, thinking)
         assert output_config == {"effort": "medium"}, (model, output_config)
+
+
+def test_azure_ai_studio_adapter_opus_47_and_48_preserves_adaptive_wire_payload():
+    """AzureAIStudioConfig preserves Azure Opus adaptive payload via extra_body."""
+    try:
+        from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+    except ImportError:
+        pytest.skip("LiteLLM does not expose AzureAIStudioConfig in this env")
+
+    cfg = AzureAIStudioConfig()
+    for model in ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"):
+        payload = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "medium"},
+        }
+        optional_params = litellm.get_optional_params(
+            model=model,
+            custom_llm_provider="azure_ai",
+            extra_body=payload,
+            drop_params=True,
+        )
+        assert optional_params.get("extra_body") == payload, (
+            model,
+            optional_params,
+        )
+        body = cfg.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=dict(optional_params),
+            litellm_params={},
+            headers={},
+        )
+        assert body.get("thinking") == {
+            "type": "adaptive",
+            "display": "summarized",
+        }, (model, body)
+        assert body.get("output_config") == {"effort": "medium"}, (model, body)
+        assert "reasoning_effort" not in body, (model, body)
 
 
 def test_map_openai_params_unrelated_model_unchanged():
