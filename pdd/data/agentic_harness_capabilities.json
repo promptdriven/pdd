@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "harnesses": {
+    "claude_code": {
+      "harness_id": "claude_code",
+      "accepts_model_arg": false,
+      "effort_knob": "--thinking",
+      "context_limit_tokens": null,
+      "identity_observable": true,
+      "routing_class": "config-fixed"
+    },
+    "codex": {
+      "harness_id": "codex",
+      "accepts_model_arg": true,
+      "effort_knob": "reasoning_effort",
+      "context_limit_tokens": null,
+      "identity_observable": true,
+      "routing_class": "controllable"
+    },
+    "gemini_cli": {
+      "harness_id": "gemini_cli",
+      "accepts_model_arg": true,
+      "effort_knob": null,
+      "context_limit_tokens": null,
+      "identity_observable": true,
+      "routing_class": "controllable"
+    },
+    "agy": {
+      "harness_id": "agy",
+      "accepts_model_arg": false,
+      "effort_knob": null,
+      "context_limit_tokens": null,
+      "identity_observable": false,
+      "routing_class": "opaque"
+    },
+    "opencode": {
+      "harness_id": "opencode",
+      "accepts_model_arg": true,
+      "effort_knob": null,
+      "context_limit_tokens": null,
+      "identity_observable": true,
+      "routing_class": "controllable"
+    }
+  }
+}

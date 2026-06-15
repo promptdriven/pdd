@@ -1241,34 +1241,22 @@
           {
             "name": "track_cost",
             "signature": "(func)",
-            "returns": "Callable",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Callable"
           },
           {
             "name": "extract_cost_and_model",
             "signature": "(result: Any) -> Tuple[Any, str]",
-            "returns": "Tuple[Any, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[Any, str]"
           },
           {
             "name": "collect_files",
-            "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
-            "returns": "Tuple[List[str], List[str]]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(args, kwargs)",
+            "returns": "Tuple[List[str], List[str]]"
           },
           {
             "name": "looks_like_file",
-            "signature": "(path_str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(path_str)",
+            "returns": "bool"
           }
         ]
       }
@@ -9152,7 +9140,7 @@
     }
   },
   {
-    "reason": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "reason": "Provides unified LLM invocation with provider retries, context checks, and dry-run cost estimates.",
     "description": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
     "dependencies": [
       "path_resolution_python.prompt",
@@ -9171,7 +9159,7 @@
         "functions": [
           {
             "name": "llm_invoke",
-            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, estimate_only=None)",
             "returns": "Dict[str, Any]"
           },
           {
