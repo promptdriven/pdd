@@ -633,7 +633,7 @@ def _is_adaptive_claude_model(model_id: str, litellm_provider: str) -> bool:
     if root not in _ADAPTIVE_CLAUDE_PROVIDERS:
         return False
     base = model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
-    return base in _ADAPTIVE_CLAUDE_MODELS
+    return _normalize_model_name(base) in _ADAPTIVE_CLAUDE_MODELS
 
 
 def _infer_reasoning_type(model_id: str, litellm_provider: str, entry: dict) -> str:
