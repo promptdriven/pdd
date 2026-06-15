@@ -1,12 +1,80 @@
 [
   {
+    "reason": "Typed per-task agentic run config schema and static escalation ladder for harness/model/effort routing.",
+    "description": "Defines AgenticRunConfig Pydantic model, per-harness capability flags, the v1 cheapest-first escalation ladder, and the agentic router mode accessor used by agentic_common and future routing callers.",
+    "dependencies": [],
+    "priority": 4,
+    "filename": "agentic_run_config_python.prompt",
+    "filepath": "pdd/agentic_run_config.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "models": [
+          {
+            "name": "AgenticRunConfig",
+            "fields": [
+              {
+                "name": "harness",
+                "type": "str"
+              },
+              {
+                "name": "model",
+                "type": "Optional[str]"
+              },
+              {
+                "name": "effort",
+                "type": "Optional[str]"
+              },
+              {
+                "name": "shots",
+                "type": "int"
+              }
+            ]
+          }
+        ],
+        "functions": [
+          {
+            "name": "get_escalation_ladder",
+            "signature": "() -> List[AgenticRunConfig]",
+            "returns": "List[AgenticRunConfig]"
+          },
+          {
+            "name": "get_agentic_router_mode",
+            "signature": "() -> str",
+            "returns": "str"
+          }
+        ],
+        "constants": [
+          {
+            "name": "HARNESS_CAPABILITIES",
+            "type": "Dict[str, Dict[str, bool]]"
+          },
+          {
+            "name": "ESCALATION_COST_SENSITIVITY",
+            "type": "float"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 14400,
+      "y": 400
+    }
+  },
+  {
     "reason": "Provides shared agentic CLI execution across Claude, Gemini/Antigravity, Codex, and OpenCode, with mid-run steering and state persistence.",
     "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
       "_keyring_timeout_python.prompt",
-      "git_porcelain_python.prompt"
+      "git_porcelain_python.prompt",
+      "agentic_run_config_python.prompt"
     ],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
@@ -61,7 +129,7 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None) -> AgenticTaskResult",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, shots=1, shot_budget_usd=None) -> AgenticTaskResult",
             "returns": "AgenticTaskResult"
           },
           {
@@ -1223,7 +1291,7 @@
   },
   {
     "reason": "Click decorator that tracks per-command LLM cost, model, and attempted-models history to a CSV file.",
-    "description": "Records token usage and calculates costs. Aggregates costs across workflow steps. Captures chronological attempted-models history (including failed cloud attempts that fell back to local) via ctx.obj['attempted_models'].",
+    "description": "Records token usage and calculates costs. Aggregates costs across workflow steps. Captures chronological attempted-models history (including failed cloud attempts that fell back to local) via ctx.obj['attempted_models']. Records per-shot agentic usage (harness, effort_level, shot_index, cost_usd, model_actual) from ctx.obj['agentic_usage_records'] for multi-shot agentic runs; writes one CSV row per shot.",
     "dependencies": [
       "llm_invoke_python.prompt"
     ],
@@ -1241,34 +1309,22 @@
           {
             "name": "track_cost",
             "signature": "(func)",
-            "returns": "Callable",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Callable"
           },
           {
             "name": "extract_cost_and_model",
             "signature": "(result: Any) -> Tuple[Any, str]",
-            "returns": "Tuple[Any, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[Any, str]"
           },
           {
             "name": "collect_files",
-            "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
-            "returns": "Tuple[List[str], List[str]]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(args, kwargs)",
+            "returns": "Tuple[List[str], List[str]]"
           },
           {
             "name": "looks_like_file",
-            "signature": "(path_str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(path_str)",
+            "returns": "bool"
           }
         ]
       }
@@ -4292,6 +4348,28 @@
               "api_key_configured: bool",
               "skipped: bool"
             ]
+          }
+        ],
+        "constants": [
+          {
+            "name": "PROVIDER_PRIMARY_KEY",
+            "type": "Dict[str, Optional[str]]"
+          },
+          {
+            "name": "PROVIDER_DISPLAY",
+            "type": "Dict[str, str]"
+          },
+          {
+            "name": "CLI_PREFERENCE",
+            "type": "List[str]"
+          },
+          {
+            "name": "SHELL_RC_MAP",
+            "type": "Dict[str, str]"
+          },
+          {
+            "name": "HARNESS_EFFORT_SUPPORT",
+            "type": "Dict[str, bool]"
           }
         ]
       }

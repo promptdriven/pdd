@@ -4,7 +4,7 @@
 {
   "type": "module",
   "module": {
-    "dataclasses": [
+    "models": [
       {
         "name": "AgenticRunConfig",
         "fields": [
@@ -18,12 +18,14 @@
     "functions": [
       {"name": "get_escalation_ladder", "signature": "() -> List[AgenticRunConfig]", "returns": "List[AgenticRunConfig]"},
       {"name": "get_agentic_router_mode", "signature": "() -> str", "returns": "str"}
+    ],
+    "constants": [
+      {"name": "HARNESS_CAPABILITIES", "type": "Dict[str, Dict[str, bool]]"},
+      {"name": "ESCALATION_COST_SENSITIVITY", "type": "float"}
     ]
   }
 }
 </pdd-interface>
-
-<include>context/python_preamble.prompt</include>
 
 % Goal
 Write the `pdd/agentic_run_config.py` module.
