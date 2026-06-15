@@ -1,3 +1,18 @@
+<pdd-reason>Provides the `pdd connect` CLI command to launch a local REST server and register with PDD Cloud.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "connect", "description": "Launch a local REST server that enables the web frontend to interact with PDD commands through a browser interface, with optional PDD Cloud registration for remote access"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>python_preamble.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write `pdd/commands/connect.py`.
 
 % Role & Scope

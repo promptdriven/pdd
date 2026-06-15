@@ -10433,5 +10433,31 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Provides the `pdd connect` CLI command to launch a local REST server and register with PDD Cloud.",
+    "description": "Implements `pdd connect`: starts a local REST server via uvicorn, performs smart port detection, optionally registers the session with PDD Cloud for remote browser access via Firestore message bus, opens a browser window, and handles graceful shutdown with deregistration. Uses StatusReporter primitives exclusively for all terminal output.",
+    "dependencies": [
+      "python_preamble.prompt"
+    ],
+    "priority": 70,
+    "filename": "commands/connect_python.prompt",
+    "filepath": "pdd/commands/connect.py",
+    "tags": [
+      "command",
+      "python",
+      "cli"
+    ],
+    "interface": {
+      "type": "command",
+      "command": {
+        "commands": [
+          {
+            "name": "connect",
+            "description": "Launch a local REST server that enables the web frontend to interact with PDD commands through a browser interface, with optional PDD Cloud registration for remote access"
+          }
+        ]
+      }
+    }
   }
 ]
