@@ -297,7 +297,7 @@
     - Hard cap: clamp the effective shot count to `min(shots, 5)`. Silently clamp; do not raise.
     - Mutual exclusion: if `use_batch_mode=True` and the guard is active, raise `ValueError` before any provider call.
     - Candidate loop: run the standard single-invocation flow (model selection, context validation, LLM call, response processing, retry) N times sequentially, collecting each successful result string. All existing per-call guards (`_model_disallows_temperature`, Gemini 3 clamping, `interactive_only` exclusion, context-window validation, schema validation) apply inside each iteration.
-    - Reasoning parameters for `reasoning_type="effort"` models inside the loop: pass `thinking={"type": "adaptive"}` and `output_config={"effort": level}` (mirroring the `adaptive` branch). Other `reasoning_type` values follow their existing parameter paths unchanged.
+    - Reasoning parameters for `reasoning_type="adaptive"` models inside the loop: pass `thinking={"type": "adaptive"}` and `output_config={"effort": level}` (mirroring the `adaptive` branch). Other `reasoning_type` values follow their existing parameter paths unchanged.
     - Candidate selection:
       1. If `verifier` is provided, return the first candidate for which `verifier(result)` is `True`.
       2. If no candidate passes (or `verifier` is None), use self-consistency: return the mode of all candidate results (most frequent string); break ties by first occurrence.

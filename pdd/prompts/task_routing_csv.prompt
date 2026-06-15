@@ -1,5 +1,14 @@
 <pdd-reason>Generates the task_routing.csv skeleton: per-task static routing table for the E[pass]−λ·cost router in llm_invoke.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": ["task_class", "model", "temperature", "effort", "shots", "pass_rate", "avg_cost_usd"]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
 
 % You are an expert AI engineer. Your goal is to write a CSV file that serves as the static per-task config routing table consumed by the `llm_invoke()` Per-Task Config Router.
