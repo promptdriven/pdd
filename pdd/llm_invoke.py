@@ -4447,6 +4447,7 @@ def llm_invoke(
         # Track per-model temperature adjustment attempt (avoid infinite loop)
         current_temperature = temperature
         temp_adjustment_done = False
+        force_temperature_on_retry = False
         while retry_with_same_model:
             retry_with_same_model = False # Assume success unless auth error on new key
             attempt_counter += 1
@@ -4477,7 +4478,10 @@ def llm_invoke(
                 # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
                 "num_retries": 2,
             }
-            if _model_disallows_temperature(model_name_litellm):
+            if (
+                _model_disallows_temperature(model_name_litellm)
+                and not force_temperature_on_retry
+            ):
                 if verbose:
                     logger.info("[INFO] Skipping 'temperature' for this model; the provider rejects it.")
             else:
@@ -5856,6 +5860,7 @@ def llm_invoke(
                         )
                     current_temperature = adjusted_temp
                     temp_adjustment_done = True
+                    force_temperature_on_retry = claude_thinking_sent and adjusted_temp == 1
                     retry_with_same_model = True
                     _emit_llm_attribution(
                         attribution_context,
