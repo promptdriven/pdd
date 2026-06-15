@@ -65,12 +65,49 @@
      - If --frontend-url: Open that URL instead
      - Use webbrowser.open()
 
-  6. **Output messages**:
-     - Print `PDD_POSITIONING` from `pdd.cli_branding` before the server details.
-     - "Starting PDD server on http://{host}:{port}"
-     - "API Documentation: http://{host}:{port}/docs"
-     - "Frontend: http://{host}:{port}" (or custom URL)
-     - "Press Ctrl+C to stop the server"
+  6. **Output messages** (use `StatusReporter` primitives for every line of output):
+     - `status.start("launching local REST server")` — first line of output,
+       before any checks.
+     - Port-scan outcome (when default port is busy):
+       `status.step(f"port {port} in use — scanning for an available port")`
+       followed by `status.step(f"using port {available_port}")` on success,
+       or `status.failure("no available port found in range 9876–9899",
+                          reason="all ports in the scan range are occupied",
+                          suggestions=["free a port in the range",
+                                       "specify --port to choose a different range"])`.
+     - Uvicorn not installed:
+       `status.failure("uvicorn not installed",
+                       reason="the connect command requires server dependencies",
+                       suggestions=["pip install 'pdd[server]'"])`.
+     - Cloud registration (authenticated, not --local-only):
+       `with status.waiting("registering session with PDD Cloud", on="network"):`
+           `cloud_url = asyncio.run(session_manager.register(...))`
+       `status.success("session registered with PDD Cloud")`
+       On `RemoteSessionError`:
+       `status.failure("cloud registration failed",
+                       reason=str(e),
+                       suggestions=["check network connectivity",
+                                    "run with --local-only to skip cloud registration"])`.
+     - Local-only / unauthenticated path:
+       `status.step("local-only mode — skipping cloud registration")`.
+     - Phase separator (between setup and server-info block):
+       `console.rule("[muted]Server running[/muted]", style="muted")`
+     - Server info block (after the rule):
+       ```
+       console.print(PDD_POSITIONING)
+       console.print(f"  [muted]Local:[/muted]     [path]http://{host}:{port}[/path]")
+       console.print(f"  [muted]API docs:[/muted]  [path]http://{host}:{port}/docs[/path]")
+       console.print(f"  [muted]Frontend:[/muted]  [path]{target_url}[/path]")
+       console.print("  [muted]Stop:[/muted]      Ctrl+C")
+       ```
+       Label column width is fixed (8 chars + colon + spaces) for visual alignment.
+     - Remote-session / non-interactive browser skip:
+       `status.step("skipping browser open — remote session detected")`.
+     - Shutdown path:
+       `status.step("stopping server")`
+       `with status.waiting("deregistering from PDD Cloud", on="network"):`
+           `asyncio.run(session_manager.deregister())`
+       `status.success("session deregistered")` or `status.failure(...)`.
 
   7. **Graceful shutdown**:
      - Handle KeyboardInterrupt
@@ -98,16 +135,39 @@
 
 <pdd.commands.misc><include>context/commands/misc_example.py</include></pdd.commands.misc>
 <pdd.commands><include>context/commands/__init___example.py</include></pdd.commands>
+<cli_status_usage><include>context/cli_status_example.py</include></cli_status_usage>
+<cli_theme_usage><include>context/cli_theme_example.py</include></cli_theme_usage>
 
 % Instructions
   - Use @click.command("connect")
   - NO @track_cost decorator (no LLM calls)
-  - Use click.echo() for output
-  - Use click.style() for colored output
-  - Import `PDD_POSITIONING` from `pdd.cli_branding`
-  - click.confirm() for security warning
-  - Determine project_root from current working directory
-  - Pass click context for potential future use
+  - Import `from_context` from `pdd.cli_status`; call
+    `status = from_context(ctx, command="pdd connect")` at the top of the
+    command body. Use ONLY `StatusReporter` primitives for all terminal output —
+    do NOT use `click.echo()` or `click.style()` for user-facing messages.
+  - Import `console` from `pdd.cli_theme` for structured display blocks
+    (`console.rule()`, `console.print()` with semantic markup roles).
+  - Use `console.rule("[muted]Server running[/muted]", style="muted")` as the
+    single visual separator between the setup phase and the server-info block.
+  - Use semantic Rich markup roles from `PDD_THEME` for the server-info URL
+    lines: `[path]` for URLs, `[muted]` for labels, `[info]` for neutral
+    notes. Do NOT hard-code `[green]`, `[blue]`, or any raw color name.
+  - Import `PDD_POSITIONING` from `pdd.cli_branding`; print it via
+    `console.print(PDD_POSITIONING)` immediately before the server-info block.
+  - Wrap `asyncio.run(session_manager.register(...))` in
+    `with status.waiting("registering session with PDD Cloud", on="network"):`
+    — this turns a silent network call into a visible progress event.
+  - The `--allow-remote` without `--token` security warning must use
+    `status.failure("insecure configuration",
+     reason="allowing remote connections without a token lets anyone on the
+             network execute code on this machine",
+     suggestions=["add --token <secret> to require bearer auth",
+                  "omit --allow-remote to bind to localhost only"])`.
+    This path only fires when `--allow-remote` is explicitly passed; it must
+    not fire in the default localhost case.
+  - Determine project_root from current working directory.
+  - Pass click context; `from_context` uses it to inherit the global
+    `--quiet` flag automatically — no extra plumbing needed.
 
 % Deliverables
   - Code: `pdd/commands/connect.py`

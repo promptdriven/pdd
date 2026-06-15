@@ -112,6 +112,25 @@ don't re-plumb it.
 
 ## Adoption
 
-`detect_change_main` and `conflicts_main` are migrated as the first adopters in
-this PR. Remaining commands move onto the reporter incrementally in follow-on
-work under this EPIC, the same way the color system rolled out.
+`detect_change_main` and `conflicts_main` were the first adopters (EPIC #1540,
+workstream 2). `connect` adopted `StatusReporter` in the `pdd connect` redesign
+(EPIC #1560, workstream 4), establishing the pattern for the remaining commands.
+Canonical usage in `connect.py`:
+
+```python
+from ..cli_status import from_context
+from ..cli_theme import console as themed_console
+
+def connect(..., ctx):
+    status = from_context(ctx, command="pdd connect")
+    status.start("launching local REST server")
+
+    with status.waiting("registering session with PDD Cloud", on="network"):
+        cloud_url = asyncio.run(session_manager.register(session_name=session_name))
+    status.success("session registered with PDD Cloud")
+
+    themed_console.rule("[muted]Server running[/muted]", style="muted")
+    themed_console.print(f"  [muted]Local:[/muted]     [path]http://{host}:{port}[/path]")
+```
+
+Remaining commands move onto the reporter incrementally in follow-on work.
