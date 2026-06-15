@@ -395,6 +395,7 @@ def _poll_check_runs_for_head(
     API.
     """
     saw_checks = False
+    saw_api_error = False
     latest_checks: List[Dict[str, str]] = []
     start = time.monotonic()
 
@@ -419,6 +420,7 @@ def _poll_check_runs_for_head(
                 return status, latest_checks
 
         if result.returncode != 0:
+            saw_api_error = True
             stderr_lower = (result.stderr or "").lower()
             if "resource not accessible by integration" in stderr_lower:
                 if not quiet:
@@ -426,7 +428,7 @@ def _poll_check_runs_for_head(
                         "[yellow]CI polling: cannot read GitHub check runs "
                         "(GitHub App may lack checks:read permission on this repo).[/yellow]"
                     )
-                return "no_checks", []
+                return "unreadable", []
             if not quiet:
                 stderr = result.stderr.strip()
                 if stderr:
@@ -435,6 +437,8 @@ def _poll_check_runs_for_head(
         time.sleep(POLL_INTERVAL_SECONDS)
 
     if not saw_checks:
+        if saw_api_error:
+            return "unreadable", []
         return "no_checks", []
     return "timeout", latest_checks
 
@@ -521,7 +525,7 @@ def run_github_checks_gate(
         )
     if status == "failed":
         return False, f"{source_name} failed on PR head {head_sha[:8]}:\n{summary}", head_sha
-    if status == "no_checks":
+    if status in {"no_checks", "unreadable"}:
         return (
             False,
             (
@@ -882,11 +886,25 @@ def run_ci_validation_loop(
                 quiet=quiet,
             )
             # Only treat as genuinely having no checks if the cross-check confirms it.
-            if cross_status == "no_checks" or (cross_status == "passed" and not cross_checks):
+            if cross_status == "no_checks":
                 return True, "No CI checks detected", total_cost
             # Otherwise the PR is not ready; fall through with the real check status.
             status = cross_status
             checks = cross_checks
+            if status == "unreadable":
+                message = (
+                    f"GitHub check runs were missing or unreadable for PR head "
+                    f"{cross_head_sha[:8]}; CI validation cannot verify the PR."
+                )
+                post_ci_failure_comment(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    pr_number=pr_number,
+                    failures=[message],
+                    attempts=fix_attempt,
+                    cwd=cwd,
+                )
+                return False, message, total_cost
         if status == "timeout":
             if checks:
                 last_failures = checks

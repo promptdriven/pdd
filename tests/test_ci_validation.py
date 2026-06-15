@@ -391,6 +391,29 @@ def test_poll_check_runs_for_head_pending_times_out(tmp_path: Path) -> None:
     assert checks[0]["bucket"] == "pending"
 
 
+def test_poll_check_runs_for_head_reports_unreadable_permission_error(tmp_path: Path) -> None:
+    """Unreadable REST check-runs are distinct from a real zero-check repo."""
+    result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout="",
+        stderr="Resource not accessible by integration",
+    )
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "unreadable"
+    assert checks == []
+
+
 def test_run_ci_validation_loop_retries_and_commits_fix(tmp_path: Path) -> None:
     """A failing required check should trigger one fix attempt, commit, and repoll."""
     failing_checks = [
@@ -999,6 +1022,7 @@ def test_poll_logs_unknown_stderr_before_classifying_as_failed(
 
 # The live PR head visible on GitHub in the report (pdd_cloud#1997).
 LIVE_HEAD_SHA = "143082622265be1b997a1b0fc5409dbc2e3ea408"
+STALE_HEAD_SHA = "0d55021deadbeefdeadbeefdeadbeefdeadbeef"
 
 # The real, failing required checks GitHub showed on the PR head.
 FAILING_CHECK_RUNS = {
@@ -1255,7 +1279,7 @@ def test_loop_routes_no_checks_through_live_head_cross_check(
 
     with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
          patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
-         patch("pdd.ci_validation._get_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._get_head_sha", return_value=STALE_HEAD_SHA), \
          patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
          patch("pdd.ci_validation._poll_required_checks", return_value=("no_checks", [])), \
          patch(
@@ -1357,3 +1381,32 @@ def test_loop_cross_check_respects_explicit_expected_head_override(
     assert mock_cross_check.call_args.kwargs.get("head_sha") == "verified-post-checkup-head"
     assert success is True
     assert message == "No CI checks detected"
+
+
+def test_loop_not_ready_when_live_head_cross_check_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    """Unreadable live-head check-runs must fail closed, not look like no CI."""
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value=STALE_HEAD_SHA), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("no_checks", [])), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("unreadable", [])), \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True), \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, _cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd_cloud",
+            issue_number=2107,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "unreadable" in message
+    assert "No CI checks detected" not in message
