@@ -11,17 +11,14 @@ maximize E[hidden_pass] - lambda * expected_cost
 subject to a caller-selected cost and latency budget
 ```
 
-The routed configuration has four dimensions:
+The routed configuration splits into two execution columns:
 
-- `model`: a concrete row from `pdd/data/llm_model.csv`, selected by capability,
-  provider availability, cost, structured-output support, and interaction
-  constraints.
-- `harness`: direct `llm_invoke` generation or an agentic harness such as the
-  existing `pdd/agentic_*` orchestrators.
-- `reasoning`: the current `--time`/reasoning-effort surface, including
-  `reasoning_effort`, `max_reasoning_tokens`, and provider-specific
-  `reasoning_type` handling.
-- `shots`: one or more candidates plus verifier-backed selection.
+- **PDD direct generation (#1584):** route model, temperature, thinking budget,
+  and multi-shot count through native `llm_invoke` controls.
+- **Agentic CLI harnesses (#1585):** route harness choice, model, thinking
+  budget, and repeat-run count through per-CLI flags and orchestrator behavior.
+  Temperature is not a first-class dimension here because external CLIs usually
+  do not expose it uniformly.
 
 The v1 router should be transparent and benchmark-driven: a static lookup keyed
 by task class, with an escalation ladder fallback. Learned routing and bandit
@@ -49,23 +46,28 @@ baseline on the benchmark.
 
 ## Likely Architecture
 
-Add routing as a narrow layer above existing invocation surfaces:
+Add routing as a narrow layer above the two invocation surfaces:
 
 1. **Task classification.** Extract coarse task features before invocation:
    command family (`generate`, `fix`, `change`, `sync`, `checkup`), language,
    prompt size, repo size, estimated context pressure, visible-test presence,
    structured-output requirement, and whether the task is single-file or
    multi-file.
-2. **Config schema.** Represent candidate configs as data, not code branches:
-   `{model_selector, harness, reasoning_effort_or_time, shots, temperature,
+2. **PDD direct config schema.** Represent native `llm_invoke` candidates as
+   data: `{model_selector, temperature, reasoning_effort_or_time, shots,
    budget_cap, feasibility_constraints}`.
-3. **Policy lookup.** Load a versioned static lookup table produced from offline
+3. **Agentic CLI config schema.** Represent external harness candidates as
+   data: `{harness, cli_model, cli_reasoning_flag, repeat_runs, budget_cap,
+   feasibility_constraints}`.
+4. **Policy lookup.** Load versioned static lookup tables produced from offline
    benchmark results. Missing task classes use the current fixed-`strength`
-   behavior.
-4. **Escalation ladder.** On verifier failure, escalate through a small ordered
-   sequence: stronger model, more reasoning, more shots, then heavier agentic
-   harness, stopping at the budget cap.
-5. **Telemetry.** Record task class, chosen config, cost, latency, verifier
+   behavior for direct generation or the current orchestrator defaults for
+   agentic CLI paths.
+5. **Escalation ladder.** On verifier failure, escalate within the active
+   column through a small ordered sequence: stronger model, more reasoning, more
+   shots or repeat-runs, then heavier harness where applicable, stopping at the
+   budget cap.
+6. **Telemetry.** Record task class, chosen config, cost, latency, verifier
    result, and fallback/escalation step so later PRs can compare policy quality
    and decide whether learned routing is justified.
 
@@ -84,27 +86,23 @@ Add routing as a narrow layer above existing invocation surfaces:
 - Tests under `tests/`: cover config parsing, policy fallback, escalation order,
   feasibility filtering, and telemetry shape once implementation begins.
 
-## PR Breakdown
+## Child Issues
 
-1. **Analysis/design: decide which LLM/config is best for a task.**
-   Define the config space, benchmark objective, task classes, and data needed
-   for a static v1 policy. No runtime routing.
-2. **Benchmark axis extension.**
-   Extend the repo-bloat benchmark run schema and harness design so
-   `(model, harness, reasoning, shots)` can vary while task fixtures remain
-   fixed.
-3. **Routing config schema and feasibility filter.**
-   Add typed config objects and validation for model availability,
-   structured-output support, provider constraints, and budget caps.
-4. **Static lookup policy behind a flag.**
-   Load a checked-in policy artifact, classify tasks coarsely, choose a config,
-   and fall back to current `strength` behavior when no policy applies.
-5. **Escalation ladder behind the same flag.**
-   Retry failed verifier-backed runs through a bounded ladder and record each
-   escalation.
-6. **Benchmark report and go/no-go decision.**
-   Compare v1 routing with fixed `strength` on the benchmark task classes and
-   decide whether learned or bandit routing has enough measured headroom.
+1. **#1584: PDD direct generation.** Route model, temperature, thinking tokens,
+   and multi-shot count through `llm_invoke`. This is the cheapest place to
+   prove the routing thesis against fixed `strength` because all four knobs are
+   natively settable.
+2. **#1585: Agentic CLI harnesses.** Route harness choice, model, thinking
+   effort, and repeat-run count through `pdd/agentic_*` and per-CLI flags.
+   Cross-CLI usage/cost instrumentation from #1430 §6 is part of this column
+   because reward is not directly comparable until the harnesses report usage
+   consistently.
+
+Each child folds in its own share of the #1209 benchmark-axis extension and the
+`E[pass] - lambda * cost` static-lookup plus escalation-ladder router. The
+benchmark-axis extension is genuinely shared infrastructure; if implementation
+starts duplicating harness work across #1584 and #1585, split that foundation
+back out into a third issue.
 
 ## v1 Non-Goals
 
