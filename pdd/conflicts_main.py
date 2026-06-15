@@ -4,6 +4,7 @@ from typing import List, Dict, Tuple, Optional
 import click
 from rich import print as rprint
 
+from .cli_status import from_context
 from .construct_paths import construct_paths
 from .conflicts_in_prompts import conflicts_in_prompts
 from . import DEFAULT_TIME, DEFAULT_STRENGTH
@@ -20,7 +21,13 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
     :param language: Optional language hint for file processing.
     :return: A tuple containing the list of conflicts, total cost, and model name used.
     """
+    # Consistent status/progress messaging (EPIC #1540, workstream 2). Inherits
+    # the global --quiet flag from ctx, so status is suppressed in quiet mode.
+    status = from_context(ctx, command="pdd conflicts")
+    quiet = ctx.obj.get('quiet', False)
     try:
+        status.start(f"checking '{prompt1}' and '{prompt2}' for conflicting instructions")
+
         # Construct file paths
         input_file_paths = {
             "prompt1": prompt1,
@@ -49,14 +56,15 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
         temperature = ctx.obj.get('temperature', 0)
         time_budget = ctx.obj.get('time', DEFAULT_TIME)
-        conflicts, total_cost, model_name = conflicts_in_prompts(
-            prompt1_content,
-            prompt2_content,
-            strength,
-            temperature,
-            time_budget,
-            verbose
-        )
+        with status.waiting("comparing the two prompts for conflicts", on="LLM"):
+            conflicts, total_cost, model_name = conflicts_in_prompts(
+                prompt1_content,
+                prompt2_content,
+                strength,
+                temperature,
+                time_budget,
+                verbose
+            )
 
         # Replace prompt1 and prompt2 with actual file paths
         for conflict in conflicts:
@@ -73,9 +81,20 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
             for conflict in conflicts:
                 writer.writerow(conflict)
 
+        # Completion message with a clear next action.
+        if conflicts:
+            status.success(
+                f"{len(conflicts)} conflict(s) found between the two prompts",
+                next_step="review the conflicts below and reconcile the prompts",
+            )
+        else:
+            status.success(
+                "no conflicts found between the two prompts",
+                next_step="the prompts are consistent — nothing to reconcile",
+            )
+
         # Provide user feedback
-        if not ctx.obj.get('quiet', False):
-            rprint("[bold green]Conflict analysis completed successfully.[/bold green]")
+        if not quiet:
             rprint(f"[bold]Model used:[/bold] {model_name}")
             rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
             if output:
@@ -94,6 +113,12 @@ def conflicts_main(ctx: click.Context, prompt1: str, prompt2: str, output: Optio
         return conflicts, total_cost, model_name
 
     except Exception as e:
-        if not ctx.obj.get('quiet', False):
-            rprint(f"[bold red]Error:[/bold red] {str(e)}")
+        status.failure(
+            "analyzing the prompts for conflicts",
+            reason=str(e),
+            suggestions=[
+                "check that both prompt files exist and are readable",
+                "re-run without --quiet to see more detail",
+            ],
+        )
         sys.exit(1)

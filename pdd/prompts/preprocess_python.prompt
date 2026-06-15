@@ -87,7 +87,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 % Error Handling
 - Best-effort: on unexpected exceptions, return the partially processed prompt instead of raising — this allows the CLI and callers to continue with whatever was produced before the error
 - Always re-raise circular-include `ValueError` and `RecursionError`
-- When `PDD_QUIET=1` env var is set, suppress Rich panel output (start/complete banners) but not error messages
+- When `PDD_QUIET=1` env var is set, suppress Rich panel output (start/complete banners), include progress messages, missing-include warnings, and selector fallback warnings; keep true error messages visible.
 - Debug mode: when `PDD_PREPROCESS_DEBUG=1`, log detailed processing events to console. When `PDD_PREPROCESS_DEBUG_FILE` is also set, write a debug report to that file path.
 - After processing, scan for risky placeholders remaining outside code fences and log via debug output (no effect on returned prompt):
   - Single-brace variables like `{name}` that weren't doubled (potential PromptTemplate errors)

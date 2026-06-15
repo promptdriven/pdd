@@ -1,10 +1,14 @@
-from pathlib import Path
 from typing import Optional
+import click
 from rich import print
 from pdd.path_resolution import get_default_resolver
 
 def print_formatted(message: str) -> None:
     """Print message with raw formatting tags for testing compatibility."""
+    ctx = click.get_current_context(silent=True)
+    if ctx is not None and isinstance(ctx.obj, dict):
+        if ctx.obj.get("quiet") or ctx.obj.get("estimate") or ctx.obj.get("estimate_json"):
+            return
     print(message)
 
 def load_prompt_template(prompt_name: str) -> Optional[str]:

@@ -4,10 +4,10 @@ E2E Test for Issue #686: Anthropic cost calculation double-counts cache_creation
 This test exercises the full provider JSON parsing path that `run_agentic_task` uses:
   _parse_provider_json("anthropic", data) -> _calculate_anthropic_cost(data)
 
-The bug: `_calculate_anthropic_cost()` computes `new_input = input_tokens - cache_read`
-but does NOT subtract `cache_creation`. Since Anthropic's `input_tokens` includes both
-`cache_read` and `cache_creation`, the cache_creation tokens end up charged at the regular
-input rate (1.0x) AND again at the cache write rate (1.25x), totaling 2.25x instead of 1.25x.
+The bug: `_calculate_anthropic_cost()` must not double-count cache buckets. Anthropic
+reports `input_tokens` as the fresh input bucket after the last cache breakpoint, with
+`cache_read_input_tokens` and `cache_creation_input_tokens` as separate input buckets.
+Cache creation tokens should be charged at the cache write rate, not as fresh input too.
 
 These E2E tests use realistic Claude CLI JSON output payloads (matching what `run_agentic_task`
 parses from subprocess stdout) to verify the cost flows correctly through the full parsing path.
@@ -34,7 +34,7 @@ class TestE2EAnthropicCostParsing:
 
         Sonnet pricing: $3/M input, $15/M output, cache read 0.1x, cache write 1.25x
 
-        Token breakdown (1000 input total):
+        Token breakdown (1000 input total across published buckets):
           - 500 cache_read  -> 500 * $3/M * 0.1  = $0.00015
           - 300 cache_creation -> 300 * $3/M * 1.25 = $0.001125
           - 200 new input   -> 200 * $3/M * 1.0   = $0.0006
@@ -48,7 +48,7 @@ class TestE2EAnthropicCostParsing:
             "result": "I've analyzed the bug and here are my findings...",
             "total_cost_usd": 0,  # Zero when using subscription auth
             "usage": {
-                "input_tokens": 1000,
+                "input_tokens": 200,
                 "output_tokens": 200,
                 "cache_read_input_tokens": 500,
                 "cache_creation_input_tokens": 300,
@@ -56,7 +56,7 @@ class TestE2EAnthropicCostParsing:
             "modelUsage": {
                 "claude-sonnet-4-20250514": {
                     # No costUSD — forces token-based estimation
-                    "inputTokens": 1000,
+                    "inputTokens": 200,
                     "outputTokens": 200,
                     "cacheReadInputTokens": 500,
                     "cacheCreationInputTokens": 300,
@@ -90,7 +90,7 @@ class TestE2EAnthropicCostParsing:
         first turn. This means cache_creation is large on turn 1, and subsequent turns
         have large cache_read. The cost inflation compounds across all cached turns.
 
-        Token breakdown (50,000 input total — typical for agentic task):
+        Token breakdown (50,000 input total across published buckets — typical for agentic task):
           - 40,000 cache_read       -> charged at 0.1x input
           - 8,000  cache_creation   -> charged at 1.25x input
           - 2,000  new input        -> charged at 1.0x input
@@ -102,7 +102,7 @@ class TestE2EAnthropicCostParsing:
             "result": "Task completed successfully.",
             "total_cost_usd": 0,
             "usage": {
-                "input_tokens": 50000,
+                "input_tokens": 2000,
                 "output_tokens": 5000,
                 "cache_read_input_tokens": 40000,
                 "cache_creation_input_tokens": 8000,
@@ -120,18 +120,15 @@ class TestE2EAnthropicCostParsing:
         assert success is True
 
         # Correct calculation:
-        #   new_input = 50000 - 40000 - 8000 = 2000
         #   input_cost = 2000/1M * $3 = $0.006
         #   cache_read_cost = 40000/1M * $3 * 0.1 = $0.012
         #   cache_write_cost = 8000/1M * $3 * 1.25 = $0.030
         #   output_cost = 5000/1M * $15 = $0.075
         #   total = $0.123
         #
-        # Buggy calculation (cache_creation not subtracted from new_input):
-        #   new_input = 50000 - 40000 = 10000 (includes 8000 cache_creation)
-        #   input_cost = 10000/1M * $3 = $0.030  (should be $0.006)
-        #   overcharge = 8000/1M * $3 = $0.024
-        #   buggy total = $0.147
+        # Buggy total-inclusive interpretation:
+        #   input_tokens is treated as including cache buckets, so the fresh
+        #   input bucket is lost or double-counted depending on the formula.
 
         expected_correct_cost = 0.123
         buggy_cost = 0.147
@@ -157,7 +154,7 @@ class TestE2EAnthropicCostParsing:
             "result": "Done.",
             "total_cost_usd": 0.004875,  # Correct cost provided by Claude
             "usage": {
-                "input_tokens": 1000,
+                "input_tokens": 200,
                 "output_tokens": 200,
                 "cache_read_input_tokens": 500,
                 "cache_creation_input_tokens": 300,
@@ -191,7 +188,7 @@ class TestE2EAnthropicCostParsing:
                 "result": f"Step {step} done.",
                 "total_cost_usd": 0,
                 "usage": {
-                    "input_tokens": 50000,
+                    "input_tokens": 2000,
                     "output_tokens": 5000,
                     "cache_read_input_tokens": 40000,
                     "cache_creation_input_tokens": 8000,
