@@ -8051,6 +8051,43 @@ def test_map_openai_params_direct_opus_48_emits_adaptive_shape():
         assert output_config == {"effort": "medium"}, (model, output_config)
 
 
+def test_azure_ai_studio_adapter_opus_47_and_48_preserves_adaptive_wire_payload():
+    """AzureAIStudioConfig maps through OpenAI by default and drops
+    unsupported kwargs before transform_request. The PDD patch must preserve
+    Azure AI Opus adaptive thinking all the way into the request body."""
+    import pdd.llm_invoke  # noqa: F401
+    try:
+        from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+    except ImportError:
+        import pytest
+        pytest.skip("LiteLLM does not expose AzureAIStudioConfig in this env")
+
+    cfg = AzureAIStudioConfig()
+    for model in ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"):
+        mapped = cfg.map_openai_params(
+            non_default_params={
+                "thinking": {"type": "adaptive", "display": "summarized"},
+                "reasoning_effort": "medium",
+            },
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        body = cfg.transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=dict(mapped),
+            litellm_params={},
+            headers={},
+        )
+        assert body.get("thinking") == {
+            "type": "adaptive",
+            "display": "summarized",
+        }, (model, body)
+        assert body.get("output_config") == {"effort": "medium"}, (model, body)
+        assert "reasoning_effort" not in body, (model, body)
+
+
 def test_map_openai_params_unrelated_model_unchanged():
     """The patch is gated on opus-4-7 substring (and pre-existing predicates).
     GPT-5 must not be affected by any patch layer — LiteLLM drops Anthropic-
