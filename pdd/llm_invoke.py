@@ -96,9 +96,9 @@ except Exception:
 # works across LiteLLM 1.80.x and 1.82.x. Remove when LiteLLM ships
 # native opus-4-7 matching.
 #
-# Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig,
-# so none of these patches reach the Azure adapter. Azure Opus 4.7
-# callers need a separate code-path fix (stock CSV row is `budget`).
+# Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig.
+# The runtime adaptive branch sends Azure Opus 4.7/4.8 payloads via
+# `extra_body`, which LiteLLM preserves for AzureAIStudioConfig.
 try:
     from litellm.llms.anthropic.chat.transformation import (
         AnthropicConfig as _AnthropicConfigOpus47,
@@ -2544,7 +2544,9 @@ def _summarize_litellm_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     summary["has_api_key"] = bool(kwargs.get("api_key"))
     summary["has_base_url"] = bool(kwargs.get("base_url") or kwargs.get("api_base"))
     summary["has_response_format"] = "response_format" in kwargs
-    summary["has_reasoning"] = any(key in kwargs for key in ("reasoning", "reasoning_effort", "thinking"))
+    summary["has_reasoning"] = (
+        "reasoning" in kwargs or _has_thinking_or_reasoning_payload(kwargs)
+    )
     messages = kwargs.get("messages")
     if isinstance(messages, list):
         summary["message_count"] = len(messages)
@@ -2563,6 +2565,14 @@ def _model_disallows_temperature(model_name: Any) -> bool:
         or "claude-opus-4-8" in model_lower
         or "claude-opus-4.8" in model_lower
     )
+
+
+def _has_thinking_or_reasoning_payload(litellm_kwargs: Dict[str, Any]) -> bool:
+    """Return True when a LiteLLM request carries Claude thinking/reasoning."""
+    if "thinking" in litellm_kwargs or "reasoning_effort" in litellm_kwargs:
+        return True
+    extra_body = litellm_kwargs.get("extra_body")
+    return isinstance(extra_body, dict) and "thinking" in extra_body
 
 
 # Regex anchored to the Gemini 3 family identifier so that:
@@ -4409,7 +4419,6 @@ def llm_invoke(
 
     # Initialize variables for retry section
     response_format = None
-    time_kwargs = {}
 
     # Update global rate map for callback cost fallback
     try:
@@ -4437,9 +4446,11 @@ def llm_invoke(
         # Track per-model temperature adjustment attempt (avoid infinite loop)
         current_temperature = temperature
         temp_adjustment_done = False
+        force_temperature_on_retry = False
         while retry_with_same_model:
             retry_with_same_model = False # Assume success unless auth error on new key
             attempt_counter += 1
+            time_kwargs: Dict[str, Any] = {}
             request_id = attribution_context.get("request_id", "no-attribution") if attribution_context else "no-attribution"
             attempt_id = f"{request_id}-{attempt_counter}"
 
@@ -4467,7 +4478,10 @@ def llm_invoke(
                 # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
                 "num_retries": 2,
             }
-            if _model_disallows_temperature(model_name_litellm):
+            if (
+                _model_disallows_temperature(model_name_litellm)
+                and not force_temperature_on_retry
+            ):
                 if verbose:
                     logger.info("[INFO] Skipping 'temperature' for this model; the provider rejects it.")
             else:
@@ -4744,31 +4758,57 @@ def llm_invoke(
                             logger.info(f"[INFO] Requesting generic reasoning_effort='{effort}' for {model_name_litellm}")
 
                 elif reasoning_type == 'adaptive':
-                    # Anthropic Claude Opus 4.7 (and onward) removed the legacy
+                    # Claude Opus 4.7 (and onward) on Anthropic and Azure AI
+                    # removed the legacy
                     # `thinking={"type":"enabled","budget_tokens":N}` shape and
                     # only accepts the new adaptive thinking API:
                     # `thinking={"type":"adaptive"}` + `output_config.effort`.
-                    # We send `thinking` explicitly (with summarized display so
-                    # any future structured thinking blocks surface in logs)
-                    # and pass `reasoning_effort` so LiteLLM 1.80+ maps it to
-                    # `output_config.effort` server-side (gated by
-                    # AnthropicConfig._is_claude_opus_4_5 on its side; callers
-                    # that ship a newer Opus may need to monkey-patch that
-                    # helper until LiteLLM ships native matching).
+                    # Anthropic accepts top-level `thinking` and
+                    # `reasoning_effort`; Azure AI's OpenAI-style optional-param
+                    # filter drops those keys, so Azure must use `extra_body`.
                     from .reasoning import time_to_effort_level
                     effort = time_to_effort_level(time)
-                    provider_lower = str(provider).lower()
+                    provider_lower = str(provider).strip().lower().replace('_', ' ')
+                    thinking_param = {"type": "adaptive", "display": "summarized"}
                     if provider_lower == 'anthropic':
-                        thinking_param = {"type": "adaptive", "display": "summarized"}
                         litellm_kwargs["thinking"] = thinking_param
                         time_kwargs["thinking"] = thinking_param
                         litellm_kwargs["reasoning_effort"] = effort
                         time_kwargs["reasoning_effort"] = effort
                         if verbose:
-                            logger.info(f"[INFO] Requesting Anthropic adaptive thinking with effort='{effort}' for {model_name_litellm}")
+                            logger.info(
+                                "[INFO] Requesting Anthropic adaptive "
+                                f"thinking with effort='{effort}' for "
+                                f"{model_name_litellm}"
+                            )
+                    elif provider_lower == 'azure ai':
+                        azure_adaptive_body = {
+                            "thinking": thinking_param,
+                            "output_config": {"effort": effort},
+                        }
+                        for kwargs in (litellm_kwargs, time_kwargs):
+                            existing_extra_body = kwargs.get("extra_body")
+                            if isinstance(existing_extra_body, dict):
+                                kwargs["extra_body"] = {
+                                    **existing_extra_body,
+                                    **azure_adaptive_body,
+                                }
+                            else:
+                                kwargs["extra_body"] = dict(azure_adaptive_body)
+                        if verbose:
+                            logger.info(
+                                "[INFO] Requesting Azure AI adaptive thinking "
+                                f"via extra_body with effort='{effort}' for "
+                                f"{model_name_litellm}"
+                            )
                     else:
                         if verbose:
-                            logger.warning(f"[WARN] reasoning_type='adaptive' but provider '{provider}' is not Anthropic; reasoning parameter not sent for {model_name_litellm}.")
+                            logger.warning(
+                                "[WARN] reasoning_type='adaptive' but provider "
+                                f"'{provider}' is not Anthropic or Azure AI; "
+                                "reasoning parameter not sent for "
+                                f"{model_name_litellm}."
+                            )
 
                 elif reasoning_type == 'none':
                     if verbose:
@@ -5144,11 +5184,13 @@ def llm_invoke(
                 else:
                     # Claude requirement: when thinking/reasoning is enabled, temperature must be 1.
                     # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
-                    # Check both 'thinking' and 'reasoning_effort' because litellm translates
-                    # reasoning_effort to thinking internally during transform_request.
+                    # Check top-level and extra_body payloads because LiteLLM
+                    # may route provider-specific thinking through either.
                     try:
                         is_claude_model = 'claude' in model_name_litellm.lower()
-                        has_thinking_or_reasoning = 'thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs
+                        has_thinking_or_reasoning = _has_thinking_or_reasoning_payload(
+                            litellm_kwargs
+                        )
                         if is_claude_model and has_thinking_or_reasoning and 'temperature' in litellm_kwargs:
                             if litellm_kwargs.get('temperature') != 1:
                                 if verbose:
@@ -5797,7 +5839,10 @@ def llm_invoke(
                 # 2) thinking enabled but temperature!=1 -> retry with 1
                 lower_err = error_str.lower()
                 if (not temp_adjustment_done) and ("temperature" in lower_err) and ("thinking" in lower_err):
-                    claude_thinking_sent = ('thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs) and 'claude' in model_name_litellm.lower()
+                    claude_thinking_sent = (
+                        _has_thinking_or_reasoning_payload(litellm_kwargs)
+                        and 'claude' in model_name_litellm.lower()
+                    )
                     # Decide direction of adjustment based on whether thinking was enabled in the call
                     if claude_thinking_sent:
                         # thinking enabled -> force temperature=1
@@ -5815,6 +5860,7 @@ def llm_invoke(
                         )
                     current_temperature = adjusted_temp
                     temp_adjustment_done = True
+                    force_temperature_on_retry = claude_thinking_sent and adjusted_temp == 1
                     retry_with_same_model = True
                     _emit_llm_attribution(
                         attribution_context,
