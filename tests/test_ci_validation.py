@@ -1285,3 +1285,75 @@ def test_loop_routes_no_checks_through_live_head_cross_check(
         "The live-head cross-check reported failing checks; the loop must act on "
         f"that verdict and fail closed. Got success={success!r}, message={message!r}."
     )
+
+
+def test_loop_cross_checks_live_head_when_local_head_is_stale(
+    tmp_path: Path,
+) -> None:
+    """A stale local worktree head must not be used for the no_checks cross-check."""
+    failing_run = {
+        "name": "pr-tests (prompt-driven-development-stg)",
+        "state": "FAILURE",
+        "bucket": "fail",
+        "link": "https://github.com/promptdriven/pdd_cloud/runs/1",
+    }
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value="stale-local-head"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("no_checks", [])), \
+         patch(
+             "pdd.ci_validation._poll_check_runs_for_head",
+             return_value=("failed", [failing_run]),
+         ) as mock_cross_check, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True), \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, _cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd_cloud",
+            issue_number=2107,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert mock_cross_check.call_args.kwargs.get("head_sha") == LIVE_HEAD_SHA
+    assert success is False
+    assert "No CI checks detected" not in message
+
+
+def test_loop_cross_check_respects_explicit_expected_head_override(
+    tmp_path: Path,
+) -> None:
+    """The final-gate caller can still pin the exact post-checkup PR head."""
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value="stale-local-head"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA) as mock_live_head, \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("no_checks", [])), \
+         patch(
+             "pdd.ci_validation._poll_check_runs_for_head",
+             return_value=("no_checks", []),
+         ) as mock_cross_check, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, _cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd_cloud",
+            issue_number=2107,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            timeout=60.0,
+            quiet=True,
+            expected_head_sha_override="verified-post-checkup-head",
+        )
+
+    mock_live_head.assert_not_called()
+    assert mock_cross_check.call_args.kwargs.get("head_sha") == "verified-post-checkup-head"
+    assert success is True
+    assert message == "No CI checks detected"

@@ -868,10 +868,16 @@ def run_ci_validation_loop(
             # reported, or a poll timeout with nothing read). Failing open on all of
             # these silently green-lights a PR whose live head actually has failing
             # checks. Reuse the REST Checks API path the final gate uses.
+            cross_head_sha = expected_head_sha_override or _get_pr_head_sha(
+                repo_owner,
+                repo_name,
+                pr_number,
+                cwd,
+            ) or head_sha
             cross_status, cross_checks = _poll_check_runs_for_head(
                 repo_owner=repo_owner,
                 repo_name=repo_name,
-                head_sha=head_sha,
+                head_sha=cross_head_sha,
                 cwd=cwd,
                 quiet=quiet,
             )
