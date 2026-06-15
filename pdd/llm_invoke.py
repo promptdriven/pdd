@@ -4754,7 +4754,7 @@ def llm_invoke(
                     # filter drops those keys, so Azure must use `extra_body`.
                     from .reasoning import time_to_effort_level
                     effort = time_to_effort_level(time)
-                    provider_lower = str(provider).lower()
+                    provider_lower = str(provider).strip().lower().replace('_', ' ')
                     thinking_param = {"type": "adaptive", "display": "summarized"}
                     if provider_lower == 'anthropic':
                         litellm_kwargs["thinking"] = thinking_param
