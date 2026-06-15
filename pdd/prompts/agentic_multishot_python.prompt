@@ -1,0 +1,94 @@
+<pdd-reason>Sequential multi-shot repeat-run controller for agentic CLI harnesses; wraps run_agentic_task with per-shot budget/timeout, hidden-verifier selection, and append-only JSONL telemetry.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "dataclasses": [
+      {
+        "name": "MultishotCandidateRecord",
+        "fields": [
+          {"name": "shot_id", "type": "int"},
+          {"name": "task_id", "type": "str"},
+          {"name": "multishot_run_id", "type": "str"},
+          {"name": "cli_version", "type": "str"},
+          {"name": "config_id", "type": "str"},
+          {"name": "verdict", "type": "str"},
+          {"name": "failure_class", "type": "Optional[str]"},
+          {"name": "cost_usd", "type": "float"},
+          {"name": "latency_ms", "type": "float"},
+          {"name": "started_at", "type": "str"},
+          {"name": "finished_at", "type": "str"},
+          {"name": "stop_reason", "type": "Optional[str]"}
+        ]
+      },
+      {
+        "name": "MultishotResult",
+        "fields": [
+          {"name": "winner", "type": "Optional[MultishotCandidateRecord]"},
+          {"name": "candidates", "type": "List[MultishotCandidateRecord]"},
+          {"name": "total_cost_usd", "type": "float"},
+          {"name": "total_latency_ms", "type": "float"}
+        ]
+      }
+    ],
+    "functions": [
+      {"name": "run_multishot_candidates", "signature": "(instruction, cwd, *, n_shots=1, per_shot_budget, total_budget, per_shot_timeout_s, total_timeout_s, stop_on_first_pass=True, verifier_fn, config_id, task_id, jsonl_path=None, **kwargs) -> MultishotResult", "returns": "MultishotResult"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>failure_classification_python.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write `pdd/agentic_multishot.py`.
+
+% Role & Scope
+Thin orchestration controller for sequential multi-shot CLI repeat-runs. Wraps `run_agentic_task` from `agentic_common` without modifying it. Does not implement candidate selection logic beyond hidden-verifier pass/fail; no LLM reranking. No parallelism in v1 — shots run sequentially to enable stop-early.
+
+% Requirements
+
+1. **`MultishotCandidateRecord` dataclass** — 12 fields matching the per-shot JSONL schema:
+   `shot_id` (int), `task_id` (str), `multishot_run_id` (str), `cli_version` (str), `config_id` (str), `verdict` (str, `"pass"` or `"fail"`), `failure_class` (Optional[str]), `cost_usd` (float), `latency_ms` (float), `started_at` (str, UTC ISO-8601), `finished_at` (str, UTC ISO-8601), `stop_reason` (Optional[str]).
+
+2. **`MultishotResult` dataclass** — `winner` (Optional[MultishotCandidateRecord], first passing shot by `shot_id` or `None` when all fail), `candidates` (List[MultishotCandidateRecord], all shot records in order), `total_cost_usd` (float), `total_latency_ms` (float).
+
+3. **`run_multishot_candidates(instruction, cwd, *, n_shots=1, per_shot_budget, total_budget, per_shot_timeout_s, total_timeout_s, stop_on_first_pass=True, verifier_fn, config_id, task_id, jsonl_path=None, **kwargs) -> MultishotResult`** — Sequential loop over `run_agentic_task`:
+   - `n_shots=1` default provides backward-compatible single-shot behavior.
+   - `verifier_fn` is a callable `(result: AgenticTaskResult) -> bool`; binary pass/fail; implementation is the caller's responsibility.
+   - `jsonl_path=None` accumulates records in memory without persisting; callers that need durability pass an explicit path.
+   - `config_id` is frozen at the start of the run and held immutable across all shots.
+   - `**kwargs` are forwarded to `run_agentic_task` unchanged (supports `verbose`, `quiet`, `label`, etc.).
+
+4. **Candidate isolation contract** — Before shot 1, snapshot task input state: hash of `cwd` directory contents (sha256 of sorted file paths + sizes) and env fingerprint (sorted `os.environ` key names). The snapshot is recorded in the first `MultishotCandidateRecord` via `multishot_run_id`. Caller is responsible for filesystem restoration between shots; each shot is invoked with identical parameters. Document this contract in the function docstring.
+
+5. **Pre-shot budget pre-check** — Before each shot (including shot 1), verify remaining total budget (`total_budget - accumulated_cost`). If remaining budget is less than `per_shot_budget`, stop immediately with `stop_reason="budget_exhausted"` without invoking `run_agentic_task`. Append the partial record (with `verdict="fail"`, `failure_class="budget_truncated"`, zero cost/latency) and return.
+
+6. **Total timeout enforcement** — Before each shot, check wall-clock elapsed since `run_multishot_candidates` entry. If elapsed exceeds `total_timeout_s`, stop with `stop_reason="timeout"`. Append the partial record and return.
+
+7. **Per-shot invocation** — Call `run_agentic_task(instruction, cwd, timeout=per_shot_timeout_s, **kwargs)`. Catch all exceptions from `run_agentic_task`; on exception, set `failure_class="infrastructure_error"` and `stop_reason="infrastructure_error"`; cost fields reflect only tokens consumed before abort (use `0.0` when not determinable); the shot counts against the shot budget.
+
+8. **Hidden verifier invocation** — After each completed shot, call `verifier_fn(task_result)`. For failed shots (task_result.success is False), derive `failure_class` via `classify_failure(task_result.output_text or "")` from `failure_classification`. Catch all exceptions from `verifier_fn`; on exception, set `failure_class="infrastructure_error"`.
+
+9. **JSONL persistence** — When `jsonl_path` is not None, append the per-shot record as a JSON line to `jsonl_path` immediately after shot completion and before any stop-early return. Flush after each write to prevent incomplete records on early exit. Write is atomic-per-record (one JSON object per line); never rewrite prior lines.
+
+10. **Stop-early logic** — `stop_on_first_pass=True` (default): return immediately after the first passing shot, after JSONL flush. `stop_on_first_pass=False`: run all `n_shots` regardless. `stop_reason` values: `"verifier_pass"` (stop-early pass), `"budget_exhausted"`, `"timeout"`, `"infrastructure_error"`, `"max_shots_reached"` (loop completed without a pass or early stop), `None` for intermediate passing records when `stop_on_first_pass=False`.
+
+11. **Winner selection** — `winner` is the first `MultishotCandidateRecord` with `verdict="pass"` by ascending `shot_id`. `winner=None` when all shots fail. No LLM reranking.
+
+12. **CLI version capture** — Run `pdd --version` as a subprocess before shot 1 (via `subprocess.run`, capture stdout). Store result in all records. Use empty string on any failure (command not found, nonzero exit, timeout).
+
+% Dependencies
+<agentic_common>
+    <include select="def:run_agentic_task">pdd/agentic_common.py</include>
+</agentic_common>
+<failure_classification>
+    <include select="def:classify_failure,class:FailureKind">pdd/failure_classification.py</include>
+</failure_classification>
+
+% Deliverables
+- Code: `pdd/agentic_multishot.py`
