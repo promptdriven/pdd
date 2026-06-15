@@ -6580,6 +6580,54 @@ class TestReasoningParameters:
         "model_name",
         ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
     )
+    def test_adaptive_reasoning_azure_ai_provider_token_opus_47_and_48(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """Custom rows may use LiteLLM's provider token azure_ai."""
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "adaptive", "azure_ai", model_name
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,  # -> "medium"
+                use_cloud=False,
+            )
+
+        expected_extra_body = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "medium"},
+        }
+        assert captured_kwargs["extra_body"] == expected_extra_body
+        assert "thinking" not in captured_kwargs
+        assert "reasoning_effort" not in captured_kwargs
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
     def test_adaptive_reasoning_azure_ai_survives_litellm_optional_param_route(
         self, llm_mod, tmp_path, monkeypatch, model_name
     ):
