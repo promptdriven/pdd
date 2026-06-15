@@ -6574,6 +6574,85 @@ class TestReasoningParameters:
         assert captured_kwargs.get("reasoning_effort") == "medium"
         assert "budget_tokens" not in captured_kwargs.get("thinking", {})
 
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
+    def test_adaptive_reasoning_azure_ai_survives_litellm_optional_param_route(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """PDD's Azure AI adaptive payload must use LiteLLM extra_body."""
+        try:
+            from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+        except ImportError:
+            pytest.skip("LiteLLM does not expose AzureAIStudioConfig in this env")
+
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "adaptive", "Azure AI", model_name
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,  # -> "medium"
+                use_cloud=False,
+            )
+
+        optional_param_kwargs = {
+            "thinking": captured_kwargs.get("thinking"),
+            "reasoning_effort": captured_kwargs.get("reasoning_effort"),
+        }
+        if "extra_body" in captured_kwargs:
+            optional_param_kwargs["extra_body"] = captured_kwargs["extra_body"]
+        optional_params = litellm.get_optional_params(
+            model=model_name,
+            custom_llm_provider="azure_ai",
+            drop_params=True,
+            **optional_param_kwargs,
+        )
+        expected_extra_body = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "medium"},
+        }
+        assert optional_params.get("extra_body") == expected_extra_body, (
+            model_name,
+            optional_params,
+        )
+        body = AzureAIStudioConfig().transform_request(
+            model=model_name,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=dict(optional_params),
+            litellm_params={},
+            headers={},
+        )
+
+        assert body.get("thinking") == {
+            "type": "adaptive",
+            "display": "summarized",
+        }, (model_name, body)
+        assert body.get("output_config") == {"effort": "medium"}, (model_name, body)
+
     def test_adaptive_reasoning_non_anthropic_provider_skipped(self, llm_mod, tmp_path, monkeypatch):
         """`reasoning_type=adaptive` on a non-Anthropic provider must warn and
         skip the reasoning payload — adaptive thinking is currently supported
