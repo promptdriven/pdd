@@ -7107,6 +7107,7 @@ class TestVertexAIClaudeTemperatureFix:
         ]
         assert retry_events
         assert retry_events[-1]["adjusted_temperature"] == 1
+        assert captured_kwargs_list[1]["temperature"] == 1
 
 
 # ============================================================================
