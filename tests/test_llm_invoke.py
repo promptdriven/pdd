@@ -6527,6 +6527,53 @@ class TestReasoningParameters:
         # Legacy budget_tokens must not leak through
         assert "budget_tokens" not in captured_kwargs.get("thinking", {})
 
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
+    def test_adaptive_reasoning_azure_ai_opus_47_and_48(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """Azure AI Foundry Opus 4.7/4.8 use the adaptive thinking shape."""
+        csv_path = self._make_csv_with_reasoning(
+            tmp_path, "adaptive", "Azure AI", model_name
+        )
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,  # -> "medium"
+                use_cloud=False,
+            )
+
+        assert captured_kwargs["thinking"] == {
+            "type": "adaptive",
+            "display": "summarized",
+        }
+        assert captured_kwargs.get("reasoning_effort") == "medium"
+        assert "budget_tokens" not in captured_kwargs.get("thinking", {})
+
     def test_adaptive_reasoning_non_anthropic_provider_skipped(self, llm_mod, tmp_path, monkeypatch):
         """`reasoning_type=adaptive` on a non-Anthropic provider must warn and
         skip the reasoning payload — adaptive thinking is currently an

@@ -495,10 +495,9 @@ def test_committed_csv_includes_vertex_gemini_flash_ci_default():
 #
 # Anthropic enforced the new adaptive thinking API for Claude Opus 4.7 on
 # 2026-05-23 ~17:25 UTC; the legacy thinking.type.enabled shape now 400s.
-# The generator must classify direct-Anthropic-provider Opus 4.7 rows as
-# adaptive (the consumer ``llm_invoke.py`` gates adaptive serialization on
-# ``provider_lower == 'anthropic'``). Azure AI / Bedrock / Vertex relays
-# stay on budget/effort pending a separate audit.
+# The generator must classify direct-Anthropic-provider and Azure AI Opus 4.7
+# rows as adaptive. Bedrock / Vertex relays stay on effort because their
+# adaptive conversion is handled by LiteLLM relay patches.
 # ==============================================================================
 
 
@@ -507,10 +506,10 @@ def test_infer_reasoning_type_returns_adaptive_for_opus_47_anthropic():
     assert gmc._infer_reasoning_type("claude-opus-4-7", "anthropic", entry) == "adaptive"
 
 
-def test_infer_reasoning_type_returns_budget_for_opus_47_azure_ai():
-    """Azure AI relay isn't audited for adaptive shape yet — keep at budget."""
+def test_infer_reasoning_type_returns_adaptive_for_opus_47_azure_ai():
+    """Azure AI Foundry Opus 4.7 supports adaptive thinking, not enabled."""
     entry = {"supports_reasoning": True}
-    assert gmc._infer_reasoning_type("azure_ai/claude-opus-4-7", "azure_ai", entry) == "budget"
+    assert gmc._infer_reasoning_type("azure_ai/claude-opus-4-7", "azure_ai", entry) == "adaptive"
 
 
 def test_infer_reasoning_type_returns_budget_for_other_anthropic_models():
@@ -524,6 +523,12 @@ def test_infer_max_reasoning_tokens_returns_16000_for_opus_47_anthropic():
     validated pdd_cloud backend CSV (16000)."""
     entry = {"supports_reasoning": True}
     assert gmc._infer_max_reasoning_tokens("claude-opus-4-7", "anthropic", entry) == 16000
+
+
+def test_infer_max_reasoning_tokens_returns_16000_for_opus_47_azure_ai():
+    """Azure AI adaptive Opus rows use the same 16000 catalog value."""
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_max_reasoning_tokens("azure_ai/claude-opus-4-7", "azure_ai", entry) == 16000
 
 
 def test_infer_max_reasoning_tokens_returns_128000_for_other_anthropic_models():
@@ -546,15 +551,20 @@ def test_infer_reasoning_type_returns_adaptive_for_opus_48_anthropic():
     assert gmc._infer_reasoning_type("claude-opus-4-8", "anthropic", entry) == "adaptive"
 
 
-def test_infer_reasoning_type_returns_budget_for_opus_48_azure_ai():
-    """Azure AI relay isn't audited for adaptive shape yet — keep at budget."""
+def test_infer_reasoning_type_returns_adaptive_for_opus_48_azure_ai():
+    """Azure AI Foundry Opus 4.8 supports adaptive thinking, not enabled."""
     entry = {"supports_reasoning": True}
-    assert gmc._infer_reasoning_type("azure_ai/claude-opus-4-8", "azure_ai", entry) == "budget"
+    assert gmc._infer_reasoning_type("azure_ai/claude-opus-4-8", "azure_ai", entry) == "adaptive"
 
 
 def test_infer_max_reasoning_tokens_returns_16000_for_opus_48_anthropic():
     entry = {"supports_reasoning": True}
     assert gmc._infer_max_reasoning_tokens("claude-opus-4-8", "anthropic", entry) == 16000
+
+
+def test_infer_max_reasoning_tokens_returns_16000_for_opus_48_azure_ai():
+    entry = {"supports_reasoning": True}
+    assert gmc._infer_max_reasoning_tokens("azure_ai/claude-opus-4-8", "azure_ai", entry) == 16000
 
 
 def test_opus_48_static_elo_seed_clears_cutoff():
@@ -623,6 +633,24 @@ def test_opus_48_bedrock_and_vertex_relays_seeded_when_litellm_unaware():
     assert vertex["coding_arena_elo"] >= gmc.ELO_CUTOFF
 
 
+def test_opus_48_azure_ai_seeded_when_litellm_unaware():
+    """Azure AI Opus 4.8 must be seeded as adaptive until LiteLLM ships it."""
+    from collections import defaultdict
+
+    seeded = gmc._mandatory_rows_missing_from(
+        rows=[], arena_index={}, elo_source_counts=defaultdict(int)
+    )
+    by_model = {r["model"]: r for r in seeded}
+
+    row = by_model.get("azure_ai/claude-opus-4-8")
+    assert row is not None, "Azure AI opus-4-8 must be seeded"
+    assert row["provider"] == "Azure AI"
+    assert row["reasoning_type"] == "adaptive"
+    assert row["max_reasoning_tokens"] == 16000
+    assert row["api_key"] == "AZURE_AI_API_KEY"
+    assert row["coding_arena_elo"] >= gmc.ELO_CUTOFF
+
+
 def test_opus_48_relays_deduped_once_litellm_knows_them():
     """Once litellm registers the relay ids, the mandatory seed must not
     duplicate them."""
@@ -649,13 +677,8 @@ def test_infer_reasoning_type_returns_effort_for_opus_48_bedrock_and_vertex():
     assert gmc._infer_reasoning_type("vertex_ai/claude-opus-4-8", "vertex_ai", entry) == "effort"
 
 
-def test_azure_opus_48_is_deferred_even_when_litellm_knows_it(monkeypatch):
-    """Azure AI / Foundry Opus 4.8 is intentionally deferred pending validation
-    (it rides the legacy budget shape via AzureAIStudioConfig, which the adaptive
-    relay patches don't reach). The deferral must be ENFORCED by the generator,
-    not just documented: even when LiteLLM's registry ships azure_ai/claude-opus-4-8,
-    a regen must omit it so the generator never diverges from the committed CSV
-    (which deliberately has no Azure 4.8 row)."""
+def test_azure_opus_48_is_emitted_when_litellm_knows_it(monkeypatch):
+    """Azure AI / Foundry Opus 4.8 is no longer deferred."""
     import litellm
 
     fake_id = "azure_ai/claude-opus-4-8"
@@ -676,12 +699,27 @@ def test_azure_opus_48_is_deferred_even_when_litellm_knows_it(monkeypatch):
     assert fake_id in litellm.model_cost
 
     rows = gmc.build_rows(refresh_elo=False)
-    assert all(r.get("model") != fake_id for r in rows), (
-        "azure_ai/claude-opus-4-8 is deferred pending validation and must not be "
-        "emitted by a regen even when LiteLLM knows the id"
-    )
-    # The direct-Anthropic 4.8 row must still be present (deferral is scoped).
-    assert any(r.get("model") == "claude-opus-4-8" for r in rows)
+    row = next((r for r in rows if r.get("model") == fake_id), None)
+    assert row is not None, "azure_ai/claude-opus-4-8 must be emitted"
+    assert row["provider"] == "Azure AI"
+    assert row["reasoning_type"] == "adaptive"
+    assert row["max_reasoning_tokens"] == 16000
+
+
+def test_committed_csv_marks_azure_ai_opus_47_and_48_adaptive():
+    """The bundled catalog must match the Azure AI adaptive generator policy."""
+    import csv
+
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = {row["model"]: row for row in csv.DictReader(handle)}
+
+    for model in ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"):
+        row = rows.get(model)
+        assert row is not None, f"{model} missing from bundled llm_model.csv"
+        assert row["provider"] == "Azure AI"
+        assert row["reasoning_type"] == "adaptive"
+        assert row["max_reasoning_tokens"] == "16000"
 
 
 def test_build_rows_includes_vertex_gemini_3_5_flash_ga_default(monkeypatch):
