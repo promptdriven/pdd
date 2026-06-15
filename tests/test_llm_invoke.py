@@ -6534,7 +6534,7 @@ class TestReasoningParameters:
     def test_adaptive_reasoning_azure_ai_opus_47_and_48(
         self, llm_mod, tmp_path, monkeypatch, model_name
     ):
-        """Azure AI Foundry Opus 4.7/4.8 use the adaptive thinking shape."""
+        """Azure AI Foundry Opus 4.7/4.8 use extra_body adaptive thinking."""
         csv_path = self._make_csv_with_reasoning(
             tmp_path, "adaptive", "Azure AI", model_name
         )
@@ -6567,12 +6567,14 @@ class TestReasoningParameters:
                 use_cloud=False,
             )
 
-        assert captured_kwargs["thinking"] == {
-            "type": "adaptive",
-            "display": "summarized",
+        expected_extra_body = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "medium"},
         }
-        assert captured_kwargs.get("reasoning_effort") == "medium"
-        assert "budget_tokens" not in captured_kwargs.get("thinking", {})
+        assert captured_kwargs["extra_body"] == expected_extra_body
+        assert "thinking" not in captured_kwargs
+        assert "reasoning_effort" not in captured_kwargs
+        assert "budget_tokens" not in captured_kwargs["extra_body"]["thinking"]
 
     @pytest.mark.parametrize(
         "model_name",
@@ -6619,12 +6621,10 @@ class TestReasoningParameters:
                 use_cloud=False,
             )
 
-        optional_param_kwargs = {
-            "thinking": captured_kwargs.get("thinking"),
-            "reasoning_effort": captured_kwargs.get("reasoning_effort"),
-        }
-        if "extra_body" in captured_kwargs:
-            optional_param_kwargs["extra_body"] = captured_kwargs["extra_body"]
+        optional_param_kwargs = {}
+        for key in ("thinking", "reasoning_effort", "extra_body"):
+            if key in captured_kwargs:
+                optional_param_kwargs[key] = captured_kwargs[key]
         optional_params = litellm.get_optional_params(
             model=model_name,
             custom_llm_provider="azure_ai",
@@ -8131,10 +8131,7 @@ def test_map_openai_params_direct_opus_48_emits_adaptive_shape():
 
 
 def test_azure_ai_studio_adapter_opus_47_and_48_preserves_adaptive_wire_payload():
-    """AzureAIStudioConfig maps through OpenAI by default and drops
-    unsupported kwargs before transform_request. The PDD patch must preserve
-    Azure AI Opus adaptive thinking all the way into the request body."""
-    __import__("pdd.llm_invoke")
+    """AzureAIStudioConfig preserves Azure Opus adaptive payload via extra_body."""
     try:
         from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
     except ImportError:
@@ -8142,19 +8139,24 @@ def test_azure_ai_studio_adapter_opus_47_and_48_preserves_adaptive_wire_payload(
 
     cfg = AzureAIStudioConfig()
     for model in ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"):
-        mapped = cfg.map_openai_params(
-            non_default_params={
-                "thinking": {"type": "adaptive", "display": "summarized"},
-                "reasoning_effort": "medium",
-            },
-            optional_params={},
+        payload = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "medium"},
+        }
+        optional_params = litellm.get_optional_params(
             model=model,
+            custom_llm_provider="azure_ai",
+            extra_body=payload,
             drop_params=True,
+        )
+        assert optional_params.get("extra_body") == payload, (
+            model,
+            optional_params,
         )
         body = cfg.transform_request(
             model=model,
             messages=[{"role": "user", "content": "hi"}],
-            optional_params=dict(mapped),
+            optional_params=dict(optional_params),
             litellm_params={},
             headers={},
         )

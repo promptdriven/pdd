@@ -96,9 +96,9 @@ except Exception:
 # works across LiteLLM 1.80.x and 1.82.x. Remove when LiteLLM ships
 # native opus-4-7 matching.
 #
-# Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig,
-# so none of these patches reach the Azure adapter. A dedicated wrapper
-# below preserves adaptive thinking for Azure AI Opus 4.7/4.8.
+# Azure AI uses AzureAIStudioConfig (OpenAI-based), not AnthropicConfig.
+# The runtime adaptive branch sends Azure Opus 4.7/4.8 payloads via
+# `extra_body`, which LiteLLM preserves for AzureAIStudioConfig.
 try:
     from litellm.llms.anthropic.chat.transformation import (
         AnthropicConfig as _AnthropicConfigOpus47,
@@ -381,55 +381,6 @@ except Exception as _vertex_transform_patch_err:  # pylint: disable=broad-except
     logger.error(
         "[opus_4_7_patch] Failed to patch VertexAIAnthropicConfig.transform_request: %s",
         _vertex_transform_patch_err,
-    )
-
-# Azure AI Studio maps through OpenAI parameter handling, which drops Anthropic-
-# style `thinking` and generic `reasoning_effort` before transform_request sees
-# them. The Azure transform itself will send `thinking` and `output_config` if
-# they reach optional_params, so wrap map_openai_params for only the adaptive
-# Azure Opus aliases and convert PDD's kwargs to the body shape Foundry expects.
-try:
-    from litellm.llms.azure_ai.chat.transformation import (
-        AzureAIStudioConfig as _AzureAIStudioConfigOpusAdaptive,
-    )
-    _existing_azure_ai_map = _AzureAIStudioConfigOpusAdaptive.map_openai_params
-    if not getattr(_existing_azure_ai_map, "_pdd_opus_adaptive_azure_ai_patched", False):
-        _orig_azure_ai_map = _existing_azure_ai_map
-        _AZURE_AI_OPUS_ADAPTIVE_ALIASES = _RELAY_OPUS_ADAPTIVE_ALIASES
-
-        def _patched_azure_ai_map(  # pylint: disable=function-redefined
-            self, non_default_params, optional_params, model, drop_params
-        ):
-            result = _orig_azure_ai_map(
-                self, non_default_params, optional_params, model, drop_params
-            )
-            m = model.lower() if isinstance(model, str) else ""
-            if not any(alias in m for alias in _AZURE_AI_OPUS_ADAPTIVE_ALIASES):
-                return result
-
-            user_params = non_default_params if isinstance(non_default_params, dict) else {}
-            user_thinking = user_params.get("thinking")
-            if isinstance(user_thinking, dict) and user_thinking.get("type") == "adaptive":
-                result["thinking"] = dict(user_thinking)
-            elif user_params.get("reasoning_effort"):
-                result["thinking"] = {"type": "adaptive"}
-
-            effort = user_params.get("reasoning_effort")
-            user_output_config = user_params.get("output_config")
-            if isinstance(user_output_config, dict):
-                result["output_config"] = dict(user_output_config)
-            elif isinstance(effort, str):
-                result["output_config"] = {"effort": effort}
-
-            result.pop("reasoning_effort", None)
-            return result
-
-        _patched_azure_ai_map._pdd_opus_adaptive_azure_ai_patched = True
-        _AzureAIStudioConfigOpusAdaptive.map_openai_params = _patched_azure_ai_map
-except Exception as _azure_ai_patch_err:  # pylint: disable=broad-except
-    logger.error(
-        "[opus_adaptive_patch] Failed to patch AzureAIStudioConfig.map_openai_params: %s",
-        _azure_ai_patch_err,
     )
 
 # Add a console handler if none exists
@@ -4798,26 +4749,43 @@ def llm_invoke(
                     # `thinking={"type":"enabled","budget_tokens":N}` shape and
                     # only accepts the new adaptive thinking API:
                     # `thinking={"type":"adaptive"}` + `output_config.effort`.
-                    # We send `thinking` explicitly (with summarized display so
-                    # any future structured thinking blocks surface in logs)
-                    # and pass `reasoning_effort` so LiteLLM 1.80+ maps it to
-                    # `output_config.effort` server-side (gated by
-                    # AnthropicConfig._is_claude_opus_4_5 on its side; callers
-                    # that ship a newer Opus may need to monkey-patch that
-                    # helper until LiteLLM ships native matching).
+                    # Anthropic accepts top-level `thinking` and
+                    # `reasoning_effort`; Azure AI's OpenAI-style optional-param
+                    # filter drops those keys, so Azure must use `extra_body`.
                     from .reasoning import time_to_effort_level
                     effort = time_to_effort_level(time)
                     provider_lower = str(provider).lower()
-                    if provider_lower in ('anthropic', 'azure ai'):
-                        thinking_param = {"type": "adaptive", "display": "summarized"}
+                    thinking_param = {"type": "adaptive", "display": "summarized"}
+                    if provider_lower == 'anthropic':
                         litellm_kwargs["thinking"] = thinking_param
                         time_kwargs["thinking"] = thinking_param
                         litellm_kwargs["reasoning_effort"] = effort
                         time_kwargs["reasoning_effort"] = effort
                         if verbose:
                             logger.info(
-                                "[INFO] Requesting Anthropic/Azure AI adaptive "
-                                f"thinking with effort='{effort}' for {model_name_litellm}"
+                                "[INFO] Requesting Anthropic adaptive "
+                                f"thinking with effort='{effort}' for "
+                                f"{model_name_litellm}"
+                            )
+                    elif provider_lower == 'azure ai':
+                        azure_adaptive_body = {
+                            "thinking": thinking_param,
+                            "output_config": {"effort": effort},
+                        }
+                        for kwargs in (litellm_kwargs, time_kwargs):
+                            existing_extra_body = kwargs.get("extra_body")
+                            if isinstance(existing_extra_body, dict):
+                                kwargs["extra_body"] = {
+                                    **existing_extra_body,
+                                    **azure_adaptive_body,
+                                }
+                            else:
+                                kwargs["extra_body"] = dict(azure_adaptive_body)
+                        if verbose:
+                            logger.info(
+                                "[INFO] Requesting Azure AI adaptive thinking "
+                                f"via extra_body with effort='{effort}' for "
+                                f"{model_name_litellm}"
                             )
                     else:
                         if verbose:
