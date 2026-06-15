@@ -7005,6 +7005,109 @@ class TestVertexAIClaudeTemperatureFix:
             f"got {captured_kwargs_list[1].get('temperature')}"
         )
 
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
+    def test_azure_ai_adaptive_extra_body_thinking_forces_temperature_1(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """The Claude temperature guard must detect Azure extra_body thinking."""
+        csv_path = self._make_csv(tmp_path, "Azure AI", model_name, "adaptive")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+        monkeypatch.setattr(llm_mod, "_model_disallows_temperature", lambda _model: False)
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return self._make_mock_response()
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                temperature=0.7,
+                time=0.5,
+                use_cloud=False,
+            )
+
+        assert captured_kwargs["extra_body"]["thinking"] == {
+            "type": "adaptive",
+            "display": "summarized",
+        }
+        assert "thinking" not in captured_kwargs
+        assert "reasoning_effort" not in captured_kwargs
+        assert captured_kwargs["temperature"] == 1
+
+    @pytest.mark.parametrize(
+        "model_name",
+        ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
+    )
+    def test_azure_ai_adaptive_extra_body_retry_uses_temperature_1(
+        self, llm_mod, tmp_path, monkeypatch, model_name
+    ):
+        """The retry classifier must detect Azure extra_body thinking."""
+        csv_path = self._make_csv(tmp_path, "Azure AI", model_name, "adaptive")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", model_name)
+
+        call_count = 0
+        captured_kwargs_list = []
+        attribution_events = []
+
+        def capture_attribution(context, event, **fields):
+            attribution_events.append((context, event, fields))
+
+        def failing_then_success(**kwargs):
+            nonlocal call_count
+            call_count += 1
+            captured_kwargs_list.append(dict(kwargs))
+            if call_count == 1:
+                mock_request = MagicMock(spec=httpx.Request)
+                mock_request.url = "https://ai.azure.com/models"
+                mock_resp = MagicMock(spec=httpx.Response)
+                mock_resp.request = mock_request
+                mock_resp.status_code = 400
+                mock_resp.headers = {"content-type": "application/json"}
+                raise openai.BadRequestError(
+                    message="temperature must be 1 when thinking is enabled",
+                    response=mock_resp,
+                    body={"error": "temperature must be 1 when thinking is enabled"},
+                )
+            return self._make_mock_response()
+
+        with (
+            patch.object(llm_mod.litellm, "completion", side_effect=failing_then_success),
+            patch.object(llm_mod, "_emit_llm_attribution", side_effect=capture_attribution),
+        ):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,
+                use_cloud=False,
+            )
+
+        assert call_count == 2
+        assert captured_kwargs_list[0]["extra_body"]["thinking"] == {
+            "type": "adaptive",
+            "display": "summarized",
+        }
+        retry_events = [
+            fields
+            for _context, event, fields in attribution_events
+            if event == "llm_invoke.temperature_retry"
+        ]
+        assert retry_events
+        assert retry_events[-1]["adjusted_temperature"] == 1
+
 
 # ============================================================================
 # TESTS: Time parameter None handling
