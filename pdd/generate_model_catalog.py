@@ -95,6 +95,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # Anthropic Claude
     # -----------------------------------------------------------------------
     "claude-opus-4-8": 1575,            # [EST] provisional, until live arena lists it
+    "claude-opus-4-7": 1565,            # [CODE] reviewed WebDev manifest row
     "claude-opus-4-6": 1561,            # [CODE] #1
     "claude-opus-4-5": 1469,            # [CODE] #6
     "claude-opus-4-1": 1389,            # [CODE] #20
@@ -108,6 +109,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     "claude-haiku-4-5": 1303,           # [CODE]
     # Dot-separated aliases
     "claude-opus-4.8": 1575,
+    "claude-opus-4.7": 1565,
     "claude-opus-4.6": 1561,
     "claude-opus-4.5": 1469,
     "claude-opus-4.1": 1389,
@@ -1388,6 +1390,22 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "structured_output": True,
         "reasoning_type": "effort",
         "location": "global",
+    },
+    {
+        # Opus 4.7 on Azure AI / Microsoft Foundry. Pinned LiteLLM can lag
+        # Foundry availability, and this row already ships in the committed
+        # catalog. Keep it seeded so refreshes preserve the Azure adaptive
+        # reasoning contract until LiteLLM ships the id.
+        "provider": "Azure AI",
+        "model": "azure_ai/claude-opus-4-7",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "AZURE_AI_API_KEY",
+        "max_reasoning_tokens": 16000,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
     },
     {
         # Opus 4.8 on Azure AI / Microsoft Foundry. Seed it until LiteLLM ships
