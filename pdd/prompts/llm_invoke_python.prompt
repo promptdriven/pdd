@@ -225,7 +225,7 @@
     - On auth error with newly acquired key: Re-prompt for same key and retry.
     - On schema validation failure: Raise SchemaValidationError to trigger fallback to next model.
     - Preserve provider credentials in retries: Pass api_key, base_url, api_version from original call.
-    - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry.
+    - Anthropic temperature auto-adjustment: If error mentions temperature+thinking, adjust and retry. Treat top-level thinking/reasoning_effort and extra_body.thinking as thinking being sent.
       Two directions: (1) thinking enabled but temperature≠1 → force temperature=1;
       (2) temperature=1 without thinking → retry with 0.99. Track adjustment to avoid infinite loop.
     - Catch litellm.ContextWindowExceededError as a post-call safety net (for cases where

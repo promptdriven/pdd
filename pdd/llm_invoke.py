@@ -2544,7 +2544,9 @@ def _summarize_litellm_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     summary["has_api_key"] = bool(kwargs.get("api_key"))
     summary["has_base_url"] = bool(kwargs.get("base_url") or kwargs.get("api_base"))
     summary["has_response_format"] = "response_format" in kwargs
-    summary["has_reasoning"] = any(key in kwargs for key in ("reasoning", "reasoning_effort", "thinking"))
+    summary["has_reasoning"] = (
+        "reasoning" in kwargs or _has_thinking_or_reasoning_payload(kwargs)
+    )
     messages = kwargs.get("messages")
     if isinstance(messages, list):
         summary["message_count"] = len(messages)
@@ -2563,6 +2565,14 @@ def _model_disallows_temperature(model_name: Any) -> bool:
         or "claude-opus-4-8" in model_lower
         or "claude-opus-4.8" in model_lower
     )
+
+
+def _has_thinking_or_reasoning_payload(litellm_kwargs: Dict[str, Any]) -> bool:
+    """Return True when a LiteLLM request carries Claude thinking/reasoning."""
+    if "thinking" in litellm_kwargs or "reasoning_effort" in litellm_kwargs:
+        return True
+    extra_body = litellm_kwargs.get("extra_body")
+    return isinstance(extra_body, dict) and "thinking" in extra_body
 
 
 # Regex anchored to the Gemini 3 family identifier so that:
@@ -5170,11 +5180,13 @@ def llm_invoke(
                 else:
                     # Claude requirement: when thinking/reasoning is enabled, temperature must be 1.
                     # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
-                    # Check both 'thinking' and 'reasoning_effort' because litellm translates
-                    # reasoning_effort to thinking internally during transform_request.
+                    # Check top-level and extra_body payloads because LiteLLM
+                    # may route provider-specific thinking through either.
                     try:
                         is_claude_model = 'claude' in model_name_litellm.lower()
-                        has_thinking_or_reasoning = 'thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs
+                        has_thinking_or_reasoning = _has_thinking_or_reasoning_payload(
+                            litellm_kwargs
+                        )
                         if is_claude_model and has_thinking_or_reasoning and 'temperature' in litellm_kwargs:
                             if litellm_kwargs.get('temperature') != 1:
                                 if verbose:
@@ -5823,7 +5835,10 @@ def llm_invoke(
                 # 2) thinking enabled but temperature!=1 -> retry with 1
                 lower_err = error_str.lower()
                 if (not temp_adjustment_done) and ("temperature" in lower_err) and ("thinking" in lower_err):
-                    claude_thinking_sent = ('thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs) and 'claude' in model_name_litellm.lower()
+                    claude_thinking_sent = (
+                        _has_thinking_or_reasoning_payload(litellm_kwargs)
+                        and 'claude' in model_name_litellm.lower()
+                    )
                     # Decide direction of adjustment based on whether thinking was enabled in the call
                     if claude_thinking_sent:
                         # thinking enabled -> force temperature=1
