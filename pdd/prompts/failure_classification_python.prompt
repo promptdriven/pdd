@@ -2,6 +2,20 @@
 
 <pdd-reason>Classify pytest / verification output for `fix_error_loop` and `agentic_multishot` by failure type: syntax_import, assertion_logic, timeout_flaky, budget_truncated, infrastructure_error.</pdd-reason>
 
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "classify_failure", "signature": "(text: str) -> FailureKind", "returns": "FailureKind"},
+      {"name": "extract_failure_signature", "signature": "(text: str) -> str", "returns": "str"},
+      {"name": "failure_classification_hint", "signature": "(kind: FailureKind) -> str", "returns": "str"},
+      {"name": "format_signature_hint", "signature": "(sig: str) -> str", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
 % Goal
 Write `pdd/failure_classification.py`.
 
@@ -19,9 +33,9 @@ Pure helpers used by `fix_error_loop` and `agentic_multishot` (and optionally ot
 
 2. **Classification order** — When scanning output, **check timeout/flaky patterns before syntax/import** so strings like `"timed out"` win over incidental `SyntaxError` substrings in logs.
 
-3. **`classify_failure(output: str) -> FailureKind`** — Map captured failure text to a `FailureKind`.
+3. **`classify_failure(text: str) -> FailureKind`** — Map captured failure text to a `FailureKind`.
 
-4. **`extract_failure_signature(output: str) -> str`** — Produce a **stable, comparable** signature for “same failure as last iteration” (e.g. normalized error type + location hints). Used to detect unchanged syntax/import failures across fix attempts.
+4. **`extract_failure_signature(text: str) -> str`** — Produce a **stable, comparable** signature for “same failure as last iteration” (e.g. normalized error type + location hints). Used to detect unchanged syntax/import failures across fix attempts.
 
 5. **`failure_classification_hint(kind: FailureKind) -> str`** — Short, user-facing explanation for why the loop stopped or what to try next. Must cover all five `FailureKind` values:
    - `syntax_import` — existing hint text (unchanged).

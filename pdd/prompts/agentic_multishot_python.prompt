@@ -1,3 +1,5 @@
+<include>context/python_preamble.prompt</include>
+
 <pdd-reason>Sequential multi-shot repeat-run controller for agentic CLI harnesses; wraps run_agentic_task with per-shot budget/timeout, hidden-verifier selection, and append-only JSONL telemetry.</pdd-reason>
 
 <pdd-interface>
@@ -41,8 +43,6 @@
 
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>failure_classification_python.prompt</pdd-dependency>
-
-<include>context/python_preamble.prompt</include>
 
 % Goal
 Write `pdd/agentic_multishot.py`.
