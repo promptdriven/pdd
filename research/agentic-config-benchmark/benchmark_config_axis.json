@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "axis_id": "agentic-config-benchmark-v1",
+  "issue": "https://github.com/promptdriven/pdd/issues/1594",
+  "description": "Config axis sweep: vary (harness, model, thinking) while holding task fixtures constant.",
+
+  "locked_invariants": {
+    "task_id": "PLACEHOLDER_task_id",
+    "visible_tests_sha256": "PLACEHOLDER_visible_tests_sha256",
+    "hidden_verifier_sha256": "PLACEHOLDER_hidden_verifier_sha256",
+    "materialized_repo_sha256": "PLACEHOLDER_materialized_repo_sha256",
+    "timeout_seconds": 1800,
+    "repeat_runs": 5
+  },
+
+  "note_on_placeholders": "task_id, visible_tests_sha256, hidden_verifier_sha256, and materialized_repo_sha256 are PLACEHOLDER values to be replaced with content-addressed hashes from #1419 fixtures before any run. The runner aborts if any hash field begins with 'PLACEHOLDER_'.",
+
+  "model_registry_path": "pdd/data/llm_model.csv",
+  "model_registry_fields_used": ["model_id", "model_rank_score", "model_rank_source", "reasoning_type", "interactive_only"],
+
+  "config_identity_hash_fields": ["harness_id", "harness_version", "model_id", "thinking_enabled", "thinking_effort"],
+
+  "configs": [
+    {
+      "config_rank": 0,
+      "label": "baseline",
+      "harness_id": "pdd-agentic-cli",
+      "harness_version": "1.0.0",
+      "model_id": "anthropic.claude-sonnet-4-6",
+      "thinking_enabled": false,
+      "thinking_effort": null,
+      "is_default_baseline": true,
+      "model_rank_score": 13200,
+      "model_rank_source": "deepswe-solve-rate",
+      "reasoning_type": "effort",
+      "interactive_only": false,
+      "notes": "Default agentic baseline. Anchor row for delta_vs_baseline comparisons."
+    },
+    {
+      "config_rank": 1,
+      "label": "baseline+thinking",
+      "harness_id": "pdd-agentic-cli",
+      "harness_version": "1.0.0",
+      "model_id": "anthropic.claude-sonnet-4-6",
+      "thinking_enabled": true,
+      "thinking_effort": "medium",
+      "is_default_baseline": false,
+      "model_rank_score": 13200,
+      "model_rank_source": "deepswe-solve-rate",
+      "reasoning_type": "effort",
+      "interactive_only": false,
+      "notes": "Same model as baseline with extended thinking enabled at medium effort. reasoning_type=effort qualifies this cell for thinking."
+    },
+    {
+      "config_rank": 2,
+      "label": "stronger",
+      "harness_id": "pdd-agentic-cli",
+      "harness_version": "1.0.0",
+      "model_id": "anthropic.claude-opus-4-7",
+      "thinking_enabled": false,
+      "thinking_effort": null,
+      "is_default_baseline": false,
+      "model_rank_score": 15400,
+      "model_rank_source": "deepswe-solve-rate",
+      "reasoning_type": "effort",
+      "interactive_only": false,
+      "notes": "Top-ranked model by DeepSWE solve-rate. DeepSWE score reflects different harness; see deepswe_rank_caveat in run records."
+    },
+    {
+      "config_rank": 3,
+      "label": "stronger+thinking",
+      "harness_id": "pdd-agentic-cli",
+      "harness_version": "1.0.0",
+      "model_id": "anthropic.claude-opus-4-7",
+      "thinking_enabled": true,
+      "thinking_effort": "medium",
+      "is_default_baseline": false,
+      "model_rank_score": 15400,
+      "model_rank_source": "deepswe-solve-rate",
+      "reasoning_type": "effort",
+      "interactive_only": false,
+      "notes": "Top-ranked model with thinking enabled. Highest expected capability; highest expected cost."
+    },
+    {
+      "config_rank": 4,
+      "label": "latest",
+      "harness_id": "pdd-agentic-cli",
+      "harness_version": "1.0.0",
+      "model_id": "anthropic.claude-opus-4-8",
+      "thinking_enabled": false,
+      "thinking_effort": null,
+      "is_default_baseline": false,
+      "model_rank_score": 1575,
+      "model_rank_source": "static-prefix",
+      "reasoning_type": "effort",
+      "interactive_only": false,
+      "notes": "Most recent model (static-prefix rank = arena ELO proxy 1575). No DeepSWE solve-rate yet available; model_rank_score reflects arena ELO fallback."
+    },
+    {
+      "config_rank": 5,
+      "label": "latest+thinking",
+      "harness_id": "pdd-agentic-cli",
+      "harness_version": "1.0.0",
+      "model_id": "anthropic.claude-opus-4-8",
+      "thinking_enabled": true,
+      "thinking_effort": "medium",
+      "is_default_baseline": false,
+      "model_rank_score": 1575,
+      "model_rank_source": "static-prefix",
+      "reasoning_type": "effort",
+      "interactive_only": false,
+      "notes": "Most recent model with thinking enabled. reasoning_type=effort qualifies."
+    }
+  ],
+
+  "scheduling_rules": {
+    "skip_interactive_only": true,
+    "skip_thinking_for_non_effort_models": true,
+    "thinking_eligible_reasoning_types": ["effort", "budget"],
+    "abort_on_placeholder_hashes": true
+  },
+
+  "deepswe_caveat": "Model cells where model_rank_source='deepswe-solve-rate' reflect solve-rate scores measured under the DeepSWE harness, not the PDD agentic CLI harness. These scores inform model-strength ordering but do not translate directly to PDD pass-rate predictions. Always reported with deepswe_rank_caveat in run records."
+}
