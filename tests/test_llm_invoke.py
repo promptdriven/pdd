@@ -6624,6 +6624,72 @@ class TestReasoningParameters:
         assert "thinking" not in captured_kwargs
         assert "reasoning_effort" not in captured_kwargs
 
+    def test_azure_ai_adaptive_extra_body_does_not_leak_to_fallback_retry(
+        self, llm_mod, tmp_path, monkeypatch
+    ):
+        """Azure adaptive retry kwargs must not leak into later candidates."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Azure AI,azure_ai/claude-opus-4-7,5,25,1565,TEST_KEY,True,adaptive,4096,4096,16000\n"
+            "openai,gpt-4,1,2,1300,TEST_KEY,True,none,4096,4096,0\n"
+        )
+        csv_path = tmp_path / "models.csv"
+        csv_path.write_text(content)
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "azure_ai/claude-opus-4-7")
+
+        mock_message_none = MagicMock()
+        mock_message_none.content = None
+        mock_choice_none = MagicMock()
+        mock_choice_none.message = mock_message_none
+        mock_response_none = MagicMock()
+        mock_response_none.choices = [mock_choice_none]
+        mock_response_none._hidden_params = {}
+
+        mock_message_ok = MagicMock()
+        mock_message_ok.content = "fallback retry success"
+        mock_choice_ok = MagicMock()
+        mock_choice_ok.message = mock_message_ok
+        mock_choice_ok.finish_reason = "stop"
+        mock_response_ok = MagicMock()
+        mock_response_ok.choices = [mock_choice_ok]
+        mock_response_ok._hidden_params = {}
+
+        captured_kwargs_list = []
+
+        def fail_azure_then_retry_gpt(**kwargs):
+            captured_kwargs_list.append(dict(kwargs))
+            if len(captured_kwargs_list) == 1:
+                raise Exception("azure unavailable")
+            if len(captured_kwargs_list) == 2:
+                return mock_response_none
+            return mock_response_ok
+
+        with patch.object(
+            llm_mod.litellm,
+            "completion",
+            side_effect=fail_azure_then_retry_gpt,
+        ):
+            result = llm_mod.llm_invoke(
+                prompt="Say {greeting}",
+                input_json={"greeting": "hello"},
+                strength=0.5,
+                time=0.5,
+                use_cloud=False,
+            )
+
+        assert result["result"] == "fallback retry success"
+        assert captured_kwargs_list[0]["model"] == "azure_ai/claude-opus-4-7"
+        assert "extra_body" in captured_kwargs_list[0]
+        assert captured_kwargs_list[1]["model"] == "gpt-4"
+        assert "extra_body" not in captured_kwargs_list[1]
+        assert captured_kwargs_list[2]["model"] == "gpt-4"
+        assert "extra_body" not in captured_kwargs_list[2]
+
     @pytest.mark.parametrize(
         "model_name",
         ("azure_ai/claude-opus-4-7", "azure_ai/claude-opus-4-8"),
