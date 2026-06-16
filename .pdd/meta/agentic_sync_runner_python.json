@@ -1,17 +1,21 @@
 {
-  "pdd_version": "0.0.231",
-  "timestamp": "2026-05-08T21:43:23.524863+00:00",
+  "pdd_version": "0.0.275.dev3",
+  "timestamp": "2026-06-16T01:31:18.161464+00:00",
   "command": "fix",
-  "prompt_hash": "0aac581655f7ed877c364c94d68b917a87aa8d4aa2233978e6d8b8f0520398e2",
-  "code_hash": "0f334b0b2784578eb4468b5a175bbc68700c9919e0dec87ce7383274677b4eb6",
-  "example_hash": "45ec8a98d3ea367bc32b42fdf1ab0d14883364ad08b0ba6c6676e070550aaac3",
-  "test_hash": "2308381015e0df1ce816d22a8e4b6fdcb633fc4dba026b4a6f2e641b5025cea8",
+  "prompt_hash": "0784d6ff7f749b74e6938bfdd945a1cf97aed961ebea4bf3849fe512bf7163f9",
+  "code_hash": "587d51aaed8470de39bbefbb0882f481f269431cca8b50e45b22e90dbd2eb695",
+  "example_hash": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
+  "test_hash": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22",
   "test_files": {
-    "test_agentic_sync_runner.py": "2308381015e0df1ce816d22a8e4b6fdcb633fc4dba026b4a6f2e641b5025cea8"
+    "test_agentic_sync_runner.py": "781deb083113a3c96b990501f24cdf41e0742190be5cfbe85553639c25e62e22"
   },
   "include_deps": {
-    "context/agentic_change_example.py": "46743f7ad91c5949e25e8a5c7532b3f8ada733e16f85a41d3e72ae9507ee559b",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "context/agentic_change_example.py": "a8308b2af708c804d626a4a96012c5a67f5bc6469e33857cafc07627213828d7",
+    "context/agentic_common_example.py": "f9cdb30a932973d341b795faf510056b95573610af5ac48e3849cf42c205998e",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
+    "context/architecture_sync_example.py": "b6158dbc7ca3fd32665528562225f6739ec521a071d845acab0f7caaea221ae0",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/sync_order_example.py": "b4eb1e167e7604c7dbac703bdcba7287188fa9d2d5ef6d490216d003cdc542fa"
   }
 }
