@@ -10008,12 +10008,10 @@ def test_codex_effort_env_is_case_and_whitespace_tolerant(
     assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
 
 
-def test_claude_always_prints_effort_notice_when_not_quiet(
+def test_claude_injects_effort_flag_when_not_quiet(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
 ):
-    """Silent-failure guard: dropping the user's reasoning request with no
-    feedback generates support tickets. The notice fires regardless of
-    --verbose, gated only by --quiet."""
+    """Claude Code supports --effort; PDD should apply the requested effort."""
     from pdd.agentic_common import _run_with_provider
 
     mock_shutil_which.return_value = "/bin/claude"
@@ -10031,8 +10029,11 @@ def test_claude_always_prints_effort_notice_when_not_quiet(
         os.environ.pop("PDD_REASONING_EFFORT", None)
 
     captured = capsys.readouterr()
-    assert "PDD_REASONING_EFFORT=high" in captured.out
-    assert "Claude Code CLI" in captured.out
+    assert "PDD_REASONING_EFFORT=high" not in captured.out
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--effort" in cmd
+    assert cmd[cmd.index("--effort") + 1] == "high"
 
 
 def test_claude_suppresses_effort_notice_when_quiet(
@@ -10057,6 +10058,57 @@ def test_claude_suppresses_effort_notice_when_quiet(
 
     captured = capsys.readouterr()
     assert "PDD_REASONING_EFFORT" not in captured.out
+
+
+def test_claude_interactive_injects_effort_env(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which
+):
+    """Interactive bridge cannot receive argv flags, so effort is passed via env."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    os.environ["PDD_REASONING_EFFORT"] = "medium"
+    try:
+        with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+            bridge.return_value = (True, "ok", 0.0, None)
+            _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_CLAUDE_CODE_MODE", None)
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    _, kwargs = bridge.call_args
+    assert kwargs["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
+
+
+def test_opencode_warns_when_effort_requested_without_variant(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
+):
+    """OpenCode has no generic effort flag; users should get the variant hint."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/opencode"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"type": "message", "text": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    os.environ["OPENCODE_MODEL"] = "openai/gpt-5"
+    os.environ.pop("OPENCODE_VARIANT", None)
+    try:
+        _run_with_provider("opencode", prompt_file, mock_cwd, verbose=False, quiet=False)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+        os.environ.pop("OPENCODE_MODEL", None)
+
+    captured = capsys.readouterr()
+    assert "OPENCODE_VARIANT" in captured.out
 
 
 # ---------------------------------------------------------------------------

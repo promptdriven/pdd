@@ -20,6 +20,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from dataclasses import dataclass
+from enum import Enum
 
 from rich.console import Console
 
@@ -29,6 +30,22 @@ AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
 TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
+
+
+class EffortCapability(str, Enum):
+    FULL = "full"
+    CLAMPED = "clamped"
+    CONFIG_ONLY = "config_only"
+    INTERACTIVE_ONLY = "interactive_only"
+    UNSUPPORTED = "unsupported"
+
+
+_EFFORT_CAPABILITY: Dict[str, EffortCapability] = {
+    "openai": EffortCapability.FULL,
+    "anthropic": EffortCapability.CLAMPED,
+    "google": EffortCapability.UNSUPPORTED,
+    "opencode": EffortCapability.UNSUPPORTED,
+}
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
@@ -959,8 +976,10 @@ class _ProviderRunResult(tuple):
         cost_usd: float,
         model: Optional[str],
         usage: AgenticUsage = None,
+        requested_effort: Optional[str] = None,
+        effective_effort: Optional[str] = None,
     ) -> "_ProviderRunResult":
-        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage))
+        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage, requested_effort, effective_effort))
 
     def __iter__(self):
         return (tuple.__getitem__(self, i) for i in range(4))
@@ -968,6 +987,14 @@ class _ProviderRunResult(tuple):
     @property
     def usage(self) -> AgenticUsage:
         return tuple.__getitem__(self, 4)
+
+    @property
+    def requested_effort(self) -> Optional[str]:
+        return tuple.__getitem__(self, 5)
+
+    @property
+    def effective_effort(self) -> Optional[str]:
+        return tuple.__getitem__(self, 6)
 
 
 @dataclass
@@ -2329,6 +2356,33 @@ def _get_provider_model(provider: str) -> Optional[str]:
     return value.strip() or None
 
 
+def _resolve_effort_for_provider_log(
+    provider: str,
+    reasoning_time: Optional[float],
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return (requested_effort, effective_effort) for audit logging."""
+    env = env or os.environ
+    if reasoning_time is not None:
+        from .reasoning import time_to_effort_level
+        requested = time_to_effort_level(reasoning_time)
+    else:
+        requested = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
+        if requested not in {"low", "medium", "high"}:
+            requested = None
+    if provider == "openai":
+        codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
+        if codex_effort in {"low", "medium", "high", "xhigh"}:
+            return requested, codex_effort
+        return requested, requested
+    if provider == "anthropic":
+        claude_effort = (env.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip().lower()
+        if claude_effort in {"low", "medium", "high", "xhigh", "max"}:
+            return requested or claude_effort, claude_effort
+        return requested, requested
+    return requested, None
+
+
 def _log_agentic_interaction(
     label: str,
     prompt: str,
@@ -2342,6 +2396,8 @@ def _log_agentic_interaction(
     model: Optional[str] = None,
     false_positive: bool = False,
     include_bodies: bool = True,
+    requested_effort: Optional[str] = None,
+    effective_effort: Optional[str] = None,
 ) -> Optional[_PddOwnedLogWrite]:
     """
     Append one record per provider attempt to ``.pdd/agentic-logs/session_*.jsonl``.
@@ -2401,6 +2457,8 @@ def _log_agentic_interaction(
             "duration_seconds": round(duration, 2),
             "prompt_length": len(prompt),
             "response_length": len(response),
+            "requested_effort": requested_effort,
+            "effective_effort": effective_effort,
         }
         if include_bodies:
             entry["prompt"] = prompt
@@ -4326,6 +4384,10 @@ def run_agentic_task(
                 # fall back to the requested model from env vars when the JSON
                 # didn't surface one (e.g. early-error returns).
                 effective_model = actual_model or _get_provider_model(provider)
+                requested_effort, effective_effort = _resolve_effort_for_provider_log(
+                    provider,
+                    reasoning_time,
+                )
 
                 # False Positive Detection
                 # Issue #249: Empty output should ALWAYS be detected as false positive,
@@ -4387,6 +4449,8 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 false_positive=True,
+                                requested_effort=requested_effort,
+                                effective_effort=effective_effort,
                             ),
                             pdd_owned_log_signatures,
                             filesystem_snapshot,
@@ -4452,6 +4516,8 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 include_bodies=verbose,
+                                requested_effort=requested_effort,
+                                effective_effort=effective_effort,
                             )
                             return AgenticTaskResult(
                                 False,
@@ -4478,6 +4544,8 @@ def run_agentic_task(
                             cwd=cwd,
                             model=effective_model,
                             include_bodies=verbose,
+                            requested_effort=requested_effort,
+                            effective_effort=effective_effort,
                         )
                         return AgenticTaskResult(
                             True,
@@ -4506,6 +4574,8 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
+                            requested_effort=requested_effort,
+                            effective_effort=effective_effort,
                         ),
                         pdd_owned_log_signatures,
                         filesystem_snapshot,
@@ -4592,6 +4662,8 @@ def run_agentic_task(
                     duration=time.time() - task_start_time,
                     cwd=cwd,
                     model=effective_model,
+                    requested_effort=requested_effort if 'requested_effort' in locals() else None,
+                    effective_effort=effective_effort if 'effective_effort' in locals() else None,
                 )
             # If deadline was exhausted, don't try other providers either
             if deadline_exhausted or time.time() > aggregate_deadline:
@@ -5910,12 +5982,9 @@ def _run_with_provider(
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
         if _claude_code_interactive_enabled(env):
-            if reasoning_effort and not quiet:
-                console.print(
-                    f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but PDD's "
-                    "Claude Code interactive bridge does not map it to a CLI flag; "
-                    "applies to llm_invoke steps only, not this subprocess.[/dim]"
-                )
+            if reasoning_effort:
+                env = dict(env)
+                env["CLAUDE_CODE_EFFORT_LEVEL"] = reasoning_effort
             return _run_claude_interactive_with_mcp(
                 cli_path=cli_path,
                 prompt_path=prompt_path,
@@ -5954,17 +6023,8 @@ def _run_with_provider(
         claude_model = env.get("CLAUDE_MODEL")
         if claude_model:
             cmd.extend(["--model", claude_model])
-        if reasoning_effort and not quiet:
-            # Always surface outside --quiet mode — silently dropping the user's
-            # reasoning signal is a support-ticket generator. The Claude Code CLI
-            # has no --reasoning-effort flag today, so clarify that the effort
-            # applies to LiteLLM-invoked steps (analysis/verification) but not
-            # to this code-writing subprocess.
-            console.print(
-                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Claude Code CLI "
-                "has no reasoning-effort flag; applies to llm_invoke steps only, "
-                "not this subprocess.[/dim]"
-            )
+        if reasoning_effort:
+            cmd.extend(["--effort", reasoning_effort])
     elif provider == "google":
         resolved_bin = _get_google_cli_name(env)
         if resolved_bin == "agy":
@@ -6092,6 +6152,12 @@ def _run_with_provider(
         variant_name = (env.get("OPENCODE_VARIANT") or "").strip()
         if variant_name:
             cmd.extend(["--variant", variant_name])
+        elif reasoning_effort and not quiet:
+            console.print(
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but OpenCode "
+                "does not expose a generic CLI effort flag; configure an "
+                "OPENCODE_VARIANT for provider-specific reasoning settings.[/dim]"
+            )
         # The OpenCode CLI requires a positional ``message`` argument for
         # ``opencode run`` (https://opencode.ai/docs/cli/) — earlier revisions
         # passed only ``--`` and piped the prompt body on stdin, which the CLI

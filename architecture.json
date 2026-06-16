@@ -185,6 +185,18 @@
             "returns": "bool"
           }
         ],
+        "enums": [
+          {
+            "name": "EffortCapability",
+            "values": [
+              "FULL",
+              "CLAMPED",
+              "CONFIG_ONLY",
+              "INTERACTIVE_ONLY",
+              "UNSUPPORTED"
+            ]
+          }
+        ],
         "typeAliases": [
           {
             "name": "TaskClass",
