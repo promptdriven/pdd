@@ -3,11 +3,11 @@
   "harnesses": {
     "claude_code": {
       "harness_id": "claude_code",
-      "accepts_model_arg": false,
-      "effort_knob": "--thinking",
+      "accepts_model_arg": true,
+      "effort_knob": null,
       "context_limit_tokens": null,
       "identity_observable": true,
-      "routing_class": "config-fixed"
+      "routing_class": "controllable"
     },
     "codex": {
       "harness_id": "codex",
