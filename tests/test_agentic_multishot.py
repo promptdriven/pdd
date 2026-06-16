@@ -417,3 +417,120 @@ class TestCliVersion:
         patched.task.return_value = make_result(True, "ok", 0.1)
         result = run_multishot_candidates("do", Path("."), **base_kwargs())
         assert result.candidates[0].cli_version == ""
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+from datetime import datetime
+import json
+from pathlib import Path
+
+
+class TestTimestampsAndLatency:
+    def test_started_and_finished_are_iso8601_utc(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        rec = result.candidates[0]
+        # datetime.fromisoformat round-trips the ISO-8601 strings written.
+        started = datetime.fromisoformat(rec.started_at)
+        finished = datetime.fromisoformat(rec.finished_at)
+        assert started.tzinfo is not None
+        assert finished.tzinfo is not None
+        assert finished >= started
+
+    def test_latency_ms_nonnegative_on_success(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        assert result.candidates[0].latency_ms >= 0.0
+        assert result.total_latency_ms >= 0.0
+
+    def test_cost_recorded_from_task_result(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.42)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        assert result.candidates[0].cost_usd == 0.42
+
+
+class TestIntermediateStopReason:
+    def test_failing_intermediate_shot_has_no_stop_reason(self, patched):
+        # n_shots=3, all fail -> shots 1,2 have stop_reason None; shot 3 max_shots_reached.
+        patched.task.return_value = make_result(False, "boom", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=3, verifier_fn=always_fail),
+        )
+        assert result.candidates[0].stop_reason is None
+        assert result.candidates[1].stop_reason is None
+        assert result.candidates[2].stop_reason == "max_shots_reached"
+
+
+class TestVerifierFailOnSuccessfulTask:
+    def test_task_success_but_verifier_fail_is_assertion_logic(self, patched):
+        # task_result.success=True but verifier returns False -> failure_class assertion_logic.
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(verifier_fn=always_fail)
+        )
+        rec = result.candidates[0]
+        assert rec.verdict == "fail"
+        assert rec.failure_class == "assertion_logic"
+
+
+class TestJsonlFlushBeforeEarlyReturn:
+    def test_jsonl_written_before_stop_on_first_pass(self, patched, tmp_path):
+        results = [make_result(False, "boom", 0.1), make_result(True, "ok", 0.1)]
+        patched.task.side_effect = results
+        out = tmp_path / "t.jsonl"
+        run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=5, verifier_fn=verify_by_success, jsonl_path=out),
+        )
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+        last = json.loads(lines[-1])
+        assert last["verdict"] == "pass"
+        assert last["stop_reason"] == "verifier_pass"
+
+    def test_jsonl_written_on_infrastructure_error(self, patched, tmp_path):
+        patched.task.side_effect = RuntimeError("boom")
+        out = tmp_path / "t.jsonl"
+        run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=3, jsonl_path=out),
+        )
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        rec = json.loads(lines[0])
+        assert rec["failure_class"] == "infrastructure_error"
+        assert rec["stop_reason"] == "infrastructure_error"
+
+    def test_jsonl_written_on_budget_exhaustion(self, patched, tmp_path):
+        out = tmp_path / "t.jsonl"
+        run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(per_shot_budget=2.0, total_budget=1.0, jsonl_path=out),
+        )
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        rec = json.loads(lines[0])
+        assert rec["stop_reason"] == "budget_exhausted"
+
+
+class TestArbitraryKwargsForwarded:
+    def test_extra_kwargs_passed_through(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(),
+            max_retries=3,
+            reasoning_time=0.5,
+        )
+        _, kwargs = patched.task.call_args
+        assert kwargs["max_retries"] == 3
+        assert kwargs["reasoning_time"] == 0.5
