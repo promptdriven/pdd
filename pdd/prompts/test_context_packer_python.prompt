@@ -52,6 +52,7 @@ This module implements deterministic ranked test packing. It selects which test 
 ### Instructions:
 - Keep import-graph BFS in a private method `_build_import_graph(module_path)` with per-instance caching.
 - The redundancy penalty λ defaults to 0.5; it is not exposed as a configuration parameter.
+- Set `__test__ = False` on the `Test*`-named classes (`TestContextPacker`, `TestPackingManifest`, `TestPackingResult`) so pytest does not mis-collect them as test cases.
 - Do not add external dependencies beyond stdlib (`ast`, `json`, `os`, `pathlib`) and existing project modules.
 
 ### Deliverables:
