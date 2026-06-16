@@ -22,7 +22,7 @@
       {"name": "get_available_agents", "signature": "() -> List[str]", "returns": "List[str]"},
       {"name": "get_agentic_capabilities", "signature": "() -> Dict[str, Any]", "returns": "Dict[str, Any]"},
       {"name": "validate_claude_policy", "signature": "(policy: Any, *, interactive: bool = False) -> ClaudePolicy", "returns": "ClaudePolicy"},
-      {"name": "run_agentic_task", "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, task_class=None) -> AgenticTaskResult", "returns": "AgenticTaskResult"},
+      {"name": "run_agentic_task", "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None) -> AgenticTaskResult", "returns": "AgenticTaskResult"},
       {"name": "select_harness_for_task", "signature": "(task_class: str, candidates: List[str]) -> List[str]", "returns": "List[str]"},
       {"name": "detect_control_token", "signature": "(output, token, tail_lines=_SEMANTIC_TAIL_LINES) -> Optional[TokenMatch]", "returns": "Optional[TokenMatch]"},
       {"name": "classify_step_output", "signature": "(output, expected_tokens, model=\"gemini/gemini-3-flash\") -> Optional[TokenMatch]", "returns": "Optional[TokenMatch]"},
@@ -59,6 +59,7 @@
 <pdd-dependency>auth_service_python.prompt</pdd-dependency>
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
 <pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
+<pdd-dependency>routing_policy_python.prompt</pdd-dependency>
 <include>context/python_preamble.prompt</include>
 
 % Goal
@@ -159,12 +160,14 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini/Antigravi
 
    `select_harness_for_task` MUST NOT call `get_available_agents()`, load files, or produce side effects — it is a pure list-reordering function. The routing table is hard-coded in the function; `pdd/data/harness_registry.csv` (capability rationale data file, created alongside this prompt change) provides machine-readable backing for these choices and is consumed by external benchmark/policy tooling, not by this function at runtime. The registry columns MUST include `harness_id`, `cli_name`, `provider`, `headless_flag`, `headless_reliable`, `sandbox_level`, `auth_methods`, `auth_non_interactive`, `available_flags`, `rate_limit_tier`, `hidden_verifier_compatible`, `swe_bench_score`, `max_repo_size_gb`, and `notes`.
 
+24. **Routing Policy Integration**: `run_agentic_task` accepts two new optional keyword arguments — `routing_policy: Optional[RoutingPolicy] = None` (a loaded `RoutingPolicy` from `pdd.routing_policy`) and `task_class: Optional[str] = None` (coarse task class string, e.g. `"bug-fix"`, `"feature"`). When `routing_policy is None`, the function behaves exactly as before (no config selection, no escalation, no telemetry emission) — all existing callers are unaffected. When `routing_policy` is non-None: import `from pdd.routing_policy import select_config, escalate, emit_routing_record` and then: (a) call `select_config(routing_policy, task_class, None, deadline)` before the provider iteration loop to obtain a `(RoutingConfig, RoutingRecord)` pair (`run_agentic_task` does not track cumulative spend, so `budget_remaining` is passed as `None` to skip the budget pre-check at this layer); (b) apply the returned `RoutingConfig` by restricting the provider candidates list to the configured `harness` when that harness is available, setting the provider model env var from `resolve_model_for_tier(model_tier)`, setting `reasoning_time` from the `EffortLevel`-to-float map `{"low": 0.15, "medium": 0.5, "high": 0.85}`, and setting `max_retries` from `repeat_runs`; (c) after the routed config fails provider/verifier checks, call `escalate(routing_policy, record, verifier_result, None, effective_deadline)` to obtain the next bounded `(RoutingConfig, RoutingRecord)` and run that config with `routing_policy=None` so the existing provider loop is reused without recursively reselecting step 0; (d) emit one `RoutingRecord` JSON line per routed config attempt via `emit_routing_record(record, log_dir=cwd / ".pdd" / "agentic-logs")`. When `routing_policy` is set but `task_class` is `None` or not recognised, the router normalises to `"default"` and records `fallback_reason = "no_policy_row"`, falling through to the existing provider defaults.
+
 % Function Signatures
 `get_agent_provider_preference() -> List[str]`
 `get_available_agents() -> List[str]`
 `select_harness_for_task(task_class: str, candidates: List[str]) -> List[str]`
 - Pure function. Reorders `candidates` (already filtered by `get_available_agents()`) according to the task-class routing table. Unknown task classes return candidates unchanged.
-`run_agentic_task(instruction, cwd, *, verbose=False, quiet=False, label="", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, task_class=None) -> AgenticTaskResult`
+`run_agentic_task(instruction, cwd, *, verbose=False, quiet=False, label="", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None) -> AgenticTaskResult`
 - Tries providers in preference order. Returns a tuple-compatible AgenticTaskResult with five indexed fields `(success, output, cost, provider, usage)`. Iteration yields the historical four fields so existing `success, output, cost, provider = run_agentic_task(...)` callers continue to work, and `result[4]` MUST remain the usage field. Structured consumers should read `result.usage` or `result[4]`; changed-file metadata is exposed separately as `result.changed_files` and in `result.to_dict()["changed_files"]` so tuple compatibility is not disturbed. For Claude interactive mode, `usage` is JSON-serializable and shaped as `{"claude": [{"model": str, "input_tokens": int, "output_tokens": int, "cached_input_tokens": int, "cache_creation_input_tokens": int}, ...]}` when transcript usage rows are available; non-Claude providers may return `None`.
 - `use_playwright` enables constrained tools (see section).
 - Uses exponential backoff with jitter: `retry_delay * (2 ** (attempt - 1)) + random.uniform(0, retry_delay)`.
@@ -172,6 +175,8 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini/Antigravi
 - Enforces aggregate per-step timeout (`2 * effective_timeout` when no deadline set).
 - `reasoning_time` accepts an explicit user-supplied `--time` value forwarded by command modules and is `None` when the command used only the global default.
 - `steers` is an optional list of `SteerEntry` objects to inject into the instruction.
+- `routing_policy` is an optional `RoutingPolicy` from `pdd.routing_policy`; when non-None, enables pre-flight config selection via `select_config()`, bounded post-failure escalation via `escalate()`, and telemetry emission via `emit_routing_record()`. All existing callers without this argument are unaffected.
+- `task_class` is an optional coarse task-class string (e.g. `"bug-fix"`, `"feature"`) passed to `select_config()` when `routing_policy` is non-None; `None` or unrecognised values normalise to `"default"` and fall through to orchestrator defaults.
 `seed_issue_steer_cursor(repo_owner, repo_name, issue_number, state, *, cwd, quiet=False) -> bool`
 - Sets `last_steered_comment_id` / `last_steer_at` / `steer_cursor_seeded` to the current issue comment tail without returning steers. Returns `False` and logs a warning when the baseline `gh api` fetch fails (does not set `steer_cursor_seeded`).
 `ensure_issue_steer_cursor_seeded(repo_owner, repo_name, issue_number, state, *, cwd, quiet=False) -> bool`

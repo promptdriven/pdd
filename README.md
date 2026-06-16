@@ -65,6 +65,8 @@ For non-interactive bounded prompt repair after a failed prompt source-set check
 
 For the deterministic prompt source-set quality gate and its `pdd.prompt_source_set_report.v1` JSON schema (including the per-finding `requires_clarification` / `clarification_reason` clarification signal), see [docs/checkup_prompt_quality_gate.md](docs/checkup_prompt_quality_gate.md).
 
+For the agentic CLI routing policy (task-class-keyed static config table and bounded escalation ladder for `run_agentic_task`), see [docs/routing_policy.md](docs/routing_policy.md).
+
 ## Installation
 
 ### Prerequisites for macOS
@@ -3522,6 +3524,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `anthropic`, `google`, `openai`, `opencode`, and `antigravity` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
 - **`PDD_CLAUDE_CODE_MODE`**: Set to `interactive` to make the Anthropic agentic provider use interactive Claude Code through a temporary MCP reply tool instead of `claude -p`. This is an opt-in workaround for environments where `claude -p` uses a separate Agent SDK credit pool; when unset, PDD keeps the existing `claude -p - --output-format json` behavior.
 - **`PDD_GOOGLE_CLI`**: Selects the Google-provider binary. Values: `agy` (Antigravity CLI), `gemini` (legacy Gemini CLI as rollback), or `auto` (default — prefer `agy` when installed and credentialed, but use legacy `gemini` when both binaries are installed and the only Google auth signal is `~/.gemini/oauth_creds.json`). Used by both availability detection and command construction so they cannot disagree.
+- **`PDD_ROUTING_POLICY`**: Path to a YAML file that overrides the built-in agentic routing policy used by `run_agentic_task`. When set, `routing_policy.load_policy()` loads task-class rows from this file and merges them with the built-in defaults; absent keys fall back to defaults. Unset by default. See [docs/routing_policy.md](docs/routing_policy.md) for the schema.
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 - **`PDD_STEER_JSON`**: JSON list of mid-run user steers (`comment_id`, `author`, `body`). Cloud runners pass pending issue comments before GitHub comment polling; orchestrators drain at step boundaries and inject `## Steered user input (mid-run)` into the next agentic step.
 - **`PDD_WORKFLOW_STATE`**: Hidden GitHub comment marker used to persist and resume agentic workflow state across machines. Users normally do not set this directly; delete the state comment only when intentionally forcing a clean restart.

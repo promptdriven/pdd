@@ -2802,6 +2802,84 @@ def test_run_agentic_task_returns_gvs_detectable_json_usage_contract(
     json.dumps(result[4])
 
 
+def test_run_agentic_task_routing_policy_selects_initial_config(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google", "anthropic"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, kwargs, os.environ.get("CLAUDE_MODEL")))
+        return (True, "done", 0.25, "actual-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert calls == [("anthropic", calls[0][1], "tier-2-model")]
+    assert calls[0][1]["reasoning_time"] == 0.5
+    assert os.environ.get("CLAUDE_MODEL") is None
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "bug-fix"
+    assert payload["selected_config"]["model_tier"] == 2
+    assert payload["verifier_result"] == "pass"
+
+
+def test_run_agentic_task_routing_policy_escalates_after_failure(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    providers = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        return (True, "fixed on escalation", 0.2, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert result.output_text == "fixed on escalation"
+    assert providers == ["anthropic", "google"]
+    records = []
+    for path in sorted((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl")):
+        records.extend(json.loads(line) for line in path.read_text().splitlines())
+    assert [row["verifier_result"] for row in records] == ["fail", "pass"]
+    assert records[1]["escalation_step"] == 1
+    assert records[1]["selected_config"]["harness"] == "google"
+
+
 # ---------------------------------------------------------------------------
 # Issue #1365: interactive Claude post-launch auth fast-fail
 # ---------------------------------------------------------------------------
