@@ -2011,6 +2011,36 @@ def _verify_public_surface_regression(
         language or "python",
         patch_targets=patch_targets,
     )
+    # Syntax gate (issue #1612 Bug 2): if the freshly generated Python is
+    # unparseable, ``_snapshot_public_surface`` silently returns an empty set,
+    # which would misroute the failure as a phantom public-surface regression
+    # (``post_surface_size: 0``) and send the repair loop chasing removed
+    # symbols instead of the real problem. Raise a syntax-focused
+    # ``ArchitectureConformanceError`` so the repair loop targets the syntax
+    # error while still listing the expected public symbols to restore.
+    if before:
+        try:
+            ast.parse(generated_code or "")
+        except SyntaxError as syntax_err:
+            expected = sorted(before)
+            raise ArchitectureConformanceError(
+                prompt_name=prompt_name,
+                output_path=output_path or "",
+                architecture_entry={},
+                expected_symbols=expected,
+                found_symbols=[],
+                missing_symbols=expected,
+                message=(
+                    f"Architecture conformance error for {prompt_name}: "
+                    f"generated Python has a syntax error: {syntax_err}"
+                ),
+                repair_directive=(
+                    f"Fix the Python syntax error in the generated code: "
+                    f"{syntax_err}\n"
+                    f"Then restore all expected public symbols: "
+                    f"{', '.join(expected)}."
+                ),
+            ) from syntax_err
     after_patch_targets = _effective_patch_targets(
         generated_code, language or "python", output_path
     )

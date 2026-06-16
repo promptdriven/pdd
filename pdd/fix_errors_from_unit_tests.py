@@ -239,6 +239,24 @@ def fix_errors_from_unit_tests(
         total_cost += response2['cost']
         result2: CodeFix = response2['result']
 
+        # Guard against malformed structured output (``None`` or a raw string
+        # from the cache-bypass / truncation path). Return a clean
+        # "no fix applied" result instead of crashing with an AttributeError
+        # that the outer handler would mask as model_name='Error: AttributeError'
+        # (issue #1612).
+        if result2 is None or isinstance(result2, str):
+            if verbose:
+                console.print(
+                    "[yellow]fix_errors_from_unit_tests received a malformed "
+                    "extraction result; no fix applied.[/yellow]"
+                )
+            write_to_error_file(
+                error_file,
+                "fix_errors_from_unit_tests received a malformed CodeFix "
+                "result; no fix applied.",
+            )
+            return False, False, "", "", result1, total_cost, model_name
+
         if verbose:
             console.print(f"Total cost: ${total_cost:.6f}")
             console.print(f"Model used: {model_name}")

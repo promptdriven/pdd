@@ -119,6 +119,20 @@ def detect_change(
             console.print(f"Token count: {extract_response.get('token_count', 0)}")
             console.print(f"Cost: ${extract_response.get('cost', 0):.6f}")
 
+        # Guard against malformed structured output (``None`` or a raw string
+        # from the cache-bypass / truncation path). Fall back to an empty change
+        # list instead of crashing with an AttributeError on ``.changes_list``
+        # (issue #1612).
+        if extract_response['result'] is None or isinstance(
+            extract_response['result'], str
+        ):
+            if verbose:
+                console.print(
+                    "[yellow]detect_change received a malformed extraction "
+                    "result; returning no detected changes.[/yellow]"
+                )
+            return [], total_cost, model_name
+
         # Step 4: Format and display results
         changes_list = extract_response['result'].changes_list
         if verbose:

@@ -168,6 +168,18 @@ def update_prompt(
 
             total_cost += second_response['cost']
 
+            # Guard against malformed structured output (``None`` or a raw
+            # string from the cache-bypass / truncation path) before accessing
+            # ``.modified_prompt`` (issue #1612).
+            if second_response['result'] is None or isinstance(
+                second_response['result'], str
+            ):
+                raise ValueError(
+                    "update_prompt received a malformed structured result "
+                    f"(expected PromptUpdate, got "
+                    f"{type(second_response['result']).__name__})."
+                )
+
             # Validate that modified_prompt is not empty or whitespace-only
             modified_prompt_text = second_response['result'].modified_prompt
             if not modified_prompt_text or not modified_prompt_text.strip():

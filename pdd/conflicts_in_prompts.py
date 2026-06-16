@@ -97,10 +97,24 @@ def conflicts_in_prompts(
         )
 
         total_cost += extract_response['cost']
-        
+
+        # Guard against malformed structured output (``None`` or a raw string
+        # from the cache-bypass / truncation path). Fall back to an empty change
+        # list instead of crashing with an AttributeError on ``.changes_list``
+        # (issue #1612).
+        if extract_response['result'] is None or isinstance(
+            extract_response['result'], str
+        ):
+            if verbose:
+                rprint(
+                    "[yellow]conflicts_in_prompts received a malformed "
+                    "extraction result; returning no detected conflicts.[/yellow]"
+                )
+            return [], total_cost, model_name
+
         # Get the changes list from the Pydantic model
         changes_list = [
-            change.dict() 
+            change.dict()
             for change in extract_response['result'].changes_list
         ]
 

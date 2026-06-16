@@ -264,6 +264,17 @@ def insert_includes(
                 raise ValueError("Failed to get valid response from LLM model")
 
             result: InsertIncludesOutput = response['result']
+            # Guard against malformed structured output (``None`` or a raw
+            # string from the cache-bypass / truncation path). The
+            # ``'result' not in response`` check above does not catch a
+            # present-but-None value, so verify the shape before accessing
+            # ``.output_prompt`` (issue #1612).
+            if result is None or isinstance(result, str):
+                raise ValueError(
+                    "insert_includes received a malformed LLM result "
+                    f"(expected InsertIncludesOutput, got "
+                    f"{type(result).__name__})."
+                )
             model_name = response['model_name']
             total_cost = response['cost'] + auto_include_cost
             output_prompt = result.output_prompt

@@ -89,6 +89,17 @@ def continue_generation(
             language=language,
         )
         total_cost += trim_start_response['cost']
+        # Guard against malformed structured output (``None`` or a raw string
+        # from the cache-bypass / truncation path) before accessing
+        # ``.code_block`` (issue #1612).
+        if trim_start_response['result'] is None or isinstance(
+            trim_start_response['result'], str
+        ):
+            raise ValueError(
+                "continue_generation received a malformed trim-start result "
+                f"(expected TrimResultsStartOutput, got "
+                f"{type(trim_start_response['result']).__name__})."
+            )
         code_block = trim_start_response['result'].code_block
 
         # Step 4: Continue generation loop
