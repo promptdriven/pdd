@@ -19,6 +19,7 @@ from pdd.agentic_common import (
     get_available_agents,
     get_agent_provider_preference,
     run_agentic_task,
+    select_harness_for_task,
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
@@ -44,11 +45,138 @@ from pdd.agentic_common import (
     CODEX_PRICING,
     DEFAULT_TIMEOUT_SECONDS,
     AGENTIC_LOG_DIR,
+    TASK_CLASS_HIGH_ISOLATION,
+    TASK_CLASS_MULTI_FILE,
+    TASK_CLASS_REPO_SCALE,
+    TASK_CLASS_SINGLE_FILE,
 )
 
 # ---------------------------------------------------------------------------
 # Z3 Formal Verification
 # ---------------------------------------------------------------------------
+
+def test_select_harness_for_task_routes_known_task_classes():
+    candidates = ["google", "openai", "opencode", "anthropic"]
+
+    assert select_harness_for_task(TASK_CLASS_SINGLE_FILE, candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_MULTI_FILE, candidates) == [
+        "anthropic",
+        "opencode",
+        "google",
+        "openai",
+    ]
+    assert select_harness_for_task(TASK_CLASS_REPO_SCALE, candidates) == [
+        "anthropic",
+        "opencode",
+        "google",
+        "openai",
+    ]
+    assert select_harness_for_task(TASK_CLASS_HIGH_ISOLATION, candidates) == [
+        "opencode",
+        "anthropic",
+        "google",
+        "openai",
+    ]
+
+
+def test_select_harness_for_task_preserves_unmatched_and_unknown_order():
+    candidates = ["openai", "custom", "google"]
+
+    assert select_harness_for_task("future_task_class", candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_MULTI_FILE, candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_REPO_SCALE, candidates) == [
+        "custom",
+        "openai",
+        "google",
+    ]
+
+
+def test_run_agentic_task_task_class_reorders_available_candidates(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            task_class=TASK_CLASS_HIGH_ISOLATION,
+        )
+
+    assert not result.success
+    assert attempted == ["opencode", "anthropic", "google", "openai"]
+
+
+def test_run_agentic_task_task_class_none_preserves_candidate_order(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            task_class=None,
+        )
+
+    assert not result.success
+    assert attempted == ["google", "openai", "opencode", "anthropic"]
+
+
+def test_run_agentic_task_claude_policy_overrides_task_class(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            claude_policy={"outputFormat": "json"},
+            task_class=TASK_CLASS_HIGH_ISOLATION,
+        )
+
+    assert not result.success
+    assert attempted == ["anthropic"]
 
 def test_z3_pricing_properties():
     """
