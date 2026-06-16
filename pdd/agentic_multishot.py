@@ -202,7 +202,7 @@ def run_multishot_candidates(
             else:
                 verdict = "fail"
                 if not task_result.success:
-                    failure_class = classify_failure(task_result.output_text or "")
+                    failure_class = classify_failure(task_result.output_text or "").value
                 else:
                     failure_class = "assertion_logic"
         else:

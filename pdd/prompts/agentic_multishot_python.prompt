@@ -68,11 +68,15 @@ Thin orchestration controller for sequential multi-shot CLI repeat-runs. Wraps `
 
 5. **Pre-shot budget pre-check** — Before each shot (including shot 1), verify remaining total budget (`total_budget - accumulated_cost`). If remaining budget is less than `per_shot_budget`, stop immediately with `stop_reason="budget_exhausted"` without invoking `run_agentic_task`. Append the partial record (with `verdict="fail"`, `failure_class="budget_truncated"`, zero cost/latency) and return.
 
-6. **Total timeout enforcement** — Before each shot, check wall-clock elapsed since `run_multishot_candidates` entry. If elapsed exceeds `total_timeout_s`, stop with `stop_reason="timeout"`. Append the partial record and return.
+6. **Total timeout enforcement** — Before each shot, check wall-clock elapsed since `run_multishot_candidates` entry. If elapsed meets or exceeds `total_timeout_s` (`elapsed >= total_timeout_s`), stop with `stop_reason="timeout"` without invoking `run_agentic_task`. Append the partial record (with `verdict="fail"`, `failure_class="timeout_flaky"`, zero cost/latency) and return.
 
 7. **Per-shot invocation** — Call `run_agentic_task(instruction, cwd, timeout=per_shot_timeout_s, **kwargs)`. Catch all exceptions from `run_agentic_task`; on exception, set `failure_class="infrastructure_error"` and `stop_reason="infrastructure_error"`; cost fields reflect only tokens consumed before abort (use `0.0` when not determinable); the shot counts against the shot budget.
 
-8. **Hidden verifier invocation** — After each completed shot, call `verifier_fn(task_result)`. For failed shots (task_result.success is False), derive `failure_class` via `classify_failure(task_result.output_text or "")` from `failure_classification`. Catch all exceptions from `verifier_fn`; on exception, set `failure_class="infrastructure_error"`.
+8. **Hidden verifier invocation** — After each completed shot, call `verifier_fn(task_result)`; its boolean result is the primary verdict. `verdict="pass"` when it returns truthy, otherwise `verdict="fail"`. Derive `failure_class` as follows:
+   - Verifier raised an exception → `failure_class="infrastructure_error"` and `verdict="fail"` (do not consult `task_result`).
+   - `verdict="pass"` → `failure_class=None`.
+   - `verdict="fail"` and `task_result.success is False` → the string value of `classify_failure(task_result.output_text or "")` from `failure_classification` (i.e. `.value`, so the field stays a plain `str` like the other branches).
+   - `verdict="fail"` and `task_result.success is True` (task ran cleanly but the hidden verifier rejected the candidate) → `failure_class="assertion_logic"`.
 
 9. **JSONL persistence** — When `jsonl_path` is not None, append the per-shot record as a JSON line to `jsonl_path` immediately after shot completion and before any stop-early return. Flush after each write to prevent incomplete records on early exit. Write is atomic-per-record (one JSON object per line); never rewrite prior lines.
 
