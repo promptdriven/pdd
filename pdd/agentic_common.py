@@ -26,11 +26,71 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+UsageSource = str
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
     """Raised when a requested agentic policy cannot be enforced by PDD."""
+
+
+def _normalize_token_buckets(provider: str, raw_usage: Any) -> Dict[str, int]:
+    """Normalize provider-specific token usage into common buckets."""
+    buckets = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    if not isinstance(raw_usage, dict):
+        return buckets
+
+    def _int_value(*keys: str) -> int:
+        cur: Any = raw_usage
+        for key in keys:
+            if not isinstance(cur, dict):
+                return 0
+            cur = cur.get(key)
+        try:
+            return int(cur or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    provider = provider.lower()
+    if provider == "anthropic":
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        buckets["cache_read_tokens"] = _int_value("cache_read_input_tokens")
+        buckets["cache_write_tokens"] = _int_value("cache_creation_input_tokens")
+    elif provider == "openai":
+        usage = raw_usage.get("total_token_usage") if isinstance(raw_usage.get("total_token_usage"), dict) else raw_usage
+        raw_usage = usage
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        buckets["cache_read_tokens"] = _int_value("cached_input_tokens")
+        buckets["reasoning_tokens"] = _int_value("reasoning_tokens")
+    elif provider == "google":
+        tokens = raw_usage.get("tokens") if isinstance(raw_usage.get("tokens"), dict) else raw_usage
+        raw_usage = tokens
+        buckets["input_tokens"] = _int_value("prompt")
+        buckets["output_tokens"] = _int_value("candidates")
+        buckets["cache_read_tokens"] = _int_value("cached")
+        buckets["reasoning_tokens"] = _int_value("thoughts")
+    elif provider == "opencode":
+        buckets["input_tokens"] = _int_value("input")
+        buckets["output_tokens"] = _int_value("output")
+        buckets["cache_read_tokens"] = _int_value("cache", "read")
+        buckets["cache_write_tokens"] = _int_value("cache", "write")
+    return buckets
+
+
+def _meets_usage_contract(result: "AgenticTaskResult") -> bool:
+    """Return True when a result has comparable cost for routing."""
+    return (
+        getattr(result, "usage_source", "") != "unavailable"
+        and getattr(result, "cost_usd", 0.0) > 0.0
+    )
 
 
 def get_agentic_capabilities() -> Dict[str, Any]:
@@ -900,12 +960,22 @@ class AgenticTaskResult(tuple):
         usage: AgenticUsage = None,
         *,
         changed_files: Optional[List[str]] = None,
+        usage_source: str = "",
+        estimate_method: str = "",
+        cli_version: str = "",
+        model_id: str = "",
+        cumulative_cost_usd: Optional[float] = None,
     ) -> "AgenticTaskResult":
         result = tuple.__new__(
             cls,
             (success, output_text, cost_usd, provider, usage),
         )
         result._changed_files = list(changed_files or [])
+        result._usage_source = usage_source
+        result._estimate_method = estimate_method
+        result._cli_version = cli_version
+        result._model_id = model_id
+        result._cumulative_cost_usd = cost_usd if cumulative_cost_usd is None else cumulative_cost_usd
         return result
 
     def __iter__(self):
@@ -935,6 +1005,26 @@ class AgenticTaskResult(tuple):
     def changed_files(self) -> List[str]:
         return list(getattr(self, "_changed_files", []))
 
+    @property
+    def usage_source(self) -> str:
+        return str(getattr(self, "_usage_source", ""))
+
+    @property
+    def estimate_method(self) -> str:
+        return str(getattr(self, "_estimate_method", ""))
+
+    @property
+    def cli_version(self) -> str:
+        return str(getattr(self, "_cli_version", ""))
+
+    @property
+    def model_id(self) -> str:
+        return str(getattr(self, "_model_id", ""))
+
+    @property
+    def cumulative_cost_usd(self) -> float:
+        return float(getattr(self, "_cumulative_cost_usd", self.cost_usd))
+
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable mapping shape for structured consumers."""
         return {
@@ -944,6 +1034,11 @@ class AgenticTaskResult(tuple):
             "provider": self.provider,
             "usage": self.usage,
             "changed_files": self.changed_files,
+            "usage_source": self.usage_source,
+            "estimate_method": self.estimate_method,
+            "cli_version": self.cli_version,
+            "model_id": self.model_id,
+            "cumulative_cost_usd": self.cumulative_cost_usd,
         }
 
 
@@ -4083,6 +4178,7 @@ def run_agentic_task(
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
     effective_deadline = deadline if deadline is not None else get_job_deadline()
     task_start_time = time.time()
+    cumulative_cost_usd = 0.0
     # Issue #902: Cap total time across all providers to prevent 150min burn
     aggregate_deadline = task_start_time + (2 * effective_timeout)
 
@@ -4202,6 +4298,7 @@ def run_agentic_task(
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
                 cost = float(provider_result[2])
+                cumulative_cost_usd += cost
                 actual_model = provider_result[3]
                 usage = provider_result[4] if len(provider_result) > 4 else None
                 last_output = output
@@ -4209,6 +4306,16 @@ def run_agentic_task(
                 # fall back to the requested model from env vars when the JSON
                 # didn't surface one (e.g. early-error returns).
                 effective_model = actual_model or _get_provider_model(provider)
+                if usage:
+                    usage_source = "provider_reported" if cost > 0 else "pricing_table_estimate"
+                    estimate_method = "provider_usage"
+                elif cost > 0:
+                    usage_source = "pricing_table_estimate"
+                    estimate_method = "token_estimation"
+                else:
+                    usage_source = "unavailable"
+                    estimate_method = "unavailable"
+                model_id = str(effective_model or "")
 
                 # False Positive Detection
                 # Issue #249: Empty output should ALWAYS be detected as false positive,
@@ -4343,6 +4450,10 @@ def run_agentic_task(
                                 provider,
                                 usage,
                                 changed_files=changed_files,
+                                usage_source=usage_source,
+                                estimate_method=estimate_method,
+                                model_id=model_id,
+                                cumulative_cost_usd=cumulative_cost_usd,
                             )
 
                         # Issue #1376: always emit a summary record so the audit
@@ -4369,6 +4480,10 @@ def run_agentic_task(
                             provider,
                             usage,
                             changed_files=changed_files,
+                            usage_source=usage_source,
+                            estimate_method=estimate_method,
+                            model_id=model_id,
+                            cumulative_cost_usd=cumulative_cost_usd,
                         )
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
@@ -4483,9 +4598,10 @@ def run_agentic_task(
         return AgenticTaskResult(
             False,
             f"All agent providers failed: {'; '.join(provider_errors)}",
-            0.0,
+            cumulative_cost_usd,
             "",
             None,
+            cumulative_cost_usd=cumulative_cost_usd,
         )
 
     finally:
