@@ -824,7 +824,7 @@ def test_llm_invoke_resolves_model_from_env_at_call_time(monkeypatch):
     monkeypatch.setenv("PDD_MODEL_DEFAULT", "vertex_ai/gemini-3-flash-preview")
     captured = {}
 
-    def _spy(strength, base, df):
+    def _spy(strength, base, df, manifest_by_model=None):
         captured["base"] = base
         # Short-circuit before llm_invoke enters the candidate loop. We only need
         # to assert the base model resolved at CALL time; letting the call proceed

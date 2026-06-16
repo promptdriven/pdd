@@ -2765,6 +2765,11 @@ def test_agentic_task_result_exposes_usage_while_preserving_four_unpack():
         "provider": "anthropic",
         "usage": usage,
         "changed_files": ["src/app.py"],
+        "usage_source": "",
+        "estimate_method": "",
+        "cli_version": "",
+        "model_id": "",
+        "cumulative_cost_usd": 0.123,
     }
 
 
