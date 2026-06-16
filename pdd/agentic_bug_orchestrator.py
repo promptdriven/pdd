@@ -15,6 +15,9 @@ from rich.console import Console
 from rich.markup import escape
 
 from .agentic_common import (
+    branch_checked_out_worktree,
+    clean_restart_fallback_branch,
+    current_worktree_branch,
     run_agentic_task,
     load_workflow_state,
     save_workflow_state,
@@ -205,16 +208,64 @@ def _setup_worktree(
 
     # Clean up branch if it exists
     reset_after_attach = False
+    fallback_branch: Optional[str] = None
     branch_exists = _branch_exists(cwd, branch_name)
     if branch_exists and (clean_restart or not resume_existing):
         success, _err = _delete_branch(cwd, branch_name)
         if success:
             branch_exists = False
         elif clean_restart:
-            return None, (
-                f"Cannot perform clean restart: local branch {branch_name!r} "
-                "could not be deleted. Remove the worktree using it, then retry."
+            # The common cause is a stale worktree registration: prune and
+            # retry the delete first (resolves it without a fallback).
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                cwd=git_root, capture_output=True,
             )
+            success, _err = _delete_branch(cwd, branch_name)
+            if success:
+                branch_exists = False
+            else:
+                # Still locked. Only fall back when the branch is genuinely
+                # checked out in ANOTHER live worktree (issue #1596). Use a
+                # fresh unique fallback branch off main so the locked worktree
+                # is left untouched.
+                holder = branch_checked_out_worktree(git_root, branch_name)
+                if holder and Path(holder).resolve() != worktree_path.resolve():
+                    fallback_branch = clean_restart_fallback_branch(branch_name)
+                    # The fallback name is stable across retries of the same
+                    # job (JOB_ID-derived), so a prior attempt may have left
+                    # this branch behind after its worktree was removed. Delete
+                    # it (best effort) so we recreate it fresh from main rather
+                    # than failing `git worktree add -b` on a name clash.
+                    _delete_branch(cwd, fallback_branch)
+                    # Fetch the FALLBACK branch's own tracking ref so Step 12's
+                    # `git push --force-with-lease origin {head_branch}` has
+                    # lease info. On a same-job retry in a fresh clone,
+                    # origin/{fallback} already exists but the local tracking
+                    # ref does not — without this fetch the push is rejected
+                    # with "stale info". Best effort.
+                    fallback_lease = (
+                        f"+refs/heads/{fallback_branch}:refs/remotes/origin/{fallback_branch}"
+                    )
+                    try:
+                        subprocess.run(
+                            ["git", "fetch", "origin", fallback_lease],
+                            cwd=git_root, capture_output=True, check=True,
+                        )
+                    except subprocess.CalledProcessError:
+                        pass
+                    branch_exists = False
+                    if not quiet:
+                        console.print(
+                            f"[bold cyan]Clean restart: branch {branch_name!r} is locked by "
+                            f"worktree {holder} — creating fresh fallback branch "
+                            f"{fallback_branch!r} from main instead.[/bold cyan]"
+                        )
+                else:
+                    return None, (
+                        f"Cannot perform clean restart: local branch {branch_name!r} "
+                        "could not be deleted. Remove the worktree using it, then retry."
+                    )
         else:
             # Branch couldn't be deleted — will reuse with --force,
             # then reset to HEAD so old commits don't pollute the PR.
@@ -236,7 +287,10 @@ def _setup_worktree(
                     "(checked origin/main, origin/master, main, master). Refusing "
                     "to base the fresh bug worktree on current HEAD."
                 )
-            cmd = ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref]
+            # Under a #1596 fallback the canonical branch is locked by another
+            # worktree, so create the unique fallback branch instead.
+            create_branch = fallback_branch or branch_name
+            cmd = ["git", "worktree", "add", "-b", create_branch, str(worktree_path), base_ref]
         subprocess.run(
             cmd,
             cwd=git_root,
@@ -2413,6 +2467,15 @@ def run_agentic_bug_orchestrator(
                 )
                 if stage_result.returncode != 0 and not quiet:
                     console.print(f"[yellow]Warning: failed to stage {filepath}: {stage_result.stderr.strip()}[/yellow]")
+
+        # Pre-Step 12: thread the worktree's ACTUAL head branch so a #1596
+        # clean-restart fallback branch is pushed/PR'd, not the (locked)
+        # canonical name. Defaults to the canonical name → byte-identical
+        # rendered output when no fallback occurred.
+        if step_num == 12:
+            context["head_branch"] = (
+                current_worktree_branch(current_work_dir) or f"fix/issue-{issue_number}"
+            )
 
         # Load and preprocess template
         step_str = str(step_num).replace(".", "_")

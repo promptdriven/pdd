@@ -8,6 +8,7 @@ import os
 import signal
 import sys
 import json
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -18,8 +19,9 @@ import random
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from dataclasses import dataclass
+from enum import Enum
 
 from rich.console import Console
 
@@ -37,7 +39,24 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
+
+
+class EffortCapability(str, Enum):
+    FULL = "full"
+    CLAMPED = "clamped"
+    CONFIG_ONLY = "config_only"
+    INTERACTIVE_ONLY = "interactive_only"
+    UNSUPPORTED = "unsupported"
+
+
+_EFFORT_CAPABILITY: Dict[str, EffortCapability] = {
+    "openai": EffortCapability.FULL,
+    "anthropic": EffortCapability.CLAMPED,
+    "google": EffortCapability.UNSUPPORTED,
+    "opencode": EffortCapability.UNSUPPORTED,
+}
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
@@ -986,8 +1005,10 @@ class _ProviderRunResult(tuple):
         cost_usd: float,
         model: Optional[str],
         usage: AgenticUsage = None,
+        requested_effort: Optional[str] = None,
+        effective_effort: Optional[str] = None,
     ) -> "_ProviderRunResult":
-        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage))
+        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage, requested_effort, effective_effort))
 
     def __iter__(self):
         return (tuple.__getitem__(self, i) for i in range(4))
@@ -995,6 +1016,14 @@ class _ProviderRunResult(tuple):
     @property
     def usage(self) -> AgenticUsage:
         return tuple.__getitem__(self, 4)
+
+    @property
+    def requested_effort(self) -> Optional[str]:
+        return tuple.__getitem__(self, 5)
+
+    @property
+    def effective_effort(self) -> Optional[str]:
+        return tuple.__getitem__(self, 6)
 
 
 @dataclass
@@ -1281,6 +1310,77 @@ def classify_step_output(
         return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
 
 
+def branch_checked_out_worktree(git_root: Path, branch_name: str) -> Optional[str]:
+    """Return the path of a LIVE worktree that currently has ``branch_name``
+    checked out, or ``None``. Parses ``git worktree list --porcelain`` so the
+    check does not depend on locale-specific ``git branch -D`` stderr text.
+
+    Only a worktree that genuinely holds the branch should trigger the issue
+    #1596 fallback. A stanza marked ``prunable`` (stale registration) or whose
+    path no longer exists on disk MUST NOT count — pruning + retrying the
+    delete clears those, so treating them as a lock would force a needless
+    fallback branch."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=git_root, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    target = f"refs/heads/{branch_name}"
+    # Stanzas are separated by blank lines; the final stanza may have no
+    # trailing blank line. Append one so the flush logic is uniform.
+    path: Optional[str] = None
+    branch: Optional[str] = None
+    prunable = False
+    for line in result.stdout.splitlines() + [""]:
+        if line.startswith("worktree "):
+            path = line[len("worktree "):].strip()
+        elif line.startswith("branch "):
+            branch = line[len("branch "):].strip()
+        elif line == "prunable" or line.startswith("prunable "):
+            prunable = True
+        elif line == "":
+            # End of a stanza — evaluate it.
+            if (
+                path is not None
+                and branch == target
+                and not prunable
+                and Path(path).exists()
+            ):
+                return path
+            path = None
+            branch = None
+            prunable = False
+    return None
+
+
+def clean_restart_fallback_branch(branch_name: str) -> str:
+    """Unique fallback branch name for a clean restart when ``branch_name`` is
+    locked by another worktree (issue #1596). Prefers the executor job id
+    (``JOB_ID`` / ``PDD_JOB_ID`` env) so the name — and therefore the PR — is
+    stable across retries of the same job; otherwise a random token."""
+    raw = os.environ.get("JOB_ID") or os.environ.get("PDD_JOB_ID") or ""
+    slug = re.sub(r"[^A-Za-z0-9]", "", raw)[:8]
+    if not slug:
+        slug = secrets.token_hex(4)  # 8 hex chars
+    return f"{branch_name}-job-{slug}"
+
+
+def current_worktree_branch(cwd: Path) -> Optional[str]:
+    """Return the current branch name of the git worktree at ``cwd``, or
+    ``None`` if detached/unresolvable."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    branch = result.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
 def substitute_template_variables(
     template: Any,
     context: Dict[str, Any],
@@ -1339,6 +1439,45 @@ def get_agent_provider_preference() -> List[str]:
                 result.append(p)
         return result
     return list(_DEFAULT_PROVIDER_PREFERENCE)
+
+
+TASK_CLASS_SINGLE_FILE: str = "single_file"
+TASK_CLASS_MULTI_FILE: str = "multi_file"
+TASK_CLASS_REPO_SCALE: str = "repo_scale"
+TASK_CLASS_HIGH_ISOLATION: str = "high_isolation"
+
+
+def select_harness_for_task(task_class: str, candidates: List[str]) -> List[str]:
+    """Return candidates reordered for a coarse agentic task class."""
+    if task_class == TASK_CLASS_SINGLE_FILE:
+        return list(candidates)
+
+    if task_class == TASK_CLASS_MULTI_FILE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_REPO_SCALE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_HIGH_ISOLATION:
+        preferred = ("opencode", "anthropic")
+    else:
+        return list(candidates)
+
+    ordered = [provider for provider in preferred if provider in candidates]
+    if task_class == TASK_CLASS_REPO_SCALE:
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered and provider not in {"google", "openai"}
+        )
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered
+        )
+        return ordered
+
+    ordered.extend(provider for provider in candidates if provider not in ordered)
+    return ordered
+
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
@@ -2340,6 +2479,33 @@ def _run_agentic_task_with_routing_config(
         _restore_routing_model_env(originals)
 
 
+def _resolve_effort_for_provider_log(
+    provider: str,
+    reasoning_time: Optional[float],
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return (requested_effort, effective_effort) for audit logging."""
+    env = env or os.environ
+    if reasoning_time is not None:
+        from .reasoning import time_to_effort_level
+        requested = time_to_effort_level(reasoning_time)
+    else:
+        requested = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
+        if requested not in {"low", "medium", "high"}:
+            requested = None
+    if provider == "openai":
+        codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
+        if codex_effort in {"low", "medium", "high", "xhigh"}:
+            return requested, codex_effort
+        return requested, requested
+    if provider == "anthropic":
+        claude_effort = (env.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip().lower()
+        if claude_effort in {"low", "medium", "high", "xhigh", "max"}:
+            return requested or claude_effort, claude_effort
+        return requested, requested
+    return requested, None
+
+
 def _log_agentic_interaction(
     label: str,
     prompt: str,
@@ -2353,6 +2519,8 @@ def _log_agentic_interaction(
     model: Optional[str] = None,
     false_positive: bool = False,
     include_bodies: bool = True,
+    requested_effort: Optional[str] = None,
+    effective_effort: Optional[str] = None,
 ) -> Optional[_PddOwnedLogWrite]:
     """
     Append one record per provider attempt to ``.pdd/agentic-logs/session_*.jsonl``.
@@ -2412,6 +2580,8 @@ def _log_agentic_interaction(
             "duration_seconds": round(duration, 2),
             "prompt_length": len(prompt),
             "response_length": len(response),
+            "requested_effort": requested_effort,
+            "effective_effort": effective_effort,
         }
         if include_bodies:
             entry["prompt"] = prompt
@@ -4171,7 +4341,10 @@ def run_agentic_task(
         routing_policy: Optional static routing policy. When supplied, PDD
             selects an initial agentic config by task class and may escalate
             bounded configs after verifier/provider failure.
-        task_class: Optional coarse task class key for ``routing_policy``.
+        task_class: Optional coarse task class. Reorders already-available
+            providers (harness selection) and, when ``routing_policy`` is
+            supplied, also keys the routing-policy lookup. ``None`` preserves
+            the existing provider cascade.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
@@ -4206,6 +4379,8 @@ def run_agentic_task(
                 "agent is available to enforce the requested policy"
             )
         candidates = ["anthropic"]
+    elif task_class is not None:
+        candidates = select_harness_for_task(task_class, candidates)
 
     if routing_policy is not None:
         routing_config, routing_record = select_config(
@@ -4365,6 +4540,10 @@ def run_agentic_task(
                 # fall back to the requested model from env vars when the JSON
                 # didn't surface one (e.g. early-error returns).
                 effective_model = actual_model or _get_provider_model(provider)
+                requested_effort, effective_effort = _resolve_effort_for_provider_log(
+                    provider,
+                    reasoning_time,
+                )
 
                 # False Positive Detection
                 # Issue #249: Empty output should ALWAYS be detected as false positive,
@@ -4426,6 +4605,8 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 false_positive=True,
+                                requested_effort=requested_effort,
+                                effective_effort=effective_effort,
                             ),
                             pdd_owned_log_signatures,
                             filesystem_snapshot,
@@ -4491,6 +4672,8 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 include_bodies=verbose,
+                                requested_effort=requested_effort,
+                                effective_effort=effective_effort,
                             )
                             _emit_routing_outcome(
                                 routing_record,
@@ -4524,6 +4707,8 @@ def run_agentic_task(
                             cwd=cwd,
                             model=effective_model,
                             include_bodies=verbose,
+                            requested_effort=requested_effort,
+                            effective_effort=effective_effort,
                         )
                         _emit_routing_outcome(
                             routing_record,
@@ -4559,6 +4744,8 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
+                            requested_effort=requested_effort,
+                            effective_effort=effective_effort,
                         ),
                         pdd_owned_log_signatures,
                         filesystem_snapshot,
@@ -4645,6 +4832,8 @@ def run_agentic_task(
                     duration=time.time() - task_start_time,
                     cwd=cwd,
                     model=effective_model,
+                    requested_effort=requested_effort if 'requested_effort' in locals() else None,
+                    effective_effort=effective_effort if 'effective_effort' in locals() else None,
                 )
             # If deadline was exhausted, don't try other providers either
             if deadline_exhausted or time.time() > aggregate_deadline:
@@ -6018,12 +6207,9 @@ def _run_with_provider(
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
         if _claude_code_interactive_enabled(env):
-            if reasoning_effort and not quiet:
-                console.print(
-                    f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but PDD's "
-                    "Claude Code interactive bridge does not map it to a CLI flag; "
-                    "applies to llm_invoke steps only, not this subprocess.[/dim]"
-                )
+            if reasoning_effort:
+                env = dict(env)
+                env["CLAUDE_CODE_EFFORT_LEVEL"] = reasoning_effort
             return _run_claude_interactive_with_mcp(
                 cli_path=cli_path,
                 prompt_path=prompt_path,
@@ -6062,17 +6248,8 @@ def _run_with_provider(
         claude_model = env.get("CLAUDE_MODEL")
         if claude_model:
             cmd.extend(["--model", claude_model])
-        if reasoning_effort and not quiet:
-            # Always surface outside --quiet mode — silently dropping the user's
-            # reasoning signal is a support-ticket generator. The Claude Code CLI
-            # has no --reasoning-effort flag today, so clarify that the effort
-            # applies to LiteLLM-invoked steps (analysis/verification) but not
-            # to this code-writing subprocess.
-            console.print(
-                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Claude Code CLI "
-                "has no reasoning-effort flag; applies to llm_invoke steps only, "
-                "not this subprocess.[/dim]"
-            )
+        if reasoning_effort:
+            cmd.extend(["--effort", reasoning_effort])
     elif provider == "google":
         resolved_bin = _get_google_cli_name(env)
         if resolved_bin == "agy":
@@ -6200,6 +6377,12 @@ def _run_with_provider(
         variant_name = (env.get("OPENCODE_VARIANT") or "").strip()
         if variant_name:
             cmd.extend(["--variant", variant_name])
+        elif reasoning_effort and not quiet:
+            console.print(
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but OpenCode "
+                "does not expose a generic CLI effort flag; configure an "
+                "OPENCODE_VARIANT for provider-specific reasoning settings.[/dim]"
+            )
         # The OpenCode CLI requires a positional ``message`` argument for
         # ``opencode run`` (https://opencode.ai/docs/cli/) — earlier revisions
         # passed only ``--`` and piped the prompt body on stdin, which the CLI
