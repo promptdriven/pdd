@@ -9198,7 +9198,7 @@
         "functions": [
           {
             "name": "llm_invoke",
-            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, estimate_only=None, shots=1, verifier=None, task_class=None)",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, source_prompt=None, estimate_only=None, shots=1, verifier=None, task_class=None)",
             "returns": "Dict[str, Any]"
           },
           {
