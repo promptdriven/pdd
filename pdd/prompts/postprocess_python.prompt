@@ -1,3 +1,30 @@
+<pdd-reason>Extracts clean code from raw LLM responses.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "postprocess_0",
+        "signature": "(text: str) -> str",
+        "returns": "str",
+        "sideEffects": [
+          "None"
+        ]
+      },
+      {
+        "name": "postprocess",
+        "signature": "(llm_output: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0, time: float = DEFAULT_TIME, verbose: bool = False) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a python function, "postprocess", that will extract code from a string output of an LLM. All output to the console will be pretty printed using the Python rich library.
 
 <include>context/python_preamble.prompt</include>

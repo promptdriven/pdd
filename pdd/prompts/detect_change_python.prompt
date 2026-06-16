@@ -1,3 +1,22 @@
+<pdd-reason>Identifies which prompts need updates based on changes.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "detect_change",
+        "signature": "(prompt_files: List[str], change_description: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[List[Dict[str, str]], float, str]",
+        "returns": "Tuple[List[Dict[str, str]], float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "detect_change", that will analyze a list of prompt files and a change description to determine which prompts need to be changed.
 
 <include>context/python_preamble.prompt</include>

@@ -1,3 +1,22 @@
+<pdd-reason>Continues incomplete LLM outputs that were truncated.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "continue_generation",
+        "signature": "(formatted_input_prompt: str, llm_output: str, strength: float, temperature: float, time: float = DEFAULT_TIME, language: Optional[str] = None, verbose: bool = False) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Write a function `continue_generation` that completes LLM output generation through iterative continuation.
 
 <include>./context/python_preamble.prompt</include>

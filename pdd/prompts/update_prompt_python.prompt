@@ -1,3 +1,22 @@
+<pdd-reason>Updates prompts to reflect code modifications.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "update_prompt",
+        "signature": "(input_prompt: str, input_code: str, modified_code: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "update_prompt", that will take the original code and modified code, and update the prompt that generated the original code. 
 
 <include>./context/python_preamble.prompt</include>

@@ -1,3 +1,30 @@
+<pdd-reason>Adds XML structure tags to prompt content.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "xml_tagger",
+        "signature": "(raw_prompt: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      },
+      {
+        "name": "main",
+        "signature": "()",
+        "returns": "None",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function, "xml_tagger", that will enhance a given LLM prompt by adding XML tags to improve its structure and readability. Additionally, the function should print the intermediate result after the XML conversion step to provide visibility into the process.
 
 <include>context/python_preamble.prompt</include>
