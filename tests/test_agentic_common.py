@@ -20,6 +20,10 @@ from pdd.agentic_common import (
     get_agent_provider_preference,
     run_agentic_task,
     select_harness_for_task,
+    _normalize_token_buckets,
+    _meets_usage_contract,
+    _get_provider_cli_version,
+    _provider_cli_binary_name,
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
@@ -2765,12 +2769,170 @@ def test_agentic_task_result_exposes_usage_while_preserving_four_unpack():
         "provider": "anthropic",
         "usage": usage,
         "changed_files": ["src/app.py"],
-        "usage_source": "",
-        "estimate_method": "",
+        "usage_source": "unavailable",
+        "estimate_method": "unavailable",
         "cli_version": "",
-        "model_id": "",
+        "model_id": None,
         "cumulative_cost_usd": 0.123,
+        "usage_comparable": False,
+        "token_buckets": {
+            "input_tokens": 21,
+            "output_tokens": 15,
+            "cache_read_tokens": 7,
+            "cache_write_tokens": 11,
+            "reasoning_tokens": 0,
+        },
     }
+
+
+# ---------------------------------------------------------------------------
+# Issue #1593: cross-CLI cost and usage instrumentation
+# ---------------------------------------------------------------------------
+
+
+def test_agentic_task_result_instrumentation_defaults_are_unavailable():
+    """Un-instrumented results default to the 'unavailable' contract values so
+    they are excluded from E[pass]-lambda*cost routing comparisons (#1593)."""
+    result = AgenticTaskResult(True, "ok", 0.5, "anthropic", None)
+    assert result.usage_source == "unavailable"
+    assert result.estimate_method == "unavailable"
+    assert result.cli_version == ""
+    assert result.model_id is None
+    # cost > 0 but usage_source unavailable => NOT comparable.
+    assert result.meets_usage_contract() is False
+    assert _meets_usage_contract(result) is False
+
+
+def test_meets_usage_contract_gate():
+    """_meets_usage_contract requires a known usage_source AND positive cost."""
+    comparable = AgenticTaskResult(
+        True, "ok", 0.4, "openai", None,
+        usage_source="pricing_table_estimate",
+        estimate_method="token_delta_x_pricing_csv",
+    )
+    assert _meets_usage_contract(comparable) is True
+
+    # Known source but zero cost is not comparable.
+    zero_cost = AgenticTaskResult(
+        True, "ok", 0.0, "openai", None, usage_source="provider_reported"
+    )
+    assert _meets_usage_contract(zero_cost) is False
+
+    # Positive cost but unavailable source is not comparable.
+    no_source = AgenticTaskResult(True, "ok", 0.9, "google", None)
+    assert _meets_usage_contract(no_source) is False
+
+
+def test_normalize_token_buckets_per_provider():
+    assert _normalize_token_buckets("anthropic", "not-a-dict") == {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    # Anthropic raw envelope field names.
+    anthropic_raw = {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "cache_read_input_tokens": 3,
+        "cache_creation_input_tokens": 2,
+    }
+    assert _normalize_token_buckets("anthropic", anthropic_raw) == {
+        "input_tokens": 10,
+        "output_tokens": 4,
+        "cache_read_tokens": 3,
+        "cache_write_tokens": 2,
+        "reasoning_tokens": 0,
+    }
+    # OpenAI nested total_token_usage.
+    openai_usage = {
+        "total_token_usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "cached_input_tokens": 20,
+            "reasoning_tokens": 9,
+        }
+    }
+    assert _normalize_token_buckets("openai", openai_usage) == {
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "cache_read_tokens": 20,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 9,
+    }
+    # Google nested tokens.
+    google_usage = {"tokens": {"prompt": 7, "candidates": 8, "cached": 1, "thoughts": 2}}
+    assert _normalize_token_buckets("google", google_usage) == {
+        "input_tokens": 7,
+        "output_tokens": 8,
+        "cache_read_tokens": 1,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 2,
+    }
+    # OpenCode nested cache read/write.
+    opencode_usage = {"input": 5, "output": 6, "cache": {"read": 3, "write": 4}}
+    assert _normalize_token_buckets("opencode", opencode_usage) == {
+        "input_tokens": 5,
+        "output_tokens": 6,
+        "cache_read_tokens": 3,
+        "cache_write_tokens": 4,
+        "reasoning_tokens": 0,
+    }
+
+
+def test_normalize_token_buckets_handles_wrapped_claude_usage():
+    """AgenticTaskResult.usage wraps Claude rows as {'claude': [...]}; the
+    normalizer must collapse and sum that shape."""
+    wrapped = {
+        "claude": [
+            {"model": "m", "input_tokens": 21, "output_tokens": 15,
+             "cached_input_tokens": 7, "cache_creation_input_tokens": 11},
+            {"model": "m", "input_tokens": 4, "output_tokens": 1,
+             "cached_input_tokens": 0, "cache_creation_input_tokens": 0},
+        ]
+    }
+    assert _normalize_token_buckets("anthropic", wrapped) == {
+        "input_tokens": 25,
+        "output_tokens": 16,
+        "cache_read_tokens": 7,
+        "cache_write_tokens": 11,
+        "reasoning_tokens": 0,
+    }
+
+
+def test_get_provider_cli_version_probes_binary(monkeypatch):
+    """cli_version is read from the resolved binary's --version, cached, and
+    falls back to '' when the CLI is missing (#1593)."""
+    import pdd.agentic_common as ac
+    ac._PROVIDER_CLI_VERSION_CACHE.clear()
+
+    monkeypatch.setattr(ac, "_find_cli_binary", lambda name: "/usr/bin/codex")
+
+    calls = {"n": 0}
+
+    def _fake_run(cmd, *args, **kwargs):
+        calls["n"] += 1
+        assert cmd == ["/usr/bin/codex", "--version"]
+        return subprocess.CompletedProcess(cmd, 0, stdout="codex 1.2.3\n", stderr="")
+
+    monkeypatch.setattr(ac.subprocess, "run", _fake_run)
+    assert _get_provider_cli_version("openai") == "codex 1.2.3"
+    # Cached: a second call does not re-probe.
+    assert _get_provider_cli_version("openai") == "codex 1.2.3"
+    assert calls["n"] == 1
+
+    # Missing binary => empty version, no crash.
+    ac._PROVIDER_CLI_VERSION_CACHE.clear()
+    monkeypatch.setattr(ac, "_find_cli_binary", lambda name: None)
+    assert _get_provider_cli_version("opencode") == ""
+
+
+def test_provider_cli_binary_name_mapping():
+    assert _provider_cli_binary_name("anthropic") == "claude"
+    assert _provider_cli_binary_name("openai") == "codex"
+    assert _provider_cli_binary_name("opencode") == "opencode"
+    assert _provider_cli_binary_name("unknown") is None
 
 
 def test_run_agentic_task_returns_gvs_detectable_json_usage_contract(

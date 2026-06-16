@@ -40,6 +40,7 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+UsageSource = str
 _HARNESS_CAPABILITIES_CACHE: Optional[Dict[str, Any]] = None
 TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
@@ -63,6 +64,82 @@ _EFFORT_CAPABILITY: Dict[str, EffortCapability] = {
 
 class AgenticUnsupportedSemanticsError(ValueError):
     """Raised when a requested agentic policy cannot be enforced by PDD."""
+
+
+def _normalize_token_buckets(provider: str, raw_usage: Any) -> Dict[str, int]:
+    """Normalize provider-specific token usage into common buckets."""
+    buckets = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    if not isinstance(raw_usage, dict):
+        return buckets
+
+    # AgenticTaskResult.usage wraps Claude transcript rows as {"claude": [ {...}, ... ]}.
+    # Collapse that shape into a single summed dict before bucket mapping so the
+    # normalized buckets are non-zero for the structured Claude result.
+    claude_rows = raw_usage.get("claude")
+    if isinstance(claude_rows, list):
+        summed: Dict[str, int] = {}
+        for row in claude_rows:
+            if not isinstance(row, dict):
+                continue
+            for key, value in row.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                summed[key] = summed.get(key, 0) + int(value)
+        raw_usage = summed
+
+    def _int_value(*keys: str) -> int:
+        cur: Any = raw_usage
+        for key in keys:
+            if not isinstance(cur, dict):
+                return 0
+            cur = cur.get(key)
+        try:
+            return int(cur or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    provider = provider.lower()
+    if provider == "anthropic":
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        # Raw provider envelopes use cache_read_input_tokens; the structured
+        # Claude transcript rows use cached_input_tokens — accept either.
+        buckets["cache_read_tokens"] = _int_value("cache_read_input_tokens") or _int_value("cached_input_tokens")
+        buckets["cache_write_tokens"] = _int_value("cache_creation_input_tokens")
+    elif provider == "openai":
+        usage = raw_usage.get("total_token_usage") if isinstance(raw_usage.get("total_token_usage"), dict) else raw_usage
+        raw_usage = usage
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        buckets["cache_read_tokens"] = _int_value("cached_input_tokens")
+        buckets["reasoning_tokens"] = _int_value("reasoning_tokens")
+    elif provider == "google":
+        tokens = raw_usage.get("tokens") if isinstance(raw_usage.get("tokens"), dict) else raw_usage
+        raw_usage = tokens
+        buckets["input_tokens"] = _int_value("prompt")
+        buckets["output_tokens"] = _int_value("candidates")
+        buckets["cache_read_tokens"] = _int_value("cached")
+        buckets["reasoning_tokens"] = _int_value("thoughts")
+    elif provider == "opencode":
+        buckets["input_tokens"] = _int_value("input")
+        buckets["output_tokens"] = _int_value("output")
+        buckets["cache_read_tokens"] = _int_value("cache", "read")
+        buckets["cache_write_tokens"] = _int_value("cache", "write")
+    return buckets
+
+
+def _meets_usage_contract(result: "AgenticTaskResult") -> bool:
+    """Return True when a result has comparable cost for routing."""
+    return (
+        getattr(result, "usage_source", "") != "unavailable"
+        and getattr(result, "cost_usd", 0.0) > 0.0
+    )
 
 
 def _load_harness_capabilities() -> Dict[str, Any]:
@@ -118,6 +195,57 @@ def _provider_harness_id(provider: str) -> str:
         except Exception:
             return "gemini_cli"
     return provider
+
+
+_PROVIDER_CLI_VERSION_CACHE: Dict[str, str] = {}
+
+
+def _provider_cli_binary_name(provider: str) -> Optional[str]:
+    """Map an agentic provider to the CLI binary name used to probe its version."""
+    if provider == "anthropic":
+        return "claude"
+    if provider == "openai":
+        return "codex"
+    if provider == "opencode":
+        return "opencode"
+    if provider == "google":
+        try:
+            return _get_google_cli_name()
+        except Exception:
+            return None
+    return None
+
+
+def _get_provider_cli_version(provider: str) -> str:
+    """Best-effort CLI version string for a provider (cached).
+
+    Pins the harness CLI version into every run record (issue #1593). Resolves
+    the provider's binary via the shared discovery helper and reads the first
+    line of ``<bin> --version``. Returns "" when the CLI is absent or the probe
+    fails, so callers can record an empty (not fabricated) version.
+    """
+    if provider in _PROVIDER_CLI_VERSION_CACHE:
+        return _PROVIDER_CLI_VERSION_CACHE[provider]
+    version = ""
+    name = _provider_cli_binary_name(provider)
+    binary = _find_cli_binary(name) if name else None
+    if binary:
+        try:
+            result = subprocess.run(
+                [binary, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            for line in (result.stdout or "").splitlines():
+                line = line.strip()
+                if line:
+                    version = line
+                    break
+        except (subprocess.SubprocessError, OSError):
+            version = ""
+    _PROVIDER_CLI_VERSION_CACHE[provider] = version
+    return version
 
 
 def _publish_agentic_model_provenance(
@@ -1028,10 +1156,10 @@ class AgenticTaskResult(tuple):
         usage: AgenticUsage = None,
         *,
         changed_files: Optional[List[str]] = None,
-        usage_source: str = "",
-        estimate_method: str = "",
+        usage_source: str = "unavailable",
+        estimate_method: str = "unavailable",
         cli_version: str = "",
-        model_id: str = "",
+        model_id: Optional[str] = None,
         cumulative_cost_usd: Optional[float] = None,
     ) -> "AgenticTaskResult":
         result = tuple.__new__(
@@ -1075,23 +1203,27 @@ class AgenticTaskResult(tuple):
 
     @property
     def usage_source(self) -> str:
-        return str(getattr(self, "_usage_source", ""))
+        return str(getattr(self, "_usage_source", "unavailable"))
 
     @property
     def estimate_method(self) -> str:
-        return str(getattr(self, "_estimate_method", ""))
+        return str(getattr(self, "_estimate_method", "unavailable"))
 
     @property
     def cli_version(self) -> str:
         return str(getattr(self, "_cli_version", ""))
 
     @property
-    def model_id(self) -> str:
-        return str(getattr(self, "_model_id", ""))
+    def model_id(self) -> Optional[str]:
+        return getattr(self, "_model_id", None)
 
     @property
     def cumulative_cost_usd(self) -> float:
         return float(getattr(self, "_cumulative_cost_usd", self.cost_usd))
+
+    def meets_usage_contract(self) -> bool:
+        """True when this result has comparable cost/usage for E[pass]-λ·cost routing."""
+        return _meets_usage_contract(self)
 
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable mapping shape for structured consumers."""
@@ -1107,6 +1239,8 @@ class AgenticTaskResult(tuple):
             "cli_version": self.cli_version,
             "model_id": self.model_id,
             "cumulative_cost_usd": self.cumulative_cost_usd,
+            "usage_comparable": self.meets_usage_contract(),
+            "token_buckets": _normalize_token_buckets(self.provider, self.usage),
         }
 
 
@@ -4662,6 +4796,7 @@ def run_agentic_task(
                 capability = harness_capabilities.get(harness_id, {})
                 identity_observable = bool(capability.get("identity_observable", True))
                 model_id = str(effective_model or "") if identity_observable else ""
+                cli_version = _get_provider_cli_version(provider)
                 if usage:
                     usage_source = "provider_reported" if cost > 0 else "pricing_table_estimate"
                     estimate_method = "provider_usage"
@@ -4831,6 +4966,7 @@ def run_agentic_task(
                                 usage_source=usage_source,
                                 estimate_method=estimate_method,
                                 model_id=model_id,
+                                cli_version=cli_version,
                                 cumulative_cost_usd=cumulative_cost_usd,
                             )
 
@@ -4874,6 +5010,7 @@ def run_agentic_task(
                             usage_source=usage_source,
                             estimate_method=estimate_method,
                             model_id=model_id,
+                            cli_version=cli_version,
                             cumulative_cost_usd=cumulative_cost_usd,
                         )
 

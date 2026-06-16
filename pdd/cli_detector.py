@@ -46,6 +46,7 @@ class CliBootstrapResult:
         cli_name: The CLI binary name (e.g. ``"claude"``, ``"agy"``).
         provider: The model provider key (``anthropic``/``openai``/``google``/``opencode``).
         cli_path: Absolute path of the resolved binary, or ``""`` if unresolved.
+        cli_version: Raw first line from the CLI version/help probe.
         api_key_configured: ``True`` if a primary API key was set or saved.
         skipped: ``True`` if the user opted out for this CLI.
     """
@@ -53,6 +54,7 @@ class CliBootstrapResult:
     cli_name: str = ""
     provider: str = ""
     cli_path: str = ""
+    cli_version: str = ""
     api_key_configured: bool = False
     skipped: bool = False
 
@@ -907,6 +909,7 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
 
         # --- Test step (always) ------------------------------------------
         console.print(f"Testing {CLI_LABEL[cli]} ({path})...")
+        cli_version = ""
         try:
             r = subprocess.run(
                 [path, "--version"], capture_output=True, text=True
@@ -916,6 +919,11 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
                     [path, "--help"], capture_output=True, text=True
                 )
             combined = (r.stdout or "") + (r.stderr or "")
+            for line in combined.splitlines():
+                line = line.strip()
+                if line:
+                    cli_version = line
+                    break
             console.print(combined.strip() or f"{cli} responded.")
         except (OSError, subprocess.SubprocessError) as exc:
             console.print(f"Error invoking {cli}: {exc}")
@@ -925,6 +933,7 @@ def detect_and_bootstrap_cli() -> List[CliBootstrapResult]:
                 cli_name=cli,
                 provider=provider,
                 cli_path=path or "",
+                cli_version=cli_version,
                 api_key_configured=api_key_configured,
                 skipped=False,
             )

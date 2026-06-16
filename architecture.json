@@ -4563,7 +4563,8 @@
               "provider: str",
               "cli_path: str",
               "api_key_configured: bool",
-              "skipped: bool"
+              "skipped: bool",
+              "cli_version: str"
             ]
           }
         ]
