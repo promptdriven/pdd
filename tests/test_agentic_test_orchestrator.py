@@ -519,15 +519,150 @@ def test_setup_worktree_clean_restart_uses_default_ref(tmp_path):
     assert adds[-1][-1] != "HEAD"
 
 
+def _test_init_repo_with_origin(tmp_path):
+    """Create a real git repo whose ``origin`` remote resolves ``origin/main``."""
+    import subprocess as _sp
+
+    origin_repo = tmp_path / "origin_repo"
+    origin_repo.mkdir()
+    _sp.run(["git", "init", "-b", "main"], cwd=origin_repo, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.email", "test@example.com"], cwd=origin_repo, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.name", "Test User"], cwd=origin_repo, check=True, capture_output=True)
+    (origin_repo / "README.md").write_text("Initial commit")
+    _sp.run(["git", "add", "README.md"], cwd=origin_repo, check=True, capture_output=True)
+    _sp.run(["git", "commit", "-m", "Initial commit"], cwd=origin_repo, check=True, capture_output=True)
+
+    work_repo = tmp_path / "work_repo"
+    _sp.run(["git", "clone", str(origin_repo), str(work_repo)], cwd=tmp_path, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.email", "test@example.com"], cwd=work_repo, check=True, capture_output=True)
+    _sp.run(["git", "config", "user.name", "Test User"], cwd=work_repo, check=True, capture_output=True)
+    return work_repo
+
+
+def test_clean_restart_locked_branch_uses_fallback_worktree(tmp_path, monkeypatch):
+    """Issue #1596: under clean_restart, when ``test/issue-N`` is checked out in
+    another live worktree, ``git branch -D`` genuinely fails. We must create a
+    fresh unique fallback branch from ``origin/main`` (not reuse the locked
+    branch) and leave the locked worktree untouched. Real git + a real second
+    worktree reproduce the lock."""
+    import subprocess as _sp
+
+    monkeypatch.setenv("JOB_ID", "abc12345xyz")
+    work_repo = _test_init_repo_with_origin(tmp_path)
+    issue_number = 1596
+    branch_name = f"test/issue-{issue_number}"
+
+    _sp.run(["git", "branch", branch_name, "origin/main"], cwd=work_repo, check=True, capture_output=True)
+    locked_dir = tmp_path / "locked"
+    _sp.run(["git", "worktree", "add", str(locked_dir), branch_name], cwd=work_repo, check=True, capture_output=True)
+    (locked_dir / "LEAKED.txt").write_text("should not appear in fallback")
+    _sp.run(["git", "add", "LEAKED.txt"], cwd=locked_dir, check=True, capture_output=True)
+    _sp.run(["git", "commit", "-m", "divergent commit"], cwd=locked_dir, check=True, capture_output=True)
+
+    wt, err = _setup_worktree(
+        work_repo, issue_number, quiet=True, console=MagicMock(), clean_restart=True,
+    )
+
+    assert err is None, f"expected no error, got: {err}"
+    assert wt is not None and wt.exists()
+
+    head = _sp.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=wt, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == f"{branch_name}-job-abc12345", f"unexpected fallback branch: {head}"
+
+    origin_main = _sp.run(
+        ["git", "rev-parse", "origin/main"], cwd=work_repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    fallback_base = _sp.run(
+        ["git", "rev-parse", "HEAD"], cwd=wt, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert fallback_base == origin_main, "fallback worktree must be based on origin/main HEAD"
+    assert not (wt / "LEAKED.txt").exists(), "locked branch's divergent commit leaked into fallback"
+
+    assert locked_dir.exists()
+    locked_head = _sp.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=locked_dir, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert locked_head == branch_name, "locked worktree must not be touched"
+
+    _sp.run(["git", "worktree", "remove", "--force", str(wt)], cwd=work_repo, capture_output=True)
+    _sp.run(["git", "worktree", "remove", "--force", str(locked_dir)], cwd=work_repo, capture_output=True)
+
+
+def test_non_clean_restart_delete_failure_still_hard_fails(tmp_path):
+    """Non-clean-restart byte-for-byte behavior: when ``_delete_branch`` fails
+    and clean_restart is False, keep the original 'Failed to delete existing
+    branch' error (the #1596 fallback must NOT change this path)."""
+    calls = []
+
+    def run_side_effect(args, **kwargs):
+        calls.append(list(args))
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("pdd.agentic_test_orchestrator._get_git_root", return_value=tmp_path), \
+         patch("pdd.agentic_test_orchestrator._worktree_exists", return_value=False), \
+         patch("pdd.agentic_test_orchestrator._branch_exists", return_value=True), \
+         patch("pdd.agentic_test_orchestrator._delete_branch", return_value=(False, "boom")), \
+         patch("pdd.agentic_test_orchestrator.subprocess.run", side_effect=run_side_effect):
+        wt, err = _setup_worktree(
+            tmp_path, 1, quiet=True, console=MagicMock(), clean_restart=False,
+        )
+
+    assert wt is None
+    assert err == "Failed to delete existing branch test/issue-1: boom"
+
+
+def _render_test_pr_prompt(head_branch):
+    """Render the test Step 17 submit-PR prompt the way the orchestrator does."""
+    from pdd.load_prompt_template import load_prompt_template
+    from pdd.agentic_test_orchestrator import _format_prompt
+
+    context = {
+        "issue_number": "1596",
+        "head_branch": head_branch,
+        "clean_restart": "true",
+        "repo_owner": "owner",
+        "repo_name": "repo",
+    }
+    template = load_prompt_template("agentic_test_step9_submit_pr_LLM")
+    return _format_prompt(template, context)
+
+
+def test_test_pr_prompt_head_branch_non_fallback_preserves_canonical():
+    """No-fallback path: head_branch == canonical name → rendered push/pr
+    commands match the old hardcoded behavior (#1596)."""
+    rendered = _render_test_pr_prompt("test/issue-1596")
+    assert "git push --force-with-lease -u origin test/issue-1596" in rendered
+    assert "git push -u origin test/issue-1596" in rendered
+    assert "gh pr list --head test/issue-1596" in rendered
+
+
+def test_test_pr_prompt_head_branch_fallback_uses_fallback_branch():
+    """Fallback path: head_branch == fallback name → push/pr-head use the
+    fallback branch; no bare canonical branch token in those positions."""
+    rendered = _render_test_pr_prompt("test/issue-1596-job-deadbeef")
+    assert "git push --force-with-lease -u origin test/issue-1596-job-deadbeef" in rendered
+    assert "gh pr list --head test/issue-1596-job-deadbeef" in rendered
+    assert "origin test/issue-1596\n" not in rendered
+    assert "--head test/issue-1596\n" not in rendered
+    assert "--head test/issue-1596 " not in rendered
+    assert "#1596" in rendered
+
+
 def test_submit_pr_prompt_uses_clean_restart_push_and_pr_update():
-    """Step 17 must handle old remote test branches during clean restart."""
+    """Step 17 must handle old remote test branches during clean restart, using
+    {head_branch} so a #1596 fallback branch is honored."""
     prompt = Path("pdd/prompts/agentic_test_step9_submit_pr_LLM.prompt").read_text(
         encoding="utf-8"
     )
 
-    assert "git push --force-with-lease -u origin test/issue-{issue_number}" in prompt
-    assert "gh pr list --head test/issue-{issue_number}" in prompt
+    assert "git push --force-with-lease -u origin {head_branch}" in prompt
+    assert "gh pr list --head {head_branch}" in prompt
     assert "gh pr edit <number>" in prompt
+    assert "origin test/issue-{issue_number}" not in prompt
+    assert "--head test/issue-{issue_number}" not in prompt
 
 
 # ---------------------------------------------------------------------------

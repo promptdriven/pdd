@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from pdd.agentic_sync_runner import AsyncSyncRunner
 from pdd.durable_sync_runner import (
     DurableSyncRunner,
     _parse_checkpoint_trailer,
@@ -505,3 +508,178 @@ def test_total_budget_keeps_durable_runner_single_worker(tmp_path: Path):
     )
 
     assert runner.max_workers == 1
+
+
+# ---------------------------------------------------------------------------
+# Issue #1565 — DurableSyncRunner sibling: PDD_SYNC_MAX_WORKERS env var
+# ---------------------------------------------------------------------------
+
+# Scope addition: covers expansion item "pdd/durable_sync_runner.py:82 —
+# DurableSyncRunner.__init__ else-branch also falls back to MAX_WORKERS without
+# checking PDD_SYNC_MAX_WORKERS" identified by Step 6 but absent from Step 8's
+# primary test plan.
+def test_durable_runner_fallback_max_workers_reads_pdd_sync_max_workers_env_var():
+    """PDD_SYNC_MAX_WORKERS must also limit DurableSyncRunner.max_workers when
+    durable_max_parallel is not set (the else-branch at durable_sync_runner.py:82).
+
+    Fails on buggy code: agentic_sync_runner.MAX_WORKERS is always 4, so the
+    imported durable_sync_runner.MAX_WORKERS is also always 4 regardless of the
+    env var.
+    """
+    _project_root = str(Path(__file__).resolve().parent.parent)
+    _pythonpath = f"{_project_root}:{os.environ.get('PYTHONPATH', '')}"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import os; os.environ['PDD_SYNC_MAX_WORKERS'] = '2'; "
+                "from pdd.durable_sync_runner import MAX_WORKERS; "
+                "print(MAX_WORKERS)"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env={**os.environ, "PYTHONPATH": _pythonpath},
+    )
+    assert result.returncode == 0, (
+        f"Import subprocess failed: stderr={result.stderr!r}"
+    )
+    assert result.stdout.strip() == "2", (
+        f"DurableSyncRunner's MAX_WORKERS should be 2 when "
+        f"PDD_SYNC_MAX_WORKERS=2; got {result.stdout.strip()!r}. "
+        "Bug: durable_sync_runner imports MAX_WORKERS from agentic_sync_runner "
+        "which is hardcoded to 4; the env var never reaches the durable runner."
+    )
+
+
+def test_durable_runner_reads_pdd_sync_max_workers_when_constructed(
+    tmp_path: Path, monkeypatch
+):
+    """DurableSyncRunner must see env changes made after module import."""
+    repo = _init_repo_with_remote(tmp_path)
+    monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
+
+    runner = _runner(repo)
+
+    assert runner.max_workers == 2
+
+
+# ---------------------------------------------------------------------------
+# Issue #1565 — Real-subprocess (not mocked Popen) worker-cap validation for
+# durable mode (Greg review item 4).
+#
+# DurableSyncRunner._run_child_sync delegates to super()._sync_one_module ->
+# AsyncSyncRunner._run_attempt, i.e. the SAME real subprocess.Popen reader the
+# agentic runner uses; durable only adds the worktree/checkpoint scheduling on
+# top. So the bounded-output and sticky-failure-marker behaviors are inherited
+# verbatim and are covered by the real-subprocess tests in
+# tests/test_agentic_sync_runner.py. The durable-specific risk is the worker
+# cap, validated here with real child processes. The assertion is two-sided
+# (peak <= 2 AND peak >= 2) so it cannot pass vacuously on a run that happened
+# to serialize.
+# ---------------------------------------------------------------------------
+
+# Concurrency-only fake child: drop a presence token, sample peak co-running
+# siblings for `hold_s`, record the peak, make no file changes (so the durable
+# checkpoint is empty), and exit 0.
+_DURABLE_FAKE_CHILD_SOURCE = r'''
+import os
+import sys
+import time
+import uuid
+
+presence_dir, result_path = sys.argv[1], sys.argv[2]
+hold_s, sample_s = float(sys.argv[3]), float(sys.argv[4])
+os.makedirs(presence_dir, exist_ok=True)
+token = os.path.join(presence_dir, "%d-%s" % (os.getpid(), uuid.uuid4().hex))
+open(token, "w").close()
+peak = 0
+deadline = time.time() + hold_s
+try:
+    while time.time() < deadline:
+        try:
+            peak = max(peak, len(os.listdir(presence_dir)))
+        except OSError:
+            pass
+        time.sleep(sample_s)
+finally:
+    try:
+        os.remove(token)
+    except OSError:
+        pass
+with open(result_path, "w") as handle:
+    handle.write(str(peak))
+sys.exit(0)
+'''
+
+
+def test_real_subprocess_durable_max_workers_limits_concurrency(
+    tmp_path: Path, monkeypatch
+):
+    """PDD_SYNC_MAX_WORKERS=2 caps concurrent module syncs in DURABLE mode,
+    proven with real subprocesses driven through the durable scheduler.
+
+    Four independent modules sync through real ``subprocess.Popen`` children
+    (each producing an empty checkpoint); the observed peak concurrency must
+    not exceed the cap.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    child = tmp_path / "durable_fake_child.py"
+    child.write_text(_DURABLE_FAKE_CHILD_SOURCE, encoding="utf-8")
+    presence = tmp_path / "presence"
+    results = tmp_path / "results"
+    presence.mkdir()
+    results.mkdir()
+
+    monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
+    basenames = ["a", "b", "c", "d"]
+
+    def _fake_build_command(self, basename, in_flight_cost=0.0):
+        return [
+            sys.executable,
+            str(child),
+            str(presence),
+            str(results / basename),
+            "0.6",
+            "0.01",
+        ]
+
+    runner = DurableSyncRunner(
+        basenames=basenames,
+        dep_graph={b: [] for b in basenames},
+        sync_options={},
+        github_info=None,
+        issue_number=1565,
+        project_root=repo,
+        quiet=True,
+        issue_url="https://github.com/org/repo/issues/1565",
+    )
+    assert runner.max_workers == 2
+
+    with patch.object(AsyncSyncRunner, "_build_command", _fake_build_command):
+        success, message, _cost = runner.run()
+
+    assert success, f"durable real-subprocess run failed: {message!r}"
+    peaks = [
+        int((results / b).read_text())
+        for b in basenames
+        if (results / b).exists()
+    ]
+    assert peaks, "no durable child reported a peak — children never ran"
+    observed = max(peaks)
+    # Upper bound: the cap holds. Lower bound: the children genuinely run
+    # concurrently, so the cap assertion is not vacuously satisfied by a run
+    # that happened to serialize. With 4 always-ready modules and 2 workers the
+    # durable scheduler must drive the peak to exactly 2 (worktree-create and
+    # checkpoint serialize under _checkpoint_lock, but the child sync — where
+    # the peak is measured — runs outside it).
+    assert observed <= 2, (
+        f"PDD_SYNC_MAX_WORKERS=2 did not cap durable concurrency: real children "
+        f"observed a peak of {observed} simultaneous syncs (expected <= 2)"
+    )
+    assert observed >= 2, (
+        f"durable children never ran 2-wide (peak {observed}); the <= 2 cap "
+        f"assertion would be vacuous — with 4 ready modules and 2 workers the "
+        f"peak must reach 2"
+    )

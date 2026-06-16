@@ -7,6 +7,7 @@ import os
 import signal
 import sys
 import json
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -1251,6 +1252,77 @@ def classify_step_output(
         return TokenMatch(tier="llm_classification", token=status, cost=cost)
     except Exception:
         return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
+
+
+def branch_checked_out_worktree(git_root: Path, branch_name: str) -> Optional[str]:
+    """Return the path of a LIVE worktree that currently has ``branch_name``
+    checked out, or ``None``. Parses ``git worktree list --porcelain`` so the
+    check does not depend on locale-specific ``git branch -D`` stderr text.
+
+    Only a worktree that genuinely holds the branch should trigger the issue
+    #1596 fallback. A stanza marked ``prunable`` (stale registration) or whose
+    path no longer exists on disk MUST NOT count — pruning + retrying the
+    delete clears those, so treating them as a lock would force a needless
+    fallback branch."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=git_root, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    target = f"refs/heads/{branch_name}"
+    # Stanzas are separated by blank lines; the final stanza may have no
+    # trailing blank line. Append one so the flush logic is uniform.
+    path: Optional[str] = None
+    branch: Optional[str] = None
+    prunable = False
+    for line in result.stdout.splitlines() + [""]:
+        if line.startswith("worktree "):
+            path = line[len("worktree "):].strip()
+        elif line.startswith("branch "):
+            branch = line[len("branch "):].strip()
+        elif line == "prunable" or line.startswith("prunable "):
+            prunable = True
+        elif line == "":
+            # End of a stanza — evaluate it.
+            if (
+                path is not None
+                and branch == target
+                and not prunable
+                and Path(path).exists()
+            ):
+                return path
+            path = None
+            branch = None
+            prunable = False
+    return None
+
+
+def clean_restart_fallback_branch(branch_name: str) -> str:
+    """Unique fallback branch name for a clean restart when ``branch_name`` is
+    locked by another worktree (issue #1596). Prefers the executor job id
+    (``JOB_ID`` / ``PDD_JOB_ID`` env) so the name — and therefore the PR — is
+    stable across retries of the same job; otherwise a random token."""
+    raw = os.environ.get("JOB_ID") or os.environ.get("PDD_JOB_ID") or ""
+    slug = re.sub(r"[^A-Za-z0-9]", "", raw)[:8]
+    if not slug:
+        slug = secrets.token_hex(4)  # 8 hex chars
+    return f"{branch_name}-job-{slug}"
+
+
+def current_worktree_branch(cwd: Path) -> Optional[str]:
+    """Return the current branch name of the git worktree at ``cwd``, or
+    ``None`` if detached/unresolvable."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    branch = result.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
 
 
 def substitute_template_variables(
