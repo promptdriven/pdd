@@ -7,6 +7,7 @@ import os
 import signal
 import sys
 import json
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -17,7 +18,7 @@ import random
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 from enum import Enum
 
@@ -27,6 +28,7 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
 
 
@@ -1279,6 +1281,77 @@ def classify_step_output(
         return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
 
 
+def branch_checked_out_worktree(git_root: Path, branch_name: str) -> Optional[str]:
+    """Return the path of a LIVE worktree that currently has ``branch_name``
+    checked out, or ``None``. Parses ``git worktree list --porcelain`` so the
+    check does not depend on locale-specific ``git branch -D`` stderr text.
+
+    Only a worktree that genuinely holds the branch should trigger the issue
+    #1596 fallback. A stanza marked ``prunable`` (stale registration) or whose
+    path no longer exists on disk MUST NOT count — pruning + retrying the
+    delete clears those, so treating them as a lock would force a needless
+    fallback branch."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=git_root, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    target = f"refs/heads/{branch_name}"
+    # Stanzas are separated by blank lines; the final stanza may have no
+    # trailing blank line. Append one so the flush logic is uniform.
+    path: Optional[str] = None
+    branch: Optional[str] = None
+    prunable = False
+    for line in result.stdout.splitlines() + [""]:
+        if line.startswith("worktree "):
+            path = line[len("worktree "):].strip()
+        elif line.startswith("branch "):
+            branch = line[len("branch "):].strip()
+        elif line == "prunable" or line.startswith("prunable "):
+            prunable = True
+        elif line == "":
+            # End of a stanza — evaluate it.
+            if (
+                path is not None
+                and branch == target
+                and not prunable
+                and Path(path).exists()
+            ):
+                return path
+            path = None
+            branch = None
+            prunable = False
+    return None
+
+
+def clean_restart_fallback_branch(branch_name: str) -> str:
+    """Unique fallback branch name for a clean restart when ``branch_name`` is
+    locked by another worktree (issue #1596). Prefers the executor job id
+    (``JOB_ID`` / ``PDD_JOB_ID`` env) so the name — and therefore the PR — is
+    stable across retries of the same job; otherwise a random token."""
+    raw = os.environ.get("JOB_ID") or os.environ.get("PDD_JOB_ID") or ""
+    slug = re.sub(r"[^A-Za-z0-9]", "", raw)[:8]
+    if not slug:
+        slug = secrets.token_hex(4)  # 8 hex chars
+    return f"{branch_name}-job-{slug}"
+
+
+def current_worktree_branch(cwd: Path) -> Optional[str]:
+    """Return the current branch name of the git worktree at ``cwd``, or
+    ``None`` if detached/unresolvable."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    branch = result.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
+
+
 def substitute_template_variables(
     template: Any,
     context: Dict[str, Any],
@@ -1337,6 +1410,45 @@ def get_agent_provider_preference() -> List[str]:
                 result.append(p)
         return result
     return list(_DEFAULT_PROVIDER_PREFERENCE)
+
+
+TASK_CLASS_SINGLE_FILE: str = "single_file"
+TASK_CLASS_MULTI_FILE: str = "multi_file"
+TASK_CLASS_REPO_SCALE: str = "repo_scale"
+TASK_CLASS_HIGH_ISOLATION: str = "high_isolation"
+
+
+def select_harness_for_task(task_class: str, candidates: List[str]) -> List[str]:
+    """Return candidates reordered for a coarse agentic task class."""
+    if task_class == TASK_CLASS_SINGLE_FILE:
+        return list(candidates)
+
+    if task_class == TASK_CLASS_MULTI_FILE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_REPO_SCALE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_HIGH_ISOLATION:
+        preferred = ("opencode", "anthropic")
+    else:
+        return list(candidates)
+
+    ordered = [provider for provider in preferred if provider in candidates]
+    if task_class == TASK_CLASS_REPO_SCALE:
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered and provider not in {"google", "openai"}
+        )
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered
+        )
+        return ordered
+
+    ordered.extend(provider for provider in candidates if provider not in ordered)
+    return ordered
+
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
@@ -4078,6 +4190,7 @@ def run_agentic_task(
     reasoning_time: Optional[float] = None,
     steers: Optional[List[SteerEntry]] = None,
     claude_policy: Optional[ClaudePolicy] = None,
+    task_class: Optional[str] = None,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -4101,6 +4214,8 @@ def run_agentic_task(
         claude_policy: Optional validated Claude CLI policy contract. When
             present, Anthropic runs must enforce these tool/session/output
             semantics instead of PDD's broad default permission mode.
+        task_class: Optional coarse task class used to reorder already-available
+            providers. ``None`` preserves the existing provider cascade.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
@@ -4131,6 +4246,8 @@ def run_agentic_task(
                 "agent is available to enforce the requested policy"
             )
         candidates = ["anthropic"]
+    elif task_class is not None:
+        candidates = select_harness_for_task(task_class, candidates)
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"

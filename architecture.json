@@ -61,8 +61,13 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None) -> AgenticTaskResult",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, task_class=None) -> AgenticTaskResult",
             "returns": "AgenticTaskResult"
+          },
+          {
+            "name": "select_harness_for_task",
+            "signature": "(task_class: str, candidates: List[str]) -> List[str]",
+            "returns": "List[str]"
           },
           {
             "name": "detect_control_token",
@@ -190,6 +195,12 @@
               "INTERACTIVE_ONLY",
               "UNSUPPORTED"
             ]
+          }
+        ],
+        "typeAliases": [
+          {
+            "name": "TaskClass",
+            "definition": "Literal['single_file', 'multi_file', 'repo_scale', 'high_isolation']"
           }
         ]
       }
@@ -2418,8 +2429,8 @@
     }
   },
   {
-    "reason": "Classifies test/verification failure modes for failure-aware retries.",
-    "description": "Heuristic classifier (regex-based, no LLM) used by fix_error_loop to skip unproductive retries on syntax/import or timeout/flaky failures.",
+    "reason": "Classify pytest / verification output for `fix_error_loop` and `agentic_multishot` by failure type: syntax_import, assertion_logic, timeout_flaky, budget_truncated, infrastructure_error.",
+    "description": "Heuristic classifier (regex-based, no LLM) used by fix_error_loop and agentic_multishot to categorize failures. Covers five FailureKind values; budget_truncated and infrastructure_error are set programmatically by the multi-shot controller rather than derived from output text.",
     "dependencies": [],
     "priority": 64,
     "filename": "failure_classification_python.prompt",
@@ -2436,34 +2447,126 @@
           {
             "name": "classify_failure",
             "signature": "(text: str) -> FailureKind",
-            "returns": "FailureKind",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "FailureKind"
           },
           {
             "name": "extract_failure_signature",
             "signature": "(text: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           },
           {
             "name": "failure_classification_hint",
             "signature": "(kind: FailureKind) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           },
           {
             "name": "format_signature_hint",
             "signature": "(sig: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Sequential multi-shot repeat-run controller for agentic CLI harnesses; wraps run_agentic_task with per-shot budget/timeout, hidden-verifier selection, and append-only JSONL telemetry.",
+    "description": "Orchestration controller for sequential multi-shot CLI repeat-runs. Wraps run_agentic_task with per-shot and total budget/timeout caps, hidden-verifier candidate selection, append-only JSONL persistence, and stop-early behavior on first pass.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "failure_classification_python.prompt"
+    ],
+    "priority": 65,
+    "filename": "agentic_multishot_python.prompt",
+    "filepath": "pdd/agentic_multishot.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "dataclasses": [
+          {
+            "name": "MultishotCandidateRecord",
+            "fields": [
+              {
+                "name": "shot_id",
+                "type": "int"
+              },
+              {
+                "name": "task_id",
+                "type": "str"
+              },
+              {
+                "name": "multishot_run_id",
+                "type": "str"
+              },
+              {
+                "name": "cli_version",
+                "type": "str"
+              },
+              {
+                "name": "config_id",
+                "type": "str"
+              },
+              {
+                "name": "verdict",
+                "type": "str"
+              },
+              {
+                "name": "failure_class",
+                "type": "Optional[str]"
+              },
+              {
+                "name": "cost_usd",
+                "type": "float"
+              },
+              {
+                "name": "latency_ms",
+                "type": "float"
+              },
+              {
+                "name": "started_at",
+                "type": "str"
+              },
+              {
+                "name": "finished_at",
+                "type": "str"
+              },
+              {
+                "name": "stop_reason",
+                "type": "Optional[str]"
+              }
             ]
+          },
+          {
+            "name": "MultishotResult",
+            "fields": [
+              {
+                "name": "winner",
+                "type": "Optional[MultishotCandidateRecord]"
+              },
+              {
+                "name": "candidates",
+                "type": "List[MultishotCandidateRecord]"
+              },
+              {
+                "name": "total_cost_usd",
+                "type": "float"
+              },
+              {
+                "name": "total_latency_ms",
+                "type": "float"
+              }
+            ]
+          }
+        ],
+        "functions": [
+          {
+            "name": "run_multishot_candidates",
+            "signature": "(instruction, cwd, *, n_shots=1, per_shot_budget, total_budget, per_shot_timeout_s, total_timeout_s, stop_on_first_pass=True, verifier_fn, config_id, task_id, jsonl_path=None, **kwargs) -> MultishotResult",
+            "returns": "MultishotResult"
           }
         ]
       }
@@ -7241,7 +7344,7 @@
   },
   {
     "reason": "Parallel dependency-aware sync runner that forwards compressed-context sync settings.",
-    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects three repairable generation failures from per-module sync subprocesses \u2014 architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), and test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012) \u2014 and retries each up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry forwards the parent's resolved .pddrc context, --strength, and --temperature on the retry command so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block \u2014 '=== architecture conformance failure ===', '=== public surface regression ===', or '=== test churn threshold exceeded ===' (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) \u2014 plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
+    "description": "Manages pdd sync subprocesses using a ThreadPoolExecutor whose worker count is read by _read_sync_max_workers() from the PDD_SYNC_MAX_WORKERS env var at construction (default 4, non-integer falls back to 4, clamped to 1-4, forced to 1 when total_budget is set; MAX_WORKERS stays a backwards-compatible module constant), preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects three repairable generation failures from per-module sync subprocesses — architecture-conformance ('Architecture conformance error for ' line prefix, parsed by _parse_conformance_failure), public-surface regression ('Public surface regression for ' line prefix, parsed by _parse_public_surface_failure, issue #1012), and test-churn ('Test churn threshold exceeded for ' line prefix, parsed by _parse_test_churn_failure, issue #1012) — and retries each up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact offending symbols / churn ratio and forbids editing architecture.json or rewriting unrelated tests. Every child/retry forwards the parent's resolved .pddrc context, --strength, and --temperature on the retry command so a flaky regeneration cannot silently switch model or context between attempts. Stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the failure signature (sorted missing/removed symbols, or (rounded churn_ratio, pre_line_count)) repeats, and on hard failure records the matching structured block — '=== architecture conformance failure ===', '=== public surface regression ===', or '=== test churn threshold exceeded ===' (built by build_conformance_hard_failure_from_error / build_public_surface_hard_failure_from_error / build_test_churn_hard_failure_from_error, all importable from pdd.agentic_sync_runner so sync_main and sync_orchestration reuse them verbatim) — plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits. Bounds per-attempt child stdout/stderr capture with a _BoundedTextCapture tail (capped by STDOUT_CAPTURE_LINE_LIMIT=5000 lines and STDOUT_CAPTURE_BYTE_LIMIT=1 MiB per stream, allocated fresh each attempt) so verbose repair retries cannot grow memory unbounded and trigger SIGKILL on Cloud Run; reads child pipes as bytes and decodes UTF-8 incrementally; tracks dropped line/byte counts surfaced via _log_dropped_output() and appended to failure/timeout summaries without injecting diagnostics into captured child output. The 'Overall status: ... Failed' verdict is recorded as the stdout line streams in (sticky), so a failure marker evicted from the bounded tail by trailing output still yields a failed verdict and a correct failure reason.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
@@ -7305,7 +7408,7 @@
   },
   {
     "reason": "Durable issue-sync execution engine that isolates each module in a dedicated git worktree and checkpoints successful module output to a durable branch.",
-    "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, and on success applies the module diff to the durable branch as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
+    "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Worker concurrency follows the same precedence as the parent: total_budget forces one worker, an explicit durable_max_parallel overrides, otherwise it reads the shared PDD_SYNC_MAX_WORKERS default via _read_sync_max_workers(). Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, and on success applies the module diff to the durable branch as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
     "dependencies": [
       "agentic_sync_runner_python.prompt"
     ],
@@ -7326,7 +7429,7 @@
             "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
             "returns": "DurableSyncRunner",
             "sideEffects": [
-              "Resolves durable branch name and durable worktree path; total_budget in sync_options forces sequential scheduling, otherwise durable_max_parallel caps concurrency"
+              "Resolves durable branch name and durable worktree path; total_budget in sync_options forces sequential scheduling, else an explicit durable_max_parallel caps concurrency, else concurrency falls back to the shared PDD_SYNC_MAX_WORKERS default via agentic_sync_runner._read_sync_max_workers()"
             ]
           },
           {
