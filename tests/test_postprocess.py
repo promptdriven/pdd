@@ -591,3 +591,65 @@ Clean prompt without tags.
     expected_code = """Clean prompt without tags."""
     extracted_code, cost, model_name = postprocess(llm_output, "prompt", strength=0)
     assert extracted_code == expected_code
+
+
+# ---------------------------------------------------------------------------
+# Scope addition: covers expansion item pdd/postprocess.py:134 identified
+# by Step 6 but absent from Step 8's plan.
+#
+# Root cause (sibling of issue #1612 Bug 1): `extracted_code =
+# result["result"].extracted_code` at line 134 has no isinstance guard.
+# When llm_invoke returns a raw str as result["result"] (cache-bypass /
+# truncation path), the attribute access raises
+# AttributeError('str object has no attribute extracted_code') instead of
+# a meaningful error.
+# ---------------------------------------------------------------------------
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_result_raw_string_does_not_raise_attribute_error_issue_1612(
+    mock_llm_invoke, mock_load_template
+):
+    """Scope addition: covers expansion item pdd/postprocess.py:134 identified
+    by Step 6 but absent from Step 8's plan.
+
+    When llm_invoke returns a raw string as result['result'] (cache-bypass path),
+    accessing result["result"].extracted_code at line 134 raises
+    AttributeError('str object has no attribute extracted_code').
+    postprocess should raise a meaningful ValueError, not propagate AttributeError.
+    """
+    mock_llm_invoke.return_value = {
+        "result": "Cache bypass retry also returned None",  # raw str, not ExtractedCode
+        "cost": 0.05,
+        "model_name": "gpt-4",
+    }
+
+    # After the fix, postprocess must not propagate AttributeError.
+    # It should raise ValueError (consistent with the existing guard at line 129)
+    # or handle the malformed result another way — but NOT AttributeError.
+    with pytest.raises((ValueError, TypeError)):
+        postprocess("some output", "python", strength=0.5)
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_result_none_value_does_not_raise_attribute_error_issue_1612(
+    mock_llm_invoke, mock_load_template
+):
+    """Scope addition: covers expansion item pdd/postprocess.py:134 identified
+    by Step 6 but absent from Step 8's plan.
+
+    When llm_invoke returns None as result['result'] (cache-bypass path),
+    accessing result["result"].extracted_code at line 134 raises
+    AttributeError('NoneType object has no attribute extracted_code').
+    postprocess should raise a meaningful ValueError, not propagate AttributeError.
+    """
+    mock_llm_invoke.return_value = {
+        "result": None,  # None, not ExtractedCode
+        "cost": 0.05,
+        "model_name": "gpt-4",
+    }
+
+    with pytest.raises((ValueError, TypeError)):
+        postprocess("some output", "python", strength=0.5)

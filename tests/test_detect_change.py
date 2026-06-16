@@ -171,3 +171,100 @@ def test_general_exception_handling():
                 temperature=0.0,
                 time=None
             )
+
+
+# ---------------------------------------------------------------------------
+# Scope addition: covers expansion item pdd/detect_change.py:123 identified
+# by Step 6 but absent from Step 8's plan.
+#
+# Root cause (sibling of issue #1612 Bug 1): `changes_list =
+# extract_response['result'].changes_list` at line 123 has no isinstance
+# guard.  When llm_invoke returns None or a raw str as the extraction result
+# (cache-bypass / truncation path), the attribute access raises AttributeError
+# instead of handling the malformed response gracefully.
+# ---------------------------------------------------------------------------
+
+
+def test_extract_result_none_does_not_raise_attribute_error_issue_1612(mock_templates):
+    """Scope addition: covers expansion item pdd/detect_change.py:123 identified
+    by Step 6 but absent from Step 8's plan.
+
+    When the extraction llm_invoke returns None as result, accessing
+    extract_response['result'].changes_list raises
+    AttributeError('NoneType object has no attribute changes_list').
+    detect_change should handle this gracefully rather than propagating
+    AttributeError to the caller.
+    """
+    detect_response = {
+        'result': 'Analysis results',
+        'cost': 0.05,
+        'token_count': 100,
+        'model_name': 'gpt-3.5-turbo',
+    }
+    # Extraction call returns None as the Pydantic result (cache-bypass path)
+    extract_response_none = {
+        'result': None,
+        'cost': 0.03,
+        'token_count': 50,
+        'model_name': 'gpt-3.5-turbo',
+    }
+
+    with patch('pdd.detect_change.load_prompt_template') as mock_load_template, \
+         patch('pdd.detect_change.preprocess') as mock_preprocess, \
+         patch('pdd.detect_change.llm_invoke') as mock_llm_invoke:
+
+        mock_load_template.side_effect = mock_templates
+        mock_preprocess.return_value = "Processed template"
+        mock_llm_invoke.side_effect = [detect_response, extract_response_none]
+
+        # After the fix, detect_change must not propagate AttributeError.
+        # The function should return a graceful fallback (e.g., empty list)
+        # rather than crashing with:
+        #   AttributeError: 'NoneType' object has no attribute 'changes_list'
+        result_list, _cost, _model = detect_change(
+            MOCK_PROMPT_FILES,
+            MOCK_CHANGE_DESCRIPTION,
+            strength=0.7,
+            temperature=0.0,
+        )
+        assert isinstance(result_list, list)
+
+
+def test_extract_result_raw_string_does_not_raise_attribute_error_issue_1612(mock_templates):
+    """Scope addition: covers expansion item pdd/detect_change.py:123 identified
+    by Step 6 but absent from Step 8's plan.
+
+    When the extraction llm_invoke returns a raw string as result (as observed
+    in production for the incremental generator sibling bug), accessing
+    extract_response['result'].changes_list raises
+    AttributeError('str object has no attribute changes_list').
+    detect_change should handle this gracefully.
+    """
+    detect_response = {
+        'result': 'Analysis results',
+        'cost': 0.05,
+        'token_count': 100,
+        'model_name': 'gpt-3.5-turbo',
+    }
+    extract_response_str = {
+        'result': "Cache bypass retry also returned None",
+        'cost': 0.03,
+        'token_count': 50,
+        'model_name': 'gpt-3.5-turbo',
+    }
+
+    with patch('pdd.detect_change.load_prompt_template') as mock_load_template, \
+         patch('pdd.detect_change.preprocess') as mock_preprocess, \
+         patch('pdd.detect_change.llm_invoke') as mock_llm_invoke:
+
+        mock_load_template.side_effect = mock_templates
+        mock_preprocess.return_value = "Processed template"
+        mock_llm_invoke.side_effect = [detect_response, extract_response_str]
+
+        result_list, _cost, _model = detect_change(
+            MOCK_PROMPT_FILES,
+            MOCK_CHANGE_DESCRIPTION,
+            strength=0.7,
+            temperature=0.0,
+        )
+        assert isinstance(result_list, list)
