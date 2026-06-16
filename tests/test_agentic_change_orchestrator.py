@@ -3380,6 +3380,274 @@ def test_setup_worktree_branch_checked_out_fails_without_fallback(tmp_path):
     assert worktree_branch == branch_name, f"Worktree should be on {branch_name}, but is on {worktree_branch}"
 
 
+def _init_repo_with_origin(tmp_path):
+    """Create a real git repo whose ``origin`` remote resolves ``origin/main``.
+
+    Returns the working-repo path. ``_resolve_main_ref`` will return a real
+    ``origin/main`` SHA against it (required for the clean-restart fresh-base
+    guarantee)."""
+    origin_repo = tmp_path / "origin_repo"
+    origin_repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=origin_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=origin_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=origin_repo, check=True, capture_output=True)
+    (origin_repo / "README.md").write_text("Initial commit")
+    subprocess.run(["git", "add", "README.md"], cwd=origin_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=origin_repo, check=True, capture_output=True)
+
+    work_repo = tmp_path / "work_repo"
+    subprocess.run(
+        ["git", "clone", str(origin_repo), str(work_repo)],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=work_repo, check=True, capture_output=True)
+    return work_repo
+
+
+def test_clean_restart_locked_branch_uses_fallback_worktree(tmp_path, monkeypatch):
+    """Issue #1596: under clean_restart, when ``change/issue-N`` is checked out
+    in another live worktree (the executor's), ``git branch -D`` genuinely
+    fails. We must NOT hard-fail and we must NOT reuse the locked branch's
+    commits: create a fresh unique fallback branch from ``origin/main`` and
+    leave the locked worktree untouched. Uses real git + a real second
+    worktree to truly reproduce the lock."""
+    from pdd.agentic_change_orchestrator import _setup_worktree
+
+    monkeypatch.setenv("JOB_ID", "abc12345xyz")
+    work_repo = _init_repo_with_origin(tmp_path)
+    issue_number = 1596
+    branch_name = f"change/issue-{issue_number}"
+
+    # Create the canonical branch and check it out in a SECOND real worktree,
+    # with a divergent commit that must NOT leak into the fallback worktree.
+    subprocess.run(["git", "branch", branch_name, "origin/main"], cwd=work_repo, check=True, capture_output=True)
+    locked_dir = tmp_path / "locked"
+    subprocess.run(
+        ["git", "worktree", "add", str(locked_dir), branch_name],
+        cwd=work_repo, check=True, capture_output=True,
+    )
+    (locked_dir / "LEAKED.txt").write_text("should not appear in fallback")
+    subprocess.run(["git", "add", "LEAKED.txt"], cwd=locked_dir, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "divergent commit on locked branch"], cwd=locked_dir, check=True, capture_output=True)
+
+    wt, err = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+
+    assert err is None, f"expected no error, got: {err}"
+    assert wt is not None and wt.exists()
+
+    # New worktree is on the JOB_ID-slug fallback branch.
+    head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=wt, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == f"{branch_name}-job-abc12345", f"unexpected fallback branch: {head}"
+
+    # Fallback base is origin/main HEAD — divergent locked commit is absent.
+    origin_main = subprocess.run(
+        ["git", "rev-parse", "origin/main"],
+        cwd=work_repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    fallback_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=wt, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert fallback_base == origin_main, "fallback worktree must be based on origin/main HEAD"
+    assert not (wt / "LEAKED.txt").exists(), "locked branch's divergent commit leaked into fallback"
+
+    # Locked worktree is untouched: still exists, still on the canonical branch.
+    assert locked_dir.exists()
+    locked_head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=locked_dir, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert locked_head == branch_name, "locked worktree must not be touched"
+
+    # Cleanup worktrees to avoid leaking registrations into tmp teardown.
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "worktree", "remove", "--force", str(locked_dir)], cwd=work_repo, capture_output=True)
+
+
+def test_clean_restart_locked_branch_fallback_survives_same_job_retry(tmp_path, monkeypatch):
+    """Issue #1596 retry safety: the fallback branch name is stable per JOB_ID,
+    so a retry of the same job recomputes the same name. The prior attempt's
+    fallback branch persists after its worktree is removed; the second call
+    must delete-and-recreate it from main rather than failing
+    ``git worktree add -b`` on a name clash."""
+    from pdd.agentic_change_orchestrator import _setup_worktree
+
+    monkeypatch.setenv("JOB_ID", "retry123")
+    work_repo = _init_repo_with_origin(tmp_path)
+    issue_number = 1596
+    branch_name = f"change/issue-{issue_number}"
+
+    # Persistent lock on the canonical branch (the executor's worktree).
+    subprocess.run(["git", "branch", branch_name, "origin/main"], cwd=work_repo, check=True, capture_output=True)
+    locked_dir = tmp_path / "locked"
+    subprocess.run(["git", "worktree", "add", str(locked_dir), branch_name], cwd=work_repo, check=True, capture_output=True)
+
+    # First attempt creates the fallback worktree, then is "removed" (e.g. the
+    # run stopped) — but the fallback BRANCH is left behind locally.
+    wt1, err1 = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+    assert err1 is None and wt1 is not None
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt1)], cwd=work_repo, capture_output=True)
+    fallback = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{branch_name}-job-retry123"],
+        cwd=work_repo, capture_output=True, text=True,
+    )
+    assert fallback.returncode == 0, "fallback branch should persist after worktree removal"
+
+    # Retry of the SAME job: must succeed (delete-and-recreate the stable name).
+    wt2, err2 = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+    assert err2 is None, f"retry must not fail on stable fallback name clash: {err2}"
+    assert wt2 is not None and wt2.exists()
+    head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=wt2, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == f"{branch_name}-job-retry123"
+
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt2)], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "worktree", "remove", "--force", str(locked_dir)], cwd=work_repo, capture_output=True)
+
+
+def test_clean_restart_fallback_fetches_own_lease_ref_for_force_with_lease(tmp_path, monkeypatch):
+    """Issue #1596 lease gap: the fallback push uses
+    ``git push --force-with-lease origin {head_branch}``. On a same-job retry
+    in a FRESH clone, ``origin/{fallback}`` already exists on the remote but
+    there is no local ``refs/remotes/origin/{fallback}`` tracking ref →
+    ``--force-with-lease`` is rejected ("stale info"). The fallback block must
+    fetch the FALLBACK branch's own tracking ref so the push has lease info.
+    Logic is shared across the 3 orchestrators; testing change is enough."""
+    from pdd.agentic_change_orchestrator import _setup_worktree
+
+    monkeypatch.setenv("JOB_ID", "stablejob1")
+    work_repo = _init_repo_with_origin(tmp_path)
+    issue_number = 1596
+    branch_name = f"change/issue-{issue_number}"
+    fallback_branch = f"{branch_name}-job-stablejo"  # slug = first 8 alnum
+
+    # Canonical branch locked in a 2nd live worktree, with a divergent commit
+    # that must NOT leak into the fresh-based fallback.
+    subprocess.run(["git", "branch", branch_name, "origin/main"], cwd=work_repo, check=True, capture_output=True)
+    locked_dir = tmp_path / "locked"
+    subprocess.run(["git", "worktree", "add", str(locked_dir), branch_name], cwd=work_repo, check=True, capture_output=True)
+    (locked_dir / "LEAKED.txt").write_text("should not appear in fallback")
+    subprocess.run(["git", "add", "LEAKED.txt"], cwd=locked_dir, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "divergent commit"], cwd=locked_dir, check=True, capture_output=True)
+
+    # First run produces the fallback worktree; push it to origin so the
+    # remote branch exists (the prior container's work).
+    wt1, err1 = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+    assert err1 is None and wt1 is not None
+    wt1_head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=wt1, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert wt1_head == fallback_branch
+    subprocess.run(
+        ["git", "push", "origin", f"HEAD:{fallback_branch}"],
+        cwd=wt1, check=True, capture_output=True,
+    )
+
+    # Simulate a fresh container/clone: remove the fallback worktree, then drop
+    # the local fallback branch AND its remote-tracking ref. The remote branch
+    # remains on origin (as a real prior push would leave it).
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt1)], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "branch", "-D", fallback_branch], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "branch", "-rD", f"origin/{fallback_branch}"], cwd=work_repo, capture_output=True)
+    # Confirm the tracking ref is gone before the second run.
+    pre = subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/remotes/origin/{fallback_branch}"],
+        cwd=work_repo, capture_output=True, text=True,
+    )
+    assert pre.returncode != 0, "tracking ref must be absent before the retry"
+
+    # Second run (fresh-container retry): the fallback block must fetch the
+    # fallback's own lease ref so a later --force-with-lease push works.
+    wt2, err2 = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+    assert err2 is None, f"retry must not fail: {err2}"
+    assert wt2 is not None and wt2.exists()
+
+    # The fallback lease tracking ref now EXISTS (proves the fallback fetch ran).
+    post = subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/remotes/origin/{fallback_branch}"],
+        cwd=work_repo, capture_output=True, text=True,
+    )
+    assert post.returncode == 0, "fallback lease tracking ref must exist after setup"
+
+    # Fresh base: new worktree HEAD == origin/main HEAD, no divergent leak.
+    origin_main = subprocess.run(
+        ["git", "rev-parse", "origin/main"], cwd=work_repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    wt2_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=wt2, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert wt2_base == origin_main, "fallback worktree must be based on origin/main HEAD"
+    assert not (wt2 / "LEAKED.txt").exists(), "locked branch's divergent commit leaked into fallback"
+
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt2)], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "worktree", "remove", "--force", str(locked_dir)], cwd=work_repo, capture_output=True)
+
+
+def _render_change_pr_prompt(head_branch):
+    """Render the Step 13 PR prompt the way the orchestrator does, with a
+    minimal context exercising ``head_branch`` and ``base_branch``."""
+    from pdd.load_prompt_template import load_prompt_template
+    from pdd.preprocess import preprocess
+    from pdd.agentic_common import substitute_template_variables
+
+    context = {
+        "issue_number": "1596",
+        "base_branch": "main",
+        "head_branch": head_branch,
+        "clean_restart": "true",
+    }
+    template = load_prompt_template("agentic_change_step13_create_pr_LLM")
+    template = preprocess(template, recursive=True, double_curly_brackets=True, exclude=list(context.keys()))
+    return substitute_template_variables(template, context)
+
+
+def test_step13_prompt_head_branch_non_fallback_preserves_canonical():
+    """No-fallback path: head_branch == canonical name → rendered push/pr
+    commands are byte-identical to the old hardcoded behavior (#1596)."""
+    rendered = _render_change_pr_prompt("change/issue-1596")
+    assert "git push --force-with-lease -u origin change/issue-1596" in rendered
+    assert "git push -u origin change/issue-1596" in rendered
+    assert "gh pr list --head change/issue-1596" in rendered
+    assert "--head change/issue-1596" in rendered
+
+
+def test_step13_prompt_head_branch_fallback_uses_fallback_branch():
+    """Fallback path: head_branch == fallback name → push/pr-head use the
+    fallback branch; no bare canonical branch token remains in those
+    positions (issue links #N may still appear)."""
+    rendered = _render_change_pr_prompt("change/issue-1596-job-deadbeef")
+    assert "git push --force-with-lease -u origin change/issue-1596-job-deadbeef" in rendered
+    assert "gh pr list --head change/issue-1596-job-deadbeef" in rendered
+    assert "--head change/issue-1596-job-deadbeef" in rendered
+    # Bare canonical branch token (boundary-checked) must not survive.
+    assert "origin change/issue-1596\n" not in rendered
+    assert "--head change/issue-1596\n" not in rendered
+    assert "--head change/issue-1596 " not in rendered
+    # Issue links remain.
+    assert "#1596" in rendered
+
+
+def test_step13_prompt_uses_head_branch_for_push_and_pr():
+    """Step 13 prompt must reference {head_branch} (not a hardcoded
+    change/issue-N branch) in push / gh pr commands (#1596)."""
+    prompt = Path("pdd/prompts/agentic_change_step13_create_pr_LLM.prompt").read_text(
+        encoding="utf-8"
+    )
+    assert "git push --force-with-lease -u origin {head_branch}" in prompt
+    assert "git push -u origin {head_branch}" in prompt
+    assert "gh pr list --head {head_branch}" in prompt
+    assert "--head {head_branch}" in prompt
+    # No remaining hardcoded branch token; only issue links / titles may use it.
+    assert "origin change/issue-{issue_number}" not in prompt
+    assert "--head change/issue-{issue_number}" not in prompt
+
+
 # -----------------------------------------------------------------------------
 # Issue #289: Fallback comments + consecutive failure abort + conditional state clearing
 # -----------------------------------------------------------------------------
@@ -3734,14 +4002,48 @@ def test_step9_no_files_marks_failed_not_step_num_minus_1(mock_dependencies, tem
 # =============================================================================
 
 def test_check_existing_pr_returns_url_when_pr_exists():
-    """_check_existing_pr returns the PR URL when an open PR exists."""
+    """_check_existing_pr returns the PR URL when an open PR exists on the
+    canonical head."""
     with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
         mock_sub.return_value.returncode = 0
         mock_sub.return_value.stdout = json.dumps([
-            {"url": "https://github.com/owner/repo/pull/42"}
+            {"url": "https://github.com/owner/repo/pull/42",
+             "headRefName": "change/issue-10"}
         ])
         result = _check_existing_pr("owner", "repo", 10)
     assert result == "https://github.com/owner/repo/pull/42"
+
+
+def test_check_existing_pr_matches_fallback_head():
+    """Issue #1596: a PR opened on a ``change/issue-{N}-job-*`` clean-restart
+    fallback head must be found so a later normal run does not duplicate it.
+    The prefix-search may also return an unrelated ``change/issue-{N}0`` head,
+    which must be rejected by the precise Python filter."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 0
+        # Order the unrelated prefix match FIRST to prove it is skipped, not
+        # returned, before the genuine fallback head.
+        mock_sub.return_value.stdout = json.dumps([
+            {"url": "https://github.com/owner/repo/pull/99",
+             "headRefName": "change/issue-100"},
+            {"url": "https://github.com/owner/repo/pull/43",
+             "headRefName": "change/issue-10-job-deadbeef"},
+        ])
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result == "https://github.com/owner/repo/pull/43"
+
+
+def test_check_existing_pr_rejects_unrelated_prefix_head():
+    """Issue #1596: ``head:change/issue-{N}`` prefix-matches unrelated heads
+    like ``change/issue-{N}0``; those must NOT be treated as an existing PR."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 0
+        mock_sub.return_value.stdout = json.dumps([
+            {"url": "https://github.com/owner/repo/pull/99",
+             "headRefName": "change/issue-100"},
+        ])
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result is None
 
 
 def test_check_existing_pr_returns_none_when_no_pr():
@@ -7257,14 +7559,16 @@ class TestSetupWorktreeCleanRestart:
             f"Expected a clear HEAD-fallback error message; got {err!r}"
         )
 
-    def test_clean_restart_refuses_to_reuse_undeletable_local_branch(
+    def test_clean_restart_hard_fails_when_delete_fails_without_worktree_lock(
         self, tmp_path,
     ):
-        """If the local ``change/issue-N`` branch exists and ``git branch
-        -D`` fails (e.g. it's checked out in another worktree), the
-        default code path reuses that local branch as the worktree base.
-        Under clean_restart that's a Req 15 violation; we abort with a
-        clear pointer to the offending worktree."""
+        """Negative case for the #1596 fallback: ``git branch -D`` fails but
+        ``git worktree list --porcelain`` does NOT prove any worktree holds
+        the branch (the mock returns empty porcelain output). The fallback
+        gate keys off porcelain, not the delete-error stderr text, so we must
+        still hard-fail rather than fabricate a fallback worktree. This guards
+        that a non-worktree-lock delete failure cannot silently base the fresh
+        restart on a reused local branch (Req 15)."""
         from pdd.agentic_change_orchestrator import _setup_worktree
 
         calls, side = self._patch_git(branch_delete_ok=False)

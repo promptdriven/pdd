@@ -6,6 +6,8 @@ updates a live GitHub issue comment with progress, and pauses on failure.
 """
 from __future__ import annotations
 
+import collections
+import codecs
 import csv as _csv
 import datetime
 import json
@@ -39,8 +41,95 @@ console = Console()
 # Module-level constants and helpers
 # ---------------------------------------------------------------------------
 
-# Maximum concurrent syncs
-MAX_WORKERS = 4
+def _read_sync_max_workers() -> int:
+    """Read PDD_SYNC_MAX_WORKERS, preserving default 4 and clamping 1-4."""
+    try:
+        return max(1, min(4, int(os.environ.get("PDD_SYNC_MAX_WORKERS", "4"))))
+    except ValueError:
+        return 4
+
+
+# Backwards-compatible module constant; AsyncSyncRunner reads the env at init.
+MAX_WORKERS = _read_sync_max_workers()
+
+# Maximum output retained per stream when capturing child subprocess output.
+# The line limit keeps parser work bounded; the byte limit protects against
+# very long lines that would otherwise bypass a line-only cap.
+STDOUT_CAPTURE_LINE_LIMIT = 5000
+STDOUT_CAPTURE_BYTE_LIMIT = 1024 * 1024
+OUTPUT_CAPTURE_READ_CHUNK_SIZE = 8192
+
+
+class _BoundedTextCapture:
+    """Tail capture with both line and UTF-8 byte caps."""
+
+    def __init__(self, *, line_limit: int, byte_limit: int) -> None:
+        self.line_limit = max(1, int(line_limit))
+        self.byte_limit = max(1, int(byte_limit))
+        self.lines: collections.deque[str] = collections.deque()
+        self.byte_count = 0
+        self.dropped_lines = 0
+        self.dropped_bytes = 0
+        self._partial = ""
+
+    @staticmethod
+    def _byte_len(text: str) -> int:
+        return len(text.encode("utf-8", errors="replace"))
+
+    def _trim_to_byte_limit(self, text: str) -> str:
+        encoded = text.encode("utf-8", errors="replace")
+        if len(encoded) <= self.byte_limit:
+            return text
+        tail = encoded[-self.byte_limit:].decode("utf-8", errors="ignore")
+        self.dropped_bytes += len(encoded) - self._byte_len(tail)
+        return tail
+
+    def _drop_oldest(self) -> None:
+        dropped = self.lines.popleft()
+        dropped_len = self._byte_len(dropped)
+        self.byte_count -= dropped_len
+        self.dropped_lines += 1
+        self.dropped_bytes += dropped_len
+
+    def _append_line(self, line: str) -> None:
+        line = self._trim_to_byte_limit(line)
+        line_len = self._byte_len(line)
+        while len(self.lines) >= self.line_limit:
+            self._drop_oldest()
+        while self.lines and self.byte_count + line_len > self.byte_limit:
+            self._drop_oldest()
+        self.lines.append(line)
+        self.byte_count += line_len
+
+    def _trim_partial(self) -> None:
+        self._partial = self._trim_to_byte_limit(self._partial)
+
+    def feed(self, text: str) -> List[str]:
+        if not text:
+            return []
+        text = self._partial + text
+        self._partial = ""
+        parts = text.splitlines(keepends=True)
+        if parts and not parts[-1].endswith(("\n", "\r")):
+            self._partial = parts.pop()
+            self._trim_partial()
+        for line in parts:
+            self._append_line(line)
+        return parts
+
+    def finish(self) -> List[str]:
+        if not self._partial:
+            return []
+        line = self._partial
+        self._partial = ""
+        self._append_line(line)
+        return [line]
+
+    def text(self) -> str:
+        return "".join(self.lines)
+
+    def reversed_lines(self):
+        return reversed(self.lines)
 
 # Heartbeat interval for printing progress hints during long-running modules
 HEARTBEAT_INTERVAL = 60
@@ -1008,7 +1097,9 @@ class AsyncSyncRunner:
         self._steer_state: Dict[str, Any] = {}
 
         self.total_budget = self.sync_options.get("total_budget")
-        self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
+        self.max_workers = (
+            1 if self.total_budget is not None else _read_sync_max_workers()
+        )
 
         self.module_states: Dict[str, ModuleState] = {
             b: ModuleState() for b in self.basenames
@@ -2339,37 +2430,120 @@ class AsyncSyncRunner:
             except Exception:
                 pass
 
-        stdout_lines: List[str] = []
-        stderr_lines: List[str] = []
+        # Bounded tail buffers: cap retained child output so a verbose or
+        # retrying child cannot grow these to tens of MB and trigger a SIGKILL.
+        # Allocated fresh per attempt, so output from a previous repair-retry
+        # attempt is not retained across retries in memory.
+        stdout_capture = _BoundedTextCapture(
+            line_limit=STDOUT_CAPTURE_LINE_LIMIT,
+            byte_limit=STDOUT_CAPTURE_BYTE_LIMIT,
+        )
+        stderr_capture = _BoundedTextCapture(
+            line_limit=STDOUT_CAPTURE_LINE_LIMIT,
+            byte_limit=STDOUT_CAPTURE_BYTE_LIMIT,
+        )
         verbose_print = self.verbose and not self.quiet
         line_lock = threading.Lock()
 
-        def _read_stream(stream, lines_list: List[str], prefix: str = "") -> None:
+        # Sticky capture of the child's "Overall status: ... Failed" verdict.
+        # Recorded as each stdout line streams in (see _process_child_line) so a
+        # failure marker followed by a flood of output that evicts it from the
+        # bounded tail still yields a failed verdict and a correct failure
+        # reason. Only the stdout reader thread writes it, so no lock is needed.
+        streamed_failure_markers: List[str] = []
+
+        def _dropped_output_message() -> str:
+            out_lines = stdout_capture.dropped_lines
+            out_bytes = stdout_capture.dropped_bytes
+            err_lines = stderr_capture.dropped_lines
+            err_bytes = stderr_capture.dropped_bytes
+            if not (out_lines or out_bytes or err_lines or err_bytes):
+                return ""
+            return (
+                f"{basename}: bounded child output capture dropped "
+                f"{out_lines} stdout line(s) / {out_bytes} stdout byte(s), "
+                f"{err_lines} stderr line(s) / {err_bytes} stderr byte(s) "
+                f"(kept last {STDOUT_CAPTURE_LINE_LIMIT} line(s) and "
+                f"{STDOUT_CAPTURE_BYTE_LIMIT} byte(s) per stream)"
+            )
+
+        def _log_dropped_output() -> None:
+            """Emit a diagnostic when bounded capture discarded child output.
+
+            The count is logged to the runner's own stdout, never injected into
+            the captured child stdout/stderr, so conformance/public-surface/
+            test-churn parsing and the success scan keep seeing exactly what the
+            child emitted.
+            """
+            msg = _dropped_output_message()
+            if msg and not self.quiet:
+                try:
+                    print(f"  {msg}")
+                except Exception:
+                    pass
+
+        def _read_stream_chunk(stream):
             try:
-                for line in iter(stream.readline, ''):
-                    if not line:
+                return os.read(stream.fileno(), OUTPUT_CAPTURE_READ_CHUNK_SIZE)
+            except Exception:
+                return stream.read(OUTPUT_CAPTURE_READ_CHUNK_SIZE)
+
+        def _process_child_line(line: str, prefix: str = "") -> None:
+            stripped = line.strip()
+            # Record the failure verdict on the stdout stream (prefix == "") the
+            # moment it is seen, mirroring the success-scan predicate, so it is
+            # not lost if later output evicts the line from the bounded tail.
+            if (
+                prefix == ""
+                and not streamed_failure_markers
+                and "Overall status:" in stripped
+                and "Failed" in stripped
+            ):
+                streamed_failure_markers.append(stripped)
+            if stripped.startswith("PDD_PHASE: "):
+                phase = stripped[len("PDD_PHASE: "):]
+                try:
+                    self._on_phase_change(basename, phase)
+                except Exception:
+                    pass
+            if "Successfully submitted example" in stripped:
+                try:
+                    print(f"[{basename}] Example submitted to cloud")
+                except Exception:
+                    pass
+            if verbose_print:
+                try:
+                    console.print(
+                        f"[dim]{prefix}{basename}>[/dim] {line.rstrip()}"
+                    )
+                except Exception:
+                    pass
+
+        def _read_stream(
+            stream,
+            capture: _BoundedTextCapture,
+            prefix: str = "",
+        ) -> None:
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            try:
+                while True:
+                    raw_chunk = _read_stream_chunk(stream)
+                    if not raw_chunk:
                         break
+                    if isinstance(raw_chunk, bytes):
+                        text = decoder.decode(raw_chunk)
+                    else:
+                        text = str(raw_chunk)
                     with line_lock:
-                        lines_list.append(line)
-                    stripped = line.strip()
-                    if stripped.startswith("PDD_PHASE: "):
-                        phase = stripped[len("PDD_PHASE: "):]
-                        try:
-                            self._on_phase_change(basename, phase)
-                        except Exception:
-                            pass
-                    if "Successfully submitted example" in stripped:
-                        try:
-                            print(f"[{basename}] Example submitted to cloud")
-                        except Exception:
-                            pass
-                    if verbose_print:
-                        try:
-                            console.print(
-                                f"[dim]{prefix}{basename}>[/dim] {line.rstrip()}"
-                            )
-                        except Exception:
-                            pass
+                        lines = capture.feed(text)
+                    for line in lines:
+                        _process_child_line(line, prefix)
+                final_text = decoder.decode(b"", final=True)
+                with line_lock:
+                    lines = capture.feed(final_text)
+                    lines.extend(capture.finish())
+                for line in lines:
+                    _process_child_line(line, prefix)
             except Exception:
                 pass
             finally:
@@ -2389,8 +2563,8 @@ class AsyncSyncRunner:
                 stdin=subprocess.DEVNULL,
                 cwd=cwd_str,
                 env=env,
-                text=True,
-                bufsize=1,
+                text=False,
+                bufsize=0,
                 start_new_session=True,
             )
             try:
@@ -2410,12 +2584,12 @@ class AsyncSyncRunner:
 
         t_out = threading.Thread(
             target=_read_stream,
-            args=(process.stdout, stdout_lines, ""),
+            args=(process.stdout, stdout_capture, ""),
             daemon=True,
         )
         t_err = threading.Thread(
             target=_read_stream,
-            args=(process.stderr, stderr_lines, "err:"),
+            args=(process.stderr, stderr_capture, "err:"),
             daemon=True,
         )
         t_out.start()
@@ -2464,7 +2638,7 @@ class AsyncSyncRunner:
                         else:
                             last_line = ""
                             with line_lock:
-                                for line in reversed(stdout_lines):
+                                for line in stdout_capture.reversed_lines():
                                     stripped = line.strip()
                                     if stripped and not _BOX_CHARS_RE.match(
                                         stripped
@@ -2516,12 +2690,17 @@ class AsyncSyncRunner:
                 os.unlink(cost_file.name)
             except OSError:
                 pass
-            stdout = "".join(stdout_lines)
-            stderr = "".join(stderr_lines)
+            stdout = stdout_capture.text()
+            stderr = stderr_capture.text()
+            _log_dropped_output()
+            truncation_msg = _dropped_output_message()
+            error_msg = f"Timeout after {int(effective_timeout)}s waiting for sync"
+            if truncation_msg:
+                error_msg = f"{error_msg}\n{truncation_msg}"
             return (
                 False,
                 cost,
-                f"Timeout after {int(effective_timeout)}s waiting for sync",
+                error_msg,
                 stdout,
                 stderr,
             )
@@ -2535,15 +2714,19 @@ class AsyncSyncRunner:
         except OSError:
             pass
 
-        stdout = "".join(stdout_lines)
-        stderr = "".join(stderr_lines)
+        stdout = stdout_capture.text()
+        stderr = stderr_capture.text()
+        _log_dropped_output()
 
         success = exit_code == 0
-        if success:
-            for line in stdout.splitlines():
-                if "Overall status:" in line and "Failed" in line:
-                    success = False
-                    break
+        if success and (
+            streamed_failure_markers
+            or any(
+                "Overall status:" in line and "Failed" in line
+                for line in stdout.splitlines()
+            )
+        ):
+            success = False
 
         if not self.quiet:
             try:
@@ -2560,10 +2743,13 @@ class AsyncSyncRunner:
 
         # Build failure-summary
         failure_reason = f"Exit code {exit_code}"
-        for line in stdout.splitlines():
-            if "Overall status:" in line and "Failed" in line:
-                failure_reason = line.strip()
-                break
+        if streamed_failure_markers:
+            failure_reason = streamed_failure_markers[0]
+        else:
+            for line in stdout.splitlines():
+                if "Overall status:" in line and "Failed" in line:
+                    failure_reason = line.strip()
+                    break
 
         all_output = (stderr or "") + "\n" + (stdout or "")
         info_debug_re = re.compile(
@@ -2617,6 +2803,9 @@ class AsyncSyncRunner:
                 )
 
         error = "\n".join(p for p in summary_parts if p)
+        truncation_msg = _dropped_output_message()
+        if truncation_msg:
+            error = f"{error}\n{truncation_msg}" if error else truncation_msg
         if not self.quiet:
             try:
                 console.print(
