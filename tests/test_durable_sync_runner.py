@@ -575,9 +575,9 @@ def test_durable_runner_reads_pdd_sync_max_workers_when_constructed(
 # top. So the bounded-output and sticky-failure-marker behaviors are inherited
 # verbatim and are covered by the real-subprocess tests in
 # tests/test_agentic_sync_runner.py. The durable-specific risk is the worker
-# cap, validated here with real child processes (the positive control proving
-# the presence-counting harness is non-vacuous also lives in the agentic
-# real-subprocess test).
+# cap, validated here with real child processes. The assertion is two-sided
+# (peak <= 2 AND peak >= 2) so it cannot pass vacuously on a run that happened
+# to serialize.
 # ---------------------------------------------------------------------------
 
 # Concurrency-only fake child: drop a presence token, sample peak co-running
@@ -667,7 +667,19 @@ def test_real_subprocess_durable_max_workers_limits_concurrency(
         if (results / b).exists()
     ]
     assert peaks, "no durable child reported a peak — children never ran"
-    assert max(peaks) <= 2, (
+    observed = max(peaks)
+    # Upper bound: the cap holds. Lower bound: the children genuinely run
+    # concurrently, so the cap assertion is not vacuously satisfied by a run
+    # that happened to serialize. With 4 always-ready modules and 2 workers the
+    # durable scheduler must drive the peak to exactly 2 (worktree-create and
+    # checkpoint serialize under _checkpoint_lock, but the child sync — where
+    # the peak is measured — runs outside it).
+    assert observed <= 2, (
         f"PDD_SYNC_MAX_WORKERS=2 did not cap durable concurrency: real children "
-        f"observed a peak of {max(peaks)} simultaneous syncs (expected <= 2)"
+        f"observed a peak of {observed} simultaneous syncs (expected <= 2)"
+    )
+    assert observed >= 2, (
+        f"durable children never ran 2-wide (peak {observed}); the <= 2 cap "
+        f"assertion would be vacuous — with 4 ready modules and 2 workers the "
+        f"peak must reach 2"
     )
