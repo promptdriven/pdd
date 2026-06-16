@@ -4144,6 +4144,33 @@
     }
   },
   {
+    "reason": "Generates the task_routing.csv skeleton: per-task static routing table for the E[pass]−λ·cost router in llm_invoke.",
+    "description": "Defines the static per-task config routing table (task_class, model, temperature, effort, shots, pass_rate, avg_cost_usd) consumed by llm_invoke()'s E[pass]−λ·cost router when PDD_ENABLE_TASK_ROUTING=1.",
+    "dependencies": [
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 115,
+    "filename": "task_routing_csv.prompt",
+    "filepath": "pdd/data/task_routing.csv",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": [
+          "task_class",
+          "model",
+          "temperature",
+          "effort",
+          "shots",
+          "pass_rate",
+          "avg_cost_usd"
+        ]
+      }
+    }
+  },
+  {
     "reason": "Shell completion script for bash.",
     "description": "Provides command-line completion for pdd in bash. Lists commands and options.",
     "dependencies": [],
@@ -9445,7 +9472,7 @@
         "functions": [
           {
             "name": "llm_invoke",
-            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, estimate_only=None)",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, source_prompt=None, estimate_only=None, shots=1, verifier=None, task_class=None)",
             "returns": "Dict[str, Any]"
           },
           {
