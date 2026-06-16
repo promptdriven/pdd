@@ -128,3 +128,4 @@ from .agentic_split_orchestrator import run_agentic_split_orchestrator, Diagnosi
 from .agentic_split import run_agentic_split
 from .ci_detect_changed_modules import main
 from .agentic_architecture_orchestrator import load_workflow_state, save_workflow_state, clear_workflow_state, run_agentic_architecture_orchestrator
+from .agentic_multishot import run_multishot_candidates, MultishotResult, MultishotCandidateRecord
