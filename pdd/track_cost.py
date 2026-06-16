@@ -1,5 +1,6 @@
 import functools
 from datetime import datetime
+from importlib import metadata
 import csv
 import os
 import click
@@ -10,6 +11,18 @@ from typing import Any, List, Tuple
 # "legacy header, attempted_models column will be omitted" case. Keyed on
 # absolute path so a long-running session doesn't spam the same notice.
 _legacy_csv_warned: set = set()
+
+_LEGACY_FIELDNAMES = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
+_ATTEMPT_FIELDNAMES = _LEGACY_FIELDNAMES + ['attempted_models']
+_PROVENANCE_FIELDNAMES = [
+    'requested_model',
+    'resolved_model',
+    'model_selection_outcome',
+    'strength_used',
+    'cli_version',
+    'deepswe_manifest_date',
+]
+_FULL_FIELDNAMES = _ATTEMPT_FIELDNAMES + _PROVENANCE_FIELDNAMES
 
 
 def looks_like_file(path_str) -> bool:
@@ -89,6 +102,11 @@ def track_cost(func):
 
                         timestamp = start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
 
+                        try:
+                            cli_version = metadata.version('pdd')
+                        except metadata.PackageNotFoundError:
+                            cli_version = ''
+
                         row = {
                             'timestamp': timestamp,
                             'model': model_name,
@@ -97,21 +115,26 @@ def track_cost(func):
                             'input_files': ';'.join(input_files),
                             'output_files': ';'.join(output_files),
                             'attempted_models': attempted_models,
+                            'requested_model': ctx.obj.get('requested_model', '') if ctx.obj and isinstance(ctx.obj, dict) else '',
+                            'resolved_model': ctx.obj.get('resolved_model', '') if ctx.obj and isinstance(ctx.obj, dict) else '',
+                            'model_selection_outcome': ctx.obj.get('model_selection_outcome', '') if ctx.obj and isinstance(ctx.obj, dict) else '',
+                            'strength_used': ctx.obj.get('strength_used', '') if ctx.obj and isinstance(ctx.obj, dict) else '',
+                            'cli_version': cli_version,
+                            'deepswe_manifest_date': ctx.obj.get('deepswe_manifest_date', '') if ctx.obj and isinstance(ctx.obj, dict) else '',
                         }
 
                         file_exists = os.path.isfile(output_cost_path)
                         file_has_content = file_exists and os.path.getsize(output_cost_path) > 0
 
-                        legacy_fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
-                        new_fieldnames = legacy_fieldnames + ['attempted_models']
-
-                        fieldnames = new_fieldnames
+                        fieldnames = _FULL_FIELDNAMES
                         if file_has_content:
                             with open(output_cost_path, 'r', encoding='utf-8') as f:
                                 first_line = f.readline().strip()
-                                if 'attempted_models' not in first_line:
-                                    fieldnames = legacy_fieldnames
-                                    del row['attempted_models']
+                                header = [part.strip() for part in first_line.split(',') if part.strip()]
+                                if 'attempted_models' not in header:
+                                    fieldnames = _LEGACY_FIELDNAMES
+                                    for extra in ['attempted_models'] + _PROVENANCE_FIELDNAMES:
+                                        row.pop(extra, None)
                                     abs_path = os.path.abspath(output_cost_path)
                                     if abs_path not in _legacy_csv_warned:
                                         _legacy_csv_warned.add(abs_path)
@@ -123,6 +146,13 @@ def track_cost(func):
                                             "rename the file to start fresh with the "
                                             "attempted_models column.[/yellow]"
                                         )
+                                elif 'deepswe_manifest_date' not in header:
+                                    # Mid-generation legacy file: keep the
+                                    # existing header stable and write only the
+                                    # columns the file already declares.
+                                    fieldnames = _ATTEMPT_FIELDNAMES
+                                    for extra in _PROVENANCE_FIELDNAMES:
+                                        row.pop(extra, None)
 
                         with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
                             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)

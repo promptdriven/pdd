@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import errno
 import hashlib
+import importlib.resources
 import logging
 import os
 import signal
@@ -39,6 +40,8 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+UsageSource = str
+_HARNESS_CAPABILITIES_CACHE: Optional[Dict[str, Any]] = None
 TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
 
@@ -61,6 +64,211 @@ _EFFORT_CAPABILITY: Dict[str, EffortCapability] = {
 
 class AgenticUnsupportedSemanticsError(ValueError):
     """Raised when a requested agentic policy cannot be enforced by PDD."""
+
+
+def _normalize_token_buckets(provider: str, raw_usage: Any) -> Dict[str, int]:
+    """Normalize provider-specific token usage into common buckets."""
+    buckets = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    if not isinstance(raw_usage, dict):
+        return buckets
+
+    # AgenticTaskResult.usage wraps Claude transcript rows as {"claude": [ {...}, ... ]}.
+    # Collapse that shape into a single summed dict before bucket mapping so the
+    # normalized buckets are non-zero for the structured Claude result.
+    claude_rows = raw_usage.get("claude")
+    if isinstance(claude_rows, list):
+        summed: Dict[str, int] = {}
+        for row in claude_rows:
+            if not isinstance(row, dict):
+                continue
+            for key, value in row.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                summed[key] = summed.get(key, 0) + int(value)
+        raw_usage = summed
+
+    def _int_value(*keys: str) -> int:
+        cur: Any = raw_usage
+        for key in keys:
+            if not isinstance(cur, dict):
+                return 0
+            cur = cur.get(key)
+        try:
+            return int(cur or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    provider = provider.lower()
+    if provider == "anthropic":
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        # Raw provider envelopes use cache_read_input_tokens; the structured
+        # Claude transcript rows use cached_input_tokens — accept either.
+        buckets["cache_read_tokens"] = _int_value("cache_read_input_tokens") or _int_value("cached_input_tokens")
+        buckets["cache_write_tokens"] = _int_value("cache_creation_input_tokens")
+    elif provider == "openai":
+        usage = raw_usage.get("total_token_usage") if isinstance(raw_usage.get("total_token_usage"), dict) else raw_usage
+        raw_usage = usage
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        buckets["cache_read_tokens"] = _int_value("cached_input_tokens")
+        buckets["reasoning_tokens"] = _int_value("reasoning_tokens")
+    elif provider == "google":
+        tokens = raw_usage.get("tokens") if isinstance(raw_usage.get("tokens"), dict) else raw_usage
+        raw_usage = tokens
+        buckets["input_tokens"] = _int_value("prompt")
+        buckets["output_tokens"] = _int_value("candidates")
+        buckets["cache_read_tokens"] = _int_value("cached")
+        buckets["reasoning_tokens"] = _int_value("thoughts")
+    elif provider == "opencode":
+        buckets["input_tokens"] = _int_value("input")
+        buckets["output_tokens"] = _int_value("output")
+        buckets["cache_read_tokens"] = _int_value("cache", "read")
+        buckets["cache_write_tokens"] = _int_value("cache", "write")
+    return buckets
+
+
+def _meets_usage_contract(result: "AgenticTaskResult") -> bool:
+    """Return True when a result has comparable cost for routing."""
+    return (
+        getattr(result, "usage_source", "") != "unavailable"
+        and getattr(result, "cost_usd", 0.0) > 0.0
+    )
+
+
+def _load_harness_capabilities() -> Dict[str, Any]:
+    """Load static agentic harness capability metadata."""
+    global _HARNESS_CAPABILITIES_CACHE
+    if _HARNESS_CAPABILITIES_CACHE is not None:
+        return _HARNESS_CAPABILITIES_CACHE
+
+    candidate_paths: List[Path] = []
+    try:
+        candidate_paths.append(Path.home() / ".pdd" / "agentic_harness_capabilities.json")
+    except Exception:
+        pass
+    project_root = os.getenv("PDD_PATH") or os.getenv("PROJECT_ROOT")
+    if project_root:
+        candidate_paths.append(Path(project_root) / ".pdd" / "agentic_harness_capabilities.json")
+    candidate_paths.append(Path.cwd() / ".pdd" / "agentic_harness_capabilities.json")
+
+    data: Any = None
+    for path in candidate_paths:
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+    if data is None:
+        try:
+            with importlib.resources.files("pdd.data").joinpath("agentic_harness_capabilities.json").open(
+                "r", encoding="utf-8"
+            ) as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+    if isinstance(data, dict) and isinstance(data.get("harnesses"), dict):
+        _HARNESS_CAPABILITIES_CACHE = data["harnesses"]
+    else:
+        _HARNESS_CAPABILITIES_CACHE = {}
+    return _HARNESS_CAPABILITIES_CACHE
+
+
+def _provider_harness_id(provider: str) -> str:
+    if provider == "anthropic":
+        return "claude_code"
+    if provider == "openai":
+        return "codex"
+    if provider == "opencode":
+        return "opencode"
+    if provider == "google":
+        try:
+            return "agy" if _get_google_cli_name() == "agy" else "gemini_cli"
+        except Exception:
+            return "gemini_cli"
+    return provider
+
+
+_PROVIDER_CLI_VERSION_CACHE: Dict[str, str] = {}
+
+
+def _provider_cli_binary_name(provider: str) -> Optional[str]:
+    """Map an agentic provider to the CLI binary name used to probe its version."""
+    if provider == "anthropic":
+        return "claude"
+    if provider == "openai":
+        return "codex"
+    if provider == "opencode":
+        return "opencode"
+    if provider == "google":
+        try:
+            return _get_google_cli_name()
+        except Exception:
+            return None
+    return None
+
+
+def _get_provider_cli_version(provider: str) -> str:
+    """Best-effort CLI version string for a provider (cached).
+
+    Pins the harness CLI version into every run record (issue #1593). Resolves
+    the provider's binary via the shared discovery helper and reads the first
+    line of ``<bin> --version``. Returns "" when the CLI is absent or the probe
+    fails, so callers can record an empty (not fabricated) version.
+    """
+    if provider in _PROVIDER_CLI_VERSION_CACHE:
+        return _PROVIDER_CLI_VERSION_CACHE[provider]
+    version = ""
+    name = _provider_cli_binary_name(provider)
+    binary = _find_cli_binary(name) if name else None
+    if binary:
+        try:
+            result = subprocess.run(
+                [binary, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            for line in (result.stdout or "").splitlines():
+                line = line.strip()
+                if line:
+                    version = line
+                    break
+        except (subprocess.SubprocessError, OSError):
+            version = ""
+    _PROVIDER_CLI_VERSION_CACHE[provider] = version
+    return version
+
+
+def _publish_agentic_model_provenance(
+    *,
+    resolved_model: str,
+    model_selection_outcome: str,
+) -> None:
+    """Best-effort: publish agentic model provenance for track_cost."""
+    try:
+        import click
+        ctx = click.get_current_context(silent=True)
+    except Exception:
+        ctx = None
+    if ctx is None:
+        return
+    try:
+        if ctx.obj is None:
+            ctx.obj = {}
+        if isinstance(ctx.obj, dict):
+            ctx.obj["resolved_model"] = resolved_model
+            ctx.obj["model_selection_outcome"] = model_selection_outcome
+    except Exception:
+        pass
 
 
 def get_agentic_capabilities() -> Dict[str, Any]:
@@ -948,12 +1156,22 @@ class AgenticTaskResult(tuple):
         usage: AgenticUsage = None,
         *,
         changed_files: Optional[List[str]] = None,
+        usage_source: str = "unavailable",
+        estimate_method: str = "unavailable",
+        cli_version: str = "",
+        model_id: Optional[str] = None,
+        cumulative_cost_usd: Optional[float] = None,
     ) -> "AgenticTaskResult":
         result = tuple.__new__(
             cls,
             (success, output_text, cost_usd, provider, usage),
         )
         result._changed_files = list(changed_files or [])
+        result._usage_source = usage_source
+        result._estimate_method = estimate_method
+        result._cli_version = cli_version
+        result._model_id = model_id
+        result._cumulative_cost_usd = cost_usd if cumulative_cost_usd is None else cumulative_cost_usd
         return result
 
     def __iter__(self):
@@ -983,6 +1201,30 @@ class AgenticTaskResult(tuple):
     def changed_files(self) -> List[str]:
         return list(getattr(self, "_changed_files", []))
 
+    @property
+    def usage_source(self) -> str:
+        return str(getattr(self, "_usage_source", "unavailable"))
+
+    @property
+    def estimate_method(self) -> str:
+        return str(getattr(self, "_estimate_method", "unavailable"))
+
+    @property
+    def cli_version(self) -> str:
+        return str(getattr(self, "_cli_version", ""))
+
+    @property
+    def model_id(self) -> Optional[str]:
+        return getattr(self, "_model_id", None)
+
+    @property
+    def cumulative_cost_usd(self) -> float:
+        return float(getattr(self, "_cumulative_cost_usd", self.cost_usd))
+
+    def meets_usage_contract(self) -> bool:
+        """True when this result has comparable cost/usage for E[pass]-λ·cost routing."""
+        return _meets_usage_contract(self)
+
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable mapping shape for structured consumers."""
         return {
@@ -992,6 +1234,13 @@ class AgenticTaskResult(tuple):
             "provider": self.provider,
             "usage": self.usage,
             "changed_files": self.changed_files,
+            "usage_source": self.usage_source,
+            "estimate_method": self.estimate_method,
+            "cli_version": self.cli_version,
+            "model_id": self.model_id,
+            "cumulative_cost_usd": self.cumulative_cost_usd,
+            "usage_comparable": self.meets_usage_contract(),
+            "token_buckets": _normalize_token_buckets(self.provider, self.usage),
         }
 
 
@@ -4412,6 +4661,7 @@ def run_agentic_task(
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
     effective_deadline = deadline if deadline is not None else get_job_deadline()
     task_start_time = time.time()
+    cumulative_cost_usd = 0.0
     # Issue #902: Cap total time across all providers to prevent 150min burn
     aggregate_deadline = task_start_time + (2 * effective_timeout)
 
@@ -4471,6 +4721,7 @@ def run_agentic_task(
                 )
 
         provider_errors: List[str] = []
+        harness_capabilities = _load_harness_capabilities()
         total_cost = 0.0
 
         for provider in candidates:
@@ -4532,6 +4783,7 @@ def run_agentic_task(
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
                 cost = float(provider_result[2])
+                cumulative_cost_usd += cost
                 total_cost += cost
                 actual_model = provider_result[3]
                 usage = provider_result[4] if len(provider_result) > 4 else None
@@ -4540,6 +4792,28 @@ def run_agentic_task(
                 # fall back to the requested model from env vars when the JSON
                 # didn't surface one (e.g. early-error returns).
                 effective_model = actual_model or _get_provider_model(provider)
+                harness_id = _provider_harness_id(provider)
+                capability = harness_capabilities.get(harness_id, {})
+                identity_observable = bool(capability.get("identity_observable", True))
+                model_id = str(effective_model or "") if identity_observable else ""
+                cli_version = _get_provider_cli_version(provider)
+                if usage:
+                    usage_source = "provider_reported" if cost > 0 else "pricing_table_estimate"
+                    estimate_method = "provider_usage"
+                elif cost > 0:
+                    usage_source = "pricing_table_estimate"
+                    estimate_method = "token_estimation"
+                else:
+                    usage_source = "unavailable"
+                    estimate_method = "unavailable"
+                if capability.get("routing_class") == "opaque":
+                    model_selection_outcome = "unconfirmed"
+                elif provider == "anthropic" and not os.environ.get("CLAUDE_MODEL"):
+                    model_selection_outcome = "fixed_by_config"
+                elif provider != candidates[0]:
+                    model_selection_outcome = "fallback"
+                else:
+                    model_selection_outcome = "direct"
                 requested_effort, effective_effort = _resolve_effort_for_provider_log(
                     provider,
                     reasoning_time,
@@ -4689,6 +4963,11 @@ def run_agentic_task(
                                 provider,
                                 usage,
                                 changed_files=changed_files,
+                                usage_source=usage_source,
+                                estimate_method=estimate_method,
+                                model_id=model_id,
+                                cli_version=cli_version,
+                                cumulative_cost_usd=cumulative_cost_usd,
                             )
 
                         # Issue #1376: always emit a summary record so the audit
@@ -4717,6 +4996,10 @@ def run_agentic_task(
                             cost_usd=total_cost,
                             latency_seconds=time.time() - task_start_time,
                         )
+                        _publish_agentic_model_provenance(
+                            resolved_model=model_id,
+                            model_selection_outcome=model_selection_outcome,
+                        )
                         return AgenticTaskResult(
                             True,
                             output,
@@ -4724,6 +5007,11 @@ def run_agentic_task(
                             provider,
                             usage,
                             changed_files=changed_files,
+                            usage_source=usage_source,
+                            estimate_method=estimate_method,
+                            model_id=model_id,
+                            cli_version=cli_version,
+                            cumulative_cost_usd=cumulative_cost_usd,
                         )
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
@@ -4846,6 +5134,7 @@ def run_agentic_task(
             failure_cost,
             "",
             None,
+            cumulative_cost_usd=cumulative_cost_usd,
         )
 
         _emit_routing_outcome(

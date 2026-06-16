@@ -1434,34 +1434,22 @@
           {
             "name": "track_cost",
             "signature": "(func)",
-            "returns": "Callable",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Callable"
           },
           {
             "name": "extract_cost_and_model",
             "signature": "(result: Any) -> Tuple[Any, str]",
-            "returns": "Tuple[Any, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[Any, str]"
           },
           {
             "name": "collect_files",
-            "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
-            "returns": "Tuple[List[str], List[str]]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(args, kwargs)",
+            "returns": "Tuple[List[str], List[str]]"
           },
           {
             "name": "looks_like_file",
-            "signature": "(path_str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(path_str)",
+            "returns": "bool"
           }
         ]
       }
@@ -4602,7 +4590,8 @@
               "provider: str",
               "cli_path: str",
               "api_key_configured: bool",
-              "skipped: bool"
+              "skipped: bool",
+              "cli_version: str"
             ]
           }
         ]
