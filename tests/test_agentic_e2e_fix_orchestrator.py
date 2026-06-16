@@ -11134,3 +11134,88 @@ class TestReadCheckupWorktreeHeadSha:
         ):
             result = _read_checkup_worktree_head_sha(tmp_path, 42)
         assert result == ""
+
+
+class TestPreCheckupGateRemediation:
+    def test_local_gate_failure_is_remediated_and_retried(self, tmp_path, monkeypatch):
+        from pdd import agentic_e2e_fix_orchestrator as orch
+
+        gate_results = [
+            (False, "pre_checkup_gate blocked; black failed", 0.0),
+            (True, "pre_checkup_gate passed", 0.0),
+        ]
+        agent_calls = []
+
+        monkeypatch.setattr(
+            orch,
+            "run_pre_checkup_gate",
+            lambda **_kwargs: gate_results.pop(0),
+        )
+        monkeypatch.setattr(orch, "_commit_ci_fix", lambda **_kwargs: (True, "committed"))
+        monkeypatch.setattr(
+            orch,
+            "_detect_changed_files",
+            lambda _cwd, _hashes: ["app/foo.py", "tests/test_foo.py"],
+        )
+
+        def fake_agentic_task(**kwargs):
+            agent_calls.append(kwargs)
+            return True, "CI_FIX_APPLIED", 0.25, "model"
+
+        success, message, cost, changed_files = orch._run_pre_checkup_gate_with_remediation(
+            cwd=tmp_path,
+            changed_files=["app/foo.py"],
+            repo_owner="owner",
+            repo_name="repo",
+            issue_url="https://github.com/owner/repo/issues/42",
+            issue_number=42,
+            step10_template="Issue {issue_number}\n{ci_check_results}\n{ci_failure_logs}",
+            run_agentic_task_fn=fake_agentic_task,
+            ci_retries=1,
+            timeout=60.0,
+            initial_file_hashes={},
+            quiet=True,
+        )
+
+        assert success is True
+        assert message == "pre_checkup_gate passed"
+        assert cost == 0.25
+        assert changed_files == ["app/foo.py", "tests/test_foo.py"]
+        assert len(agent_calls) == 1
+        assert "black failed" in agent_calls[0]["instruction"]
+        assert agent_calls[0]["label"] == "pre_checkup_gate_attempt1"
+
+    def test_local_gate_failure_respects_zero_retry_budget(self, tmp_path, monkeypatch):
+        from pdd import agentic_e2e_fix_orchestrator as orch
+
+        agent_calls = []
+        monkeypatch.setattr(
+            orch,
+            "run_pre_checkup_gate",
+            lambda **_kwargs: (False, "pre_checkup_gate blocked; mypy failed", 0.0),
+        )
+
+        def fake_agentic_task(**kwargs):
+            agent_calls.append(kwargs)
+            return True, "CI_FIX_APPLIED", 0.0, "model"
+
+        success, message, cost, changed_files = orch._run_pre_checkup_gate_with_remediation(
+            cwd=tmp_path,
+            changed_files=["app/foo.py"],
+            repo_owner="owner",
+            repo_name="repo",
+            issue_url="https://github.com/owner/repo/issues/42",
+            issue_number=42,
+            step10_template="{ci_check_results}",
+            run_agentic_task_fn=fake_agentic_task,
+            ci_retries=0,
+            timeout=60.0,
+            initial_file_hashes={},
+            quiet=True,
+        )
+
+        assert success is False
+        assert "mypy failed" in message
+        assert cost == 0.0
+        assert changed_files == ["app/foo.py"]
+        assert agent_calls == []
