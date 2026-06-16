@@ -17,7 +17,7 @@ import random
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 
 from rich.console import Console
@@ -26,6 +26,7 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
 
 
@@ -1310,6 +1311,45 @@ def get_agent_provider_preference() -> List[str]:
                 result.append(p)
         return result
     return list(_DEFAULT_PROVIDER_PREFERENCE)
+
+
+TASK_CLASS_SINGLE_FILE: str = "single_file"
+TASK_CLASS_MULTI_FILE: str = "multi_file"
+TASK_CLASS_REPO_SCALE: str = "repo_scale"
+TASK_CLASS_HIGH_ISOLATION: str = "high_isolation"
+
+
+def select_harness_for_task(task_class: str, candidates: List[str]) -> List[str]:
+    """Return candidates reordered for a coarse agentic task class."""
+    if task_class == TASK_CLASS_SINGLE_FILE:
+        return list(candidates)
+
+    if task_class == TASK_CLASS_MULTI_FILE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_REPO_SCALE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_HIGH_ISOLATION:
+        preferred = ("opencode", "anthropic")
+    else:
+        return list(candidates)
+
+    ordered = [provider for provider in preferred if provider in candidates]
+    if task_class == TASK_CLASS_REPO_SCALE:
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered and provider not in {"google", "openai"}
+        )
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered
+        )
+        return ordered
+
+    ordered.extend(provider for provider in candidates if provider not in ordered)
+    return ordered
+
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
@@ -4020,6 +4060,7 @@ def run_agentic_task(
     reasoning_time: Optional[float] = None,
     steers: Optional[List[SteerEntry]] = None,
     claude_policy: Optional[ClaudePolicy] = None,
+    task_class: Optional[str] = None,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -4043,6 +4084,8 @@ def run_agentic_task(
         claude_policy: Optional validated Claude CLI policy contract. When
             present, Anthropic runs must enforce these tool/session/output
             semantics instead of PDD's broad default permission mode.
+        task_class: Optional coarse task class used to reorder already-available
+            providers. ``None`` preserves the existing provider cascade.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
@@ -4073,6 +4116,8 @@ def run_agentic_task(
                 "agent is available to enforce the requested policy"
             )
         candidates = ["anthropic"]
+    elif task_class is not None:
+        candidates = select_harness_for_task(task_class, candidates)
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
