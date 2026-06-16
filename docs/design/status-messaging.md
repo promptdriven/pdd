@@ -119,7 +119,7 @@ Canonical usage in `connect.py`:
 
 ```python
 from ..cli_status import from_context
-from ..cli_theme import console as themed_console
+from ..cli_theme import console
 
 def connect(..., ctx):
     status = from_context(ctx, command="pdd connect")
@@ -129,8 +129,8 @@ def connect(..., ctx):
         cloud_url = asyncio.run(session_manager.register(session_name=session_name))
     status.success("session registered with PDD Cloud")
 
-    themed_console.rule("[muted]Server running[/muted]", style="muted")
-    themed_console.print(f"  [muted]Local:[/muted]     [path]http://{host}:{port}[/path]")
+    console.rule("[muted]Server running[/muted]", style="muted")
+    console.print(f"  [muted]Local:[/muted]     [path]http://{host}:{port}[/path]")
 ```
 
 Remaining commands move onto the reporter incrementally in follow-on work.

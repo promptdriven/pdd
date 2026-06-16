@@ -2,7 +2,7 @@
 # Shows canonical console, console.rule(), and PDD_THEME semantic markup roles.
 # This file is manually maintained — do not regenerate via pdd sync.
 
-from pdd.cli_theme import console, PDD_THEME
+from pdd.cli_theme import console
 
 # console is a pre-built Rich Console configured with PDD_THEME.
 # Import it directly instead of constructing a new one.
