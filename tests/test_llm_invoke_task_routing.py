@@ -327,7 +327,7 @@ def test_flag_on_router_overrides_model(monkeypatch):
     class _Sentinel(Exception):
         pass
 
-    def fake_select(strength, base_model, df):
+    def fake_select(strength, base_model, df, *args, **kwargs):
         seen["base_model"] = base_model
         raise _Sentinel()
 
