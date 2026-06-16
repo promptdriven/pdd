@@ -194,7 +194,7 @@
           },
           {
             "name": "_sanitize_comment_body",
-            "signature": "(body: Optional[str], max_chars: int = 25_000) -> str",
+            "signature": "(body: Optional[str], max_chars: int = _COMMENT_MAX_CHARS) -> str",
             "returns": "str"
           },
           {
