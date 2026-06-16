@@ -3978,3 +3978,293 @@ class TestBoundedSubprocessOutputCapture:
             "Failure reason must preserve the streamed 'Overall status: Failed' "
             "marker even after it is evicted from the bounded tail."
         )
+
+
+# ============================================================================
+# Issue #1565 — Real-subprocess (not mocked Popen) coverage of the new
+# binary/chunked reader and the worker cap under real process I/O.
+#
+# The tests above mock ``subprocess.Popen`` with ``io.StringIO`` streams, which
+# never exercises the production read path: real pipes, ``os.read(fileno())``
+# returning *bytes*, and incremental UTF-8 decoding (``text=False``,
+# ``bufsize=0``). The tests below spawn a real child process via the unmodified
+# ``subprocess.Popen`` call in ``_run_attempt`` — only the *command string* is
+# stubbed (``_build_command``) so the child is a controllable Python script
+# instead of a real ``pdd sync``. Everything downstream of ``Popen`` (the
+# reader threads, the bounded capture, the sticky failure-marker detection, the
+# ThreadPoolExecutor worker cap) runs unmocked.
+# ============================================================================
+
+
+# A self-contained fake ``pdd`` child. It imports nothing from ``pdd`` and is
+# driven entirely by argv so a single script serves every real-subprocess test.
+_FAKE_PDD_CHILD_SOURCE = r'''
+import os
+import sys
+import time
+import uuid
+
+
+def _concurrency(presence_dir, result_path, hold_s, sample_s):
+    """Record peak number of co-running siblings, then report it.
+
+    Each child drops a unique presence token, repeatedly samples how many
+    tokens exist (its own + concurrent siblings) for ``hold_s`` seconds, and
+    writes the peak it observed. The max peak across children is the true
+    global concurrency, because during any overlap window every co-running
+    child has a live token and at least one of them samples during that window.
+    """
+    os.makedirs(presence_dir, exist_ok=True)
+    token = os.path.join(presence_dir, "%d-%s" % (os.getpid(), uuid.uuid4().hex))
+    open(token, "w").close()
+    peak = 0
+    deadline = time.time() + hold_s
+    try:
+        while time.time() < deadline:
+            try:
+                peak = max(peak, len(os.listdir(presence_dir)))
+            except OSError:
+                pass
+            time.sleep(sample_s)
+    finally:
+        try:
+            os.remove(token)
+        except OSError:
+            pass
+    with open(result_path, "w") as handle:
+        handle.write(str(peak))
+    return 0
+
+
+def _flood(n_stdout, n_stderr, pad):
+    """Interleave large output on BOTH streams.
+
+    Writing well past the OS pipe buffer (~64 KiB) on both stdout and stderr
+    would deadlock a reader that drains only one pipe at a time, so a clean
+    return proves both pipes are drained concurrently.
+    """
+    filler = "x" * pad
+    for i in range(max(n_stdout, n_stderr)):
+        if i < n_stdout:
+            sys.stdout.write("out %d %s\n" % (i, filler))
+        if i < n_stderr:
+            sys.stderr.write("err %d %s\n" % (i, filler))
+    sys.stdout.flush()
+    sys.stderr.flush()
+    return 0
+
+
+def _fail_then_flood(n_flood):
+    """Print the failure verdict first, then bury it under trailing output.
+
+    Exits 0 on purpose: the failed verdict must come from the streamed
+    'Overall status: Failed' marker, not from the exit code.
+    """
+    sys.stdout.write("Overall status: Failed\n")
+    sys.stdout.flush()
+    for i in range(n_flood):
+        sys.stdout.write("trailing line %d\n" % i)
+    sys.stdout.flush()
+    return 0
+
+
+_MODE = sys.argv[1]
+if _MODE == "concurrency":
+    _RC = _concurrency(sys.argv[2], sys.argv[3], float(sys.argv[4]), float(sys.argv[5]))
+elif _MODE == "flood":
+    _RC = _flood(int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]))
+elif _MODE == "fail_then_flood":
+    _RC = _fail_then_flood(int(sys.argv[2]))
+else:
+    sys.stderr.write("unknown mode %r\n" % _MODE)
+    _RC = 2
+sys.exit(_RC)
+'''
+
+
+def _write_fake_pdd_child(tmp_path: Path) -> Path:
+    """Write the fake ``pdd`` child script and return its path."""
+    script = tmp_path / "fake_pdd_child.py"
+    script.write_text(_FAKE_PDD_CHILD_SOURCE, encoding="utf-8")
+    return script
+
+
+class TestRealSubprocessWorkerCap:
+    """Greg review item 1: PDD_SYNC_MAX_WORKERS must limit concurrent module
+    syncs in real (issue/global) sync mode, validated with real subprocesses.
+    """
+
+    def test_real_subprocess_max_workers_limits_concurrency(
+        self, tmp_path, monkeypatch
+    ):
+        """With real child processes, PDD_SYNC_MAX_WORKERS=2 caps concurrency.
+
+        Four independent modules are synced through real ``subprocess.Popen``
+        children. The cap run must never exceed 2 concurrent children; the
+        uncapped positive-control run must reach >=3, proving the assertion is
+        not vacuous (i.e. that the cap is what limits concurrency, not some
+        unrelated serialization).
+        """
+        child = _write_fake_pdd_child(tmp_path)
+        basenames = ["a", "b", "c", "d"]
+
+        def _peak_for_cap(cap: str) -> int:
+            presence = tmp_path / f"presence_{cap}"
+            results = tmp_path / f"results_{cap}"
+            presence.mkdir()
+            results.mkdir()
+            monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", cap)
+
+            def _fake_build_command(self, basename, in_flight_cost=0.0):
+                return [
+                    sys.executable,
+                    str(child),
+                    "concurrency",
+                    str(presence),
+                    str(results / basename),
+                    "0.6",
+                    "0.01",
+                ]
+
+            runner = AsyncSyncRunner(
+                basenames=basenames,
+                dep_graph={b: [] for b in basenames},
+                sync_options={},
+                github_info=None,
+                quiet=True,
+            )
+            assert runner.max_workers == int(cap)
+            with patch.object(
+                AsyncSyncRunner, "_build_command", _fake_build_command
+            ), patch.object(
+                AsyncSyncRunner, "_update_github_comment", lambda self: None
+            ):
+                success, msg, _cost = runner.run()
+            assert success, f"real-subprocess run failed: {msg!r}"
+            peaks = [
+                int((results / b).read_text())
+                for b in basenames
+                if (results / b).exists()
+            ]
+            assert peaks, "no child reported a peak — children never ran"
+            return max(peaks)
+
+        capped_peak = _peak_for_cap("2")
+        assert capped_peak <= 2, (
+            f"PDD_SYNC_MAX_WORKERS=2 did not limit concurrency: real children "
+            f"observed a peak of {capped_peak} simultaneous syncs (expected <= 2)"
+        )
+
+        uncapped_peak = _peak_for_cap("4")
+        assert uncapped_peak >= 3, (
+            f"Positive control failed: with PDD_SYNC_MAX_WORKERS=4 the four "
+            f"independent modules should run >=3 at once, but the peak was "
+            f"{uncapped_peak}. Without this the cap assertion would be vacuous."
+        )
+
+
+class TestRealSubprocessOutputCapture:
+    """Greg review items 2 & 3: the bounded reader and sticky failure verdict
+    under real child process I/O (real pipes, bytes, incremental decode).
+    """
+
+    def _make_runner(self) -> AsyncSyncRunner:
+        return AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+    def test_real_subprocess_verbose_child_bounded_without_deadlock(
+        self, tmp_path, monkeypatch
+    ):
+        """A verbose real child completes (no deadlock) and is not retained.
+
+        The child writes ~1.26 MiB across BOTH stdout and stderr — past the OS
+        pipe buffer and past both capture caps. A reader that drained only one
+        pipe would deadlock once the other filled; completing within the guard
+        timeout proves both are drained concurrently. The retained capture must
+        stay within the line and byte caps and hold far less than was emitted.
+        """
+        import threading
+
+        child = _write_fake_pdd_child(tmp_path)
+        n_lines = STDOUT_CAPTURE_LINE_LIMIT + 1000
+        pad = 200
+
+        def _fake_build_command(self, basename, in_flight_cost=0.0):
+            return [
+                sys.executable,
+                str(child),
+                "flood",
+                str(n_lines),
+                str(n_lines),
+                str(pad),
+            ]
+
+        # Reap a hypothetically deadlocked child quickly instead of waiting the
+        # full per-module timeout (read at call time in _run_attempt).
+        monkeypatch.setattr("pdd.agentic_sync_runner.MODULE_TIMEOUT", 30)
+
+        runner = self._make_runner()
+        holder: Dict[str, Any] = {}
+
+        def _go() -> None:
+            holder["result"] = runner._run_attempt("foo")
+
+        with patch.object(AsyncSyncRunner, "_build_command", _fake_build_command):
+            worker = threading.Thread(target=_go, daemon=True)
+            worker.start()
+            worker.join(timeout=45)
+
+        assert not worker.is_alive(), (
+            "verbose real child did not complete within 45s — the reader "
+            "likely deadlocked because a pipe buffer filled and was not "
+            "drained concurrently"
+        )
+
+        success, _cost, error, stdout, stderr = holder["result"]
+        assert success, (
+            f"expected a clean exit-0 completion, not a timeout; error={error!r}"
+        )
+        # Bounded in memory: neither stream retains the full emitted volume.
+        assert len(stdout.splitlines()) <= STDOUT_CAPTURE_LINE_LIMIT
+        assert len(stdout.encode("utf-8")) <= STDOUT_CAPTURE_BYTE_LIMIT
+        assert len(stderr.splitlines()) <= STDOUT_CAPTURE_LINE_LIMIT
+        assert len(stderr.encode("utf-8")) <= STDOUT_CAPTURE_BYTE_LIMIT
+        assert len(stdout.splitlines()) < n_lines, (
+            "captured the full child output — the bounded tail did not truncate"
+        )
+
+    def test_real_subprocess_failed_verdict_survives_tail_eviction(
+        self, tmp_path
+    ):
+        """A real child whose 'Overall status: Failed' marker scrolls out of
+        the bounded tail must still be classified as failed, with the marker
+        preserved in the failure reason.
+        """
+        child = _write_fake_pdd_child(tmp_path)
+        n_flood = STDOUT_CAPTURE_LINE_LIMIT + 500
+
+        def _fake_build_command(self, basename, in_flight_cost=0.0):
+            return [sys.executable, str(child), "fail_then_flood", str(n_flood)]
+
+        runner = self._make_runner()
+        with patch.object(AsyncSyncRunner, "_build_command", _fake_build_command):
+            success, _cost, error, stdout, _stderr = runner._run_attempt("foo")
+
+        # Precondition: the marker really was evicted from the retained tail,
+        # otherwise a tail-only scan would pass and prove nothing.
+        assert "Overall status:" not in stdout, (
+            "precondition failed: marker still in retained tail; raise n_flood"
+        )
+        assert not success, (
+            "child printed 'Overall status: Failed' then exited 0; the runner "
+            "must still classify it as failed even though the marker scrolled "
+            "out of the bounded tail (verdict captured as stdout streamed in)"
+        )
+        assert "Overall status: Failed" in error, (
+            "failure reason must preserve the streamed marker after eviction"
+        )

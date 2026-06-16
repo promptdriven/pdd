@@ -5,9 +5,11 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+from pdd.agentic_sync_runner import AsyncSyncRunner
 from pdd.durable_sync_runner import (
     DurableSyncRunner,
     _parse_checkpoint_trailer,
@@ -561,3 +563,111 @@ def test_durable_runner_reads_pdd_sync_max_workers_when_constructed(
     runner = _runner(repo)
 
     assert runner.max_workers == 2
+
+
+# ---------------------------------------------------------------------------
+# Issue #1565 — Real-subprocess (not mocked Popen) worker-cap validation for
+# durable mode (Greg review item 4).
+#
+# DurableSyncRunner._run_child_sync delegates to super()._sync_one_module ->
+# AsyncSyncRunner._run_attempt, i.e. the SAME real subprocess.Popen reader the
+# agentic runner uses; durable only adds the worktree/checkpoint scheduling on
+# top. So the bounded-output and sticky-failure-marker behaviors are inherited
+# verbatim and are covered by the real-subprocess tests in
+# tests/test_agentic_sync_runner.py. The durable-specific risk is the worker
+# cap, validated here with real child processes (the positive control proving
+# the presence-counting harness is non-vacuous also lives in the agentic
+# real-subprocess test).
+# ---------------------------------------------------------------------------
+
+# Concurrency-only fake child: drop a presence token, sample peak co-running
+# siblings for `hold_s`, record the peak, make no file changes (so the durable
+# checkpoint is empty), and exit 0.
+_DURABLE_FAKE_CHILD_SOURCE = r'''
+import os
+import sys
+import time
+import uuid
+
+presence_dir, result_path = sys.argv[1], sys.argv[2]
+hold_s, sample_s = float(sys.argv[3]), float(sys.argv[4])
+os.makedirs(presence_dir, exist_ok=True)
+token = os.path.join(presence_dir, "%d-%s" % (os.getpid(), uuid.uuid4().hex))
+open(token, "w").close()
+peak = 0
+deadline = time.time() + hold_s
+try:
+    while time.time() < deadline:
+        try:
+            peak = max(peak, len(os.listdir(presence_dir)))
+        except OSError:
+            pass
+        time.sleep(sample_s)
+finally:
+    try:
+        os.remove(token)
+    except OSError:
+        pass
+with open(result_path, "w") as handle:
+    handle.write(str(peak))
+sys.exit(0)
+'''
+
+
+def test_real_subprocess_durable_max_workers_limits_concurrency(
+    tmp_path: Path, monkeypatch
+):
+    """PDD_SYNC_MAX_WORKERS=2 caps concurrent module syncs in DURABLE mode,
+    proven with real subprocesses driven through the durable scheduler.
+
+    Four independent modules sync through real ``subprocess.Popen`` children
+    (each producing an empty checkpoint); the observed peak concurrency must
+    not exceed the cap.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    child = tmp_path / "durable_fake_child.py"
+    child.write_text(_DURABLE_FAKE_CHILD_SOURCE, encoding="utf-8")
+    presence = tmp_path / "presence"
+    results = tmp_path / "results"
+    presence.mkdir()
+    results.mkdir()
+
+    monkeypatch.setenv("PDD_SYNC_MAX_WORKERS", "2")
+    basenames = ["a", "b", "c", "d"]
+
+    def _fake_build_command(self, basename, in_flight_cost=0.0):
+        return [
+            sys.executable,
+            str(child),
+            str(presence),
+            str(results / basename),
+            "0.6",
+            "0.01",
+        ]
+
+    runner = DurableSyncRunner(
+        basenames=basenames,
+        dep_graph={b: [] for b in basenames},
+        sync_options={},
+        github_info=None,
+        issue_number=1565,
+        project_root=repo,
+        quiet=True,
+        issue_url="https://github.com/org/repo/issues/1565",
+    )
+    assert runner.max_workers == 2
+
+    with patch.object(AsyncSyncRunner, "_build_command", _fake_build_command):
+        success, message, _cost = runner.run()
+
+    assert success, f"durable real-subprocess run failed: {message!r}"
+    peaks = [
+        int((results / b).read_text())
+        for b in basenames
+        if (results / b).exists()
+    ]
+    assert peaks, "no durable child reported a peak — children never ran"
+    assert max(peaks) <= 2, (
+        f"PDD_SYNC_MAX_WORKERS=2 did not cap durable concurrency: real children "
+        f"observed a peak of {max(peaks)} simultaneous syncs (expected <= 2)"
+    )
