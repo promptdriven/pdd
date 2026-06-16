@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import functools
+import errno
 import hashlib
 import logging
 import os
@@ -21,6 +22,16 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 
 from rich.console import Console
+
+from pdd.routing_policy import (
+    RoutingConfig,
+    RoutingPolicy,
+    RoutingRecord,
+    emit_routing_record,
+    escalate,
+    resolve_model_for_tier,
+    select_config,
+)
 
 _steer_logger = logging.getLogger(__name__ + ".steer")
 
@@ -232,7 +243,7 @@ def _record_resolution_error(
     """Record or re-raise path resolution failures."""
     if errors is None:
         raise exc
-    if isinstance(exc, RuntimeError):
+    if isinstance(exc, RuntimeError) or getattr(exc, "errno", None) == errno.ELOOP:
         errors.append(f"{path}: symlink loop while resolving {context}: {exc}")
     else:
         errors.append(f"{path}: {exc}")
@@ -262,7 +273,19 @@ def _resolve_policy_path(
         path = cwd / path
     try:
         if path.name in ("", os.pardir):
+            try:
+                path.resolve(strict=True)
+            except OSError as exc:
+                if getattr(exc, "errno", None) == errno.ELOOP:
+                    _record_resolution_error(errors, path, f"policy root {raw_path}", exc)
+                    return None
             return path.resolve(strict=False)
+        try:
+            path.parent.resolve(strict=True)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.ELOOP:
+                _record_resolution_error(errors, path.parent, f"policy root {raw_path}", exc)
+                return None
         return path.parent.resolve(strict=False) / path.name
     except (RuntimeError, OSError) as exc:
         _record_resolution_error(errors, path, f"policy root {raw_path}", exc)
@@ -357,6 +380,12 @@ def _resolve_symlink_target_path(
     target_path = Path(raw_target)
     if not target_path.is_absolute():
         target_path = link_path.parent / target_path
+    try:
+        target_path.resolve(strict=True)
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.ELOOP:
+            errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
+            return None
     try:
         return target_path.resolve(strict=False)
     except RuntimeError as exc:
@@ -2217,6 +2246,100 @@ def _get_provider_model(provider: str) -> Optional[str]:
     return value.strip() or None
 
 
+def _routing_effort_to_reasoning_time(effort: str) -> float:
+    """Map routing effort labels to the existing reasoning_time scale."""
+    if effort == "high":
+        return 0.85
+    if effort == "medium":
+        return 0.5
+    return 0.15
+
+
+def _apply_routing_model_env(
+    provider: str,
+    config: Optional[RoutingConfig],
+    originals: Dict[str, Optional[str]],
+) -> None:
+    """Temporarily set the provider model env var for a routed config."""
+    if config is None:
+        return
+    env_var = _PROVIDER_MODEL_ENV.get(provider)
+    if not env_var:
+        return
+    if env_var not in originals:
+        originals[env_var] = os.environ.get(env_var)
+    model = resolve_model_for_tier(config.model_tier)
+    if model:
+        os.environ[env_var] = model
+
+
+def _restore_routing_model_env(originals: Dict[str, Optional[str]]) -> None:
+    """Restore model env vars changed for routing."""
+    for key, value in originals.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _emit_routing_outcome(
+    record: Optional[RoutingRecord],
+    *,
+    cwd: Path,
+    success: bool,
+    cost_usd: float,
+    latency_seconds: float,
+) -> None:
+    """Update and emit one routing record, ignoring no-policy calls."""
+    if record is None:
+        return
+    record.cost_usd = cost_usd
+    record.latency_seconds = latency_seconds
+    record.verifier_result = "pass" if success else "fail"
+    emit_routing_record(record, log_dir=cwd / ".pdd" / "agentic-logs")
+
+
+def _run_agentic_task_with_routing_config(
+    *,
+    config: RoutingConfig,
+    instruction: str,
+    cwd: Path,
+    verbose: bool,
+    quiet: bool,
+    label: str,
+    timeout: Optional[float],
+    retry_delay: float,
+    deadline: Optional[float],
+    use_playwright: bool,
+    steers: Optional[List[SteerEntry]],
+    claude_policy: Optional[ClaudePolicy],
+) -> AgenticTaskResult:
+    """Run one routed escalation config without re-entering policy selection."""
+    originals: Dict[str, Optional[str]] = {"PDD_AGENTIC_PROVIDER": os.environ.get("PDD_AGENTIC_PROVIDER")}
+    os.environ["PDD_AGENTIC_PROVIDER"] = config.harness
+    _apply_routing_model_env(config.harness, config, originals)
+    try:
+        return run_agentic_task(
+            instruction,
+            cwd,
+            verbose=verbose,
+            quiet=quiet,
+            label=label,
+            timeout=timeout,
+            max_retries=max(1, int(config.repeat_runs)),
+            retry_delay=retry_delay,
+            deadline=deadline,
+            use_playwright=use_playwright,
+            reasoning_time=_routing_effort_to_reasoning_time(str(config.thinking_effort)),
+            steers=steers,
+            claude_policy=claude_policy,
+            routing_policy=None,
+            task_class=None,
+        )
+    finally:
+        _restore_routing_model_env(originals)
+
+
 def _log_agentic_interaction(
     label: str,
     prompt: str,
@@ -4020,6 +4143,8 @@ def run_agentic_task(
     reasoning_time: Optional[float] = None,
     steers: Optional[List[SteerEntry]] = None,
     claude_policy: Optional[ClaudePolicy] = None,
+    routing_policy: Optional[RoutingPolicy] = None,
+    task_class: Optional[str] = None,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -4043,6 +4168,10 @@ def run_agentic_task(
         claude_policy: Optional validated Claude CLI policy contract. When
             present, Anthropic runs must enforce these tool/session/output
             semantics instead of PDD's broad default permission mode.
+        routing_policy: Optional static routing policy. When supplied, PDD
+            selects an initial agentic config by task class and may escalate
+            bounded configs after verifier/provider failure.
+        task_class: Optional coarse task class key for ``routing_policy``.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
@@ -4057,6 +4186,10 @@ def run_agentic_task(
         if claude_policy is not None
         else None
     )
+
+    routing_model_env_originals: Dict[str, Optional[str]] = {}
+    routing_record: Optional[RoutingRecord] = None
+    routing_config: Optional[RoutingConfig] = None
 
     # get_agent_provider_preference() must be called first: for
     # PDD_AGENTIC_PROVIDER=antigravity it sets PDD_GOOGLE_CLI=agy as a side
@@ -4074,10 +4207,31 @@ def run_agentic_task(
             )
         candidates = ["anthropic"]
 
+    if routing_policy is not None:
+        routing_config, routing_record = select_config(
+            routing_policy,
+            task_class,
+            budget_remaining=None,
+            deadline=deadline,
+        )
+        if routing_config is not None:
+            candidates = [routing_config.harness] if routing_config.harness in agents else []
+            max_retries = max(1, int(routing_config.repeat_runs))
+            reasoning_time = _routing_effort_to_reasoning_time(str(routing_config.thinking_effort))
+            _apply_routing_model_env(routing_config.harness, routing_config, routing_model_env_originals)
+
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
         if not quiet:
             console.print(f"[bold red]{msg}[/bold red]")
+        _emit_routing_outcome(
+            routing_record,
+            cwd=cwd,
+            success=False,
+            cost_usd=0.0,
+            latency_seconds=0.0,
+        )
+        _restore_routing_model_env(routing_model_env_originals)
         return AgenticTaskResult(False, msg, 0.0, "", None)
 
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
@@ -4142,6 +4296,7 @@ def run_agentic_task(
                 )
 
         provider_errors: List[str] = []
+        total_cost = 0.0
 
         for provider in candidates:
             if verbose:
@@ -4202,6 +4357,7 @@ def run_agentic_task(
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
                 cost = float(provider_result[2])
+                total_cost += cost
                 actual_model = provider_result[3]
                 usage = provider_result[4] if len(provider_result) > 4 else None
                 last_output = output
@@ -4336,6 +4492,13 @@ def run_agentic_task(
                                 model=effective_model,
                                 include_bodies=verbose,
                             )
+                            _emit_routing_outcome(
+                                routing_record,
+                                cwd=cwd,
+                                success=False,
+                                cost_usd=total_cost,
+                                latency_seconds=time.time() - task_start_time,
+                            )
                             return AgenticTaskResult(
                                 False,
                                 filesystem_violation,
@@ -4361,6 +4524,13 @@ def run_agentic_task(
                             cwd=cwd,
                             model=effective_model,
                             include_bodies=verbose,
+                        )
+                        _emit_routing_outcome(
+                            routing_record,
+                            cwd=cwd,
+                            success=True,
+                            cost_usd=total_cost,
+                            latency_seconds=time.time() - task_start_time,
                         )
                         return AgenticTaskResult(
                             True,
@@ -4480,15 +4650,70 @@ def run_agentic_task(
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break
 
-        return AgenticTaskResult(
+        failure_cost = total_cost if routing_policy is not None else 0.0
+        failure_result = AgenticTaskResult(
             False,
             f"All agent providers failed: {'; '.join(provider_errors)}",
-            0.0,
+            failure_cost,
             "",
             None,
         )
 
+        _emit_routing_outcome(
+            routing_record,
+            cwd=cwd,
+            success=False,
+            cost_usd=total_cost,
+            latency_seconds=time.time() - task_start_time,
+        )
+
+        if routing_policy is not None and routing_record is not None:
+            current_record = routing_record
+            last_result = failure_result
+            while True:
+                next_config, next_record = escalate(
+                    routing_policy,
+                    current_record,
+                    verifier_result="fail",
+                    budget_remaining=None,
+                    deadline=effective_deadline,
+                )
+                if (
+                    next_config is None
+                    or next_record.fallback_reason is not None
+                    or next_record.escalation_step <= current_record.escalation_step
+                ):
+                    emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
+                    break
+
+                escalated_start = time.time()
+                last_result = _run_agentic_task_with_routing_config(
+                    config=next_config,
+                    instruction=instruction,
+                    cwd=cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    label=label,
+                    timeout=timeout,
+                    retry_delay=retry_delay,
+                    deadline=deadline,
+                    use_playwright=use_playwright,
+                    steers=steers,
+                    claude_policy=claude_policy,
+                )
+                next_record.cost_usd = last_result.cost_usd
+                next_record.latency_seconds = time.time() - escalated_start
+                next_record.verifier_result = "pass" if last_result.success else "fail"
+                emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
+                if last_result.success:
+                    return last_result
+                current_record = next_record
+            return last_result
+
+        return failure_result
+
     finally:
+        _restore_routing_model_env(routing_model_env_originals)
         # Cleanup prompt file
         if prompt_path.exists():
             try:

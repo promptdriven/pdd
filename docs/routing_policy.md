@@ -106,8 +106,9 @@ Escalation never wraps around: the step index is bounded by
 
 ## RoutingRecord telemetry
 
-Every `run_agentic_task` call **when `routing_policy` is non-`None`** emits one JSON line to
-`.pdd/agentic-logs/routing-{timestamp}.jsonl`:
+Every `run_agentic_task` call **when `routing_policy` is non-`None`** emits at
+least one JSON line to `.pdd/agentic-logs/routing-{timestamp}.jsonl`; bounded
+escalation emits one additional line per escalated config attempt:
 
 ```json
 {
