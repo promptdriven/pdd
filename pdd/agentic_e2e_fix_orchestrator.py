@@ -1760,14 +1760,20 @@ def _run_pre_checkup_gate_with_remediation(
         if not success:
             return (
                 False,
-                f"pre_checkup_gate fix attempt {attempts} failed: {output}",
+                (
+                    f"{gate_message}\n\n"
+                    f"pre_checkup_gate fix attempt {attempts} failed: {output}"
+                ),
                 total_cost,
                 latest_changed_files,
             )
         if "CI_FIX_APPLIED" not in output:
             return (
                 False,
-                "pre_checkup_gate fix task did not apply an actionable fix",
+                (
+                    f"{gate_message}\n\n"
+                    "pre_checkup_gate fix task did not apply an actionable fix"
+                ),
                 total_cost,
                 latest_changed_files,
             )
