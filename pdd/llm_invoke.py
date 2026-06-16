@@ -15,7 +15,7 @@ import sys
 import traceback
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
@@ -3094,10 +3094,96 @@ def _vertex_location_value(model_info: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_DEEPSWE_MANIFEST_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_deepswe_manifest() -> Dict[str, Any]:
+    """Load DeepSWE manifest metadata keyed by model and aliases."""
+    global _DEEPSWE_MANIFEST_CACHE
+    if _DEEPSWE_MANIFEST_CACHE is not None:
+        return _DEEPSWE_MANIFEST_CACHE
+
+    candidate_paths: List[Path] = []
+    try:
+        candidate_paths.append(Path.home() / ".pdd" / "deepswe_manifest.json")
+    except Exception:
+        pass
+    project_root = os.getenv("PDD_PATH") or os.getenv("PROJECT_ROOT")
+    if project_root:
+        candidate_paths.append(Path(project_root) / ".pdd" / "deepswe_manifest.json")
+    candidate_paths.append(Path.cwd() / ".pdd" / "deepswe_manifest.json")
+
+    data: Any = None
+    for path in candidate_paths:
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+    if data is None:
+        try:
+            with importlib.resources.files("pdd.data").joinpath("deepswe_manifest.json").open(
+                "r", encoding="utf-8"
+            ) as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+    by_model: Dict[str, Any] = {}
+    entries = data.get("entries", data if isinstance(data, list) else []) if isinstance(data, (dict, list)) else []
+    if isinstance(entries, dict):
+        entries = list(entries.values())
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            keys = []
+            for key_name in ("model", "model_name", "catalog_model", "canonical_model"):
+                value = entry.get(key_name)
+                if isinstance(value, str) and value.strip():
+                    keys.append(value.strip())
+            aliases = entry.get("aliases")
+            if isinstance(aliases, list):
+                keys.extend(str(alias).strip() for alias in aliases if str(alias).strip())
+            raw_model_name = entry.get("raw_model_name")
+            if isinstance(raw_model_name, str) and raw_model_name.strip():
+                parts = raw_model_name.split()
+                keys.append(parts[0])
+            for key in keys:
+                by_model.setdefault(key, entry)
+
+    _DEEPSWE_MANIFEST_CACHE = by_model
+    return by_model
+
+
+def _manifest_effort(raw_model_name: Any) -> Optional[str]:
+    if not isinstance(raw_model_name, str):
+        return None
+    parts = raw_model_name.split()
+    if len(parts) < 2:
+        return None
+    effort = parts[-1].strip().lower()
+    return effort if effort in {"minimal", "low", "medium", "high", "xhigh", "max"} else None
+
+
+def _manifest_is_stale(retrieved_at: str) -> bool:
+    try:
+        max_age = int(os.getenv("PDD_DEEPSWE_MAX_AGE_DAYS", "30"))
+    except ValueError:
+        max_age = 30
+    try:
+        retrieved = date.fromisoformat(str(retrieved_at)[:10])
+    except Exception:
+        return False
+    return (date.today() - retrieved).days > max_age
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
-    model_df: pd.DataFrame
+    model_df: pd.DataFrame,
+    manifest_by_model: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Selects and sorts candidate models based on strength and availability."""
 
@@ -3263,6 +3349,19 @@ def _select_model_candidates(
     if not candidates:
          # This should ideally not happen if available_df was not empty
          raise RuntimeError("Model selection resulted in an empty candidate list.")
+
+    manifest_by_model = manifest_by_model or {}
+    for candidate in candidates:
+        entry = manifest_by_model.get(str(candidate.get("model", ""))) or {}
+        candidate["target_effort_level"] = _manifest_effort(entry.get("raw_model_name"))
+        candidate["deepswe_manifest_date"] = str(entry.get("retrieved_at") or "")
+
+    if candidates:
+        first = candidates[0]
+        manifest_date = str(first.get("deepswe_manifest_date") or "")
+        if manifest_date and _manifest_is_stale(manifest_date):
+            first["model_rank_source"] = f"deepswe:stale:{manifest_date}"
+            logger.warning("DeepSWE manifest metadata for selected model is stale: %s", manifest_date)
 
     # --- DEBUGGING PRINT ---
     if os.getenv("PDD_DEBUG_SELECTOR"): # Add env var check for debug prints
@@ -4193,6 +4292,33 @@ def llm_invoke(
         attempted_models.append(model_label)
         _publish_attempted_models()
 
+    def _publish_model_provenance(
+        *,
+        resolved_model: str = "",
+        outcome: str = "",
+        deepswe_manifest_date: str = "",
+    ) -> None:
+        """Best-effort: publish selected-model provenance for track_cost."""
+        try:
+            import click as _click
+            click_ctx = _click.get_current_context(silent=True)
+        except Exception:
+            click_ctx = None
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                if resolved_model:
+                    click_ctx.obj["resolved_model"] = str(resolved_model)
+                if outcome:
+                    click_ctx.obj["model_selection_outcome"] = str(outcome)
+                if deepswe_manifest_date:
+                    click_ctx.obj["deepswe_manifest_date"] = str(deepswe_manifest_date)
+        except Exception:
+            pass
+
     if use_cloud and not estimate_mode:
         from rich.console import Console
         console = Console()
@@ -4321,7 +4447,25 @@ def llm_invoke(
                     _effective_default_model,
                     LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
                 )
-        candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
+        manifest_by_model = _load_deepswe_manifest()
+        candidate_models = _select_model_candidates(
+            strength,
+            _effective_default_model,
+            model_df,
+            manifest_by_model=manifest_by_model,
+        )
+        try:
+            import click as _click_for_provenance
+            _ctx_for_provenance = _click_for_provenance.get_current_context(silent=True)
+            if _ctx_for_provenance is not None:
+                if _ctx_for_provenance.obj is None:
+                    _ctx_for_provenance.obj = {}
+                if isinstance(_ctx_for_provenance.obj, dict):
+                    _ctx_for_provenance.obj["requested_model"] = str(candidate_models[0].get("model", "")) if candidate_models else ""
+                    _ctx_for_provenance.obj["strength_used"] = str(strength)
+                    _ctx_for_provenance.obj["target_effort_level"] = candidate_models[0].get("target_effort_level") if candidate_models else None
+        except Exception:
+            pass
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
         _emit_llm_attribution(
@@ -5077,6 +5221,11 @@ def llm_invoke(
                             finish_reason=finish_reason,
                             call_type="responses",
                         )
+                        _publish_model_provenance(
+                            resolved_model=str(model_name_litellm),
+                            outcome="direct" if len(attempted_models) <= 1 else "fallback",
+                            deepswe_manifest_date=str(model_info.get("deepswe_manifest_date") or ""),
+                        )
                         return _with_local_grounding({
                             'result': final_result,
                             'cost': total_cost,
@@ -5744,6 +5893,11 @@ def llm_invoke(
                     output_tokens=_LAST_CALLBACK_DATA.get("output_tokens", 0),
                     finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
                     call_type=call_type_for_attribution,
+                )
+                _publish_model_provenance(
+                    resolved_model=str(model_name_litellm),
+                    outcome="direct" if len(attempted_models) <= 1 else "fallback",
+                    deepswe_manifest_date=str(model_info.get("deepswe_manifest_date") or ""),
                 )
                 return _with_local_grounding({
                     'result': final_result,

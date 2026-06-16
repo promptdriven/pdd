@@ -65,6 +65,8 @@ For non-interactive bounded prompt repair after a failed prompt source-set check
 
 For the deterministic prompt source-set quality gate and its `pdd.prompt_source_set_report.v1` JSON schema (including the per-finding `requires_clarification` / `clarification_reason` clarification signal), see [docs/checkup_prompt_quality_gate.md](docs/checkup_prompt_quality_gate.md).
 
+For the agentic CLI routing policy (task-class-keyed static config table and bounded escalation ladder for `run_agentic_task`), see [docs/routing_policy.md](docs/routing_policy.md).
+
 ## Installation
 
 ### Prerequisites for macOS
@@ -894,6 +896,12 @@ The generated CSV file includes the following columns:
 - input_files: A list of input files involved in the operation
 - output_files: A list of output files generated or modified by the operation
 - attempted_models: Semicolon-delimited audit log of every model PDD attempted for the command, across all LLM calls the command made (e.g. `generate` runs code-generation followed by postprocess code extraction — both contribute). When PDD's default model fails and the run falls back to another provider (for example Vertex AI → DeepSeek), each attempted model appears here so users can see the full fallback history rather than only the final successful model. The `model` column above names the model that actually produced the command's output; `attempted_models` is the complete record of what was tried. For commands that catch a substep failure and recover with a different model, the list may contain entries that came AFTER the model named in `model` — those represent attempts that were tried but didn't produce the final output. For a single-attempt successful command this column contains just the successful model. Semicolons inside model names are sanitized to preserve the delimiter. **Ordering:** sequential (single-thread) command paths produce a list in wall-clock attempt order; concurrent paths (e.g. `auto-deps --concurrency > 1`, which fans summarization across worker threads) sort their per-file contributions by file-submission index — a deterministic alternative to wall-clock ordering, which would otherwise depend on thread-scheduler timing.
+- requested_model: The model name that was explicitly requested for this command (e.g. the value of `PDD_MODEL_DEFAULT` or the model argument), before provider resolution or fallback.
+- resolved_model: The actual model identity as observed after resolution, where observable. For agentic CLIs that do not expose their selected model, this field is empty.
+- model_selection_outcome: How the final model was determined. One of `direct` (the requested model was used without fallback), `fallback` (a fallback model was substituted), `fixed_by_config` (model is fixed by user config and cannot be controlled by PDD), or `unconfirmed` (model identity could not be observed).
+- strength_used: The strength value (0.0–1.0) passed to the LLM invocation for this command.
+- cli_version: The installed PDD version at the time the command ran (from `importlib.metadata`).
+- deepswe_manifest_date: The `retrieved_at` date of the DeepSWE manifest used for model ranking during this command. Empty if no manifest was loaded.
 
 This comprehensive output allows for detailed tracking of not only the cost and type of operations but also the specific files involved in each PDD command execution.
 
@@ -1157,7 +1165,7 @@ pdd --context backend --force sync calculator # Explicit context override with v
 When a GitHub issue URL is passed instead of a basename, sync enters agentic mode:
 1. **Module Identification**: Fetches the issue content and uses an LLM to identify which modules need syncing
 2. **Dependency Validation**: Validates architecture.json dependencies and applies corrections if needed
-3. **Parallel Execution**: Dispatches parallel sync via `AsyncSyncRunner` with dependency-aware scheduling (max 4 concurrent workers)
+3. **Parallel Execution**: Dispatches parallel sync via `AsyncSyncRunner` with dependency-aware scheduling (up to 4 concurrent workers by default; set `PDD_SYNC_MAX_WORKERS` to cap concurrency lower — e.g. `1` on memory-constrained runners)
 4. **Live Progress**: Posts and updates a GitHub comment with real-time module sync status
 
 ```bash
@@ -2529,7 +2537,7 @@ The 13-step workflow:
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
 
-**Clean Restart** (`--clean-restart`, issue #1149): For `pdd change`, discards any persisted solving state for the issue and runs a fresh 13-step `pdd-issue` flow from the default base branch, ignoring any previously generated `change/issue-N` branch or PR. Use when recovering from a stopped or wrong-model run (e.g. you cancelled a Gemini-based run and want to rerun cleanly under Opus on the same issue). The orchestrator posts a `## Step 0/13: Workflow Startup` comment on the issue naming the mode, model, base branch, and command so reviewers can tell at a glance whether a run is resuming or clean-starting. The same restart intent is also available for `pdd bug`, `pdd test`, and `pdd fix` agentic GitHub issue workflows. Cannot be combined with `--manual`.
+**Clean Restart** (`--clean-restart`, issue #1149): For `pdd change`, discards any persisted solving state for the issue and runs a fresh 13-step `pdd-issue` flow from the default base branch, ignoring any previously generated `change/issue-N` branch or PR. Use when recovering from a stopped or wrong-model run (e.g. you cancelled a Gemini-based run and want to rerun cleanly under Opus on the same issue). The orchestrator posts a `## Step 0/13: Workflow Startup` comment on the issue naming the mode, model, base branch, and command so reviewers can tell at a glance whether a run is resuming or clean-starting. The same restart intent is also available for `pdd bug`, `pdd test`, and `pdd fix` agentic GitHub issue workflows. If the standard issue branch (`{command}/issue-N`) is checked out in another local worktree (e.g. a concurrent runner), the clean restart does not fail: it prunes stale worktree registrations and, if the branch is still genuinely locked, creates a fresh unique fallback branch (`{command}/issue-N-job-<id>`) from the base branch, pushes and opens/updates the PR on that branch, and leaves the locked worktree untouched. Cannot be combined with `--manual`.
 
 **Review Loop**: Steps 11-12 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
@@ -3522,6 +3530,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `anthropic`, `google`, `openai`, `opencode`, and `antigravity` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
 - **`PDD_CLAUDE_CODE_MODE`**: Set to `interactive` to make the Anthropic agentic provider use interactive Claude Code through a temporary MCP reply tool instead of `claude -p`. This is an opt-in workaround for environments where `claude -p` uses a separate Agent SDK credit pool; when unset, PDD keeps the existing `claude -p - --output-format json` behavior.
 - **`PDD_GOOGLE_CLI`**: Selects the Google-provider binary. Values: `agy` (Antigravity CLI), `gemini` (legacy Gemini CLI as rollback), or `auto` (default — prefer `agy` when installed and credentialed, but use legacy `gemini` when both binaries are installed and the only Google auth signal is `~/.gemini/oauth_creds.json`). Used by both availability detection and command construction so they cannot disagree.
+- **`PDD_ROUTING_POLICY`**: Path to a YAML file that overrides the built-in agentic routing policy used by `run_agentic_task`. When set, `routing_policy.load_policy()` loads task-class rows from this file and merges them with the built-in defaults; absent keys fall back to defaults. Unset by default. See [docs/routing_policy.md](docs/routing_policy.md) for the schema.
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 - **`PDD_STEER_JSON`**: JSON list of mid-run user steers (`comment_id`, `author`, `body`). Cloud runners pass pending issue comments before GitHub comment polling; orchestrators drain at step boundaries and inject `## Steered user input (mid-run)` into the next agentic step.
 - **`PDD_WORKFLOW_STATE`**: Hidden GitHub comment marker used to persist and resume agentic workflow state across machines. Users normally do not set this directly; delete the state comment only when intentionally forcing a clean restart.
@@ -3562,6 +3571,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_VERIFY_PROGRAM_OUTPUT_PATH`**: Default path for the final program file generated by the `verify` command.
 - **`PDD_CLOUD_TIMEOUT`**: Cloud request timeout in seconds. Default is 900 (15 minutes). Increase this value if you experience timeouts with long-running cloud operations.
 - **`PDD_MODULE_TIMEOUT_SECONDS`**: Per-module wall-clock cap for `pdd sync --agentic` runs in seconds. Default is 2700 (45 minutes).
+- **`PDD_SYNC_MAX_WORKERS`**: Maximum number of modules `pdd sync` (agentic and durable issue sync) runs concurrently. Default is 4; values are clamped to the range 1–4 (non-integer values fall back to 4). Lower it (e.g. `PDD_SYNC_MAX_WORKERS=1`) to reduce peak memory on constrained runners such as Cloud Run. A sync given an explicit `--budget` always runs sequentially regardless of this value; durable runs honor an explicit `--durable-max-parallel` over this default.
 - **`PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S`**: Timeout in seconds for the JWT auth call used by `pdd sync` / `pdd fix --auto-submit` example submission. Default is 300 (5 minutes). Auto-submit is skipped automatically when running inside a Cloud Run / Cloud Functions executor.
 
 ### Configuration Priority

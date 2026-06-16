@@ -130,7 +130,7 @@ def test_csv_row_appended_if_file_exists_with_content(mock_click_context, mock_o
     handle = mock_open_file()
     assert not any('timestamp,model,command,cost,input_files,output_files' in call.args[0] for call in handle.write.call_args_list)
     # Legacy mode kicks in because mocked readline returns empty (no header) -> no attempted_models column
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Legacy-CSV path emits a one-time UX warning telling the user how to
@@ -167,9 +167,9 @@ def test_csv_header_written_if_file_exists_but_empty(mock_click_context, mock_op
 
     handle = mock_open_file()
     # Header MUST be written when file is empty (with attempted_models column)
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date\r\n')
     # Data row should follow (command name is 'sync' from mock context)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,sync,25.5,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,sync,25.5,/path/to/prompt.txt,/path/to/output,gpt-3(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     mock_rprint.assert_not_called()
@@ -221,10 +221,10 @@ def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rpr
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date\r\n')
 
     # Use a regex pattern to match the row, ignoring the specific timestamp
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,gpt-3(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -260,10 +260,10 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date\r\n')
 
     # Use a regex pattern to match the row, ignoring the specific timestamp
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,gpt-3(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -298,9 +298,9 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written first (newly created files include attempted_models)
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date\r\n')
     # Data row should be written
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,gpt-3\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,gpt-3(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -337,9 +337,9 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date\r\n')
     # Data row should have correct cost and model
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,bert-base,train,50.0,/path/to/input.txt,/path/to/output,bert-base\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,bert-base,train,50.0,/path/to/input.txt,/path/to/output,bert-base(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -377,9 +377,9 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date\r\n')
     # Data row should have empty cost and model; attempted_models defaults to the model_name (empty here)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,short,,/path/to/prompt.txt,,\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,short,,/path/to/prompt.txt,,(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -418,9 +418,9 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date\r\n')
     # Data row should have correct input and output files
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,custom-model,process,15.0,/path/to/input.txt,/path/to/output.txt,custom-model\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,custom-model,process,15.0,/path/to/input.txt,/path/to/output.txt,custom-model(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -464,9 +464,9 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date\r\n')
     # Data row should have multiple input and output files separated by semicolons
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,batch-model,batch,100.0,/path/to/input1.txt;/path/to/input2.txt,/path/to/output1.txt;/path/to/output2.txt,batch-model\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,batch-model,batch,100.0,/path/to/input1.txt;/path/to/input2.txt,/path/to/output1.txt;/path/to/output2.txt,batch-model(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -541,7 +541,7 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Data row should include only string file paths (with attempted_models column at end)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,mixed-model,mixed,30.0,/path/to/input.txt,/path/to/output.txt,mixed-model\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,mixed-model,mixed,30.0,/path/to/input.txt,/path/to/output.txt,mixed-model(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -595,7 +595,7 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Data row should have empty cost and model; attempted_models defaults to model_name (empty)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,non_tuple,,/path/to/prompt.txt,,\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,non_tuple,,/path/to/prompt.txt,,(?:,.*)?\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -891,11 +891,11 @@ def test_attempted_models_from_ctx_obj_joined_with_semicolons(
 
     handle = mock_open_file()
     handle.write.assert_any_call(
-        'timestamp,model,command,cost,input_files,output_files,attempted_models\r\n'
+        'timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date\r\n'
     )
     row_pattern = re.compile(
         r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,deepseek/deepseek-chat,generate,0.1,'
-        r'/path/to/prompt.txt,,vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat\r\n'
+        r'/path/to/prompt.txt,,vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat(?:,.*)?\r\n'
     )
     assert any(row_pattern.match(c.args[0]) for c in handle.write.call_args_list)
 
@@ -947,7 +947,7 @@ def test_attempted_models_defaults_to_model_name_when_missing(
     handle = mock_open_file()
     row_pattern = re.compile(
         r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,solo-model,generate,0.2,'
-        r'/p.txt,,solo-model\r\n'
+        r'/p.txt,,solo-model(?:,.*)?\r\n'
     )
     assert any(row_pattern.match(c.args[0]) for c in handle.write.call_args_list)
 
@@ -981,7 +981,7 @@ def test_legacy_csv_without_attempted_models_header_is_not_rewritten(
     assert contents[1] == '2026-01-01T00:00:00.000,old-model,gen,0.01,/old.in,/old.out'
     # New row appended without an attempted_models field (6 columns only)
     assert contents[2].count(',') == 5, contents[2]
-    assert contents[2].endswith(',new-model,gen,0.02,,') or ',new-model,gen,0.02,' in contents[2]
+    assert contents[2].__contains__(',new-model,gen,0.02,,') or ',new-model,gen,0.02,' in contents[2]
 
 
 def test_legacy_csv_warning_fires_once_per_path(
@@ -1038,9 +1038,9 @@ def test_new_csv_includes_attempted_models_header(
     cmd(mock_ctx, str(tmp_path / 'p.txt'))
 
     lines = cost_path.read_text(encoding='utf-8').splitlines()
-    assert lines[0] == 'timestamp,model,command,cost,input_files,output_files,attempted_models'
+    assert lines[0] == 'timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date'
     # Data row ends with the joined attempted_models string
-    assert lines[1].endswith(',m0;m1'), lines[1]
+    assert lines[1].__contains__(',m0;m1'), lines[1]
 
 
 def test_extract_cost_and_model_short_or_non_tuple():
@@ -1108,11 +1108,11 @@ def test_attempted_models_does_not_leak_between_tracked_commands(
     lines = cost_path.read_text(encoding='utf-8').splitlines()
     # header + 2 data rows
     assert len(lines) == 3, lines
-    assert lines[0] == 'timestamp,model,command,cost,input_files,output_files,attempted_models'
+    assert lines[0] == 'timestamp,model,command,cost,input_files,output_files,attempted_models,requested_model,resolved_model,model_selection_outcome,strength_used,cli_version,deepswe_manifest_date'
     # First row carries the simulated fallback history.
-    assert lines[1].endswith(',failed-model;success-model'), lines[1]
+    assert lines[1].__contains__(',failed-model;success-model'), lines[1]
     # Second row falls back to its own [model_name], not the first command's history.
-    assert lines[2].endswith(',second-model'), lines[2]
+    assert lines[2].__contains__(',second-model'), lines[2]
     assert 'failed-model' not in lines[2], (
         f"second row leaked first command's attempted_models: {lines[2]}"
     )

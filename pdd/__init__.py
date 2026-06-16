@@ -109,7 +109,8 @@ def _setup_cloud_defaults() -> None:
 
 # Initialize cloud defaults on package import
 _setup_cloud_defaults()
-from .agentic_common import get_agent_provider_preference, get_job_deadline, Pricing, get_available_agents, run_agentic_task, github_save_state, github_load_state, github_clear_state, validate_cached_state, load_workflow_state, save_workflow_state, clear_workflow_state, post_step_comment, substitute_template_variables, post_pr_comment, post_final_comment, _extract_step_report, _sanitize_comment_body
+from .agentic_common import get_agent_provider_preference, get_job_deadline, Pricing, get_available_agents, run_agentic_task, select_harness_for_task, TaskClass, TASK_CLASS_SINGLE_FILE, TASK_CLASS_MULTI_FILE, TASK_CLASS_REPO_SCALE, TASK_CLASS_HIGH_ISOLATION, github_save_state, github_load_state, github_clear_state, validate_cached_state, load_workflow_state, save_workflow_state, clear_workflow_state, post_step_comment, substitute_template_variables, post_pr_comment, post_final_comment, _extract_step_report, _sanitize_comment_body
+from .routing_policy import RoutingConfig, EscalationStep, RoutingPolicyRow, RoutingPolicy, RoutingRecord, default_policy, load_policy, select_config, escalate, resolve_model_for_tier, emit_routing_record
 from .agentic_test_orchestrator import run_agentic_test_orchestrator
 from .architecture_sync_helper import filepath_to_prompt_filename
 from .agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
@@ -128,3 +129,4 @@ from .agentic_split_orchestrator import run_agentic_split_orchestrator, Diagnosi
 from .agentic_split import run_agentic_split
 from .ci_detect_changed_modules import main
 from .agentic_architecture_orchestrator import load_workflow_state, save_workflow_state, clear_workflow_state, run_agentic_architecture_orchestrator
+from .agentic_multishot import run_multishot_candidates, MultishotResult, MultishotCandidateRecord
