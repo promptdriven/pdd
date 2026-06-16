@@ -1569,9 +1569,16 @@ def _commit_and_push(
         # already committed on the branch (merge-base diff includes them).
         # In that case, push any unpushed commits instead of failing.
         commit_output = f"{commit_result.stdout}\n{commit_result.stderr}".lower()
+        staged_check = subprocess.run(
+            ["git", "diff", "--cached", "--quiet", "--"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
         if (
             "nothing to commit" in commit_output
             or "no changes added to commit" in commit_output
+            or staged_check.returncode == 0
         ):
             return _push_unpushed_commits_or_report_noop(cwd, repo_owner, repo_name)
         return False, f"Failed to commit: {commit_result.stderr}"

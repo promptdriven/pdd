@@ -1347,6 +1347,50 @@ class TestIssue545CommitAndPushWithTaintedHashes:
             f"File should be committed. Still uncommitted: {diff_result.stdout.strip()}"
         )
 
+    def test_commit_and_push_treats_empty_index_commit_failure_as_noop(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression: a blank commit failure with an empty index is a no-op.
+
+        In the final pre-checkup gate path, CI remediation can already commit
+        and push files that differ from the workflow's initial hash snapshot.
+        A later _commit_and_push call then sees those files as changed by hash,
+        stages them, and `git commit` can fail even though the index is empty.
+        That must not turn a passing gate into a failed pdd fix run.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push, _get_file_hashes
+        import subprocess
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+        initial_hashes = _get_file_hashes(worktree)
+
+        module.write_text("x = 2  # already committed by CI remediation\n")
+        subprocess.run(["git", "add", "module.py"], cwd=worktree, check=True)
+        subprocess.run(["git", "commit", "-m", "ci: fix gate"], cwd=worktree, check=True)
+        subprocess.run(["git", "push"], cwd=worktree, check=True)
+
+        original_run = subprocess.run
+
+        def fake_blank_commit_failure(cmd, *args, **kwargs):
+            if list(cmd[:2]) == ["git", "commit"]:
+                return subprocess.CompletedProcess(cmd, 1, "", "")
+            return original_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", fake_blank_commit_failure)
+
+        success, message = _commit_and_push(
+            cwd=worktree,
+            issue_number=545,
+            issue_title="Fix unstaged changes",
+            repo_owner="owner",
+            repo_name="repo",
+            initial_file_hashes=initial_hashes,
+            quiet=True,
+        )
+
+        assert success is True
+        assert message == "No changes to commit"
+
     def test_orchestrator_resume_with_pretainted_hashes_commits_changes(self, tmp_path):
         """Integration: resumed orchestrator detects and commits pre-existing
         unstaged modifications when ALL_TESTS_PASS at Step 2.
