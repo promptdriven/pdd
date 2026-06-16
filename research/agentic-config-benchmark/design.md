@@ -65,6 +65,7 @@ Before any run, the following must be committed in `benchmark_config_axis.json`:
 | Field | Description |
 |-------|-------------|
 | `task_id` | Task identifier (from `#1419`) |
+| `seed` | Fixed task seed / fixture seed used for every config cell |
 | `visible_tests_sha256` | SHA256 of the visible test fixture tree |
 | `hidden_verifier_sha256` | SHA256 of the hidden verifier tree (opaque; harness-only) |
 | `materialized_repo_sha256` | SHA256 of the materialized base repo used for all cells |
@@ -111,6 +112,7 @@ One JSONL line per `(task_id, config_sha256, trial_index)` run:
   "task_id": "task-alpha",
   "config_sha256": "3a7f9b...",
   "trial_index": 0,
+  "repeat_run_index": 0,
 
   "harness_id": "pdd-agentic-cli",
   "harness_version": "1.0.0",
@@ -126,6 +128,7 @@ One JSONL line per `(task_id, config_sha256, trial_index)` run:
   "deepswe_rank_caveat": "Measured under DeepSWE harness; not directly comparable to PDD agentic CLI pass-rate.",
 
   "task_id_locked": "task-alpha",
+  "seed_locked": "seed-alpha",
   "visible_tests_sha256": "...",
   "hidden_verifier_sha256": "...",
   "materialized_repo_sha256": "...",

@@ -203,7 +203,13 @@ def render_report(
 ) -> str:
     """Render the full Markdown report."""
     # Sort by config_rank, then label
-    rows = sorted(aggregated.values(), key=lambda r: (r.get("config_rank") or 999, r.get("config_label", "")))
+    rows = sorted(
+        aggregated.values(),
+        key=lambda r: (
+            999 if r.get("config_rank") is None else r["config_rank"],
+            r.get("config_label", ""),
+        ),
+    )
 
     # Find baseline row
     baseline = next((r for r in rows if r.get("is_default_baseline")), None)

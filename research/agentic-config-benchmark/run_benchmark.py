@@ -114,13 +114,41 @@ def verify_locked_hashes(locked: dict[str, Any]) -> None:
         if isinstance(value, str) and value.startswith("PLACEHOLDER_"):
             raise SystemExit(
                 f"ERROR: locked_invariants.{key} is still a placeholder value '{value}'. "
-                "Replace with the actual SHA256 hash from #1419 fixtures before running."
+                "Replace with the actual content-addressed value from #1419 fixtures before running."
             )
 
 
 # ---------------------------------------------------------------------------
 # Harness invocation
 # ---------------------------------------------------------------------------
+
+def _check_harness_command_available() -> None:
+    """
+    Fail fast when the agentic harness subcommand is unavailable.
+
+    Dry runs do not need this check, but real runs should abort before scheduling
+    cells or spending model tokens if the forward-referenced CLI is absent.
+    """
+    cmd = [sys.executable, "-m", "pdd", "agentic-run", "--help"]
+    try:
+        result = subprocess.run(
+            cmd,
+            timeout=30,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise SystemExit(f"ERROR: agentic harness command unavailable: {exc}") from exc
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        if detail:
+            detail = f" Output: {detail}"
+        raise SystemExit(
+            "ERROR: agentic harness command is unavailable. "
+            "`python -m pdd agentic-run --help` did not succeed."
+            f"{detail}"
+        )
 
 def invoke_harness(
     config: dict[str, Any],
@@ -304,6 +332,7 @@ def build_run_record(
         "config_label": config["label"],
         "config_rank": config.get("config_rank"),
         "trial_index": trial_index,
+        "repeat_run_index": trial_index,
         # Config identity
         "harness_id": harness_id,
         "harness_version": harness_version,
@@ -319,6 +348,7 @@ def build_run_record(
         "deepswe_rank_caveat": deepswe_caveat,
         # Locked invariants (verified pre-run)
         "task_id_locked": locked.get("task_id"),
+        "seed_locked": locked.get("seed"),
         "visible_tests_sha256": locked.get("visible_tests_sha256"),
         "hidden_verifier_sha256": locked.get("hidden_verifier_sha256"),
         "materialized_repo_sha256": locked.get("materialized_repo_sha256"),
@@ -355,6 +385,8 @@ def run_sweep(
 
     verify_locked_hashes(locked)
     model_registry = load_model_registry(LLM_MODEL_CSV)
+    if not dry_run:
+        _check_harness_command_available()
 
     thinking_eligible = set(axis.get("scheduling_rules", {}).get("thinking_eligible_reasoning_types", ["effort", "budget"]))
 
@@ -368,13 +400,15 @@ def run_sweep(
             continue
 
         # Scheduling gates
-        if config.get("interactive_only"):
+        model_meta = model_registry.get(config["model_id"], {})
+        interactive_only = model_meta.get("interactive_only", config.get("interactive_only", False))
+        if interactive_only:
             log.info("Skipping config '%s': interactive_only=True.", label)
             skipped_cells += 1
             continue
 
         if config.get("thinking_enabled"):
-            reasoning_type = config.get("reasoning_type", "")
+            reasoning_type = model_meta.get("reasoning_type") or config.get("reasoning_type", "")
             if reasoning_type not in thinking_eligible:
                 log.info(
                     "Skipping config '%s': thinking=True but reasoning_type='%s' not in %s.",

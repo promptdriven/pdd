@@ -6,6 +6,7 @@
 
   "locked_invariants": {
     "task_id": "PLACEHOLDER_task_id",
+    "seed": "PLACEHOLDER_seed",
     "visible_tests_sha256": "PLACEHOLDER_visible_tests_sha256",
     "hidden_verifier_sha256": "PLACEHOLDER_hidden_verifier_sha256",
     "materialized_repo_sha256": "PLACEHOLDER_materialized_repo_sha256",
@@ -13,10 +14,10 @@
     "repeat_runs": 5
   },
 
-  "note_on_placeholders": "task_id, visible_tests_sha256, hidden_verifier_sha256, and materialized_repo_sha256 are PLACEHOLDER values to be replaced with content-addressed hashes from #1419 fixtures before any run. The runner aborts if any hash field begins with 'PLACEHOLDER_'.",
+  "note_on_placeholders": "task_id, seed, visible_tests_sha256, hidden_verifier_sha256, and materialized_repo_sha256 are PLACEHOLDER values to be replaced with content-addressed values from #1419 fixtures before any run. The runner aborts if any locked invariant begins with 'PLACEHOLDER_'.",
 
   "model_registry_path": "pdd/data/llm_model.csv",
-  "model_registry_fields_used": ["model_id", "model_rank_score", "model_rank_source", "reasoning_type", "interactive_only"],
+  "model_registry_fields_used": ["model", "model_rank_score", "model_rank_source", "reasoning_type", "interactive_only"],
 
   "config_identity_hash_fields": ["harness_id", "harness_version", "model_id", "thinking_enabled", "thinking_effort"],
 
