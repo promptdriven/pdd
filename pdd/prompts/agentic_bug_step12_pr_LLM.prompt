@@ -75,7 +75,7 @@ You are working on step 12 of 12 (final step) in an agentic bug investigation wo
 % Worktree Information
 
 You are operating in an isolated git worktree at: {worktree_path}
-This worktree is already checked out to branch `fix/issue-{issue_number}`.
+This worktree is already checked out to branch `{head_branch}`.
 Do NOT create a new branch - just stage, commit, and push.
 
 % Files to Stage
@@ -86,7 +86,7 @@ Do NOT create a new branch - just stage, commit, and push.
 % Your Task
 
 1. **Prepare the commit**
-   - You are already on branch `fix/issue-{issue_number}` in an isolated worktree
+   - You are already on branch `{head_branch}` in an isolated worktree
    - **CRITICAL: Stage ONLY the files listed in `files_to_stage` above**
    - This includes test files from Steps 5, 9, and 11, AND any prompt files fixed in Step 7
    - Get the exact file paths from:
@@ -100,11 +100,11 @@ Do NOT create a new branch - just stage, commit, and push.
    - Commit with a descriptive message referencing the issue
 
 2. **Create the draft PR**
-   - If `clean_restart` is `true`, push with `git push --force-with-lease -u origin fix/issue-{issue_number}` so a stopped run's old remote branch can be replaced safely.
-   - Otherwise, push with `git push -u origin fix/issue-{issue_number}`.
+   - If `clean_restart` is `true`, push with `git push --force-with-lease -u origin {head_branch}` so a stopped run's old remote branch can be replaced safely.
+   - Otherwise, push with `git push -u origin {head_branch}`.
    - If `clean_restart` is `true`, check for an existing open PR first:
      ```bash
-     gh pr list --head fix/issue-{issue_number} --state open --json number,url
+     gh pr list --head {head_branch} --state open --json number,url
      ```
      If one exists, update that PR with `gh pr edit <number> --title "Add failing tests for #{issue_number}" --body "..."` and record its URL instead of creating a duplicate.
    - If no open PR exists, create a draft pull request using `gh pr create --draft`
@@ -123,17 +123,17 @@ Push first:
 
 ```bash
 # clean_restart == true
-git push --force-with-lease -u origin fix/issue-{issue_number}
+git push --force-with-lease -u origin {head_branch}
 
 # clean_restart != true
-git push -u origin fix/issue-{issue_number}
+git push -u origin {head_branch}
 ```
 
 Then create or update the PR:
 
 ```bash
 # clean_restart == true and an open PR already exists
-gh pr list --head fix/issue-{issue_number} --state open --json number,url
+gh pr list --head {head_branch} --state open --json number,url
 gh pr edit <number> --title "Add failing tests for #{issue_number}" --body "..."
 
 # otherwise
@@ -183,7 +183,7 @@ After creating the draft PR, return your final report between `<step_report>` an
 **PR #{{pr_number}}:** [{{pr_title}}]({{pr_url}})
 
 ### Branch
-`fix/issue-{issue_number}`
+`{head_branch}`
 
 ### What's Included
 - Failing unit test at `{{unit_test_file_path}}`

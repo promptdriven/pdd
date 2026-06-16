@@ -19,6 +19,9 @@ from rich.console import Console
 from rich.markup import escape
 
 from pdd.agentic_common import (
+    branch_checked_out_worktree,
+    clean_restart_fallback_branch,
+    current_worktree_branch,
     run_agentic_task,
     load_workflow_state,
     save_workflow_state,
@@ -555,6 +558,7 @@ def _setup_worktree(
                 console.print(f"[yellow]Warning: git fetch failed for {branch_name}: {stderr.strip()}[/yellow]")
 
     # Clean up local branch if it exists
+    fallback_branch: Optional[str] = None
     branch_exists = _branch_exists(cwd, branch_name)
     if branch_exists:
         success, _err = _delete_branch(cwd, branch_name)
@@ -566,11 +570,59 @@ def _setup_worktree(
             # base the fresh restart on whatever the previous run
             # left on the local change/issue-{N} branch, violating
             # the Req 15 base-ref guarantee.
-            return None, (
-                f"Cannot perform clean restart: local branch {branch_name!r} "
-                "could not be deleted (it is likely checked out in another "
-                "worktree). Remove that worktree first, then retry."
+            #
+            # The common cause is a stale worktree registration: prune
+            # and retry the delete first (resolves it without a fallback).
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                cwd=git_root, capture_output=True,
             )
+            success, _err = _delete_branch(cwd, branch_name)
+            if success:
+                branch_exists = False
+            else:
+                # Still locked. Only fall back when the branch is genuinely
+                # checked out in ANOTHER live worktree (issue #1596: the
+                # GitHub App executor's). Use a fresh unique fallback branch
+                # off origin/main so the locked worktree is left untouched.
+                holder = branch_checked_out_worktree(git_root, branch_name)
+                if holder and Path(holder).resolve() != worktree_path.resolve():
+                    fallback_branch = clean_restart_fallback_branch(branch_name)
+                    # The fallback name is stable across retries of the same
+                    # job (JOB_ID-derived), so a prior attempt may have left
+                    # this branch behind after its worktree was removed. Delete
+                    # it (best effort) so we recreate it fresh from main rather
+                    # than failing `git worktree add -b` on a name clash.
+                    _delete_branch(cwd, fallback_branch)
+                    # Fetch the FALLBACK branch's own tracking ref (not the
+                    # canonical one) so Step 13's `git push --force-with-lease
+                    # origin {head_branch}` has lease info. On a same-job retry
+                    # in a fresh clone, origin/{fallback} already exists but the
+                    # local tracking ref does not — without this fetch the push
+                    # is rejected with "stale info". Best effort.
+                    fallback_lease = (
+                        f"+refs/heads/{fallback_branch}:refs/remotes/origin/{fallback_branch}"
+                    )
+                    try:
+                        subprocess.run(
+                            ["git", "fetch", "origin", fallback_lease],
+                            cwd=git_root, capture_output=True, check=True
+                        )
+                    except subprocess.CalledProcessError:
+                        pass
+                    branch_exists = False
+                    if not quiet:
+                        console.print(
+                            f"[bold cyan]Clean restart: branch {branch_name!r} is locked by "
+                            f"worktree {holder} — creating fresh fallback branch "
+                            f"{fallback_branch!r} from main instead.[/bold cyan]"
+                        )
+                else:
+                    return None, (
+                        f"Cannot perform clean restart: local branch {branch_name!r} "
+                        "could not be deleted (it is likely checked out in another "
+                        "worktree). Remove that worktree first, then retry."
+                    )
 
     # Resolve base ref once. Under clean_restart, refuse to silently
     # use the literal "HEAD" fallback (the user's CURRENT branch) —
@@ -606,9 +658,12 @@ def _setup_worktree(
             if not quiet:
                 console.print(f"[blue]Reusing remote branch {branch_name} (preserving prior changes)[/blue]")
         else:
-            # No prior work — create new branch from main
+            # No prior work — create new branch from main. Under a #1596
+            # fallback the canonical branch is locked by another worktree, so
+            # create the unique fallback branch instead.
+            create_branch = fallback_branch or branch_name
             subprocess.run(
-                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref],
+                ["git", "worktree", "add", "-b", create_branch, str(worktree_path), base_ref],
                 cwd=git_root, capture_output=True, check=True
             )
             if clean_restart and not quiet:
@@ -1682,21 +1737,33 @@ def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
 def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
     """Check if an open PR already exists for this issue's branch.
 
-    Returns the PR URL if found, None otherwise.
+    Matches the canonical ``change/issue-{N}`` head AND any
+    ``change/issue-{N}-job-*`` clean-restart fallback head (issue #1596), so a
+    later normal run does not open a duplicate PR for a fallback branch.
+    Returns the PR URL if found, else None.
+
+    GitHub's ``head:`` search is a PREFIX match, so ``head:change/issue-{N}``
+    also returns unrelated heads like ``change/issue-{N}0``; the results are
+    filtered precisely in Python.
     """
-    branch = f"change/issue-{issue_number}"
+    canonical = f"change/issue-{issue_number}"
+    fallback_prefix = f"{canonical}-job-"
     try:
         result = subprocess.run(
             ["gh", "pr", "list", "--repo", f"{repo_owner}/{repo_name}",
-             "--search", f"head:{branch}", "--state", "open",
-             "--json", "url", "--limit", "1"],
+             "--search", f"head:{canonical}", "--state", "open",
+             "--json", "url,headRefName", "--limit", "30"],
             capture_output=True, text=True, check=False, timeout=30,
         )
         if result.returncode != 0:
             return None
         data = json.loads(result.stdout)
-        if data and isinstance(data, list) and data[0].get("url"):
-            return data[0]["url"]
+        if data and isinstance(data, list):
+            for pr in data:
+                head = pr.get("headRefName", "")
+                if head == canonical or head.startswith(fallback_prefix):
+                    if pr.get("url"):
+                        return pr["url"]
     except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
         pass
     return None
@@ -2834,6 +2901,12 @@ def run_agentic_change_orchestrator(
         git_root_for_pr_base = _get_git_root(current_work_dir) or current_work_dir
         context["base_branch"] = _normalize_pr_base_branch(
             _resolve_main_ref_name(git_root_for_pr_base)
+        )
+        # Thread the worktree's ACTUAL head branch so a #1596 clean-restart
+        # fallback branch is pushed/PR'd, not the (locked) canonical name.
+        # Defaults to the canonical name → byte-identical when no fallback.
+        context["head_branch"] = (
+            current_worktree_branch(current_work_dir) or f"change/issue-{issue_number}"
         )
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
