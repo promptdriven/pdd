@@ -19,6 +19,7 @@ from pdd.agentic_common import (
     get_available_agents,
     get_agent_provider_preference,
     run_agentic_task,
+    select_harness_for_task,
     _calculate_anthropic_cost,
     _calculate_gemini_cost,
     _calculate_codex_cost,
@@ -44,11 +45,138 @@ from pdd.agentic_common import (
     CODEX_PRICING,
     DEFAULT_TIMEOUT_SECONDS,
     AGENTIC_LOG_DIR,
+    TASK_CLASS_HIGH_ISOLATION,
+    TASK_CLASS_MULTI_FILE,
+    TASK_CLASS_REPO_SCALE,
+    TASK_CLASS_SINGLE_FILE,
 )
 
 # ---------------------------------------------------------------------------
 # Z3 Formal Verification
 # ---------------------------------------------------------------------------
+
+def test_select_harness_for_task_routes_known_task_classes():
+    candidates = ["google", "openai", "opencode", "anthropic"]
+
+    assert select_harness_for_task(TASK_CLASS_SINGLE_FILE, candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_MULTI_FILE, candidates) == [
+        "anthropic",
+        "opencode",
+        "google",
+        "openai",
+    ]
+    assert select_harness_for_task(TASK_CLASS_REPO_SCALE, candidates) == [
+        "anthropic",
+        "opencode",
+        "google",
+        "openai",
+    ]
+    assert select_harness_for_task(TASK_CLASS_HIGH_ISOLATION, candidates) == [
+        "opencode",
+        "anthropic",
+        "google",
+        "openai",
+    ]
+
+
+def test_select_harness_for_task_preserves_unmatched_and_unknown_order():
+    candidates = ["openai", "custom", "google"]
+
+    assert select_harness_for_task("future_task_class", candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_MULTI_FILE, candidates) == candidates
+    assert select_harness_for_task(TASK_CLASS_REPO_SCALE, candidates) == [
+        "custom",
+        "openai",
+        "google",
+    ]
+
+
+def test_run_agentic_task_task_class_reorders_available_candidates(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            task_class=TASK_CLASS_HIGH_ISOLATION,
+        )
+
+    assert not result.success
+    assert attempted == ["opencode", "anthropic", "google", "openai"]
+
+
+def test_run_agentic_task_task_class_none_preserves_candidate_order(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["google", "openai", "opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            task_class=None,
+        )
+
+    assert not result.success
+    assert attempted == ["google", "openai", "opencode", "anthropic"]
+
+
+def test_run_agentic_task_claude_policy_overrides_task_class(mock_cwd):
+    attempted = []
+
+    def fake_run(provider, *args, **kwargs):
+        attempted.append(provider)
+        return (False, f"{provider} failed", 0.0, None, None)
+
+    with patch(
+        "pdd.agentic_common.get_agent_provider_preference",
+        return_value=["opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common.get_available_agents",
+        return_value=["opencode", "anthropic"],
+    ), patch(
+        "pdd.agentic_common._run_with_provider",
+        side_effect=fake_run,
+    ):
+        result = run_agentic_task(
+            "do work",
+            mock_cwd,
+            max_retries=1,
+            quiet=True,
+            claude_policy={"outputFormat": "json"},
+            task_class=TASK_CLASS_HIGH_ISOLATION,
+        )
+
+    assert not result.success
+    assert attempted == ["anthropic"]
 
 def test_z3_pricing_properties():
     """
@@ -2672,6 +2800,84 @@ def test_run_agentic_task_returns_gvs_detectable_json_usage_contract(
     assert result[4] == usage
     assert result.usage == usage
     json.dumps(result[4])
+
+
+def test_run_agentic_task_routing_policy_selects_initial_config(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google", "anthropic"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, kwargs, os.environ.get("CLAUDE_MODEL")))
+        return (True, "done", 0.25, "actual-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert calls == [("anthropic", calls[0][1], "tier-2-model")]
+    assert calls[0][1]["reasoning_time"] == 0.5
+    assert os.environ.get("CLAUDE_MODEL") is None
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "bug-fix"
+    assert payload["selected_config"]["model_tier"] == 2
+    assert payload["verifier_result"] == "pass"
+
+
+def test_run_agentic_task_routing_policy_escalates_after_failure(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic", "google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    providers = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        return (True, "fixed on escalation", 0.2, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert result.output_text == "fixed on escalation"
+    assert providers == ["anthropic", "google"]
+    records = []
+    for path in sorted((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl")):
+        records.extend(json.loads(line) for line in path.read_text().splitlines())
+    assert [row["verifier_result"] for row in records] == ["fail", "pass"]
+    assert records[1]["escalation_step"] == 1
+    assert records[1]["selected_config"]["harness"] == "google"
 
 
 # ---------------------------------------------------------------------------
@@ -9880,12 +10086,10 @@ def test_codex_effort_env_is_case_and_whitespace_tolerant(
     assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"
 
 
-def test_claude_always_prints_effort_notice_when_not_quiet(
+def test_claude_injects_effort_flag_when_not_quiet(
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
 ):
-    """Silent-failure guard: dropping the user's reasoning request with no
-    feedback generates support tickets. The notice fires regardless of
-    --verbose, gated only by --quiet."""
+    """Claude Code supports --effort; PDD should apply the requested effort."""
     from pdd.agentic_common import _run_with_provider
 
     mock_shutil_which.return_value = "/bin/claude"
@@ -9903,8 +10107,11 @@ def test_claude_always_prints_effort_notice_when_not_quiet(
         os.environ.pop("PDD_REASONING_EFFORT", None)
 
     captured = capsys.readouterr()
-    assert "PDD_REASONING_EFFORT=high" in captured.out
-    assert "Claude Code CLI" in captured.out
+    assert "PDD_REASONING_EFFORT=high" not in captured.out
+    args, _ = mock_subprocess.call_args
+    cmd = args[0]
+    assert "--effort" in cmd
+    assert cmd[cmd.index("--effort") + 1] == "high"
 
 
 def test_claude_suppresses_effort_notice_when_quiet(
@@ -9929,6 +10136,57 @@ def test_claude_suppresses_effort_notice_when_quiet(
 
     captured = capsys.readouterr()
     assert "PDD_REASONING_EFFORT" not in captured.out
+
+
+def test_claude_interactive_injects_effort_env(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which
+):
+    """Interactive bridge cannot receive argv flags, so effort is passed via env."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/claude"
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_CLAUDE_CODE_MODE"] = "interactive"
+    os.environ["PDD_REASONING_EFFORT"] = "medium"
+    try:
+        with patch("pdd.agentic_common._run_claude_interactive_with_mcp") as bridge:
+            bridge.return_value = (True, "ok", 0.0, None)
+            _run_with_provider("anthropic", prompt_file, mock_cwd, verbose=False, quiet=True)
+    finally:
+        os.environ.pop("PDD_CLAUDE_CODE_MODE", None)
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+
+    _, kwargs = bridge.call_args
+    assert kwargs["env"]["CLAUDE_CODE_EFFORT_LEVEL"] == "medium"
+
+
+def test_opencode_warns_when_effort_requested_without_variant(
+    mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, capsys
+):
+    """OpenCode has no generic effort flag; users should get the variant hint."""
+    from pdd.agentic_common import _run_with_provider
+
+    mock_shutil_which.return_value = "/bin/opencode"
+    mock_subprocess.return_value.returncode = 0
+    mock_subprocess.return_value.stdout = json.dumps({"type": "message", "text": "ok"})
+    mock_subprocess.return_value.stderr = ""
+
+    prompt_file = mock_cwd / ".agentic_prompt_test.txt"
+    prompt_file.write_text("hi")
+
+    os.environ["PDD_REASONING_EFFORT"] = "high"
+    os.environ["OPENCODE_MODEL"] = "openai/gpt-5"
+    os.environ.pop("OPENCODE_VARIANT", None)
+    try:
+        _run_with_provider("opencode", prompt_file, mock_cwd, verbose=False, quiet=False)
+    finally:
+        os.environ.pop("PDD_REASONING_EFFORT", None)
+        os.environ.pop("OPENCODE_MODEL", None)
+
+    captured = capsys.readouterr()
+    assert "OPENCODE_VARIANT" in captured.out
 
 
 # ---------------------------------------------------------------------------
