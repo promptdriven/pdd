@@ -181,6 +181,50 @@ def test_run_ci_validation_loop_returns_no_checks_when_ci_absent(tmp_path: Path)
     assert cost == 0.0
 
 
+def test_run_ci_validation_loop_ready_when_required_no_checks_but_head_passing(
+    tmp_path: Path,
+) -> None:
+    """A ``no_checks`` rollup must not fail a PR whose live head checks all PASS.
+
+    The issue #1587 cross-check exists for the case where ``gh pr checks
+    --required`` cannot read the GraphQL ``statusCheckRollup`` (App token
+    permissions). When the REST Checks API instead shows the live head's real
+    check runs are all green, the PR is genuinely ready: the loop must return
+    success and must NOT drive a fix loop against an already-passing PR.
+    Falling through to the failure path here would be an over-correction of the
+    original fail-open bug.
+    """
+    passing = [{"name": "build", "state": "SUCCESS", "bucket": "pass", "link": ""}]
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        raise AssertionError("fix loop must not run when live head checks pass")
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="livehead0"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("no_checks", [])), \
+         patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("passed", passing)), \
+         patch("pdd.ci_validation.post_ci_failure_comment") as mock_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1587,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert "passed on live PR head" in message
+    assert "livehead" in message
+    assert cost == 0.0
+    mock_comment.assert_not_called()
+
+
 def test_github_checks_gate_passes_all_checks_on_current_head(tmp_path: Path) -> None:
     """Final gate strict mode should pass only when real checks pass."""
     passing_checks = [

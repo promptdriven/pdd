@@ -888,6 +888,19 @@ def run_ci_validation_loop(
             # Only treat as genuinely having no checks if the cross-check confirms it.
             if cross_status == "no_checks":
                 return True, "No CI checks detected", total_cost
+            # The required-check poll could not read the rollup, but the live
+            # head's real check runs are all green: the PR genuinely passed.
+            # Return ready here instead of falling through to the failure path,
+            # otherwise an already-passing PR whose GraphQL statusCheckRollup is
+            # unreadable by the App token (the exact condition this cross-check
+            # exists for) would drive a pointless fix loop or be reported as not
+            # ready.
+            if cross_status == "passed":
+                return (
+                    True,
+                    f"Required CI checks passed on live PR head {cross_head_sha[:8]}",
+                    total_cost,
+                )
             # Otherwise the PR is not ready; fall through with the real check status.
             status = cross_status
             checks = cross_checks
