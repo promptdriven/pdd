@@ -192,8 +192,9 @@ def test_extract_result_none_does_not_raise_attribute_error_issue_1612(mock_temp
     When the extraction llm_invoke returns None as result, accessing
     extract_response['result'].changes_list raises
     AttributeError('NoneType object has no attribute changes_list').
-    detect_change should handle this gracefully rather than propagating
-    AttributeError to the caller.
+    detect_change must not propagate that raw AttributeError; the robust
+    isinstance guard raises a typed ValueError instead — a malformed response
+    is a failure, not a silent "no changes".
     """
     detect_response = {
         'result': 'Analysis results',
@@ -217,17 +218,17 @@ def test_extract_result_none_does_not_raise_attribute_error_issue_1612(mock_temp
         mock_preprocess.return_value = "Processed template"
         mock_llm_invoke.side_effect = [detect_response, extract_response_none]
 
-        # After the fix, detect_change must not propagate AttributeError.
-        # The function should return a graceful fallback (e.g., empty list)
-        # rather than crashing with:
-        #   AttributeError: 'NoneType' object has no attribute 'changes_list'
-        result_list, _cost, _model = detect_change(
-            MOCK_PROMPT_FILES,
-            MOCK_CHANGE_DESCRIPTION,
-            strength=0.7,
-            temperature=0.0,
-        )
-        assert isinstance(result_list, list)
+        # After the fix, detect_change must not propagate the raw AttributeError.
+        # A malformed result raises a typed ValueError, so callers (e.g.
+        # incremental PRD propagation) fail loudly instead of silently treating
+        # it as "no changes".
+        with pytest.raises((ValueError, RuntimeError, TypeError)):
+            detect_change(
+                MOCK_PROMPT_FILES,
+                MOCK_CHANGE_DESCRIPTION,
+                strength=0.7,
+                temperature=0.0,
+            )
 
 
 def test_extract_result_raw_string_does_not_raise_attribute_error_issue_1612(mock_templates):
@@ -238,7 +239,8 @@ def test_extract_result_raw_string_does_not_raise_attribute_error_issue_1612(moc
     in production for the incremental generator sibling bug), accessing
     extract_response['result'].changes_list raises
     AttributeError('str object has no attribute changes_list').
-    detect_change should handle this gracefully.
+    detect_change must not propagate that raw AttributeError; the robust guard
+    raises a typed ValueError instead.
     """
     detect_response = {
         'result': 'Analysis results',
@@ -261,21 +263,21 @@ def test_extract_result_raw_string_does_not_raise_attribute_error_issue_1612(moc
         mock_preprocess.return_value = "Processed template"
         mock_llm_invoke.side_effect = [detect_response, extract_response_str]
 
-        result_list, _cost, _model = detect_change(
-            MOCK_PROMPT_FILES,
-            MOCK_CHANGE_DESCRIPTION,
-            strength=0.7,
-            temperature=0.0,
-        )
-        assert isinstance(result_list, list)
+        with pytest.raises((ValueError, RuntimeError, TypeError)):
+            detect_change(
+                MOCK_PROMPT_FILES,
+                MOCK_CHANGE_DESCRIPTION,
+                strength=0.7,
+                temperature=0.0,
+            )
 
 
 def test_extract_result_raw_dict_does_not_raise_attribute_error_issue_1612(mock_templates):
     """Raw-dict variant of the #1612 guard: a cloud structured-output response
     that fails Pydantic validation leaves a plain ``dict`` in result['result'].
     The narrow None/str guard missed it; the robust isinstance(result,
-    ChangesList) guard must return a graceful list, not crash on
-    ``.changes_list``.
+    ChangesList) guard must raise a typed ValueError (a malformed response is a
+    failure, not a silent "no changes"), not crash on ``.changes_list``.
     """
     detect_response = {
         'result': 'Analysis results',
@@ -298,10 +300,10 @@ def test_extract_result_raw_dict_does_not_raise_attribute_error_issue_1612(mock_
         mock_preprocess.return_value = "Processed template"
         mock_llm_invoke.side_effect = [detect_response, extract_response_dict]
 
-        result_list, _cost, _model = detect_change(
-            MOCK_PROMPT_FILES,
-            MOCK_CHANGE_DESCRIPTION,
-            strength=0.7,
-            temperature=0.0,
-        )
-        assert isinstance(result_list, list)
+        with pytest.raises((ValueError, RuntimeError, TypeError)):
+            detect_change(
+                MOCK_PROMPT_FILES,
+                MOCK_CHANGE_DESCRIPTION,
+                strength=0.7,
+                temperature=0.0,
+            )

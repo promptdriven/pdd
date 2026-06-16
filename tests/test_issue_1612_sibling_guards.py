@@ -202,20 +202,15 @@ def test_continue_generation_trim_start_result_none_no_attribute_error_issue_161
 
 @patch("pdd.conflicts_in_prompts.llm_invoke")
 @patch("pdd.conflicts_in_prompts.load_prompt_template")
-def test_conflicts_in_prompts_extract_result_none_returns_gracefully_issue_1612(
+def test_conflicts_in_prompts_extract_result_none_raises_on_malformed_issue_1612(
     mock_template, mock_llm
 ):
     """When the extraction llm_invoke returns None as result, conflicts_in_prompts
-    must return a valid (list, cost, model) tuple rather than raising RuntimeError
-    (wrapping 'NoneType object has no attribute changes_list').
-
-    Current (buggy) behaviour:
-        extract_response['result'].changes_list → AttributeError
-        → caught by outer except
-        → raise RuntimeError('Error in conflicts_in_prompts: ...')
-
-    After fix: isinstance guard added before .changes_list access; function
-    returns ([], total_cost, model_name) for malformed extraction result.
+    must raise a typed error rather than silently returning []. Returning [] for a
+    malformed response would make `pdd conflicts` write a header-only CSV that
+    silently reports "no conflicts" (a genuinely empty result is a real
+    ConflictResponse and still returns []). It must NOT propagate a raw
+    AttributeError either.
     """
     from pdd.conflicts_in_prompts import conflicts_in_prompts
 
@@ -227,27 +222,23 @@ def test_conflicts_in_prompts_extract_result_none_returns_gracefully_issue_1612(
         {"result": None, "cost": 0.02, "model_name": "test-model"},
     ]
 
-    # After fix: should return gracefully instead of raising RuntimeError
-    try:
-        changes_list, total_cost, model_name = conflicts_in_prompts(
+    # A malformed extraction result is a failure: expect a typed error
+    # (ValueError/RuntimeError), not a silent [] and not a raw AttributeError.
+    with pytest.raises((ValueError, RuntimeError)):
+        conflicts_in_prompts(
             prompt1="Be formal.",
             prompt2="Be casual.",
         )
-    except (RuntimeError, AttributeError) as exc:
-        pytest.fail(
-            f"conflicts_in_prompts raised {type(exc).__name__} on None extraction result: {exc}. "
-            "Expected isinstance guard on extract_response['result'] before .changes_list access."
-        )
-    assert isinstance(changes_list, list), "changes_list must be a list, not None"
 
 
 @patch("pdd.conflicts_in_prompts.llm_invoke")
 @patch("pdd.conflicts_in_prompts.load_prompt_template")
-def test_conflicts_in_prompts_extract_result_raw_string_returns_gracefully_issue_1612(
+def test_conflicts_in_prompts_extract_result_raw_string_raises_on_malformed_issue_1612(
     mock_template, mock_llm
 ):
     """When the extraction llm_invoke returns a raw string as result,
-    conflicts_in_prompts must not raise RuntimeError.
+    conflicts_in_prompts must raise a typed error (not silently return [], and
+    not propagate a raw AttributeError).
     """
     from pdd.conflicts_in_prompts import conflicts_in_prompts
 
@@ -257,16 +248,11 @@ def test_conflicts_in_prompts_extract_result_raw_string_returns_gracefully_issue
         {"result": "Error: cache bypass returned None", "cost": 0.02, "model_name": "test-model"},
     ]
 
-    try:
-        changes_list, total_cost, model_name = conflicts_in_prompts(
+    with pytest.raises((ValueError, RuntimeError)):
+        conflicts_in_prompts(
             prompt1="Be formal.",
             prompt2="Be casual.",
         )
-    except (RuntimeError, AttributeError) as exc:
-        pytest.fail(
-            f"conflicts_in_prompts raised {type(exc).__name__} on raw-string extraction result: {exc}."
-        )
-    assert isinstance(changes_list, list)
 
 
 # ============================================================================
@@ -1035,11 +1021,12 @@ def test_continue_generation_trim_start_result_raw_dict_no_attribute_error_issue
 
 @patch("pdd.conflicts_in_prompts.llm_invoke")
 @patch("pdd.conflicts_in_prompts.load_prompt_template")
-def test_conflicts_in_prompts_extract_result_raw_dict_returns_gracefully_issue_1612(
+def test_conflicts_in_prompts_extract_result_raw_dict_raises_on_malformed_issue_1612(
     mock_template, mock_llm
 ):
-    """Raw-dict variant: a plain dict (not ConflictResponse) must return a
-    graceful ([], cost, model) tuple, not crash on ``.changes_list``."""
+    """Raw-dict variant: a plain dict (not ConflictResponse) must raise a typed
+    error (not silently return [], and not crash on ``.changes_list``). A
+    positive isinstance(result, ConflictResponse) guard is required."""
     from pdd.conflicts_in_prompts import conflicts_in_prompts
 
     mock_template.side_effect = ["conflict_template", "extract_template"]
@@ -1048,16 +1035,10 @@ def test_conflicts_in_prompts_extract_result_raw_dict_returns_gracefully_issue_1
         {"result": {"changes_list": []}, "cost": 0.02, "model_name": "test-model"},
     ]
 
-    try:
-        changes_list, total_cost, model_name = conflicts_in_prompts(
+    with pytest.raises((ValueError, RuntimeError)):
+        conflicts_in_prompts(
             prompt1="Be formal.", prompt2="Be casual."
         )
-    except (RuntimeError, AttributeError) as exc:
-        pytest.fail(
-            f"conflicts_in_prompts raised {type(exc).__name__} on a raw-dict extraction result: {exc}. "
-            "A positive isinstance(result, ConflictResponse) guard is required."
-        )
-    assert isinstance(changes_list, list)
 
 
 @patch("pdd.update_prompt.llm_invoke")

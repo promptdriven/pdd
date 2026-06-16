@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from pdd.continue_generation import continue_generation, TrimResultsStartOutput
+from pdd.continue_generation import continue_generation, TrimResultsStartOutput, TrimResultsOutput
 from rich.console import Console
 
 # Test fixtures
@@ -33,7 +33,7 @@ def mock_llm_responses():
             'model_name': 'gpt-4'
         },
         'trim': {
-            'result': MagicMock(trimmed_continued_generation='Final trimmed part'),
+            'result': MagicMock(spec=TrimResultsOutput, trimmed_continued_generation='Final trimmed part'),
             'cost': 0.001,
             'model_name': 'gpt-3.5-turbo'
         }
@@ -65,6 +65,32 @@ def test_successful_generation(basic_inputs, mock_llm_responses):
         assert isinstance(model, str)
         assert model == "gpt-4"
         assert cost > 0
+
+def test_final_trim_malformed_result_raises_issue_1612(basic_inputs, mock_llm_responses):
+    """Final-trim guard (issue #1612): if the final trim_results_LLM call returns
+    a malformed result (a raw dict that survives llm_invoke's cloud
+    validation-failure fallback, not a TrimResultsOutput), continue_generation
+    must raise a typed error instead of crashing with AttributeError on
+    ``.trimmed_continued_generation``. The trim-start call was already guarded;
+    this pins the equivalent guard on the final trim."""
+    with patch('pdd.continue_generation.load_prompt_template') as mock_load_prompt, \
+         patch('pdd.continue_generation.preprocess') as mock_preprocess, \
+         patch('pdd.continue_generation.llm_invoke') as mock_llm_invoke, \
+         patch('pdd.continue_generation.unfinished_prompt') as mock_unfinished:
+
+        mock_load_prompt.return_value = "Mock prompt template"
+        mock_preprocess.return_value = "Processed prompt"
+        mock_llm_invoke.side_effect = [
+            mock_llm_responses['trim_start'],
+            mock_llm_responses['continue'],
+            # Final trim returns a raw dict, not a TrimResultsOutput.
+            {'result': {'trimmed_continued_generation': 'x'}, 'cost': 0.001, 'model_name': 'gpt-3.5-turbo'},
+        ]
+        mock_unfinished.return_value = ("Complete", True, 0.001, "gpt-3.5-turbo")
+
+        with pytest.raises((ValueError, RuntimeError, TypeError)):
+            continue_generation(**basic_inputs)
+
 
 def test_missing_prompt_template(basic_inputs):
     """Test handling of missing prompt template"""

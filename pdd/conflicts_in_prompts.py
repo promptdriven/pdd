@@ -100,16 +100,18 @@ def conflicts_in_prompts(
 
         # Guard against malformed structured output of any non-``ConflictResponse``
         # shape (``None``, a raw string, or a raw ``dict`` that survives the
-        # cloud validation-failure ``pass`` in ``llm_invoke``). Fall back to an
-        # empty change list instead of crashing with an AttributeError on
-        # ``.changes_list`` (issue #1612).
+        # cloud validation-failure ``pass`` in ``llm_invoke``). Raise a typed
+        # error rather than silently returning an empty list: a malformed
+        # response is a failure, and returning ``[]`` would make ``pdd conflicts``
+        # write a header-only CSV that silently reports "no conflicts". A
+        # genuinely empty result is a real ``ConflictResponse`` that passes the
+        # isinstance check and still returns ``[]`` (issue #1612).
         if not isinstance(extract_response['result'], ConflictResponse):
-            if verbose:
-                rprint(
-                    "[yellow]conflicts_in_prompts received a malformed "
-                    "extraction result; returning no detected conflicts.[/yellow]"
-                )
-            return [], total_cost, model_name
+            raise ValueError(
+                "conflicts_in_prompts received a malformed extraction result "
+                f"(expected ConflictResponse, got "
+                f"{type(extract_response['result']).__name__})."
+            )
 
         # Get the changes list from the Pydantic model
         changes_list = [

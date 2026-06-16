@@ -121,16 +121,19 @@ def detect_change(
 
         # Guard against malformed structured output of any non-``ChangesList``
         # shape (``None``, a raw string, or a raw ``dict`` that survives the
-        # cloud validation-failure ``pass`` in ``llm_invoke``). Fall back to an
-        # empty change list instead of crashing with an AttributeError on
-        # ``.changes_list`` (issue #1612).
+        # cloud validation-failure ``pass`` in ``llm_invoke``). Raise a typed
+        # error rather than silently returning an empty list: a malformed
+        # response is a failure, and returning ``[]`` would let callers (e.g.
+        # incremental PRD propagation, which treats no changes as a no-op)
+        # proceed with stale prompt Requirements. A genuinely empty result is a
+        # real ``ChangesList`` that passes the isinstance check and still
+        # returns ``[]`` (issue #1612).
         if not isinstance(extract_response['result'], ChangesList):
-            if verbose:
-                console.print(
-                    "[yellow]detect_change received a malformed extraction "
-                    "result; returning no detected changes.[/yellow]"
-                )
-            return [], total_cost, model_name
+            raise ValueError(
+                "detect_change received a malformed extraction result "
+                f"(expected ChangesList, got "
+                f"{type(extract_response['result']).__name__})."
+            )
 
         # Step 4: Format and display results
         changes_list = extract_response['result'].changes_list
