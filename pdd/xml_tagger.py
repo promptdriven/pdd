@@ -94,11 +94,12 @@ def xml_tagger(
         result: XMLOutput = extraction_response.get('result')
         total_cost += extraction_response.get('cost', 0.0)
 
-        # Guard against malformed structured output (``None`` or a raw string
-        # returned by the cache-bypass / truncation path). Raise a typed error
-        # instead of crashing with an AttributeError on ``result.xml_tagged``
+        # Guard against malformed structured output of any non-``XMLOutput``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``). Raise a typed
+        # error instead of crashing with an AttributeError on ``.xml_tagged``
         # (issue #1612).
-        if result is None or isinstance(result, str):
+        if not isinstance(result, XMLOutput):
             raise ValueError(
                 "xml_tagger received a malformed extraction result "
                 f"(expected XMLOutput, got {type(result).__name__})."

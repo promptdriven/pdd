@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from pdd.continue_generation import continue_generation
+from pdd.continue_generation import continue_generation, TrimResultsStartOutput
 from rich.console import Console
 
 # Test fixtures
@@ -23,7 +23,7 @@ def basic_inputs():
 def mock_llm_responses():
     return {
         'trim_start': {
-            'result': MagicMock(code_block='Trimmed initial output'),
+            'result': MagicMock(spec=TrimResultsStartOutput, code_block='Trimmed initial output'),
             'cost': 0.001,
             'model_name': 'gpt-3.5-turbo'
         },

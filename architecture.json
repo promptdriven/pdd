@@ -5129,7 +5129,7 @@
         "functions": [
           {
             "name": "incremental_code_generator",
-            "signature": "(original_prompt, new_prompt, existing_code, language, strength, temperature, time, force_incremental, verbose, preprocess_prompt)",
+            "signature": "(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = 0.25, force_incremental: bool = False, verbose: bool = False, preprocess_prompt: bool = True) -> Tuple[Optional[str], bool, float, str]",
             "returns": "Tuple[Optional[str], bool, float, str]"
           }
         ]

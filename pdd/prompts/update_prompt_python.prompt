@@ -86,6 +86,7 @@
         c. Use a fixed strength value of 0.5, the provided temperature, and time.
         d. If verbose is True, pretty print the running message with token count and cost.
         e. Parse with a Pydantic model, e.g., output_pydantic=PromptUpdate where PromptUpdate has a single field 'modified_prompt: str'. The Pydantic output will contain the 'modified_prompt' key.
+        f. Guard the structured result before reading its fields: if the result is not a `PromptUpdate` instance (e.g. `None`, a raw string, or a raw `dict` left by llm_invoke's cloud validation-failure fallback), do not access `.modified_prompt` — instead raise a typed ValueError, using a positive `isinstance(result, PromptUpdate)` check (NOT a `None`/`str` blacklist) so any non-`PromptUpdate` shape is caught (issue #1612).
     4. If verbose is True, pretty print the extracted modified_prompt using Rich Markdown function.
     5. Calculate total cost by summing costs from both invocations.
     6. Return the modified_prompt string, total_cost, and model_name from the first invocation.

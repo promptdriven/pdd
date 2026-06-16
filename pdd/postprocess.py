@@ -131,11 +131,14 @@ def postprocess(
             console.print(f"[red]Error during LLM invocation:[/red] {error_msg}")
             raise ValueError(error_msg)
 
-        # Guard against malformed structured output (``None`` or a raw string
-        # from the cache-bypass / truncation path). The ``"result" not in
-        # result`` check above does not catch a present-but-None value, so
-        # verify the shape before accessing ``.extracted_code`` (issue #1612).
-        if result["result"] is None or isinstance(result["result"], str):
+        # Guard against malformed structured output of any non-``ExtractedCode``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``). The ``"result"
+        # not in result`` check above does not catch a present-but-malformed
+        # value, so verify the type before accessing ``.extracted_code`` and
+        # raise a meaningful error rather than crashing pdd sync with an
+        # AttributeError (issue #1612).
+        if not isinstance(result["result"], ExtractedCode):
             error_msg = (
                 "LLM returned a malformed extraction result "
                 f"(expected ExtractedCode, got {type(result['result']).__name__})."

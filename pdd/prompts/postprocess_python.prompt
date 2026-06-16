@@ -62,6 +62,6 @@
         3a. Pass the following parameters to the prompt template (via `input_json` for `llm_invoke`):
             - 'llm_output'
             - 'language'
-        3b. The Pydantic output model (ExtractedCode) will contain 'focus', 'explanation', and 'extracted_code' keys to match the extract_code_LLM.prompt schema. Only the 'extracted_code' value is used in the return.
+        3b. Guard the structured result before reading its fields: if the llm_invoke result is not an `ExtractedCode` instance (e.g. `None`, a raw string, or a raw `dict` left by llm_invoke's cloud validation-failure fallback), do not access `.extracted_code` — instead raise a typed ValueError, using a positive `isinstance(result, ExtractedCode)` check (NOT a `None`/`str` blacklist) so any non-`ExtractedCode` shape is caught (issue #1612). Otherwise the `ExtractedCode` Pydantic output model will contain 'focus', 'explanation', and 'extracted_code' keys to match the extract_code_LLM.prompt schema; only the 'extracted_code' value is used in the return.
         3c. For the extracted_code, if the first and last line have triple backticks delete the entire first and last line. There will be the name of the language after the first triple backticks and that should be removed as well.
     Step 4. Return the extracted code string, total cost float and model name string.

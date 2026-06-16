@@ -268,3 +268,40 @@ def test_extract_result_raw_string_does_not_raise_attribute_error_issue_1612(moc
             temperature=0.0,
         )
         assert isinstance(result_list, list)
+
+
+def test_extract_result_raw_dict_does_not_raise_attribute_error_issue_1612(mock_templates):
+    """Raw-dict variant of the #1612 guard: a cloud structured-output response
+    that fails Pydantic validation leaves a plain ``dict`` in result['result'].
+    The narrow None/str guard missed it; the robust isinstance(result,
+    ChangesList) guard must return a graceful list, not crash on
+    ``.changes_list``.
+    """
+    detect_response = {
+        'result': 'Analysis results',
+        'cost': 0.05,
+        'token_count': 100,
+        'model_name': 'gpt-3.5-turbo',
+    }
+    extract_response_dict = {
+        'result': {'changes_list': []},  # raw dict, not ChangesList
+        'cost': 0.03,
+        'token_count': 50,
+        'model_name': 'gpt-3.5-turbo',
+    }
+
+    with patch('pdd.detect_change.load_prompt_template') as mock_load_template, \
+         patch('pdd.detect_change.preprocess') as mock_preprocess, \
+         patch('pdd.detect_change.llm_invoke') as mock_llm_invoke:
+
+        mock_load_template.side_effect = mock_templates
+        mock_preprocess.return_value = "Processed template"
+        mock_llm_invoke.side_effect = [detect_response, extract_response_dict]
+
+        result_list, _cost, _model = detect_change(
+            MOCK_PROMPT_FILES,
+            MOCK_CHANGE_DESCRIPTION,
+            strength=0.7,
+            temperature=0.0,
+        )
+        assert isinstance(result_list, list)

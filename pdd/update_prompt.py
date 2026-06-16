@@ -168,12 +168,11 @@ def update_prompt(
 
             total_cost += second_response['cost']
 
-            # Guard against malformed structured output (``None`` or a raw
-            # string from the cache-bypass / truncation path) before accessing
-            # ``.modified_prompt`` (issue #1612).
-            if second_response['result'] is None or isinstance(
-                second_response['result'], str
-            ):
+            # Guard against malformed structured output of any non-``PromptUpdate``
+            # shape (``None``, a raw string, or a raw ``dict`` that survives the
+            # cloud validation-failure ``pass`` in ``llm_invoke``) before
+            # accessing ``.modified_prompt`` (issue #1612).
+            if not isinstance(second_response['result'], PromptUpdate):
                 raise ValueError(
                     "update_prompt received a malformed structured result "
                     f"(expected PromptUpdate, got "

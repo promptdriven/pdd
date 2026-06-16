@@ -89,12 +89,11 @@ def continue_generation(
             language=language,
         )
         total_cost += trim_start_response['cost']
-        # Guard against malformed structured output (``None`` or a raw string
-        # from the cache-bypass / truncation path) before accessing
+        # Guard against malformed structured output of any non-``TrimResultsStartOutput``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``) before accessing
         # ``.code_block`` (issue #1612).
-        if trim_start_response['result'] is None or isinstance(
-            trim_start_response['result'], str
-        ):
+        if not isinstance(trim_start_response['result'], TrimResultsStartOutput):
             raise ValueError(
                 "continue_generation received a malformed trim-start result "
                 f"(expected TrimResultsStartOutput, got "

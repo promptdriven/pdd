@@ -961,3 +961,247 @@ def test_conflicts_in_prompts_valid_result_returns_changes_list_regression(
     assert len(changes_list) == 1
     assert changes_list[0]["prompt_name"] == "tone_Python.prompt"
     assert total_cost == pytest.approx(0.03)
+
+
+# ============================================================================
+# RAW-DICT HOLE (issue #1612): a cloud structured-output response that fails
+# Pydantic validation makes llm_invoke log a warning and ``pass`` the raw
+# parsed value through, so result['result'] can be a plain ``dict``. The
+# original narrow ``is None or isinstance(x, str)`` guards did NOT catch a
+# dict, so it reached the ``.field`` access and crashed. These tests pin the
+# robust ``not isinstance(x, Model)`` guards that close that hole.
+# ============================================================================
+
+
+@patch("pdd.xml_tagger.llm_invoke")
+@patch("pdd.xml_tagger.load_prompt_template")
+def test_xml_tagger_extraction_result_raw_dict_no_attribute_error_issue_1612(
+    mock_template, mock_llm
+):
+    """Raw-dict variant: a plain dict (not XMLOutput) must not reach
+    ``result.xml_tagged``."""
+    from pdd.xml_tagger import xml_tagger
+
+    mock_template.side_effect = ["xml_converter_template", "extract_xml_template"]
+    mock_llm.side_effect = [
+        {"result": "Some XML analysis", "cost": 0.01, "model_name": "test-model"},
+        {"result": {"xml_tagged": "<xml>x</xml>"}, "cost": 0.02, "model_name": "test-model"},
+    ]
+
+    try:
+        xml_tagger("Describe the test", strength=0.5, temperature=0.0)
+    except AttributeError as exc:
+        pytest.fail(
+            f"xml_tagger raised AttributeError on a raw-dict extraction result: {exc}. "
+            "A positive isinstance(result, XMLOutput) guard is required."
+        )
+    except (ValueError, RuntimeError, TypeError):
+        pass  # Acceptable — malformed input was detected
+
+
+@patch("pdd.continue_generation.llm_invoke")
+@patch("pdd.continue_generation.preprocess")
+@patch("pdd.continue_generation.load_prompt_template")
+def test_continue_generation_trim_start_result_raw_dict_no_attribute_error_issue_1612(
+    mock_template, mock_preprocess, mock_llm
+):
+    """Raw-dict variant: a plain dict (not TrimResultsStartOutput) must not
+    reach ``.code_block``."""
+    from pdd.continue_generation import continue_generation
+
+    mock_template.side_effect = ["continue_gen_template", "trim_start_template", "trim_template"]
+    mock_preprocess.side_effect = lambda prompt, **kw: prompt
+    mock_llm.return_value = {
+        "result": {"code_block": "def foo(): ..."},
+        "cost": 0.01,
+        "model_name": "test-model",
+    }
+
+    try:
+        continue_generation(
+            formatted_input_prompt="Generate code for X",
+            llm_output="def foo():",
+            strength=0.5,
+            temperature=0.0,
+        )
+    except AttributeError as exc:
+        pytest.fail(
+            f"continue_generation raised AttributeError on a raw-dict trim-start result: {exc}. "
+            "A positive isinstance(result, TrimResultsStartOutput) guard is required."
+        )
+    except (ValueError, RuntimeError, TypeError):
+        pass
+
+
+@patch("pdd.conflicts_in_prompts.llm_invoke")
+@patch("pdd.conflicts_in_prompts.load_prompt_template")
+def test_conflicts_in_prompts_extract_result_raw_dict_returns_gracefully_issue_1612(
+    mock_template, mock_llm
+):
+    """Raw-dict variant: a plain dict (not ConflictResponse) must return a
+    graceful ([], cost, model) tuple, not crash on ``.changes_list``."""
+    from pdd.conflicts_in_prompts import conflicts_in_prompts
+
+    mock_template.side_effect = ["conflict_template", "extract_template"]
+    mock_llm.side_effect = [
+        {"result": "These prompts conflict on tone.", "cost": 0.01, "model_name": "test-model"},
+        {"result": {"changes_list": []}, "cost": 0.02, "model_name": "test-model"},
+    ]
+
+    try:
+        changes_list, total_cost, model_name = conflicts_in_prompts(
+            prompt1="Be formal.", prompt2="Be casual."
+        )
+    except (RuntimeError, AttributeError) as exc:
+        pytest.fail(
+            f"conflicts_in_prompts raised {type(exc).__name__} on a raw-dict extraction result: {exc}. "
+            "A positive isinstance(result, ConflictResponse) guard is required."
+        )
+    assert isinstance(changes_list, list)
+
+
+@patch("pdd.update_prompt.llm_invoke")
+@patch("pdd.update_prompt.preprocess")
+@patch("pdd.update_prompt.load_prompt_template")
+def test_update_prompt_second_response_result_raw_dict_no_attribute_error_issue_1612(
+    mock_template, mock_preprocess, mock_llm
+):
+    """Raw-dict variant: a plain dict (not PromptUpdate) must not reach
+    ``.modified_prompt``."""
+    from pdd.update_prompt import update_prompt
+
+    mock_template.side_effect = ["update_template", "extract_template"]
+    mock_preprocess.side_effect = lambda t, *a, **kw: t
+    mock_llm.side_effect = [
+        {"result": "Here is the updated prompt text without any delimiters.", "cost": 0.01, "model_name": "test-model"},
+        {"result": {"modified_prompt": "new"}, "cost": 0.02, "model_name": "test-model"},
+    ]
+
+    try:
+        update_prompt(
+            input_prompt="Generate a function foo().",
+            input_code="def foo(): pass",
+            modified_code="def foo(x): return x",
+            strength=0.5,
+            temperature=0.0,
+        )
+    except (RuntimeError, AttributeError) as exc:
+        if "modified_prompt" in str(exc).lower() or isinstance(exc, AttributeError):
+            pytest.fail(
+                f"update_prompt raised {type(exc).__name__} on a raw-dict second result: {exc}. "
+                "A positive isinstance(result, PromptUpdate) guard is required."
+            )
+    except (ValueError, TypeError):
+        pass
+
+
+@patch("pdd.insert_includes.llm_invoke")
+@patch("pdd.insert_includes.auto_include")
+@patch("pdd.insert_includes.preprocess")
+@patch("pdd.insert_includes.load_prompt_template")
+def test_insert_includes_result_raw_dict_no_attribute_error_issue_1612(
+    mock_template, mock_preprocess, mock_auto_include, mock_llm
+):
+    """Raw-dict variant: a plain dict (not InsertIncludesOutput) must not reach
+    ``result.output_prompt``."""
+    from pdd.insert_includes import insert_includes
+
+    mock_template.return_value = "insert_includes_template"
+    mock_preprocess.return_value = "processed_template"
+    mock_auto_include.return_value = (
+        "Some plain dependency text",
+        "full_path,file_summary\npath/a.py,summary\n",
+        0.01,
+        "auto-include-model",
+    )
+    mock_llm.return_value = {
+        "result": {"output_prompt": "done"},
+        "cost": 0.02,
+        "model_name": "test-model",
+    }
+
+    m_open = mock_open(read_data="full_path,file_summary\n")
+    with patch("builtins.open", m_open):
+        try:
+            insert_includes(
+                input_prompt="% Generate code\n",
+                directory_path="./fake_dir",
+                csv_filename="deps.csv",
+                strength=0.5,
+                temperature=0.0,
+            )
+        except AttributeError as exc:
+            pytest.fail(
+                f"insert_includes raised AttributeError on a raw-dict result: {exc}. "
+                "A positive isinstance(result, InsertIncludesOutput) guard is required."
+            )
+        except (ValueError, RuntimeError):
+            pass
+
+
+@patch("pdd.fix_errors_from_unit_tests.llm_invoke")
+@patch("pdd.fix_errors_from_unit_tests.preprocess")
+@patch("pdd.fix_errors_from_unit_tests.load_prompt_template")
+def test_fix_errors_from_unit_tests_second_result_raw_dict_no_error_model_name_issue_1612(
+    mock_template, mock_preprocess, mock_llm, tmp_path
+):
+    """Raw-dict variant: a plain dict (not CodeFix) must not be silently
+    surfaced as model_name='Error: AttributeError'."""
+    from pdd.fix_errors_from_unit_tests import fix_errors_from_unit_tests
+
+    mock_template.side_effect = ["fix_errors_template", "extract_fix_template"]
+    mock_preprocess.side_effect = lambda t, *a, **kw: t
+    error_file = str(tmp_path / "errors.log")
+
+    mock_llm.side_effect = [
+        {"result": "Analysis of the failing tests.", "cost": 0.01, "model_name": "test-model"},
+        {"result": {"update_unit_test": False}, "cost": 0.02, "model_name": "test-model"},
+    ]
+
+    result = fix_errors_from_unit_tests(
+        unit_test="def test_foo(): assert False",
+        code="def foo(): pass",
+        prompt="Generate foo",
+        error="AssertionError",
+        error_file=error_file,
+    )
+    model_name = result[-1]
+    assert not model_name.startswith("Error: AttributeError"), (
+        f"fix_errors_from_unit_tests silently swallowed AttributeError on a raw-dict "
+        f"result: model_name={model_name!r}. A positive isinstance(result, CodeFix) "
+        "guard is required."
+    )
+
+
+@patch("pdd.incremental_prd_architecture.llm_invoke")
+@patch("pdd.incremental_prd_architecture.preprocess")
+@patch("pdd.incremental_prd_architecture.load_prompt_template")
+def test_ask_llm_for_patch_result_raw_dict_returns_fallback_issue_1612(
+    mock_template, mock_preprocess, mock_llm
+):
+    """Raw-dict variant: a plain dict (not ArchitecturePatch) must yield a
+    non-None fallback patch, not a downstream ``None.modules_to_add`` crash."""
+    from pdd.incremental_prd_architecture import _ask_llm_for_patch
+
+    mock_template.return_value = "prd_patch_template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm.return_value = {
+        "result": {"modules_to_add": []},
+        "cost": 0.03,
+        "model_name": "test-model",
+    }
+
+    result, cost, model = _ask_llm_for_patch(
+        prd_source="PRD source text",
+        prd_diff="+ New feature",
+        architecture={"modules": []},
+        strength=0.5,
+        temperature=0.0,
+        time=0.25,
+        verbose=False,
+    )
+
+    assert result is not None, (
+        "_ask_llm_for_patch returned None for a raw-dict result. A positive "
+        "isinstance(result, ArchitecturePatch) guard must build a fallback patch."
+    )

@@ -635,11 +635,12 @@ def _ask_llm_for_patch(
         output_pydantic=ArchitecturePatch,
     )
     patch_result = response["result"]
-    # Guard against malformed structured output (``None`` or a raw string from
-    # the cache-bypass / truncation path). Return a fallback patch that requests
-    # full regeneration instead of returning ``None`` and letting the caller
-    # crash with an AttributeError on ``None.modules_to_add`` (issue #1612).
-    if patch_result is None or isinstance(patch_result, str):
+    # Guard against malformed structured output of any non-``ArchitecturePatch``
+    # shape (``None``, a raw string, or a raw ``dict`` that survives the cloud
+    # validation-failure ``pass`` in ``llm_invoke``). Return a fallback patch
+    # that requests full regeneration instead of letting the caller crash with
+    # an AttributeError on ``.modules_to_add`` (issue #1612).
+    if not isinstance(patch_result, ArchitecturePatch):
         patch_result = ArchitecturePatch(
             requires_full_regeneration=True,
             rationale=(

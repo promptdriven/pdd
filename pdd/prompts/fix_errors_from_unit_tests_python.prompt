@@ -126,7 +126,7 @@
             - Specify 'output_pydantic=CodeFix' to get structured output.
             - Pass the input 'verbose'.
             - Pass the input 'language' to ensure correct post-processing validation.
-        5d. Store the resulting 'CodeFix' object which contains:
+        5d. Guard the structured result before reading its fields: if the second llm_invoke result is not a `CodeFix` instance (e.g. `None`, a raw string, or a raw `dict` left by llm_invoke's cloud validation-failure fallback), do not access its fields — instead return a clean no-fix result (no fix applied) so the outer handler does not mask it as model_name='Error: AttributeError', using a positive `isinstance(result, CodeFix)` check (NOT a `None`/`str` blacklist) so any non-`CodeFix` shape is caught (issue #1612). Otherwise store the resulting 'CodeFix' object which contains:
             - 'update_unit_test' (boolean)
             - 'update_code' (boolean)
             - 'fixed_unit_test' (string)

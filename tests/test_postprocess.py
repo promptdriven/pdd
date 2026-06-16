@@ -653,3 +653,28 @@ def test_result_none_value_does_not_raise_attribute_error_issue_1612(
 
     with pytest.raises((ValueError, TypeError)):
         postprocess("some output", "python", strength=0.5)
+
+
+@patch('pdd.postprocess.load_prompt_template', return_value="dummy_prompt")
+@patch('pdd.postprocess.llm_invoke')
+def test_result_raw_dict_value_does_not_raise_attribute_error_issue_1612(
+    mock_llm_invoke, mock_load_template
+):
+    """Regression for the issue #1612 raw-dict hole.
+
+    When a cloud structured-output response fails Pydantic validation,
+    ``llm_invoke`` logs a warning and ``pass``es the raw parsed value through,
+    so ``result['result']`` can be a plain ``dict`` (see llm_invoke.py cloud
+    path). The original narrow guard only caught ``None``/``str`` and let a
+    ``dict`` reach ``result["result"].extracted_code``, raising
+    AttributeError('dict object has no attribute extracted_code'). The robust
+    ``isinstance`` guard must turn it into a meaningful ValueError instead.
+    """
+    mock_llm_invoke.return_value = {
+        "result": {"extracted_code": "print('hello')"},  # raw dict, not ExtractedCode
+        "cost": 0.05,
+        "model_name": "gpt-4",
+    }
+
+    with pytest.raises((ValueError, TypeError)):
+        postprocess("some output", "python", strength=0.5)

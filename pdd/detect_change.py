@@ -119,13 +119,12 @@ def detect_change(
             console.print(f"Token count: {extract_response.get('token_count', 0)}")
             console.print(f"Cost: ${extract_response.get('cost', 0):.6f}")
 
-        # Guard against malformed structured output (``None`` or a raw string
-        # from the cache-bypass / truncation path). Fall back to an empty change
-        # list instead of crashing with an AttributeError on ``.changes_list``
-        # (issue #1612).
-        if extract_response['result'] is None or isinstance(
-            extract_response['result'], str
-        ):
+        # Guard against malformed structured output of any non-``ChangesList``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``). Fall back to an
+        # empty change list instead of crashing with an AttributeError on
+        # ``.changes_list`` (issue #1612).
+        if not isinstance(extract_response['result'], ChangesList):
             if verbose:
                 console.print(
                     "[yellow]detect_change received a malformed extraction "
