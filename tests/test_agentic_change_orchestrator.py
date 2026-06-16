@@ -3771,6 +3771,47 @@ def test_consecutive_failure_counter_resets(mock_dependencies, temp_cwd):
     assert mock_post_comment.call_count == 0
 
 
+def test_backoff_sleep_called_before_provider_failure_increment(mock_dependencies, temp_cwd):
+    """time.sleep(PROVIDER_FAILURE_BACKOFF_SECONDS) must fire before each increment
+    of the consecutive provider failure counter in the change orchestrator.
+
+    On the current (buggy) code this fails: time.sleep is never called because the
+    counter increments immediately (call_count == 0). After the fix adds a
+    sleep-before-increment with PROVIDER_FAILURE_BACKOFF_SECONDS = 30, the call
+    count reaches at least 3.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_run.side_effect = None
+    mock_run.return_value = (False, "All agent providers failed: anthropic: rate limited", 0.0, "")
+
+    with patch("time.sleep") as mock_sleep:
+        success, msg, cost, model, files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="content",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            issue_author="me",
+            issue_title="Backoff test",
+            cwd=temp_cwd,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "Aborting" in msg
+    assert mock_sleep.call_count >= 3, (
+        f"Expected time.sleep to be called at least 3 times (once per provider "
+        f"failure before the abort counter increments), got {mock_sleep.call_count}"
+    )
+    # Each call must pass PROVIDER_FAILURE_BACKOFF_SECONDS (= 30 seconds)
+    for call_args in mock_sleep.call_args_list:
+        assert call_args.args[0] == 30, (
+            f"Expected time.sleep(30) per provider failure, "
+            f"got time.sleep({call_args.args[0]})"
+        )
+
+
 def test_state_preserved_when_steps_failed(mock_dependencies, temp_cwd):
     """
     When some steps failed but the workflow still completes,

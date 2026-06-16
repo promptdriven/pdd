@@ -2479,6 +2479,40 @@ def test_non_provider_failure_resets_consecutive_counter(mock_dependencies, defa
     assert success is True
 
 
+def test_backoff_sleep_called_before_provider_failure_increment(mock_dependencies, default_args):
+    """time.sleep(PROVIDER_FAILURE_BACKOFF_SECONDS) must fire before each increment
+    of the consecutive provider failure counter in the bug orchestrator.
+
+    On the current (buggy) code this fails: time.sleep is never called because the
+    counter increments immediately (call_count == 0). After the fix adds a
+    sleep-before-increment with PROVIDER_FAILURE_BACKOFF_SECONDS = 30, the call
+    count reaches at least 3.
+    """
+    mock_run, _, _ = mock_dependencies
+    mock_run.side_effect = None
+    mock_run.return_value = (False, "All agent providers failed", 0.0, "")
+
+    with patch("time.sleep") as mock_sleep:
+        success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert (
+        "Aborting" in msg
+        or "consecutive" in msg.lower()
+        or "providers" in msg.lower()
+    )
+    assert mock_sleep.call_count >= 3, (
+        f"Expected time.sleep to be called at least 3 times (once per provider "
+        f"failure before the abort counter increments), got {mock_sleep.call_count}"
+    )
+    # Each call must pass PROVIDER_FAILURE_BACKOFF_SECONDS (= 30 seconds)
+    for call_args in mock_sleep.call_args_list:
+        assert call_args.args[0] == 30, (
+            f"Expected time.sleep(30) per provider failure, "
+            f"got time.sleep({call_args.args[0]})"
+        )
+
+
 def test_worktree_creation_failure_returns_early(default_args, tmp_path):
     """
     Verify that a failed worktree creation causes an immediate early exit
