@@ -15,6 +15,8 @@ class FailureKind(str, Enum):
     SYNTAX_IMPORT = "syntax_import"
     ASSERTION_LOGIC = "assertion_logic"
     TIMEOUT_FLAKY = "timeout_flaky"
+    BUDGET_TRUNCATED = "budget_truncated"
+    INFRASTRUCTURE_ERROR = "infrastructure_error"
 
 
 # Match before generic errors so timeouts are not misclassified.
@@ -29,7 +31,6 @@ _RE_SYNTAX_IMPORT = re.compile(
     r"ImportError while loading|ERROR collecting|No module named)",
     re.MULTILINE,
 )
-
 
 def classify_failure(text: str) -> FailureKind:
     """
@@ -89,6 +90,10 @@ def failure_classification_hint(kind: FailureKind) -> str:
             "isolation, I/O) over large logic rewrites; avoid weakening assertions "
             "unless the prompt clearly allows it."
         )
+    if kind == FailureKind.BUDGET_TRUNCATED:
+        return "shot stopped — per-shot or total budget exhausted; increase budget limits or reduce per-shot work scope"
+    if kind == FailureKind.INFRASTRUCTURE_ERROR:
+        return "shot stopped by infrastructure failure (crash, timeout, OOM); check infrastructure health and retry"
     return (
         "Failure kind: assertion/logic. Use the prompt as spec; align code and tests "
         "with expected behavior."

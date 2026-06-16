@@ -20,7 +20,7 @@ Durable execution engine for `pdd sync <github issue url> --durable`. It must pr
 10. On patch conflict or failed module output, exit non-zero for the durable run, abort any in-progress `git am`, preserve prior checkpoints, and do not create later checkpoints.
 11. Push behavior must be conservative: retry transient push failures up to three attempts, halt immediately on non-fast-forward, and preserve local checkpoint commits for recovery.
 12. Remove successful module worktrees; retain failed module worktrees for inspection. Startup cleanup may remove only stale worktrees for the current issue.
-13. Honor dependency ordering and `durable_max_parallel`. Parallel execution must never let dependent modules run before all in-scope dependencies have checkpointed successfully.
+13. Honor dependency ordering and `durable_max_parallel`. Parallel execution must never let dependent modules run before all in-scope dependencies have checkpointed successfully. When `total_budget` is set, force one worker; when `durable_max_parallel` is provided, use `max(1, int(durable_max_parallel))`; otherwise read the shared `PDD_SYNC_MAX_WORKERS` fallback via `agentic_sync_runner._read_sync_max_workers()` so durable mode honors the same env-backed default as `AsyncSyncRunner`.
 14. Durable runs still update the same GitHub progress comment path as standard `AsyncSyncRunner` runs; fresh reruns must patch the existing progress comment rather than posting duplicates.
 
 % Dependencies

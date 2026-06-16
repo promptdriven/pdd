@@ -1,12 +1,26 @@
 <include>context/python_preamble.prompt</include>
 
-<pdd-reason>Classify pytest / verification output so `fix_error_loop` can adapt retries by failure type (syntax/import, assertion/logic, timeout/flaky).</pdd-reason>
+<pdd-reason>Classify pytest / verification output for `fix_error_loop` and `agentic_multishot` by failure type: syntax_import, assertion_logic, timeout_flaky, budget_truncated, infrastructure_error.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "classify_failure", "signature": "(text: str) -> FailureKind", "returns": "FailureKind"},
+      {"name": "extract_failure_signature", "signature": "(text: str) -> str", "returns": "str"},
+      {"name": "failure_classification_hint", "signature": "(kind: FailureKind) -> str", "returns": "str"},
+      {"name": "format_signature_hint", "signature": "(sig: str) -> str", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
 
 % Goal
 Write `pdd/failure_classification.py`.
 
 % Role & Scope
-Pure helpers used by `fix_error_loop` (and optionally other callers). No I/O, no LLM calls. Classification is heuristic over captured test/verification text.
+Pure helpers used by `fix_error_loop` and `agentic_multishot` (and optionally other callers). No I/O, no LLM calls. Classification is heuristic over captured test/verification text.
 
 % Requirements
 
@@ -14,14 +28,21 @@ Pure helpers used by `fix_error_loop` (and optionally other callers). No I/O, no
    - `syntax_import` — `SyntaxError`, `IndentationError`, `ImportError`, `ModuleNotFoundError`, and similar import/syntax issues.
    - `assertion_logic` — pytest assertion diffs, expectation mismatches, general test failures that are not clearly syntax/import or timeout/flaky.
    - `timeout_flaky` — test timeouts, “timed out”, flaky/intermittent patterns.
+   - `budget_truncated` — shot stopped because per-shot or total multi-shot budget was exhausted before CLI invocation completed. Set **programmatically** by the multi-shot controller (`agentic_multishot`); NOT derived from output text in `classify_failure`.
+   - `infrastructure_error` — shot stopped by sandbox crash, API timeout, OOM, or other infrastructure failure. Set **programmatically** by the multi-shot controller; NOT derived from output text in `classify_failure`.
 
 2. **Classification order** — When scanning output, **check timeout/flaky patterns before syntax/import** so strings like `"timed out"` win over incidental `SyntaxError` substrings in logs.
 
-3. **`classify_failure(output: str) -> FailureKind`** — Map captured failure text to a `FailureKind`.
+3. **`classify_failure(text: str) -> FailureKind`** — Map captured failure text to a `FailureKind`.
 
-4. **`extract_failure_signature(output: str) -> str`** — Produce a **stable, comparable** signature for “same failure as last iteration” (e.g. normalized error type + location hints). Used to detect unchanged syntax/import failures across fix attempts.
+4. **`extract_failure_signature(text: str) -> str`** — Produce a **stable, comparable** signature for “same failure as last iteration” (e.g. normalized error type + location hints). Used to detect unchanged syntax/import failures across fix attempts.
 
-5. **`failure_classification_hint(kind: FailureKind) -> str`** — Short, user-facing explanation for why the loop stopped or what to try next.
+5. **`failure_classification_hint(kind: FailureKind) -> str`** — Short, user-facing explanation for why the loop stopped or what to try next. Must cover all five `FailureKind` values:
+   - `syntax_import` — existing hint text (unchanged).
+   - `assertion_logic` — existing hint text (unchanged).
+   - `timeout_flaky` — existing hint text (unchanged).
+   - `budget_truncated` → `"shot stopped — per-shot or total budget exhausted; increase budget limits or reduce per-shot work scope"`.
+   - `infrastructure_error` → `"shot stopped by infrastructure failure (crash, timeout, OOM); check infrastructure health and retry"`.
 
 6. **`format_signature_hint(sig: str) -> str`** — Keep this helper focused on formatting/truncating the extracted signature for console-safe display (callers may apply Rich yellow styling). User-facing early-stop guidance text should be produced by caller-side logic (e.g. `fix_error_loop`) rather than embedded here.
 
