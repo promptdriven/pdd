@@ -74,3 +74,35 @@ def test_failure_classification_hint_nonempty() -> None:
     h = failure_classification_hint(FailureKind.SYNTAX_IMPORT)
     assert "syntax" in h.lower() or "import" in h.lower()
 
+
+def test_failure_kind_has_multishot_values() -> None:
+    """Prompt change: multi-shot controller sets budget/infra kinds programmatically."""
+    assert FailureKind.BUDGET_TRUNCATED.value == "budget_truncated"
+    assert FailureKind.INFRASTRUCTURE_ERROR.value == "infrastructure_error"
+
+
+def test_failure_classification_hint_budget_truncated() -> None:
+    assert failure_classification_hint(FailureKind.BUDGET_TRUNCATED) == (
+        "shot stopped — per-shot or total budget exhausted; "
+        "increase budget limits or reduce per-shot work scope"
+    )
+
+
+def test_failure_classification_hint_infrastructure_error() -> None:
+    assert failure_classification_hint(FailureKind.INFRASTRUCTURE_ERROR) == (
+        "shot stopped by infrastructure failure (crash, timeout, OOM); "
+        "check infrastructure health and retry"
+    )
+
+
+def test_failure_classification_hint_covers_all_kinds() -> None:
+    """Every FailureKind must yield a non-empty hint."""
+    for kind in FailureKind:
+        assert failure_classification_hint(kind).strip()
+
+
+def test_budget_and_infra_not_derived_from_text() -> None:
+    """classify_failure must never return the programmatic-only kinds from text."""
+    assert classify_failure("budget exhausted") != FailureKind.BUDGET_TRUNCATED
+    assert classify_failure("infrastructure OOM crash") != FailureKind.INFRASTRUCTURE_ERROR
+
