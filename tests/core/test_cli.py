@@ -506,6 +506,124 @@ def test_cli_result_callback_non_tuple_result_warning():
     summary = "\n".join(lines)
     assert "Step 1 (generate):[/warning] Unexpected result format: str" in summary
 
+
+def test_cli_summary_uses_shared_status_glyphs():
+    """EPIC #1540, workstream 2: the execution summary speaks the same
+    SUCCESS/FAILURE vocabulary as every other command, so each step line is
+    prefixed with the shared cli_status glyph (✓ for success, ✗ for failure)."""
+    from pdd.cli_status import GLYPHS, Status
+
+    ok, fail = GLYPHS[Status.SUCCESS], GLYPHS[Status.FAILURE]
+
+    # A successful (cost-bearing) step is marked with the success glyph.
+    success = "\n".join(_capture_summary(['generate'], ('code', 0.1, 'model-A')))
+    assert ok in success
+    assert f"[success]{ok}[/success]" in success
+
+    # A failed step (None result) is marked with the failure glyph.
+    failure = "\n".join(_capture_summary(['generate'], [None]))
+    assert fail in failure
+    assert f"[error]{fail}[/error]" in failure
+
+
+def test_shared_console_uses_brand_palette():
+    """EPIC #1540, workstream 1: the shared CLI console renders semantic roles
+    from the central brand palette by default (not an ad-hoc per-module theme),
+    so the enhanced color system is on without any flag."""
+    from pdd.core.errors import custom_theme
+    from pdd.cli_theme import ELECTRIC_CYAN, BUILD_GREEN
+
+    # 'command' is the hero role -> Electric-Cyan (brand), not the old magenta.
+    assert ELECTRIC_CYAN.lower() in str(custom_theme.styles.get("command")).lower()
+    assert BUILD_GREEN.lower() in str(custom_theme.styles.get("success")).lower()
+
+
+import io as _io
+from contextlib import contextmanager as _contextmanager
+
+
+@_contextmanager
+def _restore_shared_console_color():
+    """Snapshot/restore the shared console's color state and NO_COLOR/FORCE_COLOR
+    so a test that flips the global color preference never leaks into others."""
+    from pdd.core import errors as _errors
+
+    con = _errors.console
+    saved = (con.no_color, con._force_terminal, con._color_system, con.file)
+    saved_env = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
+    try:
+        yield con
+    finally:
+        con.no_color, con._force_terminal, con._color_system, con.file = saved
+        for k, v in saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _render(con):
+    buf = _io.StringIO()
+    con.file = buf
+    con.print("[command]pdd[/command]")
+    return buf.getvalue()
+
+
+def test_set_console_color_toggles_a_console():
+    """_set_console_color forces color on (even non-TTY) and strips it off."""
+    from rich.console import Console
+    from rich.theme import Theme
+    from pdd.core.errors import _set_console_color
+    from pdd.cli_theme import SEMANTIC_STYLES
+
+    con = Console(theme=Theme(SEMANTIC_STYLES), force_terminal=True)
+    _set_console_color(con, False)
+    assert "\x1b[" not in _render(con)
+    _set_console_color(con, True)
+    assert "\x1b[" in _render(con)
+
+
+def test_apply_color_preference_env_and_shared_console():
+    """The global preference sets NO_COLOR/FORCE_COLOR (so later-built consoles
+    inherit it) and updates the already-constructed shared console in place."""
+    from pdd.core import errors
+
+    with _restore_shared_console_color() as con:
+        errors.apply_color_preference(False)
+        assert os.environ.get("NO_COLOR") == "1"
+        assert "FORCE_COLOR" not in os.environ
+        assert con.no_color is True
+
+        errors.apply_color_preference(True)
+        assert os.environ.get("FORCE_COLOR") == "1"
+        assert "NO_COLOR" not in os.environ
+        assert con.no_color is False
+        assert "\x1b[" in _render(con)
+
+        # None is auto (the default) and must change nothing it was just set to.
+        errors.apply_color_preference(None)
+        assert os.environ.get("FORCE_COLOR") == "1"
+
+
+def test_cli_no_color_flag_disables_color(runner):
+    """`pdd --no-color …` flows through the group callback and disables color
+    globally (NO_COLOR set, shared console stripped) before any command runs."""
+    with _restore_shared_console_color() as con:
+        result = runner.invoke(cli_command, ["--no-color", "--list-contexts"])
+        assert result.exit_code == 0
+        assert os.environ.get("NO_COLOR") == "1"
+        assert con.no_color is True
+
+
+def test_cli_color_flag_forces_color(runner):
+    """`pdd --color …` forces color on (FORCE_COLOR set) even though the test
+    runner is not a TTY."""
+    with _restore_shared_console_color() as con:
+        result = runner.invoke(cli_command, ["--color", "--list-contexts"])
+        assert result.exit_code == 0
+        assert os.environ.get("FORCE_COLOR") == "1"
+        assert con.no_color is False
+
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 def test_user_cancellation_does_not_show_error_message_issue_186(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):
