@@ -211,6 +211,55 @@ def test_drift_sync_does_not_rewrite_unrelated_architecture_entries(monkeypatch,
     assert outcome.ok is True
 
 
+def test_drift_sync_uses_top_level_prompts_dir(monkeypatch, tmp_path):
+    prompt_dir = tmp_path / "prompts"
+    app_dir = tmp_path / "app"
+    prompt_dir.mkdir()
+    app_dir.mkdir()
+    (app_dir / "async_helpers.py").write_text("def fetch_data():\n    return None\n", encoding="utf-8")
+    (prompt_dir / "async_helpers_Python.prompt").write_text(
+        "<pdd-reason>Fresh top-level prompt reason</pdd-reason>\n",
+        encoding="utf-8",
+    )
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "async_helpers_Python.prompt",
+                    "filepath": "app/async_helpers.py",
+                    "reason": "Stale reason",
+                    "description": "Description",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "run_metadata_sync",
+        lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None),
+    )
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["app/async_helpers.py"],
+        base_ref=None,
+        strict=False,
+    )
+
+    synced = json.loads(arch_path.read_text(encoding="utf-8"))[0]
+    assert synced["reason"] == "Fresh top-level prompt reason"
+    assert outcome.ok is True
+    assert "Prompt file not found" not in " ".join(outcome.messages)
+
+
 def test_quarantined_targeted_tests_report_without_blocking(monkeypatch, tmp_path):
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
