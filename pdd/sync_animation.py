@@ -209,6 +209,10 @@ class AnimationState:
             "example": DEFAULT_EXAMPLE_COLOR, "tests": DEFAULT_TESTS_COLOR
         }
         self.scroll_offsets: Dict[str, int] = {"prompt": 0, "code": 0, "example": 0, "tests": 0}
+        # Horizontal marquee offset for the command step strip, used only when
+        # the fully-spelt-out strip is too wide for the terminal (see
+        # _render_step_strip). Advances one cell per rendered frame.
+        self.step_scroll_offset: int = 0
         self.path_box_content_width = 16 # Base chars for path inside its small box (will be dynamic)
         self.auto_deps_progress: int = 0  # Progress counter for auto-deps border thickening
 
@@ -558,17 +562,26 @@ _STAGE_TITLES = {
     STAGE_OUTPUT:  "Outputs",
 }
 
-# Short labels for the command step strip.
+# Labels for the command step strip. The execute sub-commands are spelt out in
+# full (issue #1560) — `auto-deps`, `generate`, … rather than `deps`, `gen`, …
+# — so the strip reads as the real CLI commands the loop runs. When the full
+# strip is too wide for the terminal it is first tightened (a compact separator)
+# and, failing that, rotated as a marquee so every step still scrolls past; see
+# _render_step_strip.
 _STEP_LABELS = {
-    "auto-deps": "deps",
-    "generate": "gen",
-    "example": "ex",
+    "auto-deps": "auto-deps",
+    "generate": "generate",
+    "example": "example",
     "verify": "verify",
     "test": "test",
     "fix": "fix",
-    "update": "upd",
+    "update": "update",
 }
 _PROBE_SLOTS = {"verify", "test"}  # canonical strip slots that are checks, not builds
+
+# Separators tried in order when fitting the strip to the available width: the
+# roomy one first, then a compact one. If neither fits the strip rotates.
+_STRIP_SEPARATORS = ("  ·  ", " · ")
 
 
 def _render_phase_rail(state: AnimationState, blink_on: bool) -> Text:
@@ -596,37 +609,88 @@ def _render_phase_rail(state: AnimationState, blink_on: bool) -> Text:
     return rail
 
 
-def _render_step_strip(state: AnimationState, blink_on: bool) -> Text:
-    """One-line strip of the command-execution loop with the active step lit.
+def _step_strip_cells(state: AnimationState, blink_on: bool,
+                      separator: str) -> List[Tuple[str, str]]:
+    """Build the command-execution strip as a flat list of (char, style) cells.
 
-    Done steps get a check, the active step pulses (probe steps carry a probe
-    glyph and turn red on a crash), and upcoming steps stay dim — so the user
-    sees intermediate steps and where the current operation sits in the loop.
+    Working in cells lets the renderer measure the strip's true width, choose a
+    separator that fits, and — when nothing fits — take a styled marquee window
+    without re-deriving any of the per-step coloring. Done steps get a check,
+    the active step pulses (probe steps carry a probe glyph and turn red on a
+    crash), and upcoming steps stay dim.
     """
     cur_op = state.current_function_name
     cur_slot = _STEP_ALIASES.get(cur_op, cur_op)
     is_crash = cur_op == "crash"
-    strip = Text(justify="center")
+    cells: List[Tuple[str, str]] = []
+
+    def add(segment: str, style: str) -> None:
+        cells.extend((ch, style) for ch in segment)
+
     for i, step in enumerate(COMMAND_SEQUENCE):
         if i > 0:
-            strip.append("  ·  ", style="dim " + ELECTRIC_CYAN)
+            add(separator, "dim " + ELECTRIC_CYAN)
         label = _STEP_LABELS.get(step, step)
         if step == cur_slot:
             if step in _PROBE_SLOTS:
                 marker = "◈" if blink_on else "◇"
                 style = f"bold {BREAK_RED}" if is_crash else f"bold {DIFF_YELLOW}"
-                strip.append(f"{marker} ", style=style)
-                strip.append(label, style=style)
+                add(f"{marker} ", style)
+                add(label, style)
             else:
                 glyph = "▸ " if blink_on else "▹ "
-                strip.append(glyph, style=f"bold {ELECTRIC_CYAN}")
-                strip.append(label, style=f"bold {ELECTRIC_CYAN}")
+                style = f"bold {ELECTRIC_CYAN}"
+                add(glyph, style)
+                add(label, style)
         elif step in state.executed_steps:
-            strip.append("✓ ", style=BUILD_GREEN)
-            strip.append(label, style=BUILD_GREEN)
+            add("✓ ", BUILD_GREEN)
+            add(label, BUILD_GREEN)
         else:
-            strip.append(label, style="dim " + ELECTRIC_CYAN)
-    return strip
+            add(label, "dim " + ELECTRIC_CYAN)
+    return cells
+
+
+def _cells_to_text(cells: List[Tuple[str, str]]) -> Text:
+    """Reassemble (char, style) cells into a single-line, crop-safe Text."""
+    text = Text(justify="center", no_wrap=True, overflow="crop")
+    for ch, style in cells:
+        text.append(ch, style=style or None)
+    return text
+
+
+def _render_step_strip(state: AnimationState, blink_on: bool,
+                       content_width: Optional[int] = None) -> Text:
+    """One-line strip of the command-execution loop with the active step lit.
+
+    The execute sub-commands are spelt out in full, so the user sees the real
+    commands the loop runs and where the current operation sits among them. The
+    strip adapts to the terminal so the full names stay legible at any width:
+
+    1. render it with the roomy separator if it fits;
+    2. otherwise tighten the separator (resize) and render if *that* fits;
+    3. otherwise rotate it as a marquee — a fixed-width window that scrolls one
+       cell per frame, looping through a small gap — so every step still
+       scrolls past on a narrow terminal instead of being silently cropped.
+
+    ``content_width`` is the cell budget for the strip; when omitted (e.g. unit
+    tests) the full strip is rendered untruncated.
+    """
+    if content_width is None or content_width <= 0:
+        return _cells_to_text(_step_strip_cells(state, blink_on, _STRIP_SEPARATORS[0]))
+
+    cells: List[Tuple[str, str]] = []
+    for separator in _STRIP_SEPARATORS:
+        cells = _step_strip_cells(state, blink_on, separator)
+        if len(cells) <= content_width:
+            return _cells_to_text(cells)
+
+    # Still too wide even tightened: rotate the (compact) strip as a marquee.
+    gap = [(" ", "")] * 4  # blank run so the loop seam reads as a gap, not a join
+    loop = cells + gap
+    offset = state.step_scroll_offset % len(loop)
+    window = (loop + loop)[offset:offset + content_width]
+    state.step_scroll_offset = (offset + 1) % len(loop)
+    return _cells_to_text(window)
 
 
 def _render_stage_card(state: AnimationState, console_width: int, blink_on: bool) -> Align:
@@ -794,9 +858,12 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
     rail = _render_phase_rail(state, blink_on)
 
     if state.current_stage == STAGE_EXECUTE:
+        # The strip lives inside the framed panel: subtract its border (2 cells)
+        # and horizontal padding (2 cells) to get the real cell budget.
+        strip_width = max(10, console_width - 4)
         body_layout.split_column(
             Layout(rail, name="rail", size=1),
-            Layout(_render_step_strip(state, blink_on), name="step_strip", size=1),
+            Layout(_render_step_strip(state, blink_on, strip_width), name="step_strip", size=1),
             Layout(_build_artifact_graph(state, console_width, blink_on), name="graph", ratio=1),
         )
     else:

@@ -129,10 +129,44 @@ class TestFrameRendering:
         for fn in ["auto-deps", "generate", "example", "verify"]:
             state.update_dynamic_state(fn, 0.0, *PATHS)
         strip = _render_step_strip(state, blink_on=True).plain
-        assert "deps" in strip and "verify" in strip
+        assert "auto-deps" in strip and "verify" in strip
         # Done steps get a check, the active probe step gets a probe glyph.
         assert "✓" in strip
         assert "◈" in strip
+
+    def test_step_strip_spells_out_every_command(self):
+        # The execute sub-commands are shown in full, not abbreviated.
+        state = AnimationState(basename="m", budget=5.0)
+        state.update_dynamic_state("generate", 0.0, *PATHS)
+        strip = _render_step_strip(state, blink_on=True, content_width=200).plain
+        for full in COMMAND_SEQUENCE:  # auto-deps, generate, example, ...
+            assert full in strip, full
+
+    def test_step_strip_tightens_separator_to_fit(self):
+        # When the roomy separator overflows but a compact one fits, the strip
+        # resizes (tighter spacing) rather than rotating, keeping full names.
+        state = AnimationState(basename="m", budget=5.0)
+        state.update_dynamic_state("update", 0.0, *PATHS)  # all prior steps done
+        for fn in ["auto-deps", "generate", "example", "verify", "test", "fix"]:
+            state.update_dynamic_state(fn, 0.0, *PATHS)
+        state.update_dynamic_state("update", 0.0, *PATHS)
+        strip = _render_step_strip(state, blink_on=True, content_width=80)
+        assert len(strip.plain) <= 80
+        assert "auto-deps" in strip.plain and "update" in strip.plain
+        # No rotation needed at this width, so the marquee offset stays put.
+        assert state.step_scroll_offset == 0
+
+    def test_step_strip_rotates_when_too_narrow(self):
+        state = AnimationState(basename="m", budget=5.0)
+        state.update_dynamic_state("generate", 0.0, *PATHS)
+        narrow = 24
+        first = _render_step_strip(state, blink_on=True, content_width=narrow)
+        # The marquee window never overflows its budget (stays one line).
+        assert len(first.plain) <= narrow
+        # ...and it advances each frame so every step scrolls into view.
+        before = state.step_scroll_offset
+        _render_step_strip(state, blink_on=True, content_width=narrow)
+        assert state.step_scroll_offset != before
 
     def test_execute_frame_shows_artifact_boxes(self):
         state = AnimationState(basename="m", budget=5.0)
