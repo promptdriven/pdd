@@ -144,3 +144,33 @@ def test_roles_render_ansi_on_a_truecolor_console():
     console.print("[command]pdd[/command] [tag]<include>[/tag] [success]ok[/success]")
     out = console.file.getvalue()
     assert "\x1b[" in out  # ANSI escape sequence emitted
+
+
+# ---------------------------------------------------------------------------
+# Issue #1634: brand palette locking for additional semantic roles
+# (EPIC #1540 — workstream 1)
+# ---------------------------------------------------------------------------
+
+def test_warning_role_resolves_to_diff_yellow():
+    """warning state maps to Diff-Yellow from the brand palette (not a generic yellow)."""
+    assert cli_theme.DIFF_YELLOW in cli_theme.SEMANTIC_STYLES["warning"]
+
+
+def test_danger_role_resolves_to_break_red():
+    """danger role uses Break-Red — the brand error / failure color."""
+    assert cli_theme.BREAK_RED in cli_theme.SEMANTIC_STYLES["danger"]
+
+
+def test_label_role_resolves_to_lumen_purple():
+    """label (Accent-1 family, same as tag) is Lumen-Purple."""
+    assert cli_theme.LUMEN_PURPLE in cli_theme.SEMANTIC_STYLES["label"]
+
+
+def test_accent_role_resolves_to_prompt_magenta():
+    """accent (Accent-2 / CTA) is Prompt-Magenta — used sparingly."""
+    assert cli_theme.PROMPT_MAGENTA in cli_theme.SEMANTIC_STYLES["accent"]
+
+
+def test_version_role_resolves_to_build_green_700():
+    """version uses the Build-Green-700 tint, distinct from the success base green."""
+    assert cli_theme.BUILD_GREEN_700 in cli_theme.SEMANTIC_STYLES["version"]

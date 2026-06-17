@@ -205,6 +205,7 @@ def test_cli_command_help(runner):
     assert result.exit_code == 0
     assert "Usage: cli generate [OPTIONS]" in result.output
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
@@ -239,6 +240,7 @@ def test_cli_global_options_defaults(mock_construct, mock_main, mock_auto_update
     assert ctx.obj['time'] == DEFAULT_TIME
     mock_auto_update.assert_called_once_with()
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
@@ -383,6 +385,7 @@ def test_process_commands_includes_compression_summary(mock_auto_update):
         cr.clear_compression_fallback_events()
 
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
@@ -404,6 +407,7 @@ def test_cli_global_options_quiet_overrides_verbose(mock_construct, mock_main, m
     assert ctx.obj['quiet'] is True
     mock_auto_update.assert_called_once_with()
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
@@ -439,6 +443,7 @@ def test_cli_auto_update_not_called_when_disabled(mock_construct, mock_main, moc
     runner.invoke(cli_command, ["generate", str(files["test.prompt"])])
     mock_auto_update.assert_not_called()
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update', side_effect=Exception("Network error"))
 @patch('pdd.commands.generate.code_generator_main')
 @patch('pdd.cli.construct_paths')
@@ -970,6 +975,64 @@ def test_process_commands_fatal_exception(mock_write_dump, mock_print):
     with ctx:
         process_commands(results=[({}, 0.1, "gpt-4")])
     ctx.exit.assert_called_with(1)
+
+# ---------------------------------------------------------------------------
+# Issue #1634: summary line format and apply_color_preference edge cases
+# ---------------------------------------------------------------------------
+
+def test_cli_summary_step_line_has_glyph_and_step_substring():
+    """EPIC #1540 — the execution summary line for a successful step must contain
+    both the shared cli_status SUCCESS glyph *and* the 'Step N (cmd):[/info] Cost:'
+    substring in the same captured output, proving they coexist rather than one
+    replacing the other."""
+    from pdd.cli_status import GLYPHS, Status
+
+    success_glyph = GLYPHS[Status.SUCCESS]
+    lines = _capture_summary(['generate'], [('code', 0.05, 'model-X')])
+    summary = "\n".join(lines)
+
+    # Both the glyph (within its semantic markup) and the step cost label must appear.
+    assert f"[success]{success_glyph}[/success]" in summary
+    assert "Step 1 (generate):[/info] Cost:" in summary
+
+
+def test_cli_summary_failure_line_has_glyph_and_step_info():
+    """A failed step (None result) shows the FAILURE glyph AND 'Step N (cmd)'
+    in the same output — glyph prefix and step label coexist on failure too."""
+    from pdd.cli_status import GLYPHS, Status
+
+    failure_glyph = GLYPHS[Status.FAILURE]
+    lines = _capture_summary(['generate'], [None])
+    summary = "\n".join(lines)
+
+    assert f"[error]{failure_glyph}[/error]" in summary
+    assert "Step 1 (generate)" in summary
+
+
+def test_apply_color_preference_none_is_noop(monkeypatch):
+    """apply_color_preference(None) must leave the environment and shared console
+    color state exactly as it found them — it is the auto-detect path and calling
+    it without prior flags must be a no-op (EPIC #1540, workstream 3)."""
+    import pdd.core.errors as errors
+
+    # Ensure a clean slate: neither flag is set.
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+
+    # Snapshot the shared console's color attributes before the call.
+    con = errors.console
+    before_no_color = con.no_color
+    before_force_terminal = con._force_terminal
+
+    errors.apply_color_preference(None)
+
+    # Environment must be unchanged.
+    assert "NO_COLOR" not in os.environ
+    assert "FORCE_COLOR" not in os.environ
+    # Shared console must be unchanged.
+    assert con.no_color == before_no_color
+    assert con._force_terminal == before_force_terminal
+
 
 if __name__ == "__main__":
     import pytest
