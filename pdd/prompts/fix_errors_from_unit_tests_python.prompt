@@ -1,3 +1,38 @@
+<pdd-reason>Fixes code based on failing unit test output.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "validate_inputs",
+        "signature": "(strength: float, temperature: float) -> None",
+        "returns": "None",
+        "sideEffects": [
+          "None"
+        ]
+      },
+      {
+        "name": "write_to_error_file",
+        "signature": "(file_path: str, content: str) -> None",
+        "returns": "None",
+        "sideEffects": [
+          "None"
+        ]
+      },
+      {
+        "name": "fix_errors_from_unit_tests",
+        "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[bool, bool, str, str, str, float, str]",
+        "returns": "Tuple[bool, bool, str, str, str, float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a python function, "fix_errors_from_unit_tests", that will fix unit test errors and warnings in a code file and log the process. All output to the console will be pretty printed using the Python rich library.
 
 <include>context/python_preamble.prompt</include>
@@ -91,7 +126,7 @@
             - Specify 'output_pydantic=CodeFix' to get structured output.
             - Pass the input 'verbose'.
             - Pass the input 'language' to ensure correct post-processing validation.
-        5d. Store the resulting 'CodeFix' object which contains:
+        5d. Guard the structured result before reading its fields: if the second llm_invoke result is not a `CodeFix` instance (e.g. `None`, a raw string, or a raw `dict` left by llm_invoke's cloud validation-failure fallback), do not access its fields — instead return a clean no-fix result (no fix applied) so the outer handler does not mask it as model_name='Error: AttributeError', using a positive `isinstance(result, CodeFix)` check (NOT a `None`/`str` blacklist) so any non-`CodeFix` shape is caught (issue #1612). Otherwise store the resulting 'CodeFix' object which contains:
             - 'update_unit_test' (boolean)
             - 'update_code' (boolean)
             - 'fixed_unit_test' (string)

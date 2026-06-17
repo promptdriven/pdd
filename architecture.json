@@ -2399,9 +2399,15 @@
     }
   },
   {
-    "reason": "Determines needed dependencies and inserts them into a prompt with optional deduplication.",
+    "reason": "Determines needed dependencies via auto_include and inserts them into a prompt, handling both new and updated includes.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "auto_include_python.prompt",
+      "preprocess_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 60,
     "filename": "insert_includes_python.prompt",
     "filepath": "pdd/insert_includes.py",
@@ -2415,19 +2421,8 @@
         "functions": [
           {
             "name": "insert_includes",
-            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)",
-            "returns": "Tuple[str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "main",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True, compress: bool = False)",
+            "returns": "Tuple[str, str, float, str]"
           }
         ]
       }
@@ -5414,9 +5409,13 @@
     }
   },
   {
-    "reason": "Applies targeted patches to existing code based on prompt changes.",
+    "reason": "Analyzes prompt changes and incrementally patches existing code or triggers full regeneration.",
     "description": "Detects changes between prompt versions and generates minimal code patches. More efficient than full regeneration for small modifications.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "preprocess_python.prompt",
+      "postprocess_python.prompt"
+    ],
     "priority": 149,
     "filename": "incremental_code_generator_python.prompt",
     "filepath": "pdd/incremental_code_generator.py",
@@ -5432,10 +5431,7 @@
           {
             "name": "incremental_code_generator",
             "signature": "(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = 0.25, force_incremental: bool = False, verbose: bool = False, preprocess_prompt: bool = True) -> Tuple[Optional[str], bool, float, str]",
-            "returns": "Tuple[Optional[str], bool, float, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[Optional[str], bool, float, str]"
           }
         ]
       }
@@ -5737,7 +5733,7 @@
     }
   },
   {
-    "reason": "Applies guarded incremental PRD changes to architecture.json and related prompts without full regeneration.",
+    "reason": "Incrementally propagates PRD changes into architecture.json and affected prompt Requirements using validated targeted patches.",
     "description": "Reads a PRD diff from hash/provenance metadata and ignored local raw-baseline cache, asks the LLM for a structured architecture patch, validates dependency, prompt filename, filepath, and file invariants deterministically, rejects unsafe or secret-like code filepaths before reads, retries invalid patches with explicit validation feedback, writes targeted architecture updates atomically, validates prompt previews under the write lock to avoid lost edits, syncs prompt metadata tags, creates prompts for new modules, deletes prompts for removed modules, updates prompt Requirements through detect_change/change, and avoids persisting raw PRD or GitHub issue/comment text in tracked metadata.",
     "dependencies": [
       "architecture_sync_python.prompt",
@@ -5760,13 +5756,13 @@
         "functions": [
           {
             "name": "run_incremental_prd_propagation",
-            "signature": "(prd_source: str, *, architecture_path: Path | str, prompts_dir: Path | str, project_root: Path | str | None, issue_content: Optional[str], dry_run: bool, verbose: bool, quiet: bool, strength: float, temperature: float, time: float, max_patch_attempts: int, update_prompt_requirements: bool, generate_new_prompts: bool)",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(prd_source: str, *, architecture_path: Path | str = \"architecture.json\", prompts_dir: Path | str = \"prompts\", project_root: Path | str | None = None, issue_content: Optional[str] = None, dry_run: bool = False, verbose: bool = False, quiet: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, max_patch_attempts: int = 3, update_prompt_requirements: bool = True, generate_new_prompts: bool = True) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple of success flag, message, cost, model, and changed files"
           },
           {
             "name": "apply_architecture_patch",
-            "signature": "(raw_architecture: Any, patch: ArchitecturePatch)",
-            "returns": "PatchApplication"
+            "signature": "(raw_architecture: Any, patch: ArchitecturePatch) -> PatchApplication",
+            "returns": "Validated in-memory architecture patch application result"
           }
         ]
       }
@@ -8197,7 +8193,9 @@
   {
     "reason": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
     "description": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 221,
     "filename": "ci_validation_python.prompt",
     "filepath": "pdd/ci_validation.py",
@@ -8216,6 +8214,11 @@
             "sideEffects": [
               "expected_head_sha_override forces the poll to wait for a specific PR head SHA instead of _get_head_sha(cwd); used by the post-checkup CI re-validation gate where cwd's local HEAD is stale relative to the PR remote because the checkup pushed from its own worktree"
             ]
+          },
+          {
+            "name": "run_github_checks_gate",
+            "signature": "(cwd, repo_owner, repo_name, pr_number, quiet, expected_head_sha=None, required_only=False)",
+            "returns": "Tuple[bool, str, str]"
           },
           {
             "name": "post_ci_failure_comment",

@@ -1,3 +1,22 @@
+<pdd-reason>Continues incomplete LLM outputs that were truncated.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "continue_generation",
+        "signature": "(formatted_input_prompt: str, llm_output: str, strength: float, temperature: float, time: float = DEFAULT_TIME, language: Optional[str] = None, verbose: bool = False) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Write a function `continue_generation` that completes LLM output generation through iterative continuation.
 
 <include>./context/python_preamble.prompt</include>
@@ -29,9 +48,9 @@
 % Requirements
 1. Load and preprocess three prompt templates: 'continue_generation_LLM', 'trim_results_start_LLM', 'trim_results_LLM' (recursive, no double curly brackets).
 2. Use Pydantic models for structured trim outputs (explanation + extracted field).
-3. First trim the start of llm_output using trim_results_start_LLM with EXTRACTION_STRENGTH, temperature=0.
+3. First trim the start of llm_output using trim_results_start_LLM with EXTRACTION_STRENGTH, temperature=0. Guard the structured result before reading its fields: if the trim_start result is not a `TrimResultsStartOutput` instance (e.g. `None`, a raw string, or a raw `dict` left by llm_invoke's cloud validation-failure fallback), do not access `.code_block` — instead raise a typed ValueError, using a positive `isinstance(result, TrimResultsStartOutput)` check (NOT a `None`/`str` blacklist) so any non-`TrimResultsStartOutput` shape is caught (issue #1612).
 4. Loop: continue generation with continue_generation_LLM, then check a line-aligned tail from the last 600 chars with unfinished_prompt (strength=0.5, temperature=0). Do not start the tail in the middle of a line when a newline exists in the slice.
-5. On completion: trim the continuation with trim_results_LLM (EXTRACTION_STRENGTH, temperature=0), append, and exit.
+5. On completion: trim the continuation with trim_results_LLM (EXTRACTION_STRENGTH, temperature=0), append, and exit. Guard this final-trim result the same way as the trim-start result: if it is not a `TrimResultsOutput` instance (`None`, a raw string, or a raw `dict` from llm_invoke's cloud validation-failure fallback), do not access `.trimmed_continued_generation` — instead raise a typed ValueError, using a positive `isinstance(result, TrimResultsOutput)` check (issue #1612).
 6. Track and return total cost from all llm_invoke calls; return model_name from continue_generation_LLM call.
 7. Pass 'language' parameter to all llm_invoke and unfinished_prompt calls.
 8. Validate inputs: strength and temperature must be 0-1, llm_output cannot be empty.

@@ -239,6 +239,25 @@ def fix_errors_from_unit_tests(
         total_cost += response2['cost']
         result2: CodeFix = response2['result']
 
+        # Guard against malformed structured output of any non-``CodeFix`` shape
+        # (``None``, a raw string, or a raw ``dict`` that survives the cloud
+        # validation-failure ``pass`` in ``llm_invoke``). Return a clean
+        # "no fix applied" result instead of crashing with an AttributeError
+        # that the outer handler would mask as model_name='Error: AttributeError'
+        # (issue #1612).
+        if not isinstance(result2, CodeFix):
+            if verbose:
+                console.print(
+                    "[yellow]fix_errors_from_unit_tests received a malformed "
+                    "extraction result; no fix applied.[/yellow]"
+                )
+            write_to_error_file(
+                error_file,
+                "fix_errors_from_unit_tests received a malformed CodeFix "
+                "result; no fix applied.",
+            )
+            return False, False, "", "", result1, total_cost, model_name
+
         if verbose:
             console.print(f"Total cost: ${total_cost:.6f}")
             console.print(f"Model used: {model_name}")
