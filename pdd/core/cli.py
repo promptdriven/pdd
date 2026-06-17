@@ -20,7 +20,7 @@ from ..auto_update import auto_update
 from ..cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 from ..construct_paths import list_available_contexts
 from ..install_completion import get_local_pdd_path
-from .errors import console, handle_error, clear_core_dump_errors
+from .errors import console, handle_error, clear_core_dump_errors, apply_color_preference
 from ..cli_status import GLYPHS as _STATUS_GLYPHS, Status as _Status
 from .utils import _first_pending_command, _should_show_onboarding_reminder
 
@@ -554,6 +554,14 @@ class PDDCLI(click.Group):
     help="Decrease output verbosity for minimal information.",
 )
 @click.option(
+    "--color/--no-color",
+    "color",
+    default=None,
+    help="Force or disable colored output across all commands. "
+    "Default: auto (color on a TTY, off when piped or when NO_COLOR is set). "
+    "--no-color disables it everywhere; --color forces it even through a pipe.",
+)
+@click.option(
     "--output-cost",
     type=click.Path(dir_okay=False, writable=True),
     default=None,
@@ -645,6 +653,7 @@ def cli(
     temperature: float,
     verbose: bool,
     quiet: bool,
+    color: Optional[bool],
     output_cost: Optional[str],
     estimate: bool,
     estimate_json: bool,
@@ -705,6 +714,11 @@ def cli(
         os.environ["PDD_QUIET"] = "1"
     else:
         os.environ.pop("PDD_QUIET", None)
+    # Color is the default (auto-detected); --color/--no-color lets the user force
+    # or disable it across every command. Apply it before any console output below
+    # so the choice covers the whole run, including later-constructed consoles.
+    ctx.obj["color"] = color
+    apply_color_preference(color)
     ctx.obj["estimate"] = estimate_mode
     ctx.obj["estimate_json"] = bool(estimate_json)
     ctx.obj["estimate_results"] = []

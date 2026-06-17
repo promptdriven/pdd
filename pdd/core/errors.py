@@ -2,6 +2,7 @@
 Error handling logic for PDD CLI.
 """
 import os
+import sys
 import traceback
 from typing import Any, Dict, List, Optional
 import click
@@ -29,6 +30,67 @@ from ..cli_theme import SEMANTIC_STYLES
 
 custom_theme = Theme(SEMANTIC_STYLES)
 console = Console(theme=custom_theme)
+
+
+def _set_console_color(con: Console, enabled: bool) -> None:
+    """Force or disable color on an already-constructed Rich console.
+
+    Color is cosmetic, so any failure poking Rich internals is swallowed rather
+    than allowed to break a command.
+    """
+    try:
+        if enabled:
+            con.no_color = False
+            con._force_terminal = True  # render color even when piped / non-TTY
+            if getattr(con, "_color_system", None) is None:
+                from rich.color import ColorSystem
+                truecolor = os.environ.get("COLORTERM", "").strip().lower() in (
+                    "truecolor",
+                    "24bit",
+                )
+                con._color_system = (
+                    ColorSystem.TRUECOLOR if truecolor else ColorSystem.EIGHT_BIT
+                )
+        else:
+            con.no_color = True
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+
+def apply_color_preference(preference: Optional[bool]) -> None:
+    """Apply the global ``--color`` / ``--no-color`` preference for this run.
+
+    ``preference`` is ``True`` (force color even when piped), ``False`` (disable
+    color everywhere), or ``None`` (auto: color on a TTY, off when piped or when
+    ``NO_COLOR`` is set — the default, so omitting the flag changes nothing).
+
+    The choice is wired two ways so it reaches every surface:
+
+    * The ``NO_COLOR`` / ``FORCE_COLOR`` environment variables are set, which
+      every Rich console constructed *after* this point honors automatically —
+      ``pdd.cli_theme.get_console`` (and thus every ``StatusReporter``), plus the
+      per-command ad-hoc consoles.
+    * The shared consoles already built at import time (this module's
+      :data:`console`, and ``pdd.update_main.console`` if it is loaded) are
+      updated in place, since they captured their color state before the flag
+      was parsed.
+    """
+    if preference is None:
+        return
+    if preference:
+        os.environ.pop("NO_COLOR", None)
+        os.environ["FORCE_COLOR"] = "1"
+    else:
+        os.environ.pop("FORCE_COLOR", None)
+        os.environ["NO_COLOR"] = "1"
+
+    _set_console_color(console, preference)
+    # Mutate sibling shared consoles only if their module is already imported;
+    # ones imported later inherit the choice from the env vars set above.
+    update_main = sys.modules.get("pdd.update_main")
+    sibling = getattr(update_main, "console", None) if update_main else None
+    if isinstance(sibling, Console):
+        _set_console_color(sibling, preference)
 
 # Buffer to collect errors for optional core dumps
 _core_dump_errors: List[Dict[str, Any]] = []

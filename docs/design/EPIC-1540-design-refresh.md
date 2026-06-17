@@ -61,9 +61,27 @@ opting in via any flag:
   auto-enables on a TTY and respects `NO_COLOR` / `--no-color`. Locked by
   `tests/commands/test_context.py::test_default_output_is_context_usage_box`.
 
+### Limiting color: a global `--color` / `--no-color`
+
+Color is the default, and a single global flag on the root `pdd` command lets a
+user force or disable it across **every** command (not just `pdd context`):
+
+- `pdd --no-color …` disables color everywhere; `pdd --color …` forces it on
+  even through a pipe (`pdd --color sync | less -R`).
+- Default is auto: color on a TTY, off when piped or when `NO_COLOR` is set.
+- Precedence for `pdd context` (which keeps its own `--color/--no-color`): the
+  command's own flag wins, else the global flag, else auto-detect.
+- Implementation (`pdd.core.errors.apply_color_preference`): sets
+  `NO_COLOR` / `FORCE_COLOR` so every console built during the run inherits the
+  choice (including `get_console`/`StatusReporter` and per-command consoles),
+  and updates the already-constructed shared console(s) in place. No per-command
+  plumbing was required.
+
 Remaining ad-hoc `Console()` instances in individual command modules are left
 for incremental adoption of `pdd.cli_theme.get_console()` and
-`pdd.cli_status.StatusReporter` (as already done in `detect_change`/`conflicts`).
+`pdd.cli_status.StatusReporter` (as already done in `detect_change`/`conflicts`);
+because they read `NO_COLOR`/`FORCE_COLOR` at construction, they already honor
+the global flag.
 
 ## Phase 2 (split out to #1560)
 
