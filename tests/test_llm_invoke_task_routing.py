@@ -290,6 +290,31 @@ def test_flag_off_ignores_shots(monkeypatch):
     assert multishot_called["v"] is False
 
 
+def test_flag_off_ignores_task_class_router(monkeypatch):
+    """With the flag unset, task_class must not consult the routing table."""
+    router_called = {"v": False}
+
+    class _Sentinel(Exception):
+        pass
+
+    def fake_route(task_class):
+        router_called["v"] = True
+        return {"model": "should-not-be-used", "temperature": 0.0, "shots": 1}
+
+    monkeypatch.setattr(m, "_select_task_route", fake_route)
+    monkeypatch.setattr(m, "_load_model_data", lambda *a, **k: object())
+    monkeypatch.setattr(
+        m,
+        "_select_model_candidates",
+        lambda *a, **k: (_ for _ in ()).throw(_Sentinel()),
+    )
+
+    with pytest.raises(_Sentinel):
+        m.llm_invoke(prompt="p", input_json={}, task_class="generate", use_cloud=False)
+
+    assert router_called["v"] is False
+
+
 def test_flag_on_dispatches_and_clamps_shots(monkeypatch):
     captured = {}
     monkeypatch.setenv("PDD_ENABLE_TASK_ROUTING", "1")
