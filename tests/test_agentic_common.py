@@ -3008,6 +3008,45 @@ def test_run_agentic_task_routing_policy_selects_initial_config(
     assert payload["verifier_result"] == "pass"
 
 
+def test_run_agentic_task_routing_policy_unknown_task_class_falls_back_without_env_mutation(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("CLAUDE_MODEL", "preexisting-model")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["anthropic"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["anthropic"])
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, os.environ.get("CLAUDE_MODEL"), kwargs))
+        return (True, "done", 0.1, "actual-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Do the work",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="unknown-task-class",
+    )
+
+    assert result.success is True
+    assert calls == [("anthropic", "preexisting-model", calls[0][2])]
+    assert calls[0][2]["reasoning_time"] is None
+    assert os.environ["CLAUDE_MODEL"] == "preexisting-model"
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "default"
+    assert payload["selected_config"] is None
+    assert payload["fallback_reason"] == "no_policy_row"
+    assert payload["verifier_result"] == "pass"
+
+
 def test_run_agentic_task_routing_policy_escalates_after_failure(
     mock_cwd,
     monkeypatch,
