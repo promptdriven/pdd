@@ -37,6 +37,34 @@ Terminal captures of the merged workstreams (PRs 1–3) live in
 
 Legend: ✅ merged · 🟡 in progress · ⬜ not started
 
+## Enhanced experience is the default (no flags required)
+
+Phase 1 landed the *infrastructure* — the brand palette (`pdd/cli_theme.py`),
+the status primitives (`pdd/cli_status.py`), and the revamped `pdd context`
+usage box — but several surfaces still defaulted to the pre-refresh look. This
+follow-up makes the enhanced experience the **default**, so users get it without
+opting in via any flag:
+
+- **Color system, on by default.** The shared CLI console (`pdd/core/errors.py`,
+  re-exported as `pdd.console` and used by the command-execution summary,
+  `pdd update`, `pdd templates`, and other base commands) now renders every
+  semantic role from the central brand palette in `pdd/cli_theme.py` instead of
+  an ad-hoc per-module theme. `[command]`/`[success]`/`[error]` markup that was
+  already in place across the CLI now resolves to the brand colors automatically.
+- **Consistent status vocabulary, on by default.** The per-step *Command
+  Execution Summary* (`pdd/core/cli.py`) now prefixes each step with the shared
+  `cli_status` glyphs — `✓` for success, `✗` for failure — in their semantic
+  roles, so chained commands end with the same SUCCESS/FAILURE shorthand the
+  rest of the refresh uses.
+- **`pdd context` revamped view, on by default.** The Claude-Code-style usage
+  box is the no-flag default (`--table`/`--json` remain opt-in); color
+  auto-enables on a TTY and respects `NO_COLOR` / `--no-color`. Locked by
+  `tests/commands/test_context.py::test_default_output_is_context_usage_box`.
+
+Remaining ad-hoc `Console()` instances in individual command modules are left
+for incremental adoption of `pdd.cli_theme.get_console()` and
+`pdd.cli_status.StatusReporter` (as already done in `detect_change`/`conflicts`).
+
 ## Phase 2 (split out to #1560)
 
 The remaining workstreams moved to **[#1560](https://github.com/promptdriven/pdd/issues/1560)**

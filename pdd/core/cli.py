@@ -21,7 +21,13 @@ from ..cli_branding import PDD_FULL_TAGLINE, PDD_POSITIONING
 from ..construct_paths import list_available_contexts
 from ..install_completion import get_local_pdd_path
 from .errors import console, handle_error, clear_core_dump_errors
+from ..cli_status import GLYPHS as _STATUS_GLYPHS, Status as _Status
 from .utils import _first_pending_command, _should_show_onboarding_reminder
+
+# Shared status glyphs (EPIC #1540, workstream 2) so the per-step execution
+# summary speaks the same SUCCESS/FAILURE vocabulary as every other command.
+_OK_GLYPH = _STATUS_GLYPHS[_Status.SUCCESS]   # ✓
+_FAIL_GLYPH = _STATUS_GLYPHS[_Status.FAILURE]  # ✗
 from .duplicate_cli_guard import check_duplicate_before_subcommand, record_after_guarded_command
 
 
@@ -986,16 +992,16 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
             if not ctx.obj.get("quiet") and not suppress_result_summary:
                 # Check if it was install_completion (which normally returns None)
                 if command_name == "install_completion":
-                    console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
+                    console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Command completed.")
                 # If command name is unknown, and it might be install_completion which prints its own status
                 elif command_name.startswith("Unknown Command"):
                     console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command executed (see output above for status details).")
                 # Check if it was preprocess (which returns a dummy tuple on success)
                 # This case handles actual failure for preprocess
                 elif command_name == "preprocess":
-                    console.print(f"  [error]Step {i+1} ({command_name}):[/error] Command failed.")
+                    console.print(f"  [error]{_FAIL_GLYPH}[/error] [error]Step {i+1} ({command_name}):[/error] Command failed.")
                 else:
-                    console.print(f"  [error]Step {i+1} ({command_name}):[/error] Command failed.")
+                    console.print(f"  [error]{_FAIL_GLYPH}[/error] [error]Step {i+1} ({command_name}):[/error] Command failed.")
         # Check if the result is the expected tuple structure from @track_cost or preprocess success
         elif isinstance(result_tuple, tuple) and len(result_tuple) == 3:
             result_data, cost, model_name = result_tuple
@@ -1004,7 +1010,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                 # Special handling for preprocess success message (check actual command name)
                 actual_command_name = invoked_subcommands[i] if i < num_commands else None # Get actual name if possible
                 if actual_command_name == "preprocess" and cost == 0.0 and model_name == "local":
-                    console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed (local).")
+                    console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Command completed (local).")
                 else:
                     # Generic output using potentially "Unknown Command" name.
                     # Suppress the Model: segment when no model was used (zero-cost
@@ -1013,9 +1019,9 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
                     # blank "Model: " label (#1103).
                     model_repr = (model_name or "").strip()
                     if model_repr and model_repr.lower() not in {"unknown", "n/a", "none", "skipped"}:
-                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_repr}")
+                        console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}, Model: {model_repr}")
                     else:
-                        console.print(f"  [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}")
+                        console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Cost: ${cost:.6f}")
                 
                 # Display examples used for grounding
                 if isinstance(result_data, dict) and result_data.get("examplesUsed"):
@@ -1028,7 +1034,7 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         # Handle dicts with examplesUsed (e.g. from commands not using track_cost but returning metadata)
         elif isinstance(result_tuple, dict) and result_tuple.get("examplesUsed"):
             if not ctx.obj.get("quiet") and not suppress_result_summary:
-                console.print(f"  [info]Step {i+1} ({command_name}):[/info] Command completed.")
+                console.print(f"  [success]{_OK_GLYPH}[/success] [info]Step {i+1} ({command_name}):[/info] Command completed.")
                 console.print("    Examples used:")
                 for ex in result_tuple["examplesUsed"]:
                     slug = ex.get("slug", "unknown")

@@ -506,6 +506,37 @@ def test_cli_result_callback_non_tuple_result_warning():
     summary = "\n".join(lines)
     assert "Step 1 (generate):[/warning] Unexpected result format: str" in summary
 
+
+def test_cli_summary_uses_shared_status_glyphs():
+    """EPIC #1540, workstream 2: the execution summary speaks the same
+    SUCCESS/FAILURE vocabulary as every other command, so each step line is
+    prefixed with the shared cli_status glyph (✓ for success, ✗ for failure)."""
+    from pdd.cli_status import GLYPHS, Status
+
+    ok, fail = GLYPHS[Status.SUCCESS], GLYPHS[Status.FAILURE]
+
+    # A successful (cost-bearing) step is marked with the success glyph.
+    success = "\n".join(_capture_summary(['generate'], ('code', 0.1, 'model-A')))
+    assert ok in success
+    assert f"[success]{ok}[/success]" in success
+
+    # A failed step (None result) is marked with the failure glyph.
+    failure = "\n".join(_capture_summary(['generate'], [None]))
+    assert fail in failure
+    assert f"[error]{fail}[/error]" in failure
+
+
+def test_shared_console_uses_brand_palette():
+    """EPIC #1540, workstream 1: the shared CLI console renders semantic roles
+    from the central brand palette by default (not an ad-hoc per-module theme),
+    so the enhanced color system is on without any flag."""
+    from pdd.core.errors import custom_theme
+    from pdd.cli_theme import ELECTRIC_CYAN, BUILD_GREEN
+
+    # 'command' is the hero role -> Electric-Cyan (brand), not the old magenta.
+    assert ELECTRIC_CYAN.lower() in str(custom_theme.styles.get("command")).lower()
+    assert BUILD_GREEN.lower() in str(custom_theme.styles.get("success")).lower()
+
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
 def test_user_cancellation_does_not_show_error_message_issue_186(mock_main, mock_auto_update, runner, tmp_path, monkeypatch):

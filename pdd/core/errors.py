@@ -17,15 +17,17 @@ except ImportError:
         return None
 
 # --- Initialize Rich Console ---
-# Define a custom theme for consistent styling
-custom_theme = Theme({
-    "info": "cyan",
-    "warning": "yellow",
-    "error": "bold red",
-    "success": "green",
-    "path": "dim blue",
-    "command": "bold magenta",
-})
+# Brand color is the single source of truth (EPIC #1540, workstream 1). The
+# shared console renders every semantic role from the central palette in
+# ``pdd.cli_theme`` so the enhanced color system is the *default* across the
+# whole CLI — every existing ``[command]``/``[success]``/``[error]`` markup now
+# resolves to the brand palette instead of an ad-hoc per-module theme. The role
+# names below are a superset of the historical ones (``info``/``warning``/
+# ``error``/``success``/``path``/``command``), so existing call sites keep
+# working unchanged.
+from ..cli_theme import SEMANTIC_STYLES
+
+custom_theme = Theme(SEMANTIC_STYLES)
 console = Console(theme=custom_theme)
 
 # Buffer to collect errors for optional core dumps
