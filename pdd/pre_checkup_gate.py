@@ -419,14 +419,12 @@ def _resolve_prompt_under_arch(
     fn = _norm(filename) if isinstance(filename, str) else ""
     if not fn:
         return None
-    # Fast path: the common layouts directly under the architecture's directory.
-    for sub in ("prompts", "pdd/prompts"):
-        candidate = arch_dir / sub / fn
-        if candidate.is_file():
-            return candidate
     # Prefer the prompts dir COLOCATED with the changed code: walk from the code
-    # file's directory up to the architecture dir, so code at src/b/foo.py binds to
-    # src/b/prompts/<fn> rather than a same-named prompt in an unrelated src/a/prompts.
+    # file's directory UP to the architecture dir, so code at src/b/foo.py binds to
+    # src/b/prompts/<fn> even when a same-named prompt ALSO sits at the top-level
+    # <arch_dir>/prompts/. The walk's final step is <arch_dir> itself, so it also
+    # covers the direct-under-arch layout (e.g. <arch_dir>/prompts/<subpath>) — hence
+    # it runs BEFORE the bare direct check below, not after.
     if code_path is not None:
         try:
             stop = arch_dir.resolve()
@@ -442,6 +440,12 @@ def _resolve_prompt_under_arch(
                 current = current.parent
         except (OSError, ValueError):
             pass
+    # Direct under the architecture's directory: taken when there is no code hint, or
+    # the colocated walk found nothing.
+    for sub in ("prompts", "pdd/prompts"):
+        candidate = arch_dir / sub / fn
+        if candidate.is_file():
+            return candidate
     # Fallback: a prompts dir NESTED below the architecture's directory (e.g.
     # extensions/app/src/prompts/) — the same arrangement the prompt-change path
     # already handles via _prompt_sync_scope's last-"prompts"-component scoping.

@@ -890,7 +890,7 @@ def test_gate_validates_heal_CREATED_example_when_example_path_unset(monkeypatch
     )
 
     def heal_creates_broken_example(_d, _e):
-        exp = pathlib.Path(ex_path)
+        exp = Path(ex_path)
         exp.parent.mkdir(parents=True, exist_ok=True)
         exp.write_text("def broken(:\n", encoding="utf-8")
         return True
@@ -1222,7 +1222,7 @@ def test_drift_sync_foreign_prompt_dir_metadata_sync_receives_foreign_arch_path(
     sync_all_prompts_to_architecture is stubbed to isolate the run_metadata_sync call
     site; the capturing stub records every architecture_path it receives.
     """
-    ext_arch = _ext_prompt_repo(tmp_path)
+    _ext_prompt_repo(tmp_path)
 
     captured_arch_paths = []
 
@@ -1273,7 +1273,7 @@ def test_drift_sync_foreign_arch_write_tracked_in_synced_paths(monkeypatch, tmp_
     ensures the sync WILL rewrite the foreign arch) and asserts the foreign arch's
     repo-relative path appears in synced_paths.
     """
-    ext_arch = _ext_prompt_repo(tmp_path, root_arch_content="[]")
+    _ext_prompt_repo(tmp_path, root_arch_content="[]")
 
     monkeypatch.setattr(
         pre_checkup_gate,
@@ -1769,4 +1769,38 @@ def test_foreign_code_resolution_prefers_prompt_colocated_with_code(tmp_path):
     (prompt_path, _code_path), = touched.values()
     assert prompt_path.resolve() == (ext / "src" / "b" / "prompts" / "foo_python.prompt").resolve(), (
         f"expected the prompt colocated with src/b/foo.py, got {prompt_path}"
+    )
+
+
+def test_foreign_code_resolution_colocated_wins_over_top_level_prompt(tmp_path):
+    """A foreign code change must bind to the prompt COLOCATED with the code even when
+    a same-named prompt ALSO sits directly under <arch_dir>/prompts/. The direct-under-
+    arch lookup must not shadow the colocated walk, or src/b/foo.py would mistakenly
+    resolve to the top-level prompt and the gate would heal/validate the wrong module.
+    """
+    ext = tmp_path / "extensions" / "app"
+    (ext / "prompts").mkdir(parents=True)
+    (ext / "src" / "b" / "prompts").mkdir(parents=True)
+    # Same basename at the top level AND colocated with the code in src/b.
+    (ext / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>TOP</pdd-reason>\n", encoding="utf-8"
+    )
+    (ext / "src" / "b" / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>COLOCATED</pdd-reason>\n", encoding="utf-8"
+    )
+    (ext / "src" / "b" / "foo.py").write_text("X = 1\n", encoding="utf-8")
+    (ext / "architecture.json").write_text(
+        json.dumps([{"filename": "foo_python.prompt", "filepath": "src/b/foo.py"}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    arch = pre_checkup_gate._load_architecture(tmp_path)
+    touched = pre_checkup_gate._touched_prompt_files(
+        tmp_path, ["extensions/app/src/b/foo.py"], arch
+    )
+    assert len(touched) == 1, touched
+    (prompt_path, _code_path), = touched.values()
+    assert prompt_path.resolve() == (ext / "src" / "b" / "prompts" / "foo_python.prompt").resolve(), (
+        f"top-level prompt shadowed the colocated one; got {prompt_path}"
     )
