@@ -1064,3 +1064,285 @@ def test_targeted_tests_exclude_integration_marker_and_handle_no_tests(tmp_path)
     )
 
     assert failures == [], failures
+
+
+# ---------------------------------------------------------------------------
+# Issue #1614 — pre_checkup_gate drift-sync targets root architecture.json
+# for prompts outside pdd/prompts
+# ---------------------------------------------------------------------------
+
+def _ext_prompt_repo(tmp_path, root_arch_content="[]"):
+    """Foreign-prompts-dir fixture for issue #1614 tests.
+
+    Creates:
+    - extensions/github_pdd_app/prompts/ext_module_python.prompt  (fresh reason)
+    - extensions/github_pdd_app/architecture.json                 (stale reason)
+    - architecture.json (root, configurable via root_arch_content)
+
+    Returns the Path to the foreign architecture.json.
+    """
+    ext_prompts_dir = tmp_path / "extensions" / "github_pdd_app" / "prompts"
+    ext_prompts_dir.mkdir(parents=True)
+    (ext_prompts_dir / "ext_module_python.prompt").write_text(
+        "<pdd-reason>Fresh ext reason</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = tmp_path / "extensions" / "github_pdd_app" / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "ext_module_python.prompt",
+                    "filepath": "extensions/github_pdd_app/ext_module.py",
+                    "reason": "Stale ext reason",
+                    "description": "Ext module desc",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text(root_arch_content, encoding="utf-8")
+    return ext_arch
+
+
+def test_drift_sync_foreign_prompt_dir_does_not_corrupt_root_architecture(monkeypatch, tmp_path):
+    """Issue #1614 (failure mode 1): when a changed prompt resolves to a foreign
+    prompts_dir (outside pdd/prompts), sync_all_prompts_to_architecture must be called
+    with that directory's own architecture.json, NOT the repo-root one.
+
+    Buggy behavior: architecture_path=worktree/"architecture.json" is passed for every
+    group regardless of prompts_dir. register_untracked_prompts rglobs the foreign
+    prompts_dir against the root arch, finds ext_module_python.prompt absent there, and
+    registers a new module entry into the root architecture.json — corrupting it.
+
+    This test drives the REAL sync_all_prompts_to_architecture (only run_metadata_sync
+    and detect_drift are stubbed) to observe the actual file mutation.
+    """
+    ext_arch = _ext_prompt_repo(tmp_path, root_arch_content="[]")
+
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "run_metadata_sync",
+        lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None),
+    )
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # Root arch must stay empty — the foreign prompt must NOT be registered here.
+    root_arch_data = json.loads((tmp_path / "architecture.json").read_text())
+    assert root_arch_data == [], (
+        f"Root architecture.json was corrupted by the foreign-prompt sync: "
+        f"expected [], got {root_arch_data}"
+    )
+    # Foreign arch must be updated with the fresh reason from the prompt file.
+    ext_arch_data = json.loads(ext_arch.read_text())
+    assert len(ext_arch_data) == 1
+    assert ext_arch_data[0]["reason"] == "Fresh ext reason", ext_arch_data
+    assert outcome.ok is True
+
+
+def test_drift_sync_foreign_prompt_dir_metadata_sync_receives_foreign_arch_path(monkeypatch, tmp_path):
+    """Issue #1614 (failure mode 2): run_metadata_sync must receive the nearest-ancestor
+    architecture.json for a foreign-prompts-dir prompt, not the repo-root one.
+
+    Buggy behavior: architecture_path=worktree/"architecture.json" (root) is passed for
+    every prompt regardless of which prompts_dir was resolved for that group. A metadata-
+    sync step that runs the fingerprint pipeline against the root arch for a prompt it
+    does not own trips spurious failures and blocks a legitimate PR.
+
+    sync_all_prompts_to_architecture is stubbed to isolate the run_metadata_sync call
+    site; the capturing stub records every architecture_path it receives.
+    """
+    ext_arch = _ext_prompt_repo(tmp_path)
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(kwargs.get("architecture_path"))
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "sync_all_prompts_to_architecture",
+        lambda **_k: {"success": True},
+    )
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    assert captured_arch_paths, "run_metadata_sync was never called for the foreign prompt"
+    expected = tmp_path / "extensions" / "github_pdd_app" / "architecture.json"
+    for arch_path in captured_arch_paths:
+        assert arch_path == expected, (
+            f"run_metadata_sync received the wrong architecture_path: "
+            f"expected {expected}, got {arch_path}"
+        )
+
+
+# Scope addition: covers expansion item "synced_paths tracking at
+# pdd/pre_checkup_gate.py:406-443 tracks only root architecture.json — after
+# per-dir fix foreign arch rewrites are not included in synced_paths and won't
+# be validated by _run_build_smoke" identified by Step 6 but absent from Step
+# 8's plan (Step 8 listed it as Test 3, included below).
+def test_drift_sync_foreign_arch_write_tracked_in_synced_paths(monkeypatch, tmp_path):
+    """Issue #1614 (expansion item): when sync_all_prompts_to_architecture rewrites the
+    FOREIGN architecture.json (because the fix correctly targets it), that rewrite must
+    appear in outcome.synced_paths so _run_build_smoke can validate the produced tree.
+
+    The current arch_path tracking (lines 406-443) only watches worktree/"architecture.json"
+    (root). After the per-dir arch-path fix, the foreign arch is rewritten but the root
+    arch is untouched, so the root-only signature check never fires and the foreign arch
+    write is silently dropped from synced_paths.
+
+    This test drives the REAL sync_all_prompts_to_architecture (the stale-reason fixture
+    ensures the sync WILL rewrite the foreign arch) and asserts the foreign arch's
+    repo-relative path appears in synced_paths.
+    """
+    ext_arch = _ext_prompt_repo(tmp_path, root_arch_content="[]")
+
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "run_metadata_sync",
+        lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None),
+    )
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    assert "extensions/github_pdd_app/architecture.json" in outcome.synced_paths, (
+        f"Foreign architecture.json rewrite was not tracked in synced_paths; "
+        f"got {outcome.synced_paths}"
+    )
+
+
+def test_drift_sync_foreign_prompt_falls_back_to_root_arch_when_no_own_arch(monkeypatch, tmp_path):
+    """Issue #1614 (edge case / regression): when a foreign prompts_dir has no ancestor
+    architecture.json between itself and the repo root, the nearest-ancestor walk-up
+    must fall back to worktree/"architecture.json" and still function correctly.
+
+    This confirms the fix does not break the no-own-arch fallback path.
+    """
+    # Foreign prompt dir without its own architecture.json anywhere up the tree.
+    no_arch_prompts_dir = tmp_path / "extensions" / "no_arch_app" / "prompts"
+    no_arch_prompts_dir.mkdir(parents=True)
+    (no_arch_prompts_dir / "ext_module_python.prompt").write_text(
+        "<pdd-reason>Fresh ext reason</pdd-reason>\n", encoding="utf-8"
+    )
+    # Root arch owns the entry (no intermediate arch.json exists).
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "ext_module_python.prompt",
+                    "filepath": "extensions/no_arch_app/ext_module.py",
+                    "reason": "Stale ext reason",
+                    "description": "Ext module desc",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        pre_checkup_gate,
+        "run_metadata_sync",
+        lambda *_a, **_k: SimpleNamespace(ok=True, failing_stage=None),
+    )
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/no_arch_app/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # Root arch must be updated (fallback to root arch worked).
+    root_arch_data = json.loads((tmp_path / "architecture.json").read_text())
+    assert len(root_arch_data) == 1
+    assert root_arch_data[0]["reason"] == "Fresh ext reason", root_arch_data
+    assert outcome.ok is True
+
+
+def test_drift_sync_standard_pdd_prompts_still_uses_root_architecture(monkeypatch, tmp_path):
+    """Issue #1614 (regression): the arch-per-prompts-dir resolution must NOT break the
+    standard case. Prompts under pdd/prompts/ have no pdd/architecture.json, so the
+    nearest-ancestor walk-up must resolve to the repo-root architecture.json for both
+    sync_all_prompts_to_architecture and run_metadata_sync.
+    """
+    prompt_dir = tmp_path / "pdd" / "prompts"
+    prompt_dir.mkdir(parents=True)
+    (tmp_path / "pdd" / "foo.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+    (prompt_dir / "foo_python.prompt").write_text(
+        "<pdd-reason>Fresh foo</pdd-reason>\n", encoding="utf-8"
+    )
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "foo_python.prompt",
+                    "filepath": "pdd/foo.py",
+                    "reason": "Stale foo",
+                    "description": "Foo desc",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    # No pdd/architecture.json — walk-up must skip and find root.
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(kwargs.get("architecture_path"))
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["pdd/prompts/foo_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # Real sync must have updated the root arch entry.
+    arch_data = json.loads(arch_path.read_text())
+    assert arch_data[0]["reason"] == "Fresh foo", arch_data
+    # run_metadata_sync must have received the root arch path (not pdd/architecture.json).
+    assert captured_arch_paths, "run_metadata_sync was never called"
+    for ap in captured_arch_paths:
+        assert ap == tmp_path / "architecture.json", (
+            f"Standard pdd/prompts case: expected root arch path, got {ap}"
+        )
+    assert outcome.ok is True
