@@ -403,9 +403,8 @@ def _run_drift_sync(
             if rel_code:
                 basename_to_code[basename] = rel_code
 
-    arch_path = worktree / "architecture.json"
     if prompt_pairs:
-        arch_sig_before = _file_content_sig(arch_path)
+        arch_paths_before: Dict[Path, str] = {}
         try:
             prompts_by_dir: Dict[Path, Set[str]] = {}
             for filename, (prompt_path, _code_path) in prompt_pairs.items():
@@ -414,9 +413,14 @@ def _run_drift_sync(
 
             sync_errors: List[str] = []
             for prompts_dir, filenames in prompts_by_dir.items():
+                own_arch = prompts_dir.parent / "architecture.json"
+                ap = own_arch if own_arch.is_file() else worktree / "architecture.json"
+                if ap not in arch_paths_before:
+                    arch_paths_before[ap] = _file_content_sig(ap)
+
                 result = sync_all_prompts_to_architecture(
                     prompts_dir=prompts_dir,
-                    architecture_path=worktree / "architecture.json",
+                    architecture_path=ap,
                     dry_run=False,
                     only_files=filenames,
                 )
@@ -439,16 +443,23 @@ def _run_drift_sync(
         # that the PR never touched and sync left unchanged — a false-block on infra
         # not of this PR's doing. (A sync that *writes* a broken file is still
         # caught, because then the content changed.)
-        if _file_content_sig(arch_path) != arch_sig_before:
-            synced_paths.append("architecture.json")
+        for ap, sig_before in arch_paths_before.items():
+            if _file_content_sig(ap) != sig_before:
+                rel = _rel_within(ap, worktree)
+                if rel:
+                    synced_paths.append(rel)
 
     for filename, (prompt_path, code_path) in prompt_pairs.items():
         try:
+            prompts_dir, _ = _prompt_sync_scope(worktree, prompt_path, filename)
+            own_arch = prompts_dir.parent / "architecture.json"
+            ap = own_arch if own_arch.is_file() else worktree / "architecture.json"
+
             result = run_metadata_sync(
                 prompt_path,
                 code_path if code_path and code_path.exists() else None,
                 repo_root=worktree,
-                architecture_path=worktree / "architecture.json",
+                architecture_path=ap,
             )
             if not getattr(result, "ok", False):
                 stage = getattr(result, "failing_stage", None) or "unknown"
@@ -568,7 +579,6 @@ def _run_drift_sync(
     return _CheckOutcome(
         ok=not failures, messages=messages, cost=cost, synced_paths=synced_paths
     )
-
 
 def _module_name_for_python_path(path: Path, worktree: Path) -> Optional[str]:
     try:
