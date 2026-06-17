@@ -279,13 +279,24 @@ def test_preprocess_called_with_correct_exclude(mock_preprocess, mock_load_templ
 @patch("pdd.incremental_code_generator.load_prompt_template")
 @patch("pdd.incremental_code_generator.preprocess")
 def test_llm_invoke_failure(mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs):
-    """LLM invocation failure should raise RuntimeError."""
+    """LLM invocation failure should return a graceful fallback tuple instead of
+    raising RuntimeError. After fix for issue #1612, the exception handler at
+    lines 168-172 must return (None, False, 0.0, '') rather than re-raising as
+    RuntimeError, so that pdd sync can fall back to full regeneration instead of
+    crashing.
+    """
     mock_load_template.return_value = "template"
     mock_preprocess.return_value = "processed_template"
     mock_llm_invoke.side_effect = Exception("LLM invocation failed")
 
-    with pytest.raises(RuntimeError, match="Failed to process incremental code generation: LLM invocation failed"):
-        incremental_code_generator(**common_inputs)
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
+        **common_inputs
+    )
+
+    assert updated_code is None
+    assert is_incremental is False
+    assert total_cost == 0.0
+    assert model_name == ""
 
 
 # --- Cost Accumulation Tests ---
@@ -546,3 +557,171 @@ def test_schema_sent_to_llm_allows_null_patched_code():
     assert "string" in any_of_types, (
         f"patched_code schema must still allow string (got {patched_code_schema!r})"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1612 regression tests — incremental_code_generator crashes on
+# malformed llm_invoke results (None or raw string instead of Pydantic model).
+#
+# Root cause: `diff_result: DiffAnalysis = diff_response['result']` is a type
+# hint only — no runtime isinstance guard enforces it.  When llm_invoke returns
+# None or a raw str (cache-bypass / truncation path), the subsequent attribute
+# accesses (.is_big_change, .patched_code, etc.) raise AttributeError, which
+# the except-block re-raises as RuntimeError instead of returning the documented
+# (None, False, total_cost, model_name) fallback.
+# ---------------------------------------------------------------------------
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_diff_analyzer_returns_none_falls_back_issue_1612(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs
+):
+    """When the diff-analyzer llm_invoke result is None (cache-bypass path),
+    incremental_code_generator must return the graceful fallback tuple
+    (None, False, cost, model_name) instead of raising
+    RuntimeError('NoneType object has no attribute is_big_change').
+    """
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.return_value = {
+        "result": None,
+        "cost": 0.01,
+        "model_name": "test-model",
+    }
+
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
+        **common_inputs
+    )
+
+    assert updated_code is None
+    assert is_incremental is False
+    assert total_cost == pytest.approx(0.01)
+    assert model_name == "test-model"
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_diff_analyzer_returns_raw_string_falls_back_issue_1612(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs
+):
+    """When the diff-analyzer llm_invoke result is a raw string (as observed
+    in production: 'Cache bypass retry also returned None'),
+    incremental_code_generator must return the fallback tuple instead of
+    raising RuntimeError('str object has no attribute is_big_change').
+    """
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.return_value = {
+        "result": "Cache bypass retry also returned None",
+        "cost": 0.01,
+        "model_name": "test-model",
+    }
+
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
+        **common_inputs
+    )
+
+    assert updated_code is None
+    assert is_incremental is False
+    assert total_cost == pytest.approx(0.01)
+    assert model_name == "test-model"
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_patcher_returns_none_falls_back_issue_1612(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs
+):
+    """When the patcher llm_invoke result is None, incremental_code_generator
+    must return the fallback tuple (None, False, total_cost, model_name) instead
+    of raising RuntimeError('NoneType object has no attribute patched_code').
+
+    Total cost accumulates across both LLM calls (diff-analyzer + patcher).
+    """
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.side_effect = [
+        mock_diff_response(is_big_change=False, cost=0.01),
+        {
+            "result": None,
+            "cost": 0.02,
+            "model_name": "test-patch-model",
+        },
+    ]
+
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
+        **common_inputs
+    )
+
+    assert updated_code is None
+    assert is_incremental is False
+    assert total_cost == pytest.approx(0.03)
+    assert model_name == "test-patch-model"
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_patcher_returns_raw_string_falls_back_issue_1612(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs
+):
+    """When the patcher llm_invoke result is a raw string (as observed in
+    production: 'Error: str object has no attribute planned_modifications'),
+    incremental_code_generator must return the fallback tuple instead of
+    raising RuntimeError('str object has no attribute patched_code').
+    """
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.side_effect = [
+        mock_diff_response(is_big_change=False, cost=0.01),
+        {
+            "result": "Error: 'str' object has no attribute planned_modifications",
+            "cost": 0.02,
+            "model_name": "test-patch-model",
+        },
+    ]
+
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
+        **common_inputs
+    )
+
+    assert updated_code is None
+    assert is_incremental is False
+    assert total_cost == pytest.approx(0.03)
+    assert model_name == "test-patch-model"
+
+
+@patch("pdd.incremental_code_generator.llm_invoke")
+@patch("pdd.incremental_code_generator.load_prompt_template")
+@patch("pdd.incremental_code_generator.preprocess")
+def test_unexpected_llm_exception_falls_back_gracefully_issue_1612(
+    mock_preprocess, mock_load_template, mock_llm_invoke, common_inputs
+):
+    """When llm_invoke raises an unexpected exception, the handler at
+    lines 168-172 must return (None, False, 0.0, '') — the documented
+    fallback — instead of re-raising as RuntimeError and crashing pdd sync.
+
+    This covers the expansion item from Step 6: the handler must return the
+    fallback tuple for ALL unexpected exceptions, not only the malformed-result
+    isinstance-guarded cases.
+
+    Note: once this test passes, test_llm_invoke_failure (which asserts
+    RuntimeError propagation) must be updated to assert the fallback return
+    value instead, since both test the same handler path.
+    """
+    mock_load_template.return_value = "template"
+    mock_preprocess.return_value = "processed_template"
+    mock_llm_invoke.side_effect = Exception("connection reset")
+
+    updated_code, is_incremental, total_cost, model_name = incremental_code_generator(
+        **common_inputs
+    )
+
+    assert updated_code is None
+    assert is_incremental is False
+    assert total_cost == 0.0
+    assert model_name == ""

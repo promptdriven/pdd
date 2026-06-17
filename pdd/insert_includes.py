@@ -264,6 +264,18 @@ def insert_includes(
                 raise ValueError("Failed to get valid response from LLM model")
 
             result: InsertIncludesOutput = response['result']
+            # Guard against malformed structured output of any non-``InsertIncludesOutput``
+            # shape (``None``, a raw string, or a raw ``dict`` that survives the
+            # cloud validation-failure ``pass`` in ``llm_invoke``). The
+            # ``'result' not in response`` check above does not catch a
+            # present-but-malformed value, so verify the type before accessing
+            # ``.output_prompt`` (issue #1612).
+            if not isinstance(result, InsertIncludesOutput):
+                raise ValueError(
+                    "insert_includes received a malformed LLM result "
+                    f"(expected InsertIncludesOutput, got "
+                    f"{type(result).__name__})."
+                )
             model_name = response['model_name']
             total_cost = response['cost'] + auto_include_cost
             output_prompt = result.output_prompt
