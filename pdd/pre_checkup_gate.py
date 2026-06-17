@@ -180,18 +180,35 @@ def _docs_only(changed_files: Sequence[str]) -> bool:
     )
 
 
-def _load_architecture(worktree: Path) -> List[Dict[str, Any]]:
-    path = worktree / "architecture.json"
-    if not path.exists():
-        return []
+def _arch_entries(
+    arch_path: Path,
+    cache: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> List[Dict[str, Any]]:
+    """Module entries from a specific architecture.json — the repo root's OR a
+    foreign/nested one — tolerating both the bare-list and ``{"modules": [...]}``
+    shapes and returning ``[]`` for a missing or unparseable file. ``cache`` (keyed
+    by path) avoids re-parsing the same architecture.json within one gate run."""
+    key = str(arch_path)
+    if cache is not None and key in cache:
+        return cache[key]
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data: Any = json.loads(arch_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return []
+        data = None
     if isinstance(data, dict):
         modules = data.get("modules", [])
-        return modules if isinstance(modules, list) else []
-    return data if isinstance(data, list) else []
+        entries = modules if isinstance(modules, list) else []
+    elif isinstance(data, list):
+        entries = data
+    else:
+        entries = []
+    if cache is not None:
+        cache[key] = entries
+    return entries
+
+
+def _load_architecture(worktree: Path) -> List[Dict[str, Any]]:
+    return _arch_entries(worktree / "architecture.json")
 
 
 def _touched_architecture_json_error(
@@ -340,29 +357,154 @@ def _architecture_entry_maps_file(entry: Dict[str, Any], rel: str) -> bool:
     return rel in {filepath, f"pdd/prompts/{filename}", f"prompts/{filename}"}
 
 
+def _entry_repo_code_paths(worktree: Path, arch_dir: Path, filepath: Any) -> Set[str]:
+    """Repo-relative spellings of an architecture entry's ``filepath``.
+
+    A ``filepath`` is recorded relative to its architecture.json's own directory
+    (the root architecture.json sits at the repo root, so its entries are already
+    repo-relative; a foreign architecture.json under ``extensions/<app>/`` records
+    paths relative to that directory). Some consumers store repo-relative paths even
+    in a foreign architecture.json, so BOTH interpretations are accepted."""
+    if not isinstance(filepath, str) or not filepath:
+        return set()
+    fp = _norm(filepath)
+    out: Set[str] = set()
+    for base in (arch_dir, worktree):
+        rel = _rel_within(base / fp, worktree)
+        if rel:
+            out.add(rel)
+    return out
+
+
+def _resolve_entry_code_path(worktree: Path, arch_dir: Path, filepath: Any) -> Optional[Path]:
+    """On-disk code Path for an architecture entry, honoring both the arch-dir-
+    relative and repo-relative ``filepath`` conventions. Returns the first candidate
+    that exists, else ``None`` — never a bogus path that would mis-attribute heal
+    output to a file that is not there."""
+    if not isinstance(filepath, str) or not filepath:
+        return None
+    fp = _norm(filepath)
+    for base in (arch_dir, worktree):
+        candidate = base / fp
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _resolve_prompt_under_arch(arch_dir: Path, filename: Any) -> Optional[Path]:
+    """Locate a prompt named (architecture-relative) ``filename`` under its owning
+    architecture's directory. Prompts live under ``<arch_dir>/prompts/`` (foreign
+    consumers) or ``<arch_dir>/pdd/prompts/`` (a vendored-pdd layout); ``filename``
+    may itself contain sub-directories (e.g. ``src/config_Python.prompt``)."""
+    fn = _norm(filename) if isinstance(filename, str) else ""
+    if not fn:
+        return None
+    for sub in ("prompts", "pdd/prompts"):
+        candidate = arch_dir / sub / fn
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _code_path_for_prompt(
+    worktree: Path,
+    prompt_path: Path,
+    arch_cache: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Optional[Path]:
+    """The code module a prompt generates, resolved through the prompt's OWNING
+    architecture.json (nearest ancestor of its prompts dir) so a foreign prompt is
+    paired with its foreign code module rather than a same-named root module."""
+    prompts_dir, rel_filename = _prompt_sync_scope(worktree, prompt_path, prompt_path.name)
+    arch_path = _architecture_path_for_prompts_dir(worktree, prompts_dir)
+    for entry in _arch_entries(arch_path, arch_cache):
+        if not isinstance(entry, dict):
+            continue
+        if _norm(entry.get("filename", "")) == rel_filename:
+            return _resolve_entry_code_path(worktree, arch_path.parent, entry.get("filepath"))
+    return None
+
+
+def _nearest_foreign_architecture(worktree: Path, rel: str) -> Optional[Path]:
+    """Nearest-ancestor architecture.json above a changed file, EXCLUDING the repo
+    root (whose entries the caller already searched). ``None`` when the only owner up
+    the tree is the root architecture.json."""
+    try:
+        root = worktree.resolve()
+        current = (worktree / rel).resolve().parent
+        current.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    while current != root:
+        candidate = current / "architecture.json"
+        if candidate.is_file():
+            return candidate
+        current = current.parent
+    return None
+
+
+def _touched_prompt_for_foreign_code(
+    worktree: Path,
+    rel: str,
+    arch_cache: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Optional[Tuple[Path, Optional[Path]]]:
+    """Map a changed code file owned only by a FOREIGN architecture.json back to its
+    prompt, for modules the repo-root architecture.json does not list. Returns
+    ``(prompt_path, code_path)`` or ``None``."""
+    arch_path = _nearest_foreign_architecture(worktree, rel)
+    if arch_path is None:
+        return None
+    arch_dir = arch_path.parent
+    for entry in _arch_entries(arch_path, arch_cache):
+        if not isinstance(entry, dict):
+            continue
+        if rel not in _entry_repo_code_paths(worktree, arch_dir, entry.get("filepath")):
+            continue
+        filename = entry.get("filename")
+        if not isinstance(filename, str) or not filename.endswith(".prompt"):
+            continue
+        prompt_path = _resolve_prompt_under_arch(arch_dir, filename)
+        if prompt_path is not None:
+            return prompt_path, (worktree / rel)
+    return None
+
+
 def _touched_prompt_files(
     worktree: Path,
     changed_files: Sequence[str],
     architecture: Sequence[Dict[str, Any]],
 ) -> Dict[str, Tuple[Path, Optional[Path]]]:
+    # Keyed by each touched prompt's repo-relative PATH, never its basename: two
+    # prompts that share a basename across different prompts dirs (e.g.
+    # extensions/a/prompts and extensions/b/prompts) are distinct modules and must
+    # both be synced — a basename key collapsed them into one and silently dropped
+    # the other.
     touched: Dict[str, Tuple[Path, Optional[Path]]] = {}
+    arch_cache: Dict[str, List[Dict[str, Any]]] = {}
     for raw in changed_files:
         rel = _norm(raw)
         prompt_filename = _prompt_filename_from_changed(rel)
         if prompt_filename:
-            prompt_path = _prompt_path_for_filename(worktree, prompt_filename)
+            # Resolve to the ACTUAL changed path when it exists. Re-deriving the path
+            # from the basename (_prompt_path_for_filename) probes pdd/prompts and
+            # prompts/ FIRST, so a foreign prompt whose basename also exists at the
+            # repo root was mis-resolved to the root copy and synced against the wrong
+            # architecture.json. The literal path preserves the prompt's true identity.
+            literal = worktree / rel
+            prompt_path = (
+                literal
+                if literal.is_file()
+                else _prompt_path_for_filename(worktree, prompt_filename)
+            )
             if prompt_path is not None:
-                code_path: Optional[Path] = None
-                for entry in architecture:
-                    if not isinstance(entry, dict):
-                        continue
-                    if _norm(entry.get("filename", "")) == prompt_filename:
-                        filepath = entry.get("filepath")
-                        if isinstance(filepath, str) and filepath:
-                            code_path = worktree / filepath
-                        break
-                touched[prompt_filename] = (prompt_path, code_path)
+                key = _rel_within(prompt_path, worktree) or rel
+                touched[key] = (
+                    prompt_path,
+                    _code_path_for_prompt(worktree, prompt_path, arch_cache),
+                )
             continue
+        # A changed code/doc file: map it back to its owning prompt via the root
+        # architecture first (the common case)...
+        mapped = False
         for entry in architecture:
             if _architecture_entry_maps_file(entry, rel):
                 filename = entry.get("filename")
@@ -373,7 +515,18 @@ def _touched_prompt_files(
                     continue
                 filepath = entry.get("filepath")
                 code_path = worktree / filepath if isinstance(filepath, str) and filepath else None
-                touched[filename] = (prompt_path, code_path)
+                key = _rel_within(prompt_path, worktree) or filename
+                touched[key] = (prompt_path, code_path)
+                mapped = True
+        # ...then fall back to the nearest-ancestor FOREIGN architecture.json, so a
+        # module owned only by extensions/<app>/architecture.json is not invisible to
+        # drift sync.
+        if not mapped:
+            foreign = _touched_prompt_for_foreign_code(worktree, rel, arch_cache)
+            if foreign is not None:
+                prompt_path, code_path = foreign
+                key = _rel_within(prompt_path, worktree) or rel
+                touched[key] = (prompt_path, code_path)
     return touched
 
 

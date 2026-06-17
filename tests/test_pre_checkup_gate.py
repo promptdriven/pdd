@@ -1406,3 +1406,206 @@ def test_drift_sync_standard_pdd_prompts_still_uses_root_architecture(monkeypatc
             f"Standard pdd/prompts case: expected root arch path, got {ap}"
         )
     assert outcome.ok is True
+
+
+# ---------------------------------------------------------------------------
+# Issue #1614 — review follow-ups: prompt discovery must not misroute or
+# collapse by basename, and foreign code-only changes must be visible
+# ---------------------------------------------------------------------------
+
+def test_drift_sync_foreign_prompt_basename_collision_targets_foreign_arch(monkeypatch, tmp_path):
+    """A foreign prompt whose basename ALSO exists under pdd/prompts must still sync
+    against its own foreign architecture.json, never the repo-root one.
+
+    Buggy behavior: the prompt path was re-derived from the basename, and that probe
+    checks pdd/prompts/ and prompts/ FIRST — so the foreign prompt resolved to the
+    same-named ROOT copy and synced the root prompts_dir against the root arch,
+    leaving the foreign arch stale and the foreign prompt change unsynced.
+
+    Drives the REAL sync_all_prompts_to_architecture; only run_metadata_sync and
+    detect_drift are stubbed.
+    """
+    # Root prompt + root arch entry sharing the basename 'shared_python.prompt'.
+    (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+    (tmp_path / "pdd" / "shared.py").write_text("def root():\n    return 1\n", encoding="utf-8")
+    (tmp_path / "pdd" / "prompts" / "shared_python.prompt").write_text(
+        "<pdd-reason>Root shared</pdd-reason>\n", encoding="utf-8"
+    )
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            [
+                {"filename": "shared_python.prompt", "filepath": "pdd/shared.py",
+                 "reason": "Root shared", "description": "RS", "dependencies": [],
+                 "priority": 1, "tags": []},
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    root_before = (tmp_path / "architecture.json").read_text()
+    # Foreign app whose prompt shares the basename, with its own STALE arch.
+    (tmp_path / "extensions" / "app" / "prompts").mkdir(parents=True)
+    (tmp_path / "extensions" / "app" / "prompts" / "shared_python.prompt").write_text(
+        "<pdd-reason>Fresh foreign shared</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = tmp_path / "extensions" / "app" / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {"filename": "shared_python.prompt", "filepath": "extensions/app/shared.py",
+                 "reason": "Stale foreign shared", "description": "FS", "dependencies": [],
+                 "priority": 1, "tags": []},
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(kwargs.get("architecture_path"))
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/app/prompts/shared_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # Foreign arch was synced from the foreign prompt...
+    assert json.loads(ext_arch.read_text())[0]["reason"] == "Fresh foreign shared", (
+        "foreign prompt change was synced against the wrong architecture.json"
+    )
+    # ...the root arch (and its same-named entry) was left untouched...
+    assert (tmp_path / "architecture.json").read_text() == root_before
+    # ...and metadata-sync ran against the foreign arch, not the root one.
+    assert captured_arch_paths
+    assert all(
+        Path(ap).resolve() == ext_arch.resolve() for ap in captured_arch_paths
+    ), captured_arch_paths
+    assert outcome.ok is True
+
+
+def test_drift_sync_two_foreign_prompts_same_basename_both_synced(monkeypatch, tmp_path):
+    """Two changed prompts that share a basename across different prompts dirs are
+    distinct modules and must BOTH sync.
+
+    Buggy behavior: touched prompts were keyed by basename, so the second
+    auth_python.prompt overwrote the first — only one app's architecture/metadata was
+    synced and the other was silently dropped.
+
+    Drives the REAL sync_all_prompts_to_architecture; only run_metadata_sync and
+    detect_drift are stubbed.
+    """
+    arches = {}
+    for app in ("a", "b"):
+        (tmp_path / "extensions" / app / "prompts").mkdir(parents=True)
+        (tmp_path / "extensions" / app / "prompts" / "auth_python.prompt").write_text(
+            f"<pdd-reason>Fresh {app} auth</pdd-reason>\n", encoding="utf-8"
+        )
+        arch = tmp_path / "extensions" / app / "architecture.json"
+        arch.write_text(
+            json.dumps(
+                [
+                    {"filename": "auth_python.prompt", "filepath": f"extensions/{app}/auth.py",
+                     "reason": f"Stale {app} auth", "description": "A", "dependencies": [],
+                     "priority": 1, "tags": []},
+                ],
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        arches[app] = arch
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(Path(kwargs.get("architecture_path")).resolve())
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/a/prompts/auth_python.prompt",
+         "extensions/b/prompts/auth_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    # BOTH foreign arches synced from their OWN prompt...
+    assert json.loads(arches["a"].read_text())[0]["reason"] == "Fresh a auth"
+    assert json.loads(arches["b"].read_text())[0]["reason"] == "Fresh b auth"
+    # ...and metadata-sync ran against BOTH, not just one.
+    assert arches["a"].resolve() in captured_arch_paths, captured_arch_paths
+    assert arches["b"].resolve() in captured_arch_paths, captured_arch_paths
+    assert outcome.ok is True
+
+
+def test_drift_sync_foreign_code_only_change_discovered_via_foreign_arch(monkeypatch, tmp_path):
+    """A changed CODE file owned only by a foreign architecture.json must be mapped
+    back to its prompt and synced against that foreign arch.
+
+    Buggy behavior: _run_drift_sync loaded only the repo-root architecture.json, so a
+    code-only change to a foreign-owned module matched no entry and triggered no sync
+    at all. Uses the real foreign-consumer convention (arch-dir-relative filepath /
+    sub-pathed filename).
+
+    sync_all_prompts_to_architecture is stubbed to isolate the discovery + the
+    run_metadata_sync call site.
+    """
+    ext = tmp_path / "extensions" / "github_pdd_app"
+    (ext / "prompts" / "src").mkdir(parents=True)
+    (ext / "src").mkdir(parents=True)
+    (ext / "src" / "config.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (ext / "prompts" / "src" / "config_Python.prompt").write_text(
+        "<pdd-reason>Fresh config</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = ext / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {"filename": "src/config_Python.prompt", "filepath": "src/config.py",
+                 "reason": "Stale config", "description": "C", "dependencies": [],
+                 "priority": 1, "tags": []},
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    captured = []
+
+    def capturing_metadata_sync(prompt_path, code_path, **kwargs):
+        captured.append(
+            (Path(prompt_path), code_path, Path(kwargs.get("architecture_path")))
+        )
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(
+        pre_checkup_gate, "sync_all_prompts_to_architecture", lambda **_k: {"success": True}
+    )
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/src/config.py"],
+        base_ref=None,
+        strict=False,
+    )
+
+    assert captured, "foreign code-only change was invisible to drift sync"
+    prompt_path, code_path, arch_path = captured[0]
+    assert prompt_path.resolve() == (ext / "prompts" / "src" / "config_Python.prompt").resolve()
+    assert code_path is not None and Path(code_path).resolve() == (ext / "src" / "config.py").resolve()
+    assert arch_path.resolve() == ext_arch.resolve()
+    assert outcome.ok is True
