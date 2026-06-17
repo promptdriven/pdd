@@ -1609,3 +1609,94 @@ def test_drift_sync_foreign_code_only_change_discovered_via_foreign_arch(monkeyp
     assert code_path is not None and Path(code_path).resolve() == (ext / "src" / "config.py").resolve()
     assert arch_path.resolve() == ext_arch.resolve()
     assert outcome.ok is True
+
+
+def test_drift_sync_nested_foreign_code_only_change_resolves_nested_prompt(monkeypatch, tmp_path):
+    """A foreign code-only change whose prompt lives in a prompts dir NESTED below the
+    owning architecture.json (extensions/app/src/prompts/, not extensions/app/prompts/)
+    must still map to that prompt and metadata-sync against the foreign arch.
+
+    Resolving the prompt only directly under <arch_dir>/prompts/ or <arch_dir>/pdd/
+    prompts/ left nested layouts (which the prompt-change path already supports)
+    invisible to the foreign code-only fallback.
+    """
+    ext = tmp_path / "extensions" / "app"
+    (ext / "src" / "prompts").mkdir(parents=True)
+    (ext / "src" / "ext_module.py").write_text("X = 1\n", encoding="utf-8")
+    (ext / "src" / "prompts" / "ext_module_python.prompt").write_text(
+        "<pdd-reason>Fresh</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = ext / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {"filename": "ext_module_python.prompt", "filepath": "src/ext_module.py",
+                 "reason": "Stale", "description": "E", "dependencies": [],
+                 "priority": 1, "tags": []},
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    captured = []
+
+    def capturing_metadata_sync(prompt_path, code_path, **kwargs):
+        captured.append(
+            (Path(prompt_path), code_path, Path(kwargs.get("architecture_path")))
+        )
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(
+        pre_checkup_gate, "sync_all_prompts_to_architecture", lambda **_k: {"success": True}
+    )
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path, ["extensions/app/src/ext_module.py"], base_ref=None, strict=False
+    )
+
+    assert captured, "nested foreign code-only change was invisible to drift sync"
+    prompt_path, code_path, arch_path = captured[0]
+    assert prompt_path.resolve() == (ext / "src" / "prompts" / "ext_module_python.prompt").resolve()
+    assert code_path is not None and Path(code_path).resolve() == (ext / "src" / "ext_module.py").resolve()
+    assert arch_path.resolve() == ext_arch.resolve()
+    assert outcome.ok is True
+
+
+def test_touched_invalid_foreign_architecture_json_blocks(tmp_path):
+    """A broken FOREIGN architecture.json (a nested extensions/app/architecture.json the
+    PR touched, or that drift-sync rewrote into synced_paths) must hard-block too, not
+    only the repo-root file — drift-sync now writes foreign arch files, so a sync that
+    corrupts one must be caught. A foreign arch the PR never touched must NOT block.
+    """
+    ext_arch = tmp_path / "extensions" / "app" / "architecture.json"
+    ext_arch.parent.mkdir(parents=True)
+
+    # Unparseable foreign arch the PR touched -> blocks, named by its repo-relative path.
+    ext_arch.write_text("{ broken ]", encoding="utf-8")
+    err = pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["extensions/app/architecture.json"]
+    )
+    assert err and "extensions/app/architecture.json" in err and "not valid JSON" in err, err
+
+    # Wrong-shape foreign arch -> blocks.
+    ext_arch.write_text('"oops"', encoding="utf-8")
+    err = pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["extensions/app/architecture.json"]
+    )
+    assert err and "not a recognized architecture shape" in err, err
+
+    # Not touched by the PR -> never blocks, even if broken.
+    ext_arch.write_text("{ broken ]", encoding="utf-8")
+    assert pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["extensions/app/src/foo.py"]
+    ) is None
+
+    # Valid foreign arch touched -> does not block.
+    ext_arch.write_text("[]", encoding="utf-8")
+    assert pre_checkup_gate._touched_architecture_json_error(
+        tmp_path, ["extensions/app/architecture.json"]
+    ) is None

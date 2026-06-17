@@ -211,49 +211,36 @@ def _load_architecture(worktree: Path) -> List[Dict[str, Any]]:
     return _arch_entries(worktree / "architecture.json")
 
 
-def _touched_architecture_json_error(
-    worktree: Path, changed_files: Sequence[str]
-) -> Optional[str]:
-    """Hard-block reason if the PR itself touched ``architecture.json`` and it no
-    longer parses, else ``None``.
+def _architecture_json_shape_error(path: Path, label: str) -> Optional[str]:
+    """Shape-validation reason for ONE architecture.json (``label`` names it in the
+    message), or ``None`` if it parses into a usable module graph / does not exist.
 
-    ``_load_architecture`` deliberately swallows a parse error (returns ``[]``)
-    so the gate never crashes on a repo with a malformed arch file — but that
-    means a PR that *breaks* ``architecture.json`` would silently no-op the
-    drift phase and pass the gate, handing checkup a broken central config the
-    gate depends on. So validate it HERE, but only when the PR touched it and it
-    exists: a pre-existing/absent breakage is not this PR's doing (blocking on
-    that would be the false-block-on-infra pattern we avoid). Scope matches
-    ``_load_architecture`` — repo-root ``architecture.json`` only.
+    ``_load_architecture``/``_arch_entries`` deliberately swallow a parse error
+    (returning ``[]``) so the gate never crashes on a malformed arch file — but that
+    means a file a PR/heal *breaks* would silently no-op the module graph and pass.
+    So validate the shape HERE.
     """
-    if not any(_norm(f) == "architecture.json" for f in changed_files):
-        return None
-    path = worktree / "architecture.json"
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        return (
-            "architecture.json (changed by this PR) is not valid JSON: "
-            f"{_scrub(exc)}"
-        )
-    # Valid JSON is not enough: the shape must be one _load_architecture can
-    # extract a module graph from — a top-level list, or a dict with a "modules"
-    # list. A scalar ("oops") or a dict without a modules list parses fine but
-    # yields an EMPTY graph silently, so drift-sync and downstream checks run
-    # against no modules at all and the gate passes vacuously. An empty list /
-    # `{"modules": []}` is a legitimate "no modules" state and does NOT block.
+        return f"{label} (changed by this PR) is not valid JSON: {_scrub(exc)}"
+    # Valid JSON is not enough: the shape must be one _arch_entries can extract a
+    # module graph from — a top-level list, or a dict with a "modules" list. A scalar
+    # ("oops") or a dict without a modules list parses fine but yields an EMPTY graph
+    # silently, so drift-sync and downstream checks run against no modules at all and
+    # the gate passes vacuously. An empty list / `{"modules": []}` is a legitimate "no
+    # modules" state and does NOT block.
     if not (
         isinstance(data, list)
         or (isinstance(data, dict) and isinstance(data.get("modules"), list))
     ):
         return (
-            "architecture.json (changed by this PR) is valid JSON but not a "
-            "recognized architecture shape (expected a list of modules, or a "
-            'dict with a "modules" list); got '
-            f"{type(data).__name__} — the gate would silently treat the module "
-            "graph as empty"
+            f"{label} (changed by this PR) is valid JSON but not a recognized "
+            "architecture shape (expected a list of modules, or a dict with a "
+            f'"modules" list); got {type(data).__name__} — the gate would silently '
+            "treat the module graph as empty"
         )
     # The container is recognized, but each entry must be a usable module mapping
     # — a dict with a non-empty STRING `filename` or `filepath`. Malformed entries
@@ -264,8 +251,7 @@ def _touched_architecture_json_error(
     # STRUCTURAL terminus: the gate validates that entries are well-formed enough
     # to derive a module graph, but does NOT verify the referenced files exist or
     # match a language — that is architecture_sync's full-schema job, not a smoke
-    # gate's. (All 270 real entries satisfy this; [] / {"modules": []} is a
-    # legitimate empty state and does not block.)
+    # gate's. ([] / {"modules": []} is a legitimate empty state and does not block.)
     entries = data if isinstance(data, list) else data.get("modules", [])
 
     def _usable_entry(e: Any) -> bool:
@@ -280,10 +266,38 @@ def _touched_architecture_json_error(
     bad = sum(1 for e in entries if not _usable_entry(e))
     if bad:
         return (
-            "architecture.json (changed by this PR) has malformed module "
-            f"entries ({bad} of {len(entries)} are not dicts with a "
-            "filename/filepath) — the gate cannot derive a module graph from it"
+            f"{label} (changed by this PR) has malformed module entries "
+            f"({bad} of {len(entries)} are not dicts with a filename/filepath) — "
+            "the gate cannot derive a module graph from it"
         )
+    return None
+
+
+def _touched_architecture_json_error(
+    worktree: Path, changed_files: Sequence[str]
+) -> Optional[str]:
+    """Hard-block reason if the PR (or the heal/sync phase) touched ANY
+    ``architecture.json`` — the repo-root one OR a nested/foreign one — and it no
+    longer parses into a usable module graph, else ``None``.
+
+    Validate only files in ``changed_files`` (the PR diff PLUS the paths drift-sync
+    reported mutating via ``synced_paths``): a pre-existing/absent breakage in a file
+    this PR never touched is not its doing and MUST NOT block (the false-block-on-infra
+    pattern we avoid). Foreign arch files are in scope because drift-sync now writes
+    them — a sync that corrupts a nested ``extensions/app/architecture.json`` must be
+    caught, mirroring the guarantee already held for the root file.
+    """
+    seen: Set[str] = set()
+    for raw in changed_files:
+        rel = _norm(raw)
+        if rel != "architecture.json" and not rel.endswith("/architecture.json"):
+            continue
+        if rel in seen:
+            continue
+        seen.add(rel)
+        error = _architecture_json_shape_error(worktree / rel, rel)
+        if error:
+            return error
     return None
 
 
@@ -399,11 +413,20 @@ def _resolve_prompt_under_arch(arch_dir: Path, filename: Any) -> Optional[Path]:
     fn = _norm(filename) if isinstance(filename, str) else ""
     if not fn:
         return None
+    # Fast path: the common layouts directly under the architecture's directory.
     for sub in ("prompts", "pdd/prompts"):
         candidate = arch_dir / sub / fn
         if candidate.is_file():
             return candidate
-    return None
+    # Fallback: a prompts dir NESTED below the architecture's directory (e.g.
+    # extensions/app/src/prompts/) — the same arrangement the prompt-change path
+    # already handles via _prompt_sync_scope's last-"prompts"-component scoping.
+    # Bounded to the arch subtree; take the shallowest match for determinism.
+    matches = sorted(
+        (p for p in arch_dir.glob(f"**/prompts/{fn}") if p.is_file()),
+        key=lambda p: len(p.relative_to(arch_dir).parts),
+    )
+    return matches[0] if matches else None
 
 
 def _code_path_for_prompt(
@@ -650,6 +673,15 @@ def _run_drift_sync(
             env.setdefault("PDD_FORCE_LOCAL", "1")
             parsed_cost = 0.0
             with _pushd(worktree):
+                # KNOWN LIMITATION (foreign modules): detect_drift resolves a
+                # module's code/example paths from its basename via .pddrc context,
+                # not from the prompts_dir resolved above. A foreign module is
+                # therefore detected correctly only when a .pddrc context maps it
+                # (which real consumers configure); without one, its update-drift may
+                # be missed here. Fixing this for the no-.pddrc case needs path
+                # injection into sync_determine_operation's decision — out of scope
+                # for the architecture-targeting fix. Architecture-sync and
+                # metadata-sync above already target the correct foreign arch.
                 try:
                     prompt_drifts, example_drifts = detect_drift(
                         modules=list(modules),
