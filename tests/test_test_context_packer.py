@@ -33,25 +33,9 @@ from unittest.mock import patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Conditional import — packer tests skip until PR #1524 lands
-# ---------------------------------------------------------------------------
-try:
-    from pdd.test_context_packer import TestContextPacker, TestPackingManifest
+from pdd.test_context_packer import TestContextPacker
 
-    _PACKER_AVAILABLE = True
-except ImportError:
-    _PACKER_AVAILABLE = False
-    TestContextPacker = None  # type: ignore[assignment,misc]
-    TestPackingManifest = None  # type: ignore[assignment,misc]
-
-_needs_packer = pytest.mark.skipif(
-    not _PACKER_AVAILABLE,
-    reason=(
-        "pdd.test_context_packer not yet on main — waiting for PR #1524. "
-        "These tests will run automatically once the module is merged."
-    ),
-)
+_needs_packer = pytest.mark.skipif(False, reason="TestContextPacker is included in this PR")
 
 
 # ---------------------------------------------------------------------------
@@ -573,10 +557,11 @@ class TestFourScoringSignals:
         )
 
         selected = _selected_files(result)
-        if str(close) in selected and str(distant) in selected:
-            assert selected.index(str(close)) < selected.index(str(distant)), (
-                "File with smaller import-graph distance must rank higher in selection"
-            )
+        assert str(close) in selected, "Closer importing file must be selected"
+        assert str(distant) in selected, "Distant file must be selected when budget allows"
+        assert selected.index(str(close)) < selected.index(str(distant)), (
+            "File with smaller import-graph distance must rank higher in selection"
+        )
 
     def test_symbol_reference_overlap_higher_overlap_ranks_higher(
         self, tmp_path: Path
@@ -615,10 +600,11 @@ class TestFourScoringSignals:
         )
 
         selected = _selected_files(result)
-        if str(high_overlap) in selected and str(low_overlap) in selected:
-            assert selected.index(str(high_overlap)) < selected.index(str(low_overlap)), (
-                "Higher symbol-reference overlap with the target must produce a higher rank"
-            )
+        assert str(high_overlap) in selected, "Higher-overlap file must be selected"
+        assert str(low_overlap) in selected, "Lower-overlap file must be selected when budget allows"
+        assert selected.index(str(high_overlap)) < selected.index(str(low_overlap)), (
+            "Higher symbol-reference overlap with the target must produce a higher rank"
+        )
 
     def test_failure_history_signal_prioritizes_failing_test_from_env(
         self, tmp_path: Path, monkeypatch
@@ -659,10 +645,11 @@ class TestFourScoringSignals:
         )
 
         selected = _selected_files(result)
-        if str(newer) in selected and str(older) in selected:
-            assert selected.index(str(newer)) < selected.index(str(older)), (
-                "More recently modified file must rank higher than one last touched at epoch 0"
-            )
+        assert str(newer) in selected, "Newer file must be selected"
+        assert str(older) in selected, "Older file must be selected when budget allows"
+        assert selected.index(str(newer)) < selected.index(str(older)), (
+            "More recently modified file must rank higher than one last touched at epoch 0"
+        )
 
 
 # ===========================================================================
