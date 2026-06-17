@@ -295,6 +295,31 @@ def _prompt_sync_scope(
     return prompts_dir, rel_filename or fallback_filename
 
 
+def _architecture_path_for_prompts_dir(worktree: Path, prompts_dir: Path) -> Path:
+    """Find the nearest ancestor architecture.json for a prompts directory.
+
+    Standard repos keep prompts under pdd/prompts or prompts/ with the owning
+    architecture.json at the repo root. Nested consumers can keep prompts below
+    another package directory, where the owning architecture.json may be one or
+    more parents above the prompts directory.
+    """
+    root_arch = worktree / "architecture.json"
+    try:
+        root = worktree.resolve()
+        current = prompts_dir.resolve().parent
+        current.relative_to(root)
+    except (OSError, ValueError):
+        return root_arch
+
+    while True:
+        candidate = current / "architecture.json"
+        if candidate.is_file():
+            return candidate
+        if current == root:
+            return root_arch
+        current = current.parent
+
+
 def _prompt_filename_from_changed(rel: str) -> Optional[str]:
     marker = "/prompts/"
     if rel.startswith("prompts/"):
@@ -404,7 +429,7 @@ def _run_drift_sync(
                 basename_to_code[basename] = rel_code
 
     if prompt_pairs:
-        arch_paths_before: Dict[Path, str] = {}
+        arch_paths_before: Dict[Path, Optional[str]] = {}
         try:
             prompts_by_dir: Dict[Path, Set[str]] = {}
             for filename, (prompt_path, _code_path) in prompt_pairs.items():
@@ -413,8 +438,7 @@ def _run_drift_sync(
 
             sync_errors: List[str] = []
             for prompts_dir, filenames in prompts_by_dir.items():
-                own_arch = prompts_dir.parent / "architecture.json"
-                ap = own_arch if own_arch.is_file() else worktree / "architecture.json"
+                ap = _architecture_path_for_prompts_dir(worktree, prompts_dir)
                 if ap not in arch_paths_before:
                     arch_paths_before[ap] = _file_content_sig(ap)
 
@@ -452,8 +476,7 @@ def _run_drift_sync(
     for filename, (prompt_path, code_path) in prompt_pairs.items():
         try:
             prompts_dir, _ = _prompt_sync_scope(worktree, prompt_path, filename)
-            own_arch = prompts_dir.parent / "architecture.json"
-            ap = own_arch if own_arch.is_file() else worktree / "architecture.json"
+            ap = _architecture_path_for_prompts_dir(worktree, prompts_dir)
 
             result = run_metadata_sync(
                 prompt_path,

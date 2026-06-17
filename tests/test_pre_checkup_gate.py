@@ -1150,6 +1150,66 @@ def test_drift_sync_foreign_prompt_dir_does_not_corrupt_root_architecture(monkey
     assert outcome.ok is True
 
 
+def test_drift_sync_nested_prompt_dir_uses_nearest_ancestor_architecture(monkeypatch, tmp_path):
+    """Issue #1614: the owning architecture.json can be more than one level
+    above the prompts directory.
+
+    Example: extensions/github_pdd_app/src/prompts is owned by
+    extensions/github_pdd_app/architecture.json, not src/architecture.json and
+    not the repo root architecture.json.
+    """
+    nested_prompts_dir = (
+        tmp_path / "extensions" / "github_pdd_app" / "src" / "prompts"
+    )
+    nested_prompts_dir.mkdir(parents=True)
+    (nested_prompts_dir / "ext_module_python.prompt").write_text(
+        "<pdd-reason>Fresh nested reason</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = tmp_path / "extensions" / "github_pdd_app" / "architecture.json"
+    ext_arch.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "ext_module_python.prompt",
+                    "filepath": "extensions/github_pdd_app/src/ext_module.py",
+                    "reason": "Stale nested reason",
+                    "description": "Ext module desc",
+                    "dependencies": [],
+                    "priority": 1,
+                    "tags": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    captured_arch_paths = []
+
+    def capturing_metadata_sync(*_args, **kwargs):
+        captured_arch_paths.append(kwargs.get("architecture_path"))
+        return SimpleNamespace(ok=True, failing_stage=None)
+
+    monkeypatch.setattr(pre_checkup_gate, "run_metadata_sync", capturing_metadata_sync)
+    monkeypatch.setattr(pre_checkup_gate, "detect_drift", lambda **_k: ([], []))
+
+    outcome = pre_checkup_gate._run_drift_sync(
+        tmp_path,
+        ["extensions/github_pdd_app/src/prompts/ext_module_python.prompt"],
+        base_ref=None,
+        strict=False,
+    )
+
+    assert json.loads((tmp_path / "architecture.json").read_text()) == []
+    ext_arch_data = json.loads(ext_arch.read_text())
+    assert ext_arch_data[0]["reason"] == "Fresh nested reason", ext_arch_data
+    assert "extensions/github_pdd_app/architecture.json" in outcome.synced_paths
+    assert captured_arch_paths
+    assert all(path.resolve() == ext_arch.resolve() for path in captured_arch_paths)
+    assert outcome.ok is True
+
+
 def test_drift_sync_foreign_prompt_dir_metadata_sync_receives_foreign_arch_path(monkeypatch, tmp_path):
     """Issue #1614 (failure mode 2): run_metadata_sync must receive the nearest-ancestor
     architecture.json for a foreign-prompts-dir prompt, not the repo-root one.
