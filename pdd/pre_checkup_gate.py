@@ -406,11 +406,16 @@ def _resolve_entry_code_path(worktree: Path, arch_dir: Path, filepath: Any) -> O
     return None
 
 
-def _resolve_prompt_under_arch(arch_dir: Path, filename: Any) -> Optional[Path]:
+def _resolve_prompt_under_arch(
+    arch_dir: Path, filename: Any, code_path: Optional[Path] = None
+) -> Optional[Path]:
     """Locate a prompt named (architecture-relative) ``filename`` under its owning
     architecture's directory. Prompts live under ``<arch_dir>/prompts/`` (foreign
     consumers) or ``<arch_dir>/pdd/prompts/`` (a vendored-pdd layout); ``filename``
-    may itself contain sub-directories (e.g. ``src/config_Python.prompt``)."""
+    may itself contain sub-directories (e.g. ``src/config_Python.prompt``). When
+    ``code_path`` is given, a prompts dir COLOCATED with the code is preferred, so an
+    ambiguous basename present in several nested prompts dirs resolves to the one next
+    to its own module rather than a lexicographic pick."""
     fn = _norm(filename) if isinstance(filename, str) else ""
     if not fn:
         return None
@@ -419,6 +424,24 @@ def _resolve_prompt_under_arch(arch_dir: Path, filename: Any) -> Optional[Path]:
         candidate = arch_dir / sub / fn
         if candidate.is_file():
             return candidate
+    # Prefer the prompts dir COLOCATED with the changed code: walk from the code
+    # file's directory up to the architecture dir, so code at src/b/foo.py binds to
+    # src/b/prompts/<fn> rather than a same-named prompt in an unrelated src/a/prompts.
+    if code_path is not None:
+        try:
+            stop = arch_dir.resolve()
+            current = code_path.resolve().parent
+            current.relative_to(stop)
+            while True:
+                for sub in ("prompts", "pdd/prompts"):
+                    candidate = current / sub / fn
+                    if candidate.is_file():
+                        return candidate
+                if current == stop:
+                    break
+                current = current.parent
+        except (OSError, ValueError):
+            pass
     # Fallback: a prompts dir NESTED below the architecture's directory (e.g.
     # extensions/app/src/prompts/) — the same arrangement the prompt-change path
     # already handles via _prompt_sync_scope's last-"prompts"-component scoping.
@@ -489,7 +512,7 @@ def _touched_prompt_for_foreign_code(
         filename = entry.get("filename")
         if not isinstance(filename, str) or not filename.endswith(".prompt"):
             continue
-        prompt_path = _resolve_prompt_under_arch(arch_dir, filename)
+        prompt_path = _resolve_prompt_under_arch(arch_dir, filename, worktree / rel)
         if prompt_path is not None:
             return prompt_path, (worktree / rel)
     return None

@@ -1736,3 +1736,37 @@ def test_foreign_code_resolution_treats_glob_metachars_in_filename_literally(tmp
     assert pre_checkup_gate._resolve_prompt_under_arch(ext, "safe_python.prompt") == (
         ext / "src" / "prompts" / "safe_python.prompt"
     )
+
+
+def test_foreign_code_resolution_prefers_prompt_colocated_with_code(tmp_path):
+    """When the same prompt basename exists in several nested prompts dirs, a foreign
+    code-only change must resolve to the prompt COLOCATED with that code file, not a
+    shallow/lexicographic pick — otherwise the gate heals/validates the wrong module.
+    """
+    ext = tmp_path / "extensions" / "app"
+    (ext / "src" / "a" / "prompts").mkdir(parents=True)
+    (ext / "src" / "b" / "prompts").mkdir(parents=True)
+    # Same prompt basename in two sibling modules; the code lives in src/b.
+    (ext / "src" / "a" / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>A</pdd-reason>\n", encoding="utf-8"
+    )
+    (ext / "src" / "b" / "prompts" / "foo_python.prompt").write_text(
+        "<pdd-reason>B</pdd-reason>\n", encoding="utf-8"
+    )
+    (ext / "src" / "b" / "foo.py").write_text("X = 1\n", encoding="utf-8")
+    ext_arch = ext / "architecture.json"
+    ext_arch.write_text(
+        json.dumps([{"filename": "foo_python.prompt", "filepath": "src/b/foo.py"}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    arch = pre_checkup_gate._load_architecture(tmp_path)
+    touched = pre_checkup_gate._touched_prompt_files(
+        tmp_path, ["extensions/app/src/b/foo.py"], arch
+    )
+    assert len(touched) == 1, touched
+    (prompt_path, _code_path), = touched.values()
+    assert prompt_path.resolve() == (ext / "src" / "b" / "prompts" / "foo_python.prompt").resolve(), (
+        f"expected the prompt colocated with src/b/foo.py, got {prompt_path}"
+    )
