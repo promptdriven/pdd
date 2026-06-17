@@ -609,6 +609,9 @@ def _resolve_symlink_target_path(
         target_path = link_path.parent / target_path
     try:
         target_path.resolve(strict=True)
+    except RuntimeError as exc:
+        errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
+        return None
     except OSError as exc:
         if getattr(exc, "errno", None) == errno.ELOOP:
             errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
