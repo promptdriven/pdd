@@ -1700,3 +1700,39 @@ def test_touched_invalid_foreign_architecture_json_blocks(tmp_path):
     assert pre_checkup_gate._touched_architecture_json_error(
         tmp_path, ["extensions/app/architecture.json"]
     ) is None
+
+
+def test_foreign_code_resolution_treats_glob_metachars_in_filename_literally(tmp_path):
+    """A foreign architecture `filename` containing glob metacharacters (e.g.
+    "*.prompt") must be matched LITERALLY when resolving a foreign code-only change's
+    prompt — never interpreted as a glob that selects an arbitrary prompt under a
+    nested prompts/ dir, which would heal/validate the wrong module.
+    """
+    ext = tmp_path / "extensions" / "app"
+    (ext / "src" / "prompts").mkdir(parents=True)
+    (ext / "src" / "ext_module.py").write_text("X = 1\n", encoding="utf-8")
+    # A real, unrelated prompt that a glob "*.prompt" would wrongly match.
+    (ext / "src" / "prompts" / "safe_python.prompt").write_text(
+        "<pdd-reason>x</pdd-reason>\n", encoding="utf-8"
+    )
+    ext_arch = ext / "architecture.json"
+    ext_arch.write_text(
+        json.dumps([{"filename": "*.prompt", "filepath": "src/ext_module.py"}]),
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+    # The direct resolver must not glob-match an arbitrary prompt.
+    assert pre_checkup_gate._resolve_prompt_under_arch(ext, "*.prompt") is None
+
+    # And the end-to-end touched-files map must not spuriously pick safe_python.prompt.
+    arch = pre_checkup_gate._load_architecture(tmp_path)
+    touched = pre_checkup_gate._touched_prompt_files(
+        tmp_path, ["extensions/app/src/ext_module.py"], arch
+    )
+    assert all("safe_python.prompt" not in key for key in touched), touched
+
+    # Sanity: a real (non-glob) filename still resolves via the nested-prompts fallback.
+    assert pre_checkup_gate._resolve_prompt_under_arch(ext, "safe_python.prompt") == (
+        ext / "src" / "prompts" / "safe_python.prompt"
+    )

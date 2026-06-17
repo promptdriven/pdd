@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import glob
 import hashlib
 import json
 import os
@@ -422,8 +423,11 @@ def _resolve_prompt_under_arch(arch_dir: Path, filename: Any) -> Optional[Path]:
     # extensions/app/src/prompts/) — the same arrangement the prompt-change path
     # already handles via _prompt_sync_scope's last-"prompts"-component scoping.
     # Bounded to the arch subtree; take the shallowest match for determinism.
+    # `glob.escape` the data-controlled filename so an architecture `filename` with
+    # glob metacharacters (e.g. "*.prompt") matches LITERALLY and never selects an
+    # arbitrary prompt — only the "prompts" path segment is a real glob.
     matches = sorted(
-        (p for p in arch_dir.glob(f"**/prompts/{fn}") if p.is_file()),
+        (p for p in arch_dir.glob(f"**/prompts/{glob.escape(fn)}") if p.is_file()),
         key=lambda p: len(p.relative_to(arch_dir).parts),
     )
     return matches[0] if matches else None
@@ -673,15 +677,18 @@ def _run_drift_sync(
             env.setdefault("PDD_FORCE_LOCAL", "1")
             parsed_cost = 0.0
             with _pushd(worktree):
-                # KNOWN LIMITATION (foreign modules): detect_drift resolves a
-                # module's code/example paths from its basename via .pddrc context,
-                # not from the prompts_dir resolved above. A foreign module is
-                # therefore detected correctly only when a .pddrc context maps it
-                # (which real consumers configure); without one, its update-drift may
-                # be missed here. Fixing this for the no-.pddrc case needs path
-                # injection into sync_determine_operation's decision — out of scope
-                # for the architecture-targeting fix. Architecture-sync and
-                # metadata-sync above already target the correct foreign arch.
+                # KNOWN LIMITATION (foreign modules): the heal/verify stage is keyed
+                # by basename. detect_drift resolves a module's code/example paths from
+                # its basename via .pddrc context (not the prompts_dir resolved above),
+                # so a foreign module is detected correctly only when a .pddrc context
+                # maps it (which real consumers configure); without one its update-drift
+                # may be missed. For the same reason `modules`, basename_to_code, and
+                # basename_to_resolver collapse two foreign modules that SHARE a basename
+                # across different prompts dirs into one heal context. Architecture-sync
+                # and metadata-sync above are path-scoped and already handle both
+                # correctly; only this heal stage is basename-bound. Closing it needs
+                # per-path drift identity threaded through sync_determine_operation's
+                # decision — out of scope for the architecture-targeting fix.
                 try:
                     prompt_drifts, example_drifts = detect_drift(
                         modules=list(modules),
