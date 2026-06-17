@@ -45,7 +45,10 @@ from .grounding_provenance import (
 )
 from .compressed_sync_context import compressed_context_is_active, render_for_prompt
 from .interface_semantics import (
+    DefaultCompatibility,
     annotations_compatible,
+    build_module_default_symbols,
+    compare_default_sources,
     signature_entries_compatible,
 )
 
@@ -2008,6 +2011,36 @@ def _verify_public_surface_regression(
         language or "python",
         patch_targets=patch_targets,
     )
+    # Syntax gate (issue #1612 Bug 2): if the freshly generated Python is
+    # unparseable, ``_snapshot_public_surface`` silently returns an empty set,
+    # which would misroute the failure as a phantom public-surface regression
+    # (``post_surface_size: 0``) and send the repair loop chasing removed
+    # symbols instead of the real problem. Raise a syntax-focused
+    # ``ArchitectureConformanceError`` so the repair loop targets the syntax
+    # error while still listing the expected public symbols to restore.
+    if before:
+        try:
+            ast.parse(generated_code or "")
+        except SyntaxError as syntax_err:
+            expected = sorted(before)
+            raise ArchitectureConformanceError(
+                prompt_name=prompt_name,
+                output_path=output_path or "",
+                architecture_entry={},
+                expected_symbols=expected,
+                found_symbols=[],
+                missing_symbols=expected,
+                message=(
+                    f"Architecture conformance error for {prompt_name}: "
+                    f"generated Python has a syntax error: {syntax_err}"
+                ),
+                repair_directive=(
+                    f"Fix the Python syntax error in the generated code: "
+                    f"{syntax_err}\n"
+                    f"Then restore all expected public symbols: "
+                    f"{', '.join(expected)}."
+                ),
+            ) from syntax_err
     after_patch_targets = _effective_patch_targets(
         generated_code, language or "python", output_path
     )
@@ -2046,20 +2079,41 @@ def _verify_public_surface_regression(
         language or "python",
         patch_targets=after_patch_targets,
     )
+    # Per-side module default-symbol tables (issue #1558): a parameter default
+    # written as a same-module constant (``max_chars=_LIMIT`` where
+    # ``_LIMIT = 25000``) resolves to the literal it stands for. Each side is
+    # resolved against its OWN module — the existing code for the ``before``
+    # signature and the generated code for the ``after`` — so a literal <->
+    # same-module-constant refactor of a default is not flagged as a regression,
+    # while the same constant name resolving to a different value across the two
+    # versions still is.
+    before_default_symbols = build_module_default_symbols(existing_code)
+    after_default_symbols = build_module_default_symbols(generated_code)
     allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
     changed_set: Set[str] = set()
     for symbol, signature in before_signatures.items():
         if symbol not in after_signatures or symbol in allowed_signature_changes:
             continue
         after_signature = after_signatures[symbol]
-        if after_signature == signature:
-            continue
-        compatible = signature_entries_compatible(signature, after_signature)
+        compatible = signature_entries_compatible(
+            signature,
+            after_signature,
+            old_symbols=before_default_symbols,
+            new_symbols=after_default_symbols,
+        )
         if compatible is True:
             continue
-        # If either side is not a callable contract we understand, keep the
-        # historical exact string comparison so binding-kind and re-export
-        # changes remain strict.
+        # ``None`` means at least one side is not a callable contract we
+        # understand (an ``[assignment]`` or an import re-export). Keep the
+        # historical exact string comparison for those so binding-kind and
+        # re-export changes stay strict while unchanged entries are not flagged.
+        # Callable entries are decided semantically above — the equal-string
+        # case is NOT short-circuited first, so a default written as a
+        # same-module constant whose resolved value changed across the old and
+        # generated modules is caught even when the signature text is identical
+        # (issue #1558).
+        if compatible is None and after_signature == signature:
+            continue
         changed_set.add(symbol)
     for symbol in before_signatures:
         if symbol in after_signatures or symbol in changed_set:
@@ -2741,6 +2795,20 @@ def _verify_pdd_interface_signatures(
     except SyntaxError:
         return  # Can't parse — defer to existing checks/recovery paths.
 
+    # Module-level constants the generated code binds to safe literals, so a
+    # default written as ``max_chars=_COMMENT_MAX_CHARS`` can be resolved back
+    # to the literal it stands for when comparing against the prompt's declared
+    # default (issue #1558). The prompt and the generated code describe the SAME
+    # generated module namespace, so one table applies to both sides — unlike the
+    # public-surface gate, which compares two different module versions and needs
+    # per-side tables. A prompt that declares its default AS a bare constant name
+    # the generated code inlined (so the name is absent from this table) resolves
+    # UNKNOWN and is conservatively reported as drift; that fail-closed asymmetry
+    # is intentional (the prompt is the source of truth and rarely names a bare
+    # constant), not a latent false positive. Empty when the code defines no such
+    # constants.
+    module_symbols = build_module_default_symbols(generated_code)
+
     missing_params: List[str] = []
     missing_funcs: List[str] = []
     # Signature drift detection:
@@ -2800,7 +2868,24 @@ def _verify_pdd_interface_signatures(
                             "<no default>",
                         )
                     )
-                elif declared_default != actual_default:
+                elif declared_default != actual_default and (
+                    # The sources differ textually (the raw ``!=`` is the fast
+                    # path), but only a PROVABLY-different default is real drift.
+                    # ``25000`` vs ``25_000`` vs a same-module constant
+                    # ``_LIMIT = 25000`` resolve to the same value and must NOT
+                    # churn the gate (issue #1558). An unresolvable default (a
+                    # call, an imported name) stays UNKNOWN and is conservatively
+                    # reported — same as the prior exact-string behavior, so no
+                    # false negative is introduced. Both the prompt-declared and
+                    # generated-code defaults live in the generated module's
+                    # namespace, so the same symbol table applies to both sides.
+                    compare_default_sources(
+                        declared_default,
+                        actual_default,
+                        symbols=module_symbols,
+                    )
+                    is not DefaultCompatibility.COMPATIBLE
+                ):
                     drifted.append(
                         (
                             func_name,
@@ -4603,6 +4688,11 @@ def code_generator_main(
         # User cancelled - re-raise to stop the sync loop
         raise
     except Exception as e:
+        if (
+            e.__class__.__name__ == "EstimateOnlyResult"
+            and isinstance(getattr(e, "estimate", None), dict)
+        ):
+            raise
         if isinstance(e, click.UsageError):
             raise
 

@@ -21,12 +21,15 @@ from pdd.agentic_checkup_orchestrator import (
     _format_step_abort_message,
     _get_state_dir,
     _is_step_timeout_failure,
+    _load_step5_shell_evidence_from_memory,
     _next_step,
     _normalised_failure_signal_text,
     _parse_changed_files,
     _parse_expansion_items,
     _parse_failure_signal_block,
     _pr_base_tracking_ref,
+    _run_step5_shell_first_evidence,
+    _select_step5_python_tests,
     _targeted_non_code_step5_result,
     run_agentic_checkup_orchestrator,
 )
@@ -65,6 +68,81 @@ STEP5_CLEAN_OUTPUT = (
     "  42 passed in 0.42s\n"
     "```"
 )
+
+
+class TestStep5ShellFirstEvidence:
+    def test_selects_existing_python_tests_from_changed_modules(self, tmp_path):
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "widget.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_widget.py").write_text(
+            "def test_widget(): pass\n",
+            encoding="utf-8",
+        )
+
+        selected = _select_step5_python_tests(tmp_path, ["pdd/widget.py"])
+
+        assert selected == ["tests/test_widget.py"]
+
+    def test_persists_failed_pytest_evidence(self, tmp_path, monkeypatch):
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "widget.py").write_text("VALUE = 1\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_widget.py").write_text(
+            "def test_widget(): pass\n",
+            encoding="utf-8",
+        )
+        env_token = "customToken123456789"
+        gh_token = "ghp_" + "A" * 36
+        monkeypatch.setenv("GITHUB_TOKEN", env_token)
+        context = {
+            "pr_mode": "true",
+            "pr_scope_changed_files": "Base: refs/remotes/pdd-checkup/pr-1/base\n"
+            f"- M: pdd/widget.py\n- M: docs/{gh_token}.txt",
+        }
+        completed = subprocess.CompletedProcess(
+            args=["python", "-m", "pytest", "-q", "tests/test_widget.py"],
+            returncode=1,
+            stdout=(
+                "FAILED tests/test_widget.py::test_breaks\n"
+                f"Authorization: Bearer {gh_token}\n"
+                f"env token: {env_token}\n"
+            ),
+            stderr="",
+        )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            return_value=completed,
+        ) as run_mock:
+            evidence = _run_step5_shell_first_evidence(
+                context,
+                tmp_path,
+                tmp_path,
+                pr_number=1,
+                iteration=2,
+                quiet=True,
+            )
+
+        assert evidence is not None
+        assert evidence["status"] == "failed"
+        assert evidence["selected_tests"] == ["tests/test_widget.py"]
+        assert "tests/test_widget.py::test_breaks" in evidence["output"]
+        assert "step5_shell_evidence" in context
+        artifact = tmp_path / ".pdd" / "checkup-pr-1" / "layer1-step5-evidence.json"
+        assert not artifact.exists()
+        payload = _load_step5_shell_evidence_from_memory(tmp_path, 1)
+        assert payload is not None
+        assert payload["status"] == "failed"
+        assert "tests/test_widget.py::test_breaks" in context["step5_shell_evidence"]
+        memory_text = json.dumps(payload, indent=2, sort_keys=True)
+        assert "tests/test_widget.py::test_breaks" in memory_text
+        artifact_text = memory_text
+        assert gh_token not in artifact_text
+        assert env_token not in artifact_text
+        assert gh_token not in context["step5_shell_evidence"]
+        assert env_token not in context["step5_shell_evidence"]
+        assert run_mock.call_args.args[0][-1] == "tests/test_widget.py"
 
 
 # ---------------------------------------------------------------------------
@@ -6962,3 +7040,41 @@ class TestSetupWorktreeStaleBranch:
             cwd=wt, capture_output=True, text=True,
         ).stdout.strip()
         assert head == "checkup/issue-9", head
+
+
+class TestCompanionSourceOfTruthPaths2047:
+    """``_companion_source_of_truth_paths`` admits owning prompts of PR-diff code (#2047)."""
+
+    def test_admits_owning_prompt_and_arch_for_pr_code(self, monkeypatch) -> None:
+        import pdd.agentic_checkup_orchestrator as orch
+
+        monkeypatch.setattr(
+            orch,
+            "_load_prompt_source_map",
+            lambda _wt: {
+                "pdd/foo.py": "pdd/prompts/foo_python.prompt",
+                "pdd/bar.py": "pdd/prompts/bar_python.prompt",
+            },
+        )
+        # Only foo.py is in the PR diff -> only foo's prompt is admitted.
+        out = orch._companion_source_of_truth_paths(Path("/x"), {"pdd/foo.py"})
+        assert out == {"pdd/prompts/foo_python.prompt", "architecture.json"}
+
+    def test_unrelated_prompt_not_admitted(self, monkeypatch) -> None:
+        import pdd.agentic_checkup_orchestrator as orch
+
+        monkeypatch.setattr(
+            orch,
+            "_load_prompt_source_map",
+            lambda _wt: {"pdd/foo.py": "pdd/prompts/foo_python.prompt"},
+        )
+        # PR touches only an unregistered file -> no companion prompt admitted,
+        # so an arbitrary prompt edit still trips the scope guard.
+        out = orch._companion_source_of_truth_paths(Path("/x"), {"pdd/unrelated.py"})
+        assert out == set()
+
+    def test_no_registry_returns_empty(self, monkeypatch) -> None:
+        import pdd.agentic_checkup_orchestrator as orch
+
+        monkeypatch.setattr(orch, "_load_prompt_source_map", lambda _wt: None)
+        assert orch._companion_source_of_truth_paths(Path("/x"), {"pdd/foo.py"}) == set()

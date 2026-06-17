@@ -5,8 +5,9 @@ import os
 import sys
 import io
 import re
+import json
 import click
-from typing import Any, List, Optional, Tuple, TextIO
+from typing import Any, Dict, List, Optional, Tuple, TextIO
 
 try:
     from .. import DEFAULT_STRENGTH, __version__, DEFAULT_TIME
@@ -102,6 +103,242 @@ def _restore_captured_streams(ctx: click.Context) -> None:
 # JSON-invocation detection is shared with the early pre-parse in pdd/cli.py via a
 # stdlib-only leaf module so the two call sites cannot drift apart.
 from ..json_invocation import is_machine_json_invocation as _is_machine_json_invocation
+
+
+def _env_flag_enabled(name: str) -> bool:
+    """Return True when an environment flag is set to a truthy value."""
+    return os.getenv(name, "").lower() in {"1", "true", "yes", "on"}
+
+
+def _extract_estimate_record(result: Any) -> Optional[Dict[str, Any]]:
+    """Return an estimate payload from a command result, if one is present."""
+    candidate = result
+    if isinstance(result, tuple) and len(result) == 3:
+        candidate = result[0]
+    if isinstance(candidate, dict) and candidate.get("estimate") is True:
+        return candidate
+    return None
+
+
+def _collect_estimate_records(
+    normalized_results: List[Any],
+    ctx: click.Context,
+) -> List[Dict[str, Any]]:
+    """Collect estimate payloads from command returns or ctx.obj accumulation."""
+    records = [
+        record
+        for result in normalized_results
+        for record in [_extract_estimate_record(result)]
+        if record is not None
+    ]
+    if records:
+        return records
+
+    ctx_obj = ctx.obj if isinstance(ctx.obj, dict) else {}
+    for key in ("estimate_records", "estimate_results"):
+        value = ctx_obj.get(key)
+        if isinstance(value, list):
+            records.extend(
+                item for item in value
+                if isinstance(item, dict) and item.get("estimate") is True
+            )
+            if records:
+                break
+    return records
+
+
+def _record_cost_known(record: Dict[str, Any]) -> bool:
+    """Whether a single estimate record carries a usable, priced cost."""
+    return bool(record.get("cost_known", False)) and not record.get("unknown_cost")
+
+
+def _estimate_total_cost(records: List[Dict[str, Any]]) -> Optional[float]:
+    """Return the aggregate of the *priced* estimate records.
+
+    Sums only records with a known cost and ignores unknown ones, so a command
+    whose steps are a mix of exact and not-estimable-without-execution (e.g.
+    ``sync``: an exact generate step plus downstream steps that depend on
+    generated output) still reports a meaningful number — a lower bound — rather
+    than collapsing the whole total to "unknown". Returns None only when no
+    record is priced at all. Callers should consult ``is_lower_bound`` in the
+    summary to learn whether unpriced steps were omitted.
+    """
+    if not records:
+        return None
+    priced = [record for record in records if _record_cost_known(record)]
+    if not priced:
+        return None
+    return round(
+        sum(float(record.get("estimated_cost", record.get("total_cost", 0.0)) or 0.0) for record in priced),
+        6,
+    )
+
+
+def _build_estimate_summary(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build stable machine-readable estimate output without prompt text."""
+    total_input = sum(int(record.get("input_tokens", 0) or 0) for record in records)
+    total_predicted = sum(int(record.get("predicted_output_tokens", 0) or 0) for record in records)
+    total_output_low = sum(int(record.get("output_tokens_low", 0) or 0) for record in records)
+    total_output_high = sum(int(record.get("output_tokens_high", 0) or 0) for record in records)
+    total_cost = _estimate_total_cost(records)
+    any_unknown = any(not _record_cost_known(record) for record in records)
+    output_estimations = sorted({
+        str(record.get("output_estimation"))
+        for record in records
+        if record.get("output_estimation")
+    })
+    output_hint_paths = [
+        str(record.get("output_hint_path"))
+        for record in records
+        if record.get("output_hint_path")
+    ]
+    # The total is a lower bound when it sums some, but not all, priced steps.
+    is_lower_bound = total_cost is not None and any_unknown
+    return {
+        "estimate": True,
+        "records": records,
+        "input_tokens": total_input,
+        "predicted_output_tokens": total_predicted,
+        "output_tokens_low": total_output_low or None,
+        "output_tokens_high": total_output_high or None,
+        "estimated_cost": total_cost,
+        "total_cost": total_cost,
+        # unknown_cost stays True whenever any step is unpriced, even if the
+        # priced steps still produce a (lower-bound) number.
+        "unknown_cost": total_cost is None or any_unknown,
+        "is_lower_bound": is_lower_bound,
+        "output_estimations": output_estimations,
+        "output_hint_paths": output_hint_paths,
+        "currency": records[0].get("currency", "USD") if records else "USD",
+    }
+
+
+def _fmt_estimate_value(value: Any, *, money: bool = False) -> str:
+    """Format a nullable estimate field for human output."""
+    if value is None:
+        return "unknown"
+    if money:
+        return f"${float(value):.6f}"
+    return str(value)
+
+
+def _estimate_requested_subcommand(ctx: click.Context) -> Optional[str]:
+    """Return the first requested subcommand for estimate-mode scope checks."""
+    tokens: List[str] = []
+    try:
+        tokens = list(ctx.meta.get("pdd_cli_tokens", []) or [])
+    except Exception:
+        tokens = []
+    if not tokens:
+        try:
+            tokens = list(ctx.protected_args) + list(ctx.args)
+        except Exception:
+            tokens = list(getattr(ctx, "args", []) or [])
+    for token in tokens:
+        if token and not str(token).startswith("-"):
+            return str(token)
+    return None
+
+
+def _validate_generate_only_estimate_mode(ctx: click.Context, estimate_mode: bool) -> None:
+    """Fail closed while estimate mode is intentionally scoped to generate."""
+    if not estimate_mode:
+        return
+    command_name = _estimate_requested_subcommand(ctx)
+    if command_name in (None, "generate"):
+        return
+    raise click.UsageError("Estimate mode currently supports `generate` only.")
+
+
+def _render_estimate_output(ctx: click.Context, records: List[Dict[str, Any]]) -> None:
+    """Render estimate records as JSON or a concise human-readable table."""
+    summary = _build_estimate_summary(records)
+    ctx_obj = ctx.obj if isinstance(ctx.obj, dict) else {}
+    if ctx_obj.get("estimate_json"):
+        click.echo(json.dumps(summary, sort_keys=True))
+        return
+
+    click.echo("LLM Cost Estimate")
+    click.echo(
+        "Command | Model | Input Tokens | Predicted Output Tokens | "
+        "Input Rate/M | Output Rate/M | Estimated Cost | Context Window"
+    )
+    click.echo(
+        "--------|-------|--------------|-------------------------|"
+        "--------------|---------------|----------------|---------------"
+    )
+    for record in records:
+        context_limit = record.get("context_limit")
+        context_percent = record.get("context_usage_percent")
+        if context_limit is None and context_percent is None:
+            context_display = "unknown"
+        elif context_percent is None:
+            context_display = str(context_limit)
+        else:
+            context_display = f"{context_percent}% of {context_limit}"
+        click.echo(
+            " | ".join([
+                str(record.get("command") or "unknown"),
+                str(record.get("model") or "unknown"),
+                _fmt_estimate_value(record.get("input_tokens")),
+                _fmt_estimate_value(record.get("predicted_output_tokens")),
+                _fmt_estimate_value(record.get("input_rate_per_million")),
+                _fmt_estimate_value(record.get("output_rate_per_million")),
+                _fmt_estimate_value(
+                    record.get("estimated_cost", record.get("total_cost")),
+                    money=True,
+                ),
+                context_display,
+            ])
+        )
+
+    total = summary["estimated_cost"]
+    total_display = _fmt_estimate_value(total, money=True)
+    if summary.get("is_lower_bound"):
+        # Some steps could not be priced without execution; the printed total is
+        # a floor, not the full projected cost.
+        click.echo(
+            f"Total estimated cost: ≥ {total_display} "
+            "(lower bound; some steps not estimable without execution)"
+        )
+    else:
+        click.echo(f"Total estimated cost: {total_display}")
+    click.echo("Provider call made: false")
+    click.echo("Command output files written: false")
+    click.echo("Cost CSV row written: false")
+
+
+def _write_result_core_dump(
+    ctx: click.Context,
+    normalized_results: List[Any],
+    invoked_subcommands: List[str],
+    total_cost: float,
+) -> None:
+    """Collect captured output, restore streams, and write the result core dump."""
+    terminal_output = None
+    if isinstance(ctx.obj, dict) and ctx.obj.get("core_dump"):
+        stdout_capture = ctx.obj.get("_stdout_capture")
+        stderr_capture = ctx.obj.get("_stderr_capture")
+        if stdout_capture or stderr_capture:
+            captured_parts = []
+            if stdout_capture:
+                stdout_text = stdout_capture.get_captured_output()
+                if stdout_text:
+                    clean_stdout = _strip_ansi_codes(stdout_text)
+                    captured_parts.append(f"=== STDOUT ===\n{clean_stdout}")
+            if stderr_capture:
+                stderr_text = stderr_capture.get_captured_output()
+                if stderr_text:
+                    clean_stderr = _strip_ansi_codes(stderr_text)
+                    captured_parts.append(f"=== STDERR ===\n{clean_stderr}")
+
+            terminal_output = "\n\n".join(captured_parts) if captured_parts else ""
+            if stdout_capture:
+                sys.stdout = stdout_capture.original_stream
+            if stderr_capture:
+                sys.stderr = stderr_capture.original_stream
+
+    _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost, terminal_output)
 
 
 class PDDCLI(click.Group):
@@ -317,6 +554,20 @@ class PDDCLI(click.Group):
     help="Enable cost tracking and output a CSV file with usage details.",
 )
 @click.option(
+    "--estimate",
+    "--dry-run-cost",
+    "estimate",
+    is_flag=True,
+    default=False,
+    help="Preview token usage and estimated cost without calling providers or writing command outputs.",
+)
+@click.option(
+    "--estimate-json",
+    is_flag=True,
+    default=False,
+    help="Emit the estimate as machine-readable JSON. Implies --estimate.",
+)
+@click.option(
     "--review-examples",
     is_flag=True,
     default=False,
@@ -389,6 +640,8 @@ def cli(
     verbose: bool,
     quiet: bool,
     output_cost: Optional[str],
+    estimate: bool,
+    estimate_json: bool,
     review_examples: bool,
     local: bool,
     time: Optional[float], # Type hint is Optional[float]
@@ -409,10 +662,20 @@ def cli(
     # runner it is the pytest argv — so also check the invocation tokens captured
     # in ``PDDCLI.invoke`` (subcommand + its args). Both feed the same shared
     # detector that ``pdd/cli.py``'s early pre-parse uses, so they cannot drift.
+    # Estimate mode (--estimate/--estimate-json/PDD_ESTIMATE) is a read-only
+    # dry-run preview that must also stay quiet and payload-only.
+    estimate_mode = bool(estimate or estimate_json or _env_flag_enabled("PDD_ESTIMATE"))
     cli_tokens = ctx.meta.get("pdd_cli_tokens", []) if hasattr(ctx, "meta") else []
-    json_mode = _is_machine_json_invocation(sys.argv) or _is_machine_json_invocation(cli_tokens)
-    quiet = quiet or json_mode
-    core_dump = core_dump and not json_mode
+    json_mode = (
+        _is_machine_json_invocation(sys.argv)
+        or _is_machine_json_invocation(cli_tokens)
+        or estimate_json
+    )
+    quiet = quiet or json_mode or estimate_mode
+    _validate_generate_only_estimate_mode(ctx, estimate_mode)
+    # Estimate mode is a read-only dry-run preview; suppress the diagnostic
+    # core dump so previews never write to .pdd/core_dumps.
+    core_dump = core_dump and not json_mode and not estimate_mode
 
     # Ensure PDD_PATH is set before any commands run
     get_local_pdd_path()
@@ -436,13 +699,68 @@ def cli(
         os.environ["PDD_QUIET"] = "1"
     else:
         os.environ.pop("PDD_QUIET", None)
-    ctx.obj["output_cost"] = output_cost
+    ctx.obj["estimate"] = estimate_mode
+    ctx.obj["estimate_json"] = bool(estimate_json)
+    ctx.obj["estimate_results"] = []
+    ctx.obj["estimate_records"] = ctx.obj["estimate_results"]
+    # Estimate mode mutates process-wide env vars so the intent reaches the
+    # library-level llm_invoke (which reads PDD_ESTIMATE when no Click context is
+    # available) and any `pdd` subprocesses spawned during the command. Those
+    # mutations must NOT outlive the invocation: estimate_mode is itself derived
+    # from PDD_ESTIMATE just above, so a value left behind would make the *next*
+    # in-process CLI run silently sticky in estimate mode. This is exactly what
+    # breaks under repeated CliRunner.invoke calls in the test suite (an earlier
+    # estimate test poisons later generate/fix/change/update/report tests).
+    # Snapshot the pre-invocation values and restore them when this context tears
+    # down, so an externally exported PDD_ESTIMATE=1 still survives while a value
+    # we set internally does not.
+    #
+    # The set must cover EVERY env var this block mutates, not just PDD_ESTIMATE:
+    # estimate mode also clears PDD_OUTPUT_COST_PATH (so a preview never appends
+    # to the cost log) and forces PDD_FORCE_LOCAL=1. Omitting those leaks the same
+    # class of bug — a later in-process command would stay forced-local and would
+    # have lost an existing cost-log path. PDD_FORCE_LOCAL is likewise set by a
+    # plain --local run; snapshotting it keeps that invocation-scoped too.
+    _estimate_env_keys = (
+        "PDD_ESTIMATE",
+        "PDD_ESTIMATE_JSON",
+        "PDD_LLM_ATTRIBUTION_PROCESS_LOG",
+        "PDD_LLM_ATTRIBUTION_STDOUT",
+        "PDD_OUTPUT_COST_PATH",
+        "PDD_FORCE_LOCAL",
+    )
+    _estimate_env_snapshot = {key: os.environ.get(key) for key in _estimate_env_keys}
+
+    def _restore_estimate_env(_snapshot=_estimate_env_snapshot):
+        for key, prev in _snapshot.items():
+            if prev is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = prev
+
+    ctx.call_on_close(_restore_estimate_env)
+
+    if estimate_mode:
+        os.environ["PDD_ESTIMATE"] = "1"
+        os.environ["PDD_LLM_ATTRIBUTION_PROCESS_LOG"] = "0"
+        os.environ["PDD_LLM_ATTRIBUTION_STDOUT"] = "0"
+    else:
+        os.environ.pop("PDD_ESTIMATE", None)
+    if estimate_json:
+        os.environ["PDD_ESTIMATE_JSON"] = "1"
+    else:
+        os.environ.pop("PDD_ESTIMATE_JSON", None)
+    if estimate_mode:
+        ctx.obj["output_cost"] = None
+        os.environ.pop("PDD_OUTPUT_COST_PATH", None)
+    else:
+        ctx.obj["output_cost"] = output_cost
     ctx.obj["review_examples"] = review_examples
     if review_examples:
         ctx.obj["grounding_review_decisions"] = []
-    ctx.obj["local"] = local
+    ctx.obj["local"] = bool(local or estimate_mode)
     # Propagate --local flag to environment for llm_invoke cloud detection
-    if local:
+    if local or estimate_mode:
         os.environ['PDD_FORCE_LOCAL'] = '1'
     # Use DEFAULT_TIME if time is not provided
     ctx.obj["time"] = time if time is not None else DEFAULT_TIME
@@ -512,13 +830,19 @@ def cli(
     if quiet:
         ctx.obj["verbose"] = False
         try:
+            import logging
+
+            logging.getLogger("pdd").setLevel(logging.ERROR)
+        except Exception:
+            pass
+        try:
             from ..llm_invoke import set_quiet_logging
             set_quiet_logging()
         except Exception:
             pass
 
     # Warn users who have not completed interactive setup unless they are running it now
-    if _should_show_onboarding_reminder(ctx):
+    if not estimate_mode and _should_show_onboarding_reminder(ctx):
         console.print(
             "[warning]Complete onboarding with `pdd setup` to install tab completion and configure API keys.[/warning]"
         )
@@ -551,7 +875,7 @@ def cli(
 
     # Perform auto-update check unless disabled
 
-    if not json_mode and os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
+    if not json_mode and not estimate_mode and os.getenv("PDD_AUTO_UPDATE", "true").lower() != "false":
         try:
             if not quiet:
                 console.print("[info]Checking for updates...[/info]")
@@ -573,14 +897,15 @@ def cli(
         ctx.exit(0)
 
     # Block/warn on likely duplicate expensive runs before the subcommand body runs.
-    try:
-        check_duplicate_before_subcommand(ctx)
-    except click.UsageError:
-        _restore_captured_streams(ctx)
-        raise
-    except click.Abort:
-        _restore_captured_streams(ctx)
-        raise
+    if not estimate_mode:
+        try:
+            check_duplicate_before_subcommand(ctx)
+        except click.UsageError:
+            _restore_captured_streams(ctx)
+            raise
+        except click.Abort:
+            _restore_captured_streams(ctx)
+            raise
 
 
 def _derive_success_from_normalized_results(normalized_results: List[Any]) -> bool:
@@ -635,6 +960,16 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
 
     num_commands = len(invoked_subcommands)
     num_results = len(normalized_results)  # Number of results actually received
+    estimate_records = _collect_estimate_records(normalized_results, ctx)
+    estimate_mode = bool(ctx.obj.get("estimate")) if isinstance(ctx.obj, dict) else False
+    if estimate_mode or estimate_records:
+        if estimate_records:
+            _render_estimate_output(ctx, estimate_records)
+        elif not (isinstance(ctx.obj, dict) and ctx.obj.get("estimate_json")):
+            click.echo("No estimate was produced for this command.")
+        _write_result_core_dump(ctx, normalized_results, invoked_subcommands, 0.0)
+        return
+
     suppress_result_summary = bool(
         isinstance(ctx.obj, dict) and ctx.obj.get("_suppress_result_summary")
     )
@@ -724,38 +1059,9 @@ def process_commands(ctx: click.Context, results: List[Optional[Tuple[Any, float
         ctx, success=_derive_success_from_normalized_results(normalized_results)
     )
 
-    # Collect terminal output if capture was enabled
-    terminal_output = None
-    if ctx.obj.get("core_dump"):
-        stdout_capture = ctx.obj.get("_stdout_capture")
-        stderr_capture = ctx.obj.get("_stderr_capture")
-        if stdout_capture or stderr_capture:
-            # Combine stdout and stderr
-            captured_parts = []
-            if stdout_capture:
-                stdout_text = stdout_capture.get_captured_output()
-                if stdout_text:
-                    # Strip ANSI codes for clean output
-                    clean_stdout = _strip_ansi_codes(stdout_text)
-                    captured_parts.append(f"=== STDOUT ===\n{clean_stdout}")
-            if stderr_capture:
-                stderr_text = stderr_capture.get_captured_output()
-                if stderr_text:
-                    # Strip ANSI codes for clean output
-                    clean_stderr = _strip_ansi_codes(stderr_text)
-                    captured_parts.append(f"=== STDERR ===\n{clean_stderr}")
-
-            terminal_output = "\n\n".join(captured_parts) if captured_parts else ""
-
-            # Restore original streams
-            if stdout_capture:
-                sys.stdout = stdout_capture.original_stream
-            if stderr_capture:
-                sys.stderr = stderr_capture.original_stream
-
     # Finally, write a core dump if requested
     if not (isinstance(ctx.obj, dict) and ctx.obj.get("_suppress_core_dump")):
-        _write_core_dump(ctx, normalized_results, invoked_subcommands, total_cost, terminal_output)
+        _write_result_core_dump(ctx, normalized_results, invoked_subcommands, total_cost)
     fatal = ctx.obj.get("_fatal_exception") if isinstance(ctx.obj, dict) else None
     if fatal:
         ctx.exit(1)

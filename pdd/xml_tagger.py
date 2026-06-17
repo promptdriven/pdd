@@ -94,6 +94,17 @@ def xml_tagger(
         result: XMLOutput = extraction_response.get('result')
         total_cost += extraction_response.get('cost', 0.0)
 
+        # Guard against malformed structured output of any non-``XMLOutput``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``). Raise a typed
+        # error instead of crashing with an AttributeError on ``.xml_tagged``
+        # (issue #1612).
+        if not isinstance(result, XMLOutput):
+            raise ValueError(
+                "xml_tagger received a malformed extraction result "
+                f"(expected XMLOutput, got {type(result).__name__})."
+            )
+
         # Step 4: Print results if verbose
         if verbose:
             rprint("[green]Final XML-tagged prompt:[/green]")

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import functools
+import hashlib
 import logging
 import os
 import signal
 import sys
 import json
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -13,8 +15,9 @@ import time
 import uuid
 import re
 import random
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 
@@ -24,6 +27,7 @@ _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+_FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
@@ -34,10 +38,12 @@ def get_agentic_capabilities() -> Dict[str, Any]:
     """Return machine-checkable agentic capability contracts for callers."""
     return {
         "claude_policy": {
-            "schema_version": 1,
+            "schema_version": 2,
             "fields": {
                 "allowedTools": ["string", "null"],
                 "addDirs": "list[string]",
+                "writableRoots": "list[string]",
+                "readOnlyRoots": "list[string]",
                 "noSessionPersistence": {
                     "standard": "boolean",
                     "interactive": False,
@@ -51,8 +57,46 @@ def get_agentic_capabilities() -> Dict[str, Any]:
                     "usageSource": "persisted_session_transcript",
                 },
             },
+            "filesystemPolicy": {
+                "schemaVersion": 1,
+                "writableRoots": True,
+                "readOnlyRoots": True,
+                "enforcement": "post_run_audit_fail_closed",
+                "auditsGitMetadata": True,
+                "auditsLinkedGitMetadata": True,
+                "pddOwnedLogChanges": "chained_exact_signature_verified_only",
+                "providerLogDirWritesAudited": True,
+                "auditsDirectoryMetadata": True,
+                "escapedSymlinkTargets": "fail_closed",
+                "unrestrictedBashWithFilesystemRoots": "rejected",
+                "symlinkTargetAllowRoots": [
+                    "cwd",
+                    "addDirs",
+                    "writableRoots",
+                    "readOnlyRoots",
+                ],
+                "nonFollowingPolicyRootIdentity": True,
+            },
+            "result": {
+                "schemaVersion": 1,
+                "changedFiles": {
+                    "pythonAttribute": "changed_files",
+                    "dictKey": "changed_files",
+                },
+            },
         }
     }
+
+
+def _allowed_tools_include_unrestricted_bash(allowed_tools: Optional[str]) -> bool:
+    """Return True when allowedTools grants unrestricted Bash execution."""
+    if allowed_tools is None:
+        return False
+    for token in allowed_tools.split(","):
+        normalized = re.sub(r"\s+", "", token).lower()
+        if normalized in {"bash", "bash(*)"}:
+            return True
+    return False
 
 
 def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudePolicy:
@@ -63,6 +107,8 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
     allowed_keys = {
         "allowedTools",
         "addDirs",
+        "writableRoots",
+        "readOnlyRoots",
         "noSessionPersistence",
         "outputFormat",
     }
@@ -88,6 +134,27 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
             "claude_policy.addDirs must be a list of strings"
         )
 
+    normalized_roots: Dict[str, List[str]] = {}
+    for key in _FILESYSTEM_POLICY_KEYS:
+        if key not in policy:
+            continue
+        roots = policy.get(key)
+        if not isinstance(roots, list) or not all(isinstance(p, str) for p in roots):
+            raise AgenticUnsupportedSemanticsError(
+                f"claude_policy.{key} must be a list of strings"
+            )
+        if any(not p.strip() for p in roots):
+            raise AgenticUnsupportedSemanticsError(
+                f"claude_policy.{key} must not contain empty paths"
+            )
+        normalized_roots[key] = list(roots)
+    if normalized_roots and _allowed_tools_include_unrestricted_bash(allowed_tools):
+        raise AgenticUnsupportedSemanticsError(
+            "claude_policy.allowedTools must not include unrestricted Bash when "
+            "writableRoots or readOnlyRoots are declared because PDD cannot "
+            "audit shell writes outside the filesystem policy roots"
+        )
+
     no_session = policy.get("noSessionPersistence", False)
     if not isinstance(no_session, bool):
         raise AgenticUnsupportedSemanticsError(
@@ -106,12 +173,14 @@ def validate_claude_policy(policy: Any, *, interactive: bool = False) -> ClaudeP
             "claude_policy.outputFormat must be json"
         )
 
-    return {
+    normalized = {
         "allowedTools": allowed_tools,
         "addDirs": list(add_dirs),
         "noSessionPersistence": no_session,
         "outputFormat": "json",
     }
+    normalized.update(normalized_roots)
+    return normalized
 
 
 def _append_claude_policy_args(cmd: List[str], claude_policy: ClaudePolicy) -> None:
@@ -121,10 +190,604 @@ def _append_claude_policy_args(cmd: List[str], claude_policy: ClaudePolicy) -> N
         cmd.extend(["--tools", ""])
     else:
         cmd.extend(["--allowedTools", allowed_tools])
-    for add_dir in claude_policy["addDirs"]:
+    add_dirs: List[str] = []
+    for key in ("addDirs", "writableRoots", "readOnlyRoots"):
+        for path in claude_policy.get(key, []):
+            if path not in add_dirs:
+                add_dirs.append(path)
+    for add_dir in add_dirs:
         cmd.extend(["--add-dir", add_dir])
     if claude_policy["noSessionPersistence"]:
         cmd.append("--no-session-persistence")
+
+
+@dataclass
+class _FilesystemPolicySnapshot:
+    files: Dict[Path, str]
+    errors: List[str]
+    escaped_symlink_targets: Dict[Path, Path]
+
+
+def _claude_policy_has_filesystem_roots(policy: Optional[ClaudePolicy]) -> bool:
+    """Return True when caller requested the filesystem audit policy."""
+    return bool(
+        policy is not None and any(key in policy for key in _FILESYSTEM_POLICY_KEYS)
+    )
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return True when *path* is equal to or contained by *root*."""
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _record_resolution_error(
+    errors: Optional[List[str]],
+    path: Path,
+    context: str,
+    exc: Exception,
+) -> None:
+    """Record or re-raise path resolution failures."""
+    if errors is None:
+        raise exc
+    if isinstance(exc, RuntimeError):
+        errors.append(f"{path}: symlink loop while resolving {context}: {exc}")
+    else:
+        errors.append(f"{path}: {exc}")
+
+
+def _resolve_audit_path(
+    path: Path,
+    errors: Optional[List[str]],
+    context: str,
+) -> Optional[Path]:
+    """Resolve a path and route audit failures into *errors*."""
+    try:
+        return path.resolve(strict=False)
+    except (RuntimeError, OSError) as exc:
+        _record_resolution_error(errors, path, context, exc)
+        return None
+
+
+def _resolve_policy_path(
+    cwd: Path,
+    raw_path: str,
+    errors: Optional[List[str]] = None,
+) -> Optional[Path]:
+    """Resolve a policy path without following its final symlink component."""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = cwd / path
+    try:
+        if path.name in ("", os.pardir):
+            return path.resolve(strict=False)
+        return path.parent.resolve(strict=False) / path.name
+    except (RuntimeError, OSError) as exc:
+        _record_resolution_error(errors, path, f"policy root {raw_path}", exc)
+        return None
+
+
+def _resolve_policy_roots(
+    cwd: Path,
+    policy: ClaudePolicy,
+    key: str,
+    errors: Optional[List[str]] = None,
+) -> List[Path]:
+    """Resolve and deduplicate root paths from a normalized policy key."""
+    roots: List[Path] = []
+    for raw_path in policy.get(key, []):
+        resolved = _resolve_policy_path(cwd, raw_path, errors)
+        if resolved is None:
+            continue
+        if resolved not in roots:
+            roots.append(resolved)
+    return roots
+
+
+def _resolve_git_metadata_path(base_dir: Path, raw_path: str) -> Path:
+    """Resolve a git metadata path from a gitdir/commondir pointer file."""
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = base_dir / path
+    return path.resolve(strict=False)
+
+
+def _linked_git_metadata_roots(cwd: Path) -> List[Path]:
+    """Return linked-worktree git metadata roots referenced by cwd/.git."""
+    git_pointer = cwd / ".git"
+    try:
+        if not git_pointer.is_file():
+            return []
+        line = git_pointer.read_text(encoding="utf-8", errors="replace").splitlines()[0]
+    except (IndexError, OSError, UnicodeError):
+        return []
+
+    if not line.lower().startswith("gitdir:"):
+        return []
+
+    raw_gitdir = line.split(":", 1)[1].strip()
+    if not raw_gitdir:
+        return []
+
+    roots: List[Path] = []
+    git_dir = _resolve_git_metadata_path(git_pointer.parent, raw_gitdir)
+    roots.append(git_dir)
+
+    common_dir_file = git_dir / "commondir"
+    try:
+        raw_common_dir = common_dir_file.read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines()[0].strip()
+    except (IndexError, OSError, UnicodeError):
+        raw_common_dir = ""
+
+    if raw_common_dir:
+        common_dir = _resolve_git_metadata_path(git_dir, raw_common_dir)
+        if common_dir not in roots:
+            roots.append(common_dir)
+    return roots
+
+
+def _collapse_audit_roots(roots: List[Path]) -> List[Path]:
+    """Remove duplicate/nested audit roots so recursive snapshots stay bounded."""
+    collapsed: List[Path] = []
+    for root in sorted(set(roots), key=lambda p: (len(p.parts), str(p))):
+        if any(_path_is_within(root, existing) for existing in collapsed):
+            continue
+        collapsed.append(root)
+    return collapsed
+
+
+def _audit_entry_path(path: Path) -> Path:
+    """Return a stable absolute audit key without following the symlink leaf."""
+    if path.is_symlink():
+        return path.parent.resolve(strict=False) / path.name
+    return path.resolve(strict=False)
+
+
+def _resolve_symlink_target_path(
+    link_path: Path,
+    raw_target: str,
+    errors: List[str],
+) -> Optional[Path]:
+    """Resolve a symlink target path relative to its link parent."""
+    target_path = Path(raw_target)
+    if not target_path.is_absolute():
+        target_path = link_path.parent / target_path
+    try:
+        return target_path.resolve(strict=False)
+    except RuntimeError as exc:
+        errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
+        return None
+    except OSError as exc:
+        errors.append(f"{link_path}: {exc}")
+        return None
+
+
+def _filesystem_signature(path: Path, errors: List[str]) -> str:
+    """Return a content-aware signature for an audited filesystem path."""
+    try:
+        stat_result = path.lstat()
+    except FileNotFoundError:
+        return "missing"
+    except OSError as exc:
+        errors.append(f"{path}: {exc}")
+        return "error"
+
+    if path.is_symlink():
+        try:
+            target = os.readlink(path)
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            target = "<unreadable>"
+        return f"symlink:{stat_result.st_mode}:{target}"
+
+    if path.is_file():
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            return f"file-error:{stat_result.st_mode}:{stat_result.st_size}"
+        return f"file:{stat_result.st_mode}:{stat_result.st_size}:{digest.hexdigest()}"
+
+    if path.is_dir():
+        return (
+            f"dir:{stat_result.st_mode}:{stat_result.st_size}:"
+            f"{stat_result.st_mtime_ns}"
+        )
+
+    return (
+        f"other:{stat_result.st_mode}:{stat_result.st_size}:"
+        f"{stat_result.st_mtime_ns}"
+    )
+
+
+def _record_escaped_symlink_target(
+    link_path: Path,
+    target_path: Path,
+    symlink_target_roots: List[Path],
+    escaped_symlink_targets: Dict[Path, Path],
+) -> None:
+    """Record symlinks whose targets leave the caller-allowed target roots."""
+    if any(_path_is_within(target_path, root) for root in symlink_target_roots):
+        return
+    escaped_symlink_targets[_audit_entry_path(link_path)] = target_path
+
+
+def _snapshot_audit_path(
+    path: Path,
+    files: Dict[Path, str],
+    errors: List[str],
+    symlink_target_roots: List[Path],
+    escaped_symlink_targets: Dict[Path, Path],
+) -> None:
+    """Add one filesystem path to the snapshot and track symlink escapes."""
+    entry_path = _audit_entry_path(path)
+    files[entry_path] = _filesystem_signature(path, errors)
+    if not path.is_symlink():
+        return
+    try:
+        raw_target = os.readlink(path)
+    except OSError as exc:
+        errors.append(f"{path}: {exc}")
+        return
+    target_path = _resolve_symlink_target_path(path, raw_target, errors)
+    if target_path is None:
+        return
+    _record_escaped_symlink_target(
+        path,
+        target_path,
+        symlink_target_roots,
+        escaped_symlink_targets,
+    )
+
+
+def _snapshot_audit_root(
+    root: Path,
+    files: Dict[Path, str],
+    errors: List[str],
+    symlink_target_roots: List[Path],
+    escaped_symlink_targets: Dict[Path, Path],
+) -> None:
+    """Add all auditable files under *root* to *files*."""
+    if root.is_symlink():
+        _snapshot_audit_path(
+            root,
+            files,
+            errors,
+            symlink_target_roots,
+            escaped_symlink_targets,
+        )
+        return
+    if not root.exists():
+        return
+    if root.is_file():
+        _snapshot_audit_path(
+            root,
+            files,
+            errors,
+            symlink_target_roots,
+            escaped_symlink_targets,
+        )
+        return
+    if not root.is_dir():
+        _snapshot_audit_path(
+            root,
+            files,
+            errors,
+            symlink_target_roots,
+            escaped_symlink_targets,
+        )
+        return
+    _snapshot_audit_path(
+        root,
+        files,
+        errors,
+        symlink_target_roots,
+        escaped_symlink_targets,
+    )
+
+    def on_walk_error(exc: OSError) -> None:
+        errors.append(f"{root}: {exc}")
+
+    for current, dirnames, filenames in os.walk(
+        root,
+        topdown=True,
+        onerror=on_walk_error,
+    ):
+        current_path = Path(current)
+        for dirname in list(dirnames):
+            dir_path = current_path / dirname
+            if dir_path.is_symlink():
+                _snapshot_audit_path(
+                    dir_path,
+                    files,
+                    errors,
+                    symlink_target_roots,
+                    escaped_symlink_targets,
+                )
+            else:
+                _snapshot_audit_path(
+                    dir_path,
+                    files,
+                    errors,
+                    symlink_target_roots,
+                    escaped_symlink_targets,
+                )
+        for filename in filenames:
+            file_path = current_path / filename
+            _snapshot_audit_path(
+                file_path,
+                files,
+                errors,
+                symlink_target_roots,
+                escaped_symlink_targets,
+            )
+
+
+def _take_filesystem_policy_snapshot(
+    cwd: Path,
+    policy: ClaudePolicy,
+) -> _FilesystemPolicySnapshot:
+    """Snapshot files under cwd, addDirs, writable roots, and read-only roots."""
+    files: Dict[Path, str] = {}
+    errors: List[str] = []
+    escaped_symlink_targets: Dict[Path, Path] = {}
+
+    resolved_cwd = _resolve_audit_path(cwd, errors, "cwd")
+    if resolved_cwd is None:
+        return _FilesystemPolicySnapshot(
+            files=files,
+            errors=errors,
+            escaped_symlink_targets=escaped_symlink_targets,
+        )
+
+    symlink_target_roots = [resolved_cwd]
+    for key in ("addDirs", "writableRoots", "readOnlyRoots"):
+        symlink_target_roots.extend(
+            _resolve_policy_roots(resolved_cwd, policy, key, errors)
+        )
+    snapshot_roots = list(symlink_target_roots)
+    snapshot_roots.extend(_linked_git_metadata_roots(resolved_cwd))
+
+    audit_roots = _collapse_audit_roots(snapshot_roots)
+    collapsed_symlink_target_roots = _collapse_audit_roots(symlink_target_roots)
+    for root in audit_roots:
+        _snapshot_audit_root(
+            root,
+            files,
+            errors,
+            collapsed_symlink_target_roots,
+            escaped_symlink_targets,
+        )
+    return _FilesystemPolicySnapshot(
+        files=files,
+        errors=errors,
+        escaped_symlink_targets=escaped_symlink_targets,
+    )
+
+
+def _display_audit_path(cwd: Path, path: Path) -> str:
+    """Render cwd-contained paths as POSIX relative paths, else absolute paths."""
+    resolved_cwd = cwd.resolve(strict=False)
+    try:
+        return path.relative_to(resolved_cwd).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _format_audit_paths(paths: List[str], *, limit: int = 12) -> str:
+    """Format changed paths for concise policy messages."""
+    shown = paths[:limit]
+    suffix = f" (+{len(paths) - limit} more)" if len(paths) > limit else ""
+    return ", ".join(shown) + suffix
+
+
+@dataclass
+class _PddOwnedLogWrite:
+    path: Path
+    before_signature: str
+    after_signature: str
+
+
+def _record_pdd_owned_log_signature(
+    log_write: Optional[_PddOwnedLogWrite],
+    signatures: Dict[Path, str],
+    baseline: Optional[_FilesystemPolicySnapshot],
+) -> None:
+    """Record the exact post-write signature of a PDD-owned log file."""
+    if log_write is None:
+        return
+    entry_path = _audit_entry_path(log_write.path)
+    baseline_signature = (
+        signatures.get(entry_path)
+        if entry_path in signatures
+        else (
+            baseline.files.get(entry_path, "missing")
+            if baseline is not None
+            else log_write.before_signature
+        )
+    )
+    if log_write.before_signature != baseline_signature:
+        return
+    signatures[entry_path] = log_write.after_signature
+
+
+def _is_trusted_pdd_owned_log_change(
+    path: Path,
+    after_signature: Optional[str],
+    signatures: Dict[Path, str],
+) -> bool:
+    """Return True only for exact PDD-owned log writes with matching signatures."""
+    if after_signature is None:
+        return False
+    return signatures.get(path) == after_signature
+
+
+def _is_directory_signature(signature: Optional[str]) -> bool:
+    """Return True when a snapshot signature describes a directory."""
+    return bool(signature and signature.startswith("dir:"))
+
+
+def _is_directory_change(
+    path: Path,
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+) -> bool:
+    """Return True when a changed path is a directory in either snapshot."""
+    return (
+        _is_directory_signature(before.files.get(path))
+        or _is_directory_signature(after.files.get(path))
+    )
+
+
+def _filter_redundant_directory_changes(
+    paths: List[Path],
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+    explained_paths: Optional[Set[Path]] = None,
+) -> List[Path]:
+    """Drop directory mtime changes when a changed descendant is also reported."""
+    all_explained_paths = list(paths) + list(explained_paths or set())
+    filtered: List[Path] = []
+    for path in paths:
+        if _is_directory_change(path, before, after) and any(
+            other != path and _path_is_within(other, path)
+            for other in all_explained_paths
+        ):
+            continue
+        filtered.append(path)
+    return filtered
+
+
+def _escaped_symlink_target_for_path(
+    path: Path,
+    before: _FilesystemPolicySnapshot,
+    after: _FilesystemPolicySnapshot,
+) -> Path:
+    """Return the known escaped symlink target without assuming snapshot side."""
+    if path in after.escaped_symlink_targets:
+        return after.escaped_symlink_targets[path]
+    return before.escaped_symlink_targets[path]
+
+
+def _audit_filesystem_policy(
+    cwd: Path,
+    policy: Optional[ClaudePolicy],
+    before: Optional[_FilesystemPolicySnapshot],
+    pdd_owned_log_signatures: Optional[Dict[Path, str]] = None,
+) -> Tuple[List[str], Optional[str]]:
+    """Compare filesystem snapshots and return changed files plus violation text."""
+    if policy is None or before is None:
+        return [], None
+
+    after = _take_filesystem_policy_snapshot(cwd, policy)
+    if before.errors or after.errors:
+        errors = before.errors + after.errors
+        detail = _format_audit_paths(errors)
+        return [], f"Filesystem policy audit failed; refusing result: {detail}"
+
+    pdd_owned_log_signatures = pdd_owned_log_signatures or {}
+    comparison_paths = (
+        set(before.files) | set(after.files) | set(pdd_owned_log_signatures)
+    )
+    trusted_pdd_log_paths = {
+        path for path, signature in pdd_owned_log_signatures.items()
+        if after.files.get(path) == signature
+    }
+    changed_paths = sorted(
+        _filter_redundant_directory_changes(
+            [
+                path for path in comparison_paths
+                if (
+                    before.files.get(path) != after.files.get(path)
+                    or (
+                        path in pdd_owned_log_signatures
+                        and after.files.get(path) != pdd_owned_log_signatures[path]
+                    )
+                )
+                and not _is_trusted_pdd_owned_log_change(
+                    path,
+                    after.files.get(path),
+                    pdd_owned_log_signatures,
+                )
+            ],
+            before,
+            after,
+            trusted_pdd_log_paths,
+        ),
+        key=str,
+    )
+    escaped_symlink_paths = sorted(
+        set(before.escaped_symlink_targets) | set(after.escaped_symlink_targets),
+        key=str,
+    )
+    reported_paths = sorted(set(changed_paths) | set(escaped_symlink_paths), key=str)
+    escaped_symlink_files = [
+        (
+            _display_audit_path(cwd, path),
+            str(_escaped_symlink_target_for_path(path, before, after)),
+        )
+        for path in escaped_symlink_paths
+    ]
+    changed_files = [_display_audit_path(cwd, path) for path in reported_paths]
+    if not reported_paths:
+        return changed_files, None
+
+    resolved_cwd = cwd.resolve(strict=False)
+    writable_roots = _resolve_policy_roots(resolved_cwd, policy, "writableRoots")
+    read_only_roots = _resolve_policy_roots(resolved_cwd, policy, "readOnlyRoots")
+
+    outside_writable = [
+        path for path in changed_paths
+        if not any(_path_is_within(path, root) for root in writable_roots)
+    ]
+    inside_read_only = [
+        path for path in changed_paths
+        if any(_path_is_within(path, root) for root in read_only_roots)
+    ]
+    if not outside_writable and not inside_read_only and not escaped_symlink_files:
+        return changed_files, None
+
+    lines = [
+        "Filesystem policy violation: changed files must stay inside "
+        "caller-declared writable roots and outside declared read-only roots.",
+    ]
+    if outside_writable:
+        lines.append(
+            "Changed files outside writable roots: "
+            + _format_audit_paths(
+                [_display_audit_path(cwd, path) for path in outside_writable]
+            )
+        )
+    if inside_read_only:
+        lines.append(
+            "Changed files inside read-only roots: "
+            + _format_audit_paths(
+                [_display_audit_path(cwd, path) for path in inside_read_only]
+            )
+        )
+    if escaped_symlink_files:
+        symlink_details = [
+            f"{display_path} -> {target_path}"
+            for display_path, target_path in escaped_symlink_files
+        ]
+        lines.append(
+            "symlink targets outside audited roots: "
+            + _format_audit_paths(symlink_details)
+        )
+    lines.append("Changed files: " + _format_audit_paths(changed_files))
+    return changed_files, "\n".join(lines)
 
 
 def _interactive_allowed_tools(allowed_tools: Optional[str]) -> Optional[str]:
@@ -225,7 +888,8 @@ class AgenticTaskResult(tuple):
     structured usage with ``isinstance(result, tuple)``, ``len(result) >= 5``,
     and ``result[4]``. Iteration intentionally yields the historical four
     fields to preserve existing ``success, output, cost, provider = ...``
-    callers.
+    callers. Changed-file metadata is stored as an attribute so the indexed
+    usage slot remains stable.
     """
 
     def __new__(
@@ -235,11 +899,15 @@ class AgenticTaskResult(tuple):
         cost_usd: float,
         provider: str,
         usage: AgenticUsage = None,
+        *,
+        changed_files: Optional[List[str]] = None,
     ) -> "AgenticTaskResult":
-        return tuple.__new__(
+        result = tuple.__new__(
             cls,
             (success, output_text, cost_usd, provider, usage),
         )
+        result._changed_files = list(changed_files or [])
+        return result
 
     def __iter__(self):
         return (tuple.__getitem__(self, i) for i in range(4))
@@ -264,6 +932,10 @@ class AgenticTaskResult(tuple):
     def usage(self) -> AgenticUsage:
         return tuple.__getitem__(self, 4)
 
+    @property
+    def changed_files(self) -> List[str]:
+        return list(getattr(self, "_changed_files", []))
+
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable mapping shape for structured consumers."""
         return {
@@ -272,6 +944,7 @@ class AgenticTaskResult(tuple):
             "cost_usd": self.cost_usd,
             "provider": self.provider,
             "usage": self.usage,
+            "changed_files": self.changed_files,
         }
 
 
@@ -578,6 +1251,77 @@ def classify_step_output(
         return TokenMatch(tier="llm_classification", token=status, cost=cost)
     except Exception:
         return TokenMatch(tier="llm_classification_error", token="CLASSIFICATION_ERROR")
+
+
+def branch_checked_out_worktree(git_root: Path, branch_name: str) -> Optional[str]:
+    """Return the path of a LIVE worktree that currently has ``branch_name``
+    checked out, or ``None``. Parses ``git worktree list --porcelain`` so the
+    check does not depend on locale-specific ``git branch -D`` stderr text.
+
+    Only a worktree that genuinely holds the branch should trigger the issue
+    #1596 fallback. A stanza marked ``prunable`` (stale registration) or whose
+    path no longer exists on disk MUST NOT count — pruning + retrying the
+    delete clears those, so treating them as a lock would force a needless
+    fallback branch."""
+    try:
+        result = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=git_root, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    target = f"refs/heads/{branch_name}"
+    # Stanzas are separated by blank lines; the final stanza may have no
+    # trailing blank line. Append one so the flush logic is uniform.
+    path: Optional[str] = None
+    branch: Optional[str] = None
+    prunable = False
+    for line in result.stdout.splitlines() + [""]:
+        if line.startswith("worktree "):
+            path = line[len("worktree "):].strip()
+        elif line.startswith("branch "):
+            branch = line[len("branch "):].strip()
+        elif line == "prunable" or line.startswith("prunable "):
+            prunable = True
+        elif line == "":
+            # End of a stanza — evaluate it.
+            if (
+                path is not None
+                and branch == target
+                and not prunable
+                and Path(path).exists()
+            ):
+                return path
+            path = None
+            branch = None
+            prunable = False
+    return None
+
+
+def clean_restart_fallback_branch(branch_name: str) -> str:
+    """Unique fallback branch name for a clean restart when ``branch_name`` is
+    locked by another worktree (issue #1596). Prefers the executor job id
+    (``JOB_ID`` / ``PDD_JOB_ID`` env) so the name — and therefore the PR — is
+    stable across retries of the same job; otherwise a random token."""
+    raw = os.environ.get("JOB_ID") or os.environ.get("PDD_JOB_ID") or ""
+    slug = re.sub(r"[^A-Za-z0-9]", "", raw)[:8]
+    if not slug:
+        slug = secrets.token_hex(4)  # 8 hex chars
+    return f"{branch_name}-job-{slug}"
+
+
+def current_worktree_branch(cwd: Path) -> Optional[str]:
+    """Return the current branch name of the git worktree at ``cwd``, or
+    ``None`` if detached/unresolvable."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=cwd, capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    branch = result.stdout.strip()
+    return branch if branch and branch != "HEAD" else None
 
 
 def substitute_template_variables(
@@ -895,6 +1639,449 @@ def _is_permanent_error(error_message: str) -> bool:
     return _classify_permanent_error(error_message) is not None
 
 
+# ---------------------------------------------------------------------------
+# Issue #1541: secret-safe provider-limit marker for PDD Cloud retry scheduling
+# ---------------------------------------------------------------------------
+# PDD Cloud needs to queue an agentic executor run when the active credential
+# hits a rate/usage/credential limit, then resume after the provider reset
+# window. It cannot reliably extract a reset time by scraping raw provider
+# stderr (brittle, provider-specific, and risks leaking secrets the provider
+# echoes back in an error body). Instead the CLI emits exactly one stable,
+# machine-parseable line per provider-limit event:
+#
+#   PDD_PROVIDER_LIMIT provider=<anthropic|openai|google|antigravity|opencode>
+#       status=<429|credential_limit>
+#       reason=<rate_limit|usage_limit|session_limit|credential_limit>
+#       reset_at=<UTC ISO-8601 'YYYY-MM-DDTHH:MM:SSZ' or empty>
+#       reset_source=<provider|parsed_text|estimated|none>
+#
+# The marker is ADDITIVE — it piggybacks on the already-vetted
+# `_classify_permanent_error` ("credential-limit") and `_is_rate_limited`
+# classifications, so it inherits their false-positive guards and never changes
+# retry/backoff semantics. It only ever emits fixed enum fields plus a
+# normalized UTC timestamp, never a slice of the (untrusted) provider text.
+
+PDD_PROVIDER_LIMIT_MARKER: str = "PDD_PROVIDER_LIMIT"
+_provider_limit_logger = logging.getLogger(__name__ + ".provider_limit")
+
+# Allowed enum values. Anything outside these is coerced to a conservative
+# default by the formatter so a classifier bug can never widen the marker into
+# untrusted territory.
+_MARKER_PROVIDERS: frozenset = frozenset(
+    {"anthropic", "openai", "google", "antigravity", "opencode"}
+)
+_MARKER_STATUSES: frozenset = frozenset({"429", "credential_limit"})
+_MARKER_REASONS: frozenset = frozenset(
+    {"rate_limit", "usage_limit", "session_limit", "credential_limit"}
+)
+_MARKER_SOURCES: frozenset = frozenset(
+    {"provider", "parsed_text", "estimated", "none"}
+)
+
+_MONTHS: Dict[str, int] = {
+    name.lower(): num
+    for num, name in enumerate(
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+        start=1,
+    )
+}
+
+# Normalized UTC reset timestamp shape used both to format and to validate.
+_RESET_AT_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
+
+# Reset-clause matchers. Each is anchored on the `resets` keyword and reads ONLY
+# structured groups (never the surrounding free text). A short bounded gap
+# (`[^\n]{0,12}?`) absorbs the typical "· " / "at " / "on " delimiter between
+# the anchor and the time token. Tried most-specific first.
+_RESET_ISO_RE = re.compile(
+    r"resets?\b[^\n]{0,12}?"
+    r"(?P<iso>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?"
+    r"(?:Z|[+-]\d{2}:?\d{2})?)",
+    re.IGNORECASE,
+)
+# Optional trailing timezone, tried after the time. `tz` is a parenthesized
+# token ("(UTC)", "(America/Los_Angeles)"); `tzbare` is an *unparenthesized*
+# zone, captured in two structurally-anchored shapes so it catches real zone
+# tokens without swallowing ordinary trailing prose:
+#   * an IANA "Area/Location" name ("America/Los_Angeles") anchored on the closed
+#     set of IANA area prefixes — the required area + "/" can't match prose like
+#     "and/or"; tried first so "US/Pacific" is not truncated to the "US" abbrev;
+#   * an UPPERCASE abbreviation or numeric offset ("PST", "UTC-08:00"), matched
+#     case-sensitively so a lowercase word like "today" is left alone.
+# Every token (parenthesized OR bare) is routed through `_resolve_reset_tz`, so
+# an unrecognized zone degrades to unparseable instead of being silently read as
+# UTC. The uppercase-only bound on the abbreviation branch is deliberate: it
+# treats an all-caps non-zone word as a possible unknown zone (-> unparseable)
+# rather than emit a confidently-wrong UTC timestamp.
+_TZ_TAIL = (
+    r"(?:\s*\((?P<tz>[^)\n]{1,40})\)"
+    r"|\s+(?P<tzbare>"
+    r"(?:Africa|America|Antarctica|Arctic|Asia|Atlantic|Australia|Brazil|Canada"
+    r"|Chile|Europe|Indian|Mexico|Pacific|US|Etc)/[\w+/-]+"
+    r"|(?-i:[A-Z]{2,5}(?:[+-]\d{1,2}(?::?\d{2})?)?|[+-]\d{2}:?\d{2})"
+    r"))?"
+)
+# `ampm` accepts plain and dotted forms (am, pm, a.m., p.m.). The date matcher
+# also accepts an explicit 4-digit `year` and an optional "at" connector between
+# the day and the time, so "June 11, 2026, 3:30pm" is not misread as hour=20 and
+# "June 11 at 3:30pm" is not dropped as unparseable.
+_RESET_DATE_RE = re.compile(
+    r"resets?\b[^\n]{0,12}?"
+    r"(?P<month>jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+"
+    r"(?P<day>\d{1,2})(?:,)?\s+"
+    r"(?:(?P<year>\d{4})(?:,)?\s+)?"
+    r"(?:at\s+)?"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
+    + _TZ_TAIL,
+    re.IGNORECASE,
+)
+_RESET_TIME_RE = re.compile(
+    r"resets?\b(?P<gap>[^\n]{0,12}?)"
+    r"(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<ampm>[ap]\.?m\.?)?"
+    + _TZ_TAIL,
+    re.IGNORECASE,
+)
+
+# A relative-countdown preposition in the gap before a time-only token marks a
+# duration ("resets in 00:30", "try again within 5:00"), NOT an absolute clock
+# time — those must not yield a reset_at.
+_RELATIVE_RESET_GAP_RE = re.compile(r"\b(?:in|after|within|every)\b", re.IGNORECASE)
+# Explicit numeric UTC/GMT offset, e.g. "UTC+02:00", "GMT-5", "+0530".
+_TZ_OFFSET_RE = re.compile(r"^(?:UTC|GMT)?\s*([+-])(\d{1,2})(?::?(\d{2}))?$", re.IGNORECASE)
+# Some minimal tzdata installs omit IANA backward-link aliases even when the
+# canonical zone exists.
+_RESET_TZ_ALIASES: Dict[str, str] = {
+    "us/pacific": "America/Los_Angeles",
+}
+
+
+def _format_utc(dt: datetime) -> str:
+    """Render a timezone-aware datetime as compact UTC ISO ``YYYY-MM-DDTHH:MM:SSZ``."""
+    return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _resolve_reset_tz(name: Optional[str]) -> Optional[tzinfo]:
+    """Resolve a parenthesized timezone token to a ``tzinfo``.
+
+    Returns ``timezone.utc`` when no timezone was given (the conservative,
+    documented default for unzoned reset text), a resolved zone for ``UTC``/
+    ``GMT``/``Z``, an explicit numeric offset (``UTC+02:00``, ``GMT-5``), or a
+    recognized IANA name (e.g. ``America/Los_Angeles``), and ``None`` when an
+    *explicit* timezone token is present but unrecognized (``PDT``, ``Pacific
+    Time``) — the caller then treats the reset as unparseable rather than
+    emitting a confidently-wrong UTC timestamp.
+    """
+    if not name:
+        return timezone.utc
+    cleaned = name.strip()
+    cleaned = _RESET_TZ_ALIASES.get(cleaned.lower(), cleaned)
+    if cleaned.upper() in ("UTC", "GMT", "Z", "UT"):
+        return timezone.utc
+    offset = _TZ_OFFSET_RE.match(cleaned)
+    if offset:
+        sign = -1 if offset.group(1) == "-" else 1
+        hours = int(offset.group(2))
+        minutes = int(offset.group(3) or 0)
+        if hours > 23 or minutes > 59:
+            return None
+        return timezone(sign * timedelta(hours=hours, minutes=minutes))
+    try:
+        return ZoneInfo(cleaned)
+    except Exception:
+        return None
+
+
+def _reset_hour_to_24h(hour: int, ampm: Optional[str]) -> Optional[int]:
+    """Convert a parsed clock hour (12h with am/pm, or 24h) to 0-23, or None.
+
+    ``ampm`` may be a dotted form (``a.m.``/``p.m.``); dots are normalized away.
+    """
+    if ampm:
+        marker = ampm.replace(".", "").lower()
+        if not 1 <= hour <= 12:
+            return None
+        if marker == "am":
+            return 0 if hour == 12 else hour
+        return 12 if hour == 12 else hour + 12
+    return hour if 0 <= hour <= 23 else None
+
+
+def _iso_reset_to_utc(raw: str) -> Optional[datetime]:
+    """Parse an explicit ISO-8601 reset timestamp to an aware UTC datetime."""
+    candidate = raw.strip().replace(" ", "T")
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _match_tz(match: "re.Match[str]") -> Optional[str]:
+    """Return the timezone token from a reset match, preferring a parenthesized
+    token (``tz``) and falling back to a bare trailing abbreviation/offset
+    (``tzbare``) so an unparenthesized zone like ``11pm PST`` is not silently
+    dropped and read as UTC."""
+    groups = match.groupdict()
+    return groups.get("tz") or groups.get("tzbare")
+
+
+def _dated_reset_to_datetime(match: "re.Match[str]", now: datetime) -> Optional[datetime]:
+    """Build a reset datetime from a month/day/time match.
+
+    An explicit 4-digit year, when captured, is honored verbatim — even if it
+    lies in the past (the provider stated it, so a past reset reads as "retry
+    now"). Otherwise the year is inferred as the next future occurrence (a date
+    already past this year rolls forward)."""
+    month = _MONTHS.get(match.group("month").lower()[:3])
+    hour = _reset_hour_to_24h(int(match.group("hour")), match.group("ampm"))
+    minute = int(match.group("minute") or 0)
+    day = int(match.group("day"))
+    if month is None or hour is None or not 1 <= day <= 31 or not 0 <= minute <= 59:
+        return None
+    tz = _resolve_reset_tz(_match_tz(match))
+    if tz is None:  # explicit but unrecognized timezone -> unparseable
+        return None
+    year_token = match.groupdict().get("year")
+    if year_token:
+        try:
+            return datetime(int(year_token), month, day, hour, minute, tzinfo=tz)
+        except ValueError:
+            return None
+    # Anchor year inference to the reset *timezone's* local year, not the UTC
+    # year: near a New Year boundary `now` can already be in the next year in
+    # UTC while still in the previous year in the reset zone (or vice versa), so
+    # using `now.year` would skip the correct candidate and land a full year off
+    # (e.g. "resets Dec 31, 11:45pm (America/Los_Angeles)" at 2026-01-01T07:30Z).
+    base_year = now.astimezone(tz).year
+    for year in (base_year, base_year + 1):
+        try:
+            local = datetime(year, month, day, hour, minute, tzinfo=tz)
+        except ValueError:
+            return None
+        if local.astimezone(timezone.utc) >= now:
+            return local
+    return None
+
+
+def _time_only_reset_to_datetime(match: "re.Match[str]", now: datetime) -> Optional[datetime]:
+    """Build a reset datetime from a time-of-day match against ``now``'s date,
+    rolling to the next day when the time has already passed."""
+    hour = _reset_hour_to_24h(int(match.group("hour")), match.group("ampm"))
+    minute = int(match.group("minute") or 0)
+    if hour is None or not 0 <= minute <= 59:
+        return None
+    tz = _resolve_reset_tz(_match_tz(match))
+    if tz is None:  # explicit but unrecognized timezone -> unparseable
+        return None
+    local_now = now.astimezone(tz)
+    candidate = local_now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate.astimezone(timezone.utc) < now:
+        candidate = candidate + timedelta(days=1)
+    return candidate
+
+
+def _parse_reset_at(
+    text: Optional[str], *, now: Optional[datetime] = None
+) -> Tuple[str, str]:
+    """Parse a provider reset time out of sanitized limit text.
+
+    Returns ``(reset_at, reset_source)`` where ``reset_at`` is a normalized UTC
+    ISO-8601 string ``YYYY-MM-DDTHH:MM:SSZ`` (or ``""`` when no reset time can be
+    read) and ``reset_source`` is one of:
+
+    * ``parsed_text`` — an explicit date or full timestamp was read from text,
+    * ``estimated`` — only a time-of-day was given, so the date was inferred,
+    * ``none`` — nothing parseable.
+
+    Only recognized date/time tokens are ever read out of ``text``; the
+    surrounding free text is never echoed, so the result is safe to emit even
+    when the input carries untrusted provider output. Unzoned times are
+    interpreted as UTC (a conservative, documented default). ``now`` is
+    injectable for deterministic tests and defaults to the current UTC time.
+    """
+    if not text:
+        return "", "none"
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+
+    # 1) Explicit ISO-8601 timestamp (carries its own date; honored verbatim).
+    match = _RESET_ISO_RE.search(text)
+    if match:
+        dt = _iso_reset_to_utc(match.group("iso"))
+        if dt is not None:
+            return _format_utc(dt), "parsed_text"
+
+    # 2) Month-name date + time (year inferred -> next future occurrence).
+    match = _RESET_DATE_RE.search(text)
+    if match:
+        dt = _dated_reset_to_datetime(match, now)
+        if dt is not None:
+            return _format_utc(dt), "parsed_text"
+
+    # 3) Time-of-day only (date inferred -> next future occurrence; estimated).
+    #    Require an am/pm marker OR an explicit minute so a bare "resets 11"
+    #    cannot parse as an ambiguous time, and reject relative countdowns
+    #    ("resets in 00:30") whose HH:MM looks like a clock time but is a
+    #    duration.
+    match = _RESET_TIME_RE.search(text)
+    if (
+        match
+        and (match.group("ampm") or match.group("minute"))
+        and not _RELATIVE_RESET_GAP_RE.search(match.group("gap"))
+    ):
+        dt = _time_only_reset_to_datetime(match, now)
+        if dt is not None:
+            return _format_utc(dt), "estimated"
+
+    return "", "none"
+
+
+def _provider_limit_marker(
+    *,
+    provider: str,
+    status: str,
+    reason: str,
+    reset_at: str = "",
+    reset_source: str = "none",
+) -> str:
+    """Format the stable, secret-safe ``PDD_PROVIDER_LIMIT`` marker line.
+
+    Every field is constrained to a fixed enum (or a normalized UTC timestamp
+    for ``reset_at``); out-of-range inputs are coerced to conservative defaults
+    so the marker can never carry untrusted text. An unmappable provider is
+    reported as the literal ``unknown`` (a fixed token, never the raw string) —
+    in practice unreachable because the emission seam always passes a known
+    provider, but it keeps the marker safe if a future caller does not.
+    """
+    if provider not in _MARKER_PROVIDERS:
+        provider = "unknown"
+    if status not in _MARKER_STATUSES:
+        status = "credential_limit"
+    if reason not in _MARKER_REASONS:
+        reason = "credential_limit"
+    if reset_source not in _MARKER_SOURCES:
+        reset_source = "none"
+    if reset_at and not _RESET_AT_RE.fullmatch(reset_at):
+        reset_at, reset_source = "", "none"
+    return (
+        f"{PDD_PROVIDER_LIMIT_MARKER} provider={provider} status={status} "
+        f"reason={reason} reset_at={reset_at} reset_source={reset_source}"
+    )
+
+
+def _credential_limit_reason(error_message: str) -> str:
+    """Map a Claude Code subscription-cap envelope to a marker ``reason``.
+
+    ``session``/``usage`` map to their specific reasons; weekly/monthly/overall
+    caps map to the overarching ``credential_limit``.
+    """
+    match = re.search(
+        r"hit\s+your\s+(session|usage|weekly|monthly)?\s*limit",
+        error_message,
+        re.IGNORECASE,
+    )
+    subtype = (match.group(1) or "").lower() if match and match.group(1) else ""
+    if subtype == "session":
+        return "session_limit"
+    if subtype == "usage":
+        return "usage_limit"
+    return "credential_limit"
+
+
+def _classify_provider_limit(
+    provider: str, error_message: Optional[str], *, now: Optional[datetime] = None
+) -> Optional[str]:
+    """Return the ``PDD_PROVIDER_LIMIT`` marker line for a real provider/
+    credential limit, or ``None`` when the error is not a reset-able limit.
+
+    Piggybacks on the existing vetted classification so it inherits the
+    credential-limit false-positive guards and the generic-429 short-circuit:
+
+    * ``credential-limit`` (Claude Code subscription/session/usage/weekly cap)
+      -> ``status=credential_limit`` with a session/usage/credential reason and
+      a parsed reset time when the envelope carries one.
+    * generic transient 429 (no permanent classification) ->
+      ``status=429 reason=rate_limit`` with no reset metadata.
+
+    auth / quota / billing / oauth / provider-config permanent errors are NOT
+    reset-able limits and return ``None`` (no scheduling marker).
+    """
+    if not error_message:
+        return None
+    permanent_class = _classify_permanent_error(error_message)
+    if permanent_class == "credential-limit":
+        reset_at, reset_source = _parse_reset_at(error_message, now=now)
+        return _provider_limit_marker(
+            provider=provider,
+            status="credential_limit",
+            reason=_credential_limit_reason(error_message),
+            reset_at=reset_at,
+            reset_source=reset_source,
+        )
+    if permanent_class is None and _is_rate_limited(error_message):
+        # Generic transient 429: usually carries no reset metadata
+        # (-> reset_at= reset_source=none), but capture it when the body does
+        # expose a parseable reset (e.g. a Retry-After rendered as
+        # "resets <ISO>") so cloud can schedule precisely instead of guessing.
+        reset_at, reset_source = _parse_reset_at(error_message, now=now)
+        return _provider_limit_marker(
+            provider=provider,
+            status="429",
+            reason="rate_limit",
+            reset_at=reset_at,
+            reset_source=reset_source,
+        )
+    return None
+
+
+def _marker_provider_label(
+    provider: str, env: Optional[Dict[str, str]] = None
+) -> str:
+    """Map an internal provider name to its marker ``provider=`` value.
+
+    ``antigravity`` is collapsed to ``google`` everywhere in the agentic
+    preference list, so the marker re-derives the ``antigravity`` label when the
+    selected Google CLI is ``agy`` (vs. legacy ``gemini``) — otherwise the
+    issue's ``antigravity`` enum value would never appear.
+    """
+    if provider == "google" and _get_google_cli_name(env) == "agy":
+        return "antigravity"
+    return provider
+
+
+def _emit_provider_limit_marker(
+    provider: str, error_message: Optional[str], *, env: Optional[Dict[str, str]] = None
+) -> Optional[str]:
+    """Emit the ``PDD_PROVIDER_LIMIT`` marker for ``error_message`` if it is a
+    real provider/credential limit; return the marker line (or ``None``).
+
+    Printed on plain stdout — deliberately unstyled and NOT quiet-gated — so the
+    cloud scheduler can parse it even when human diagnostics are suppressed.
+
+    Best-effort telemetry: any failure while building/printing the marker is
+    swallowed so a marker bug can never break the agentic run it annotates.
+    """
+    try:
+        marker = _classify_provider_limit(
+            _marker_provider_label(provider, env), error_message
+        )
+        if marker is not None:
+            print(marker, flush=True)
+        return marker
+    except Exception as exc:  # pragma: no cover - defensive: marker must never crash the run
+        _provider_limit_logger.debug(
+            "Provider-limit marker emission failed for %s: %s", provider, exc
+        )
+        return None
+
+
 def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
     """Return a concise user-facing message for stale Codex CLI auth."""
     msg = error_detail.lower()
@@ -1115,7 +2302,7 @@ def _log_agentic_interaction(
     model: Optional[str] = None,
     false_positive: bool = False,
     include_bodies: bool = True,
-) -> None:
+) -> Optional[_PddOwnedLogWrite]:
     """
     Append one record per provider attempt to ``.pdd/agentic-logs/session_*.jsonl``.
 
@@ -1142,6 +2329,10 @@ def _log_agentic_interaction(
         include_bodies: When True, include the full ``prompt`` and ``response``
             text. When False, omit them but keep ``prompt_length`` and
             ``response_length`` so downstream tooling can still gauge size.
+
+    Returns:
+        The PDD-owned log append metadata when the write succeeds, otherwise
+        ``None``.
     """
     global _AGENTIC_SESSION_ID
 
@@ -1155,6 +2346,8 @@ def _log_agentic_interaction(
             _AGENTIC_SESSION_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         log_file = log_dir / f"session_{_AGENTIC_SESSION_ID}.jsonl"
+        before_errors: List[str] = []
+        before_signature = _filesystem_signature(log_file, before_errors)
 
         entry: Dict[str, Any] = {
             "timestamp": datetime.now().isoformat(),
@@ -1175,8 +2368,17 @@ def _log_agentic_interaction(
 
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
+        after_errors: List[str] = []
+        after_signature = _filesystem_signature(log_file, after_errors)
+        if before_errors or after_errors or after_signature == "missing":
+            return None
+        return _PddOwnedLogWrite(
+            path=log_file,
+            before_signature=before_signature,
+            after_signature=after_signature,
+        )
     except Exception:
-        pass  # Don't break workflow for logging errors
+        return None  # Don't break workflow for logging errors
 
 
 # ---------------------------------------------------------------------------
@@ -2479,48 +3681,400 @@ def _calculate_anthropic_cost(data: Dict[str, Any]) -> float:
     Tries modelUsage per-model costUSD first, then falls back to token-based
     estimation from the usage field.
     """
-    # Try 1: Sum costUSD from modelUsage (most accurate)
-    model_usage = data.get("modelUsage", {})
-    if model_usage:
-        total = sum(
-            float(info.get("costUSD", 0.0))
-            for info in model_usage.values()
-            if isinstance(info, dict)
-        )
-        if total > 0:
-            return total
+    raw_model_usage = data.get("modelUsage", {})
+    model_usage = raw_model_usage if isinstance(raw_model_usage, dict) else {}
 
-    # Try 2: Token-based estimation from usage field
+    # Try 1: Per-model modelUsage costUSD/token estimates.
     usage = data.get("usage", {})
-    if not usage:
-        return 0.0
+    aggregate_usage = usage if isinstance(usage, dict) else None
+    model_usage_cost = _calculate_anthropic_model_usage_token_cost(
+        model_usage,
+        aggregate_usage=aggregate_usage,
+    )
+    if model_usage_cost is not None:
+        return model_usage_cost
 
-    input_tokens = usage.get("input_tokens", 0)
-    output_tokens = usage.get("output_tokens", 0)
-    cache_read = usage.get("cache_read_input_tokens", 0)
-    cache_creation = usage.get("cache_creation_input_tokens", 0)
+    # Try 3: Token-based estimation from aggregate usage field.
+    if isinstance(usage, dict) and usage:
+        family = _anthropic_pricing_family_for_aggregate(data, model_usage)
+        cost = _calculate_anthropic_usage_cost(usage, family)
+        if cost is not None:
+            return cost
 
-    # Determine pricing family from modelUsage keys or default to sonnet
-    family = "sonnet"  # default
+    return 0.0
+
+
+_INPUT_TOKEN_KEYS: Tuple[str, ...] = ("input_tokens", "inputTokens")
+_OUTPUT_TOKEN_KEYS: Tuple[str, ...] = ("output_tokens", "outputTokens")
+_CACHE_READ_TOKEN_KEYS: Tuple[str, ...] = (
+    "cache_read_input_tokens",
+    "cached_input_tokens",
+    "cacheReadInputTokens",
+    "cachedInputTokens",
+)
+_CACHE_CREATION_TOKEN_KEYS: Tuple[str, ...] = (
+    "cache_creation_input_tokens",
+    "cacheCreationInputTokens",
+)
+
+
+def _validated_token_counter(
+    usage: Dict[str, Any],
+    aliases: Tuple[str, ...],
+    *,
+    required: bool,
+) -> Optional[int]:
+    """Return a non-negative token count, or None for missing/invalid required data."""
+    value = None
+    found = False
+    for key in aliases:
+        if key in usage:
+            value = usage[key]
+            found = True
+            break
+
+    if not found:
+        return None if required else 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _validated_anthropic_token_counts(
+    usage: Dict[str, Any],
+) -> Optional[Tuple[int, int, int, int]]:
+    """Return validated Anthropic token counters in canonical order."""
+    input_tokens = _validated_token_counter(
+        usage,
+        _INPUT_TOKEN_KEYS,
+        required=True,
+    )
+    output_tokens = _validated_token_counter(
+        usage,
+        _OUTPUT_TOKEN_KEYS,
+        required=True,
+    )
+    cache_read = _validated_token_counter(
+        usage,
+        _CACHE_READ_TOKEN_KEYS,
+        required=False,
+    )
+    cache_creation = _validated_token_counter(
+        usage,
+        _CACHE_CREATION_TOKEN_KEYS,
+        required=False,
+    )
+    if (
+        input_tokens is None
+        or output_tokens is None
+        or cache_read is None
+        or cache_creation is None
+    ):
+        return None
+    return input_tokens, output_tokens, cache_read, cache_creation
+
+
+def _positive_model_usage_cost_usd(usage: Dict[str, Any]) -> Optional[float]:
+    """Return a positive provider-reported model cost, or None."""
+    if "costUSD" not in usage:
+        return None
+    try:
+        cost = float(usage["costUSD"])
+    except (TypeError, ValueError):
+        return None
+    if cost <= 0:
+        return None
+    return cost
+
+
+def _anthropic_pricing_family_from_model_name(model_name: Optional[str]) -> Optional[str]:
+    """Return the Anthropic pricing family implied by an observed model name."""
+    if not isinstance(model_name, str) or not model_name:
+        return None
+    name_lower = model_name.lower()
+    if "opus" in name_lower:
+        return "opus"
+    if "haiku" in name_lower:
+        return "haiku"
+    if "sonnet" in name_lower:
+        return "sonnet"
+    return None
+
+
+def _anthropic_pricing_family_from_model_usage(
+    model_usage: Dict[str, Any],
+) -> Optional[str]:
+    """Infer aggregate pricing family from modelUsage keys."""
+    selected = None
     for model_name in model_usage.keys():
-        name_lower = model_name.lower()
-        if "opus" in name_lower:
-            family = "opus"
-            break
-        elif "haiku" in name_lower:
-            family = "haiku"
-            break
+        family = _anthropic_pricing_family_from_model_name(str(model_name))
+        if family == "opus":
+            return "opus"
+        if family == "haiku" and selected is None:
+            selected = "haiku"
+        elif family == "sonnet" and selected is None:
+            selected = "sonnet"
+    return selected
 
-    pricing = ANTHROPIC_PRICING_BY_FAMILY.get(family, ANTHROPIC_PRICING_BY_FAMILY["sonnet"])
 
-    # new_input = total input minus cached reads and cache creation (those tokens are billed separately)
-    new_input = max(0, input_tokens - cache_read - cache_creation)
-    input_cost = (new_input / 1_000_000) * pricing.input_per_million
+def _calculate_anthropic_usage_cost(
+    usage: Dict[str, Any],
+    family: Optional[str],
+) -> Optional[float]:
+    """Calculate Anthropic token cost from validated usage counters."""
+    counts = _validated_anthropic_token_counts(usage)
+    if counts is None:
+        return None
+    input_tokens, output_tokens, cache_read, cache_creation = counts
+
+    pricing_family = family or "sonnet"
+    pricing = ANTHROPIC_PRICING_BY_FAMILY.get(
+        pricing_family,
+        ANTHROPIC_PRICING_BY_FAMILY["sonnet"],
+    )
+
+    input_cost = (input_tokens / 1_000_000) * pricing.input_per_million
     cache_read_cost = (cache_read / 1_000_000) * pricing.input_per_million * pricing.cached_input_multiplier
     cache_write_cost = (cache_creation / 1_000_000) * pricing.input_per_million * 1.25
     output_cost = (output_tokens / 1_000_000) * pricing.output_per_million
 
     return input_cost + cache_read_cost + cache_write_cost + output_cost
+
+
+def _calculate_anthropic_model_usage_token_cost(
+    model_usage: Dict[str, Any],
+    *,
+    aggregate_usage: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """Estimate cost from per-model costUSD or validated token counters."""
+    if not model_usage:
+        return None
+
+    if not any(
+        isinstance(usage, dict)
+        and (
+            _positive_model_usage_cost_usd(usage) is not None
+            or _has_token_counter_key(usage)
+        )
+        for usage in model_usage.values()
+    ):
+        return None
+
+    aggregate_has_nonzero_cache = (
+        isinstance(aggregate_usage, dict)
+        and _has_nonzero_or_invalid_cache_counter(aggregate_usage)
+    )
+    total = 0.0
+    for model_name, usage in model_usage.items():
+        if not isinstance(usage, dict):
+            continue
+        direct_cost = _positive_model_usage_cost_usd(usage)
+        if direct_cost is not None:
+            total += direct_cost
+            continue
+        if not _has_token_counter_key(usage):
+            continue
+        if aggregate_has_nonzero_cache and not _has_complete_cache_counters(usage):
+            return None
+        family = (
+            _anthropic_pricing_family_from_model_name(str(model_name))
+            or "sonnet"
+        )
+        cost = _calculate_anthropic_usage_cost(usage, family)
+        if cost is None:
+            return None
+        total += cost
+
+    return total
+
+
+def _build_claude_usage_record(
+    model_name: str,
+    usage: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Build one JSON-serializable Claude usage record from validated counters."""
+    counts = _validated_anthropic_token_counts(usage)
+    if counts is None:
+        return None
+    input_tokens, output_tokens, cached_input_tokens, cache_creation_input_tokens = counts
+
+    return {
+        "model": model_name,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+    }
+
+
+def _has_token_counter_key(usage: Dict[str, Any]) -> bool:
+    """Return True when a usage object contains any known token counter key."""
+    aliases = (
+        _INPUT_TOKEN_KEYS
+        + _OUTPUT_TOKEN_KEYS
+        + _CACHE_READ_TOKEN_KEYS
+        + _CACHE_CREATION_TOKEN_KEYS
+    )
+    return any(key in usage for key in aliases)
+
+
+def _has_counter_alias(usage: Dict[str, Any], aliases: Tuple[str, ...]) -> bool:
+    """Return True when any alias in a counter family is present."""
+    return any(key in usage for key in aliases)
+
+
+def _has_complete_cache_counters(usage: Dict[str, Any]) -> bool:
+    """Return True when both cache-read and cache-creation counters are explicit."""
+    return (
+        _has_counter_alias(usage, _CACHE_READ_TOKEN_KEYS)
+        and _has_counter_alias(usage, _CACHE_CREATION_TOKEN_KEYS)
+    )
+
+
+def _has_required_token_counters(usage: Dict[str, Any]) -> bool:
+    """Return True when required input/output counters are explicit and valid."""
+    return (
+        _validated_token_counter(usage, _INPUT_TOKEN_KEYS, required=True) is not None
+        and _validated_token_counter(usage, _OUTPUT_TOKEN_KEYS, required=True) is not None
+    )
+
+
+def _has_nonzero_or_invalid_cache_counter(usage: Dict[str, Any]) -> bool:
+    """Return True when aggregate cache counters should not be silently dropped."""
+    for aliases in (_CACHE_READ_TOKEN_KEYS, _CACHE_CREATION_TOKEN_KEYS):
+        value = _validated_token_counter(usage, aliases, required=False)
+        if value is None or value > 0:
+            return True
+    return False
+
+
+def _merge_missing_cache_counters(
+    per_model_usage: Dict[str, Any],
+    aggregate_usage: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Fill absent per-model cache counters from aggregate Claude usage."""
+    merged = dict(per_model_usage)
+    for aliases in (_CACHE_READ_TOKEN_KEYS, _CACHE_CREATION_TOKEN_KEYS):
+        if any(key in merged for key in aliases):
+            continue
+        for key in aliases:
+            if key in aggregate_usage:
+                merged[key] = aggregate_usage[key]
+                break
+    return merged
+
+
+def _extract_anthropic_model_from_envelope(data: Dict[str, Any]) -> Optional[str]:
+    """Extract a concrete Claude model from known JSON envelope locations."""
+    model = data.get("model")
+    if isinstance(model, str) and model:
+        return model
+
+    for key in ("message", "response", "result", "advisor"):
+        value = data.get(key)
+        if not isinstance(value, dict):
+            continue
+        model = value.get("model")
+        if isinstance(model, str) and model:
+            return model
+    return None
+
+
+def _anthropic_pricing_family_for_aggregate(
+    data: Dict[str, Any],
+    model_usage: Dict[str, Any],
+) -> str:
+    """Pick a pricing family for aggregate Claude usage from observed models."""
+    return (
+        _anthropic_pricing_family_from_model_usage(model_usage)
+        or _anthropic_pricing_family_from_model_name(
+            _extract_anthropic_model_from_envelope(data)
+        )
+        or "sonnet"
+    )
+
+
+def _extract_anthropic_standard_usage(
+    data: Any,
+    *,
+    actual_model: Optional[str],
+) -> AgenticUsage:
+    """Extract GVS-compatible usage from a Claude Code JSON envelope."""
+    if not isinstance(data, dict):
+        return None
+
+    model_usage = data.get("modelUsage")
+    if isinstance(model_usage, dict) and model_usage:
+        records: List[Dict[str, Any]] = []
+        names = sorted(str(name) for name in model_usage if name)
+        aggregate_usage = data.get("usage")
+        aggregate_has_nonzero_cache = (
+            isinstance(aggregate_usage, dict)
+            and _has_nonzero_or_invalid_cache_counter(aggregate_usage)
+        )
+        for model_name in names:
+            per_model_usage = model_usage.get(model_name)
+            has_per_model_counters = (
+                isinstance(per_model_usage, dict)
+                and _has_token_counter_key(per_model_usage)
+            )
+            if (
+                len(names) > 1
+                and aggregate_has_nonzero_cache
+                and has_per_model_counters
+                and not _has_complete_cache_counters(per_model_usage)
+            ):
+                return None
+            record_usage = per_model_usage
+            if (
+                len(names) == 1
+                and isinstance(record_usage, dict)
+                and isinstance(aggregate_usage, dict)
+            ):
+                if (
+                    not _has_complete_cache_counters(record_usage)
+                    and _has_required_token_counters(aggregate_usage)
+                ):
+                    record_usage = aggregate_usage
+                else:
+                    record_usage = _merge_missing_cache_counters(
+                        record_usage,
+                        aggregate_usage,
+                    )
+            record = (
+                _build_claude_usage_record(model_name, record_usage)
+                if isinstance(record_usage, dict)
+                else None
+            )
+            if (
+                record is None
+                and len(names) == 1
+                and isinstance(aggregate_usage, dict)
+            ):
+                record = _build_claude_usage_record(model_name, aggregate_usage)
+            if record is None:
+                return None
+            records.append(record)
+        if records:
+            return {"claude": records}
+
+    usage = data.get("usage")
+    if not isinstance(usage, dict):
+        return None
+
+    model_name = (
+        _extract_anthropic_model_from_envelope(data)
+        or actual_model
+    )
+    if not model_name:
+        return None
+
+    record = _build_claude_usage_record(model_name, usage)
+    if record is None:
+        return None
+    return {"claude": [record]}
 
 
 def run_agentic_task(
@@ -2641,6 +4195,24 @@ def run_agentic_task(
         with open(prompt_path, "w", encoding="utf-8") as f:
             f.write(full_instruction)
 
+        filesystem_snapshot: Optional[_FilesystemPolicySnapshot] = None
+        pdd_owned_log_signatures: Dict[Path, str] = {}
+        if _claude_policy_has_filesystem_roots(normalized_claude_policy):
+            filesystem_snapshot = _take_filesystem_policy_snapshot(
+                cwd,
+                normalized_claude_policy or {},
+            )
+            if filesystem_snapshot.errors:
+                detail = _format_audit_paths(filesystem_snapshot.errors)
+                return AgenticTaskResult(
+                    False,
+                    "Filesystem policy audit failed before provider run; "
+                    f"refusing to execute: {detail}",
+                    0.0,
+                    "",
+                    None,
+                )
+
         provider_errors: List[str] = []
 
         for provider in candidates:
@@ -2758,17 +4330,21 @@ def run_agentic_task(
                         # Issue #1376: log false-positive provider replies so the
                         # heuristic-rejection path leaves the same audit trail
                         # as outright failures (was previously silent).
-                        _log_agentic_interaction(
-                            label=label,
-                            prompt=full_instruction,
-                            response=output,
-                            cost=cost,
-                            provider=provider,
-                            success=False,
-                            duration=time.time() - task_start_time,
-                            cwd=cwd,
-                            model=effective_model,
-                            false_positive=True,
+                        _record_pdd_owned_log_signature(
+                            _log_agentic_interaction(
+                                label=label,
+                                prompt=full_instruction,
+                                response=output,
+                                cost=cost,
+                                provider=provider,
+                                success=False,
+                                duration=time.time() - task_start_time,
+                                cwd=cwd,
+                                model=effective_model,
+                                false_positive=True,
+                            ),
+                            pdd_owned_log_signatures,
+                            filesystem_snapshot,
                         )
                         any_attempt_logged_inside = True
                         # Multi-provider configs (default): fall through to the
@@ -2813,6 +4389,34 @@ def run_agentic_task(
                         if suspicious:
                             console.print(f"[bold red]SUSPICIOUS FILES DETECTED: {', '.join(['- ' + s for s in suspicious])}[/bold red]")
 
+                        changed_files, filesystem_violation = _audit_filesystem_policy(
+                            cwd,
+                            normalized_claude_policy,
+                            filesystem_snapshot,
+                            pdd_owned_log_signatures,
+                        )
+                        if filesystem_violation is not None:
+                            _log_agentic_interaction(
+                                label=label,
+                                prompt=full_instruction,
+                                response=filesystem_violation,
+                                cost=cost,
+                                provider=provider,
+                                success=False,
+                                duration=time.time() - task_start_time,
+                                cwd=cwd,
+                                model=effective_model,
+                                include_bodies=verbose,
+                            )
+                            return AgenticTaskResult(
+                                False,
+                                filesystem_violation,
+                                cost,
+                                provider,
+                                usage,
+                                changed_files=changed_files,
+                            )
+
                         # Issue #1376: always emit a summary record so the audit
                         # log answers "which provider/model produced step N?"
                         # without --verbose. Full prompt+response bodies stay
@@ -2830,7 +4434,14 @@ def run_agentic_task(
                             model=effective_model,
                             include_bodies=verbose,
                         )
-                        return AgenticTaskResult(True, output, cost, provider, usage)
+                        return AgenticTaskResult(
+                            True,
+                            output,
+                            cost,
+                            provider,
+                            usage,
+                            changed_files=changed_files,
+                        )
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
                 # Issue #1376 codex round 2: log each failed attempt inside
@@ -2839,16 +4450,20 @@ def run_agentic_task(
                 # produces only one JSONL row — exactly the audit-trail gap
                 # this PR set out to close.
                 if not success:
-                    _log_agentic_interaction(
-                        label=label,
-                        prompt=full_instruction,
-                        response=output,
-                        cost=cost,
-                        provider=provider,
-                        success=False,
-                        duration=time.time() - task_start_time,
-                        cwd=cwd,
-                        model=effective_model,
+                    _record_pdd_owned_log_signature(
+                        _log_agentic_interaction(
+                            label=label,
+                            prompt=full_instruction,
+                            response=output,
+                            cost=cost,
+                            provider=provider,
+                            success=False,
+                            duration=time.time() - task_start_time,
+                            cwd=cwd,
+                            model=effective_model,
+                        ),
+                        pdd_owned_log_signatures,
+                        filesystem_snapshot,
                     )
                     any_attempt_logged_inside = True
 
@@ -2901,6 +4516,17 @@ def run_agentic_task(
 
             # All retries exhausted (or deadline budget exhausted) for this provider
             provider_errors.append(f"{provider}: {last_output[:MAX_ERROR_SNIPPET_LENGTH]}")
+            # Issue #1541: emit a stable, secret-safe provider-limit marker so
+            # PDD Cloud can schedule a retry after the reset window without
+            # scraping raw provider stderr. This post-retry-loop seam fires at
+            # most once per provider (the credential-limit branch breaks here;
+            # generic 429s reach here only after exhausting retries — a 429 that
+            # recovers returns earlier and emits nothing). Only real
+            # credential-limit / generic-429 classifications produce a marker;
+            # auth/quota/etc. produce none. Deliberately NOT quiet-gated: the
+            # cloud scheduler needs the marker even when human diagnostics are
+            # suppressed.
+            _emit_provider_limit_marker(provider, last_output)
             if verbose:
                 console.print(f"[yellow]Provider {provider} failed after {max_retries} attempts: {last_output}[/yellow]")
             # Issue #1072 / #1376 (codex round 2): inline per-attempt logging
@@ -4146,10 +5772,12 @@ def _run_with_provider(
     use_playwright: bool = False,
     reasoning_time: Optional[float] = None,
     claude_policy: Optional[ClaudePolicy] = None,
-) -> Tuple[bool, str, float, Optional[str]]:
+) -> Union[Tuple[bool, str, float, Optional[str]], _ProviderRunResult]:
     """
     Internal helper to run a specific provider's CLI.
-    Returns (success, output_or_error, cost, actual_model).
+    Returns a provider result whose iteration yields
+    (success, output_or_error, cost, actual_model). Claude paths may expose
+    structured usage at index 4 while preserving four-value unpacking.
 
     Issue #1376: ``actual_model`` is the model name extracted from the
     provider's JSON response (e.g. ``claude-sonnet-4-6``,
@@ -4618,6 +6246,17 @@ def _run_with_provider(
                 f"[dim]Warning: {provider} returned $0 cost. "
                 f"JSON keys: {sorted(data.keys())}[/dim]"
             )
+        if provider == "anthropic":
+            return _ProviderRunResult(
+                success,
+                text,
+                cost,
+                actual_model,
+                _extract_anthropic_standard_usage(
+                    data,
+                    actual_model=actual_model,
+                ),
+            )
         return success, text, cost, actual_model
     except json.JSONDecodeError:
         # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
@@ -4705,6 +6344,9 @@ def _extract_provider_model_from_data(provider: str, data: Dict[str, Any]) -> Op
                 names = [str(k) for k in usage.keys() if k]
                 if names:
                     return "+".join(sorted(names)) if len(names) > 1 else names[0]
+            model = _extract_anthropic_model_from_envelope(data)
+            if model:
+                return model
         elif provider == "google":
             models = (data.get("stats") or {}).get("models")
             if isinstance(models, dict) and models:

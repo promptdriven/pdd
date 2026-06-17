@@ -19,5 +19,5 @@
        - The resolver must check roots in order: $PDD_PATH, repo root, CWD
        - For each root, it checks BOTH '<root>/prompts/{name}.prompt' and '<root>/pdd/prompts/{name}.prompt'
        - If path is None, rebuild the tried-path list from resolver.pdd_path_env, resolver.repo_root, and resolver.cwd in the same order
-    3. Return the contents of the first existing file. Print success message with prompt name.
-    4. If no file found, print error listing all tried paths. On I/O errors, print error and return None.
+    3. Return the contents of the first existing file. Print success message with prompt name unless the active Click context has `ctx.obj["quiet"]`, `ctx.obj["estimate"]`, or `ctx.obj["estimate_json"]` set; estimate JSON output must not be prefixed by template-loading chatter.
+    4. If no file found, print error listing all tried paths unless the active Click context is quiet/estimate mode. On I/O errors, print error unless quiet/estimate mode is active and return None.

@@ -17,6 +17,10 @@ You are working on step 5 of 8 in an agentic checkup workflow. Previous steps di
 <pr_changed_files>
 {pr_changed_files}
 </pr_changed_files>
+- Shell-first Step 5 evidence captured before this agentic step:
+<step5_shell_evidence>
+{step5_shell_evidence}
+</step5_shell_evidence>
 
 % User Request
 <issue_content>
@@ -55,6 +59,7 @@ If this is iteration 2 or later, previous fixes have already been applied — ch
    - go test (Go)
 
 2. **Run the right tests for this mode** and capture output:
+   - If `<step5_shell_evidence>` is non-empty, treat it as deterministic test evidence already captured by the orchestrator before this agentic step. If it reports `status: failed`, `status: error`, or `status: timeout_partial`, include that command/output in your failure summary and `failure_signal` unless you rerun an equivalent command and prove it is now passing. If it reports `status: not_found`, do not treat that as a failure by itself; continue with project-specific discovery below.
    - If `PR-verification mode` is `false`, run the full discovered test suite: unit tests, integration tests, and end-to-end tests.
    - If `PR-verification mode` is `true` and `PR test scope` is `full` (the default), run the full discovered test suite. PR mode does NOT imply targeted scope; the user opted into the comprehensive quality gate by not passing `--test-scope targeted`. If the full suite is too large to complete within this step's budget, report the exact full-suite command as **not run due to time budget** and do not claim full-suite coverage — do not silently fall back to targeted tests.
    - If `PR-verification mode` is `true` AND `PR test scope` is `targeted`, first run the mandatory PR-scoped tests tied to `<pr_changed_files>`: direct tests for changed modules, adjacent tests, and tests that mention the changed module names. Expand beyond that only when project metadata or previous step output shows broader risk. The user explicitly opted into targeted scope; do NOT run the full suite.

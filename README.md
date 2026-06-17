@@ -738,6 +738,8 @@ These options can be used with any command:
 - `--verbose`: Increase output verbosity for more detailed information. Includes token count and context window usage for each LLM call.
 - `--quiet`: Decrease output verbosity for minimal information.
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
+- `--estimate`, `--dry-run-cost`: Preview the LLM token and rough cost estimate for `pdd generate` without calling a provider, writing command outputs, or appending cost CSV rows.
+- `--estimate-json`: Emit the estimate result as machine-readable JSON instead of the human-readable table.
 - `--review-examples`: Review and optionally exclude few-shot examples before command execution.
 - `--local`: Run commands locally instead of in the cloud.
 - `--core-dump`: Capture a debug bundle for this run so it can be replayed and analyzed later.
@@ -857,6 +859,21 @@ pdd --output-cost PATH_TO_CSV_FILE [COMMAND] [OPTIONS] [ARGS]...
 
 The `PATH_TO_CSV_FILE` should be the desired location and filename for the CSV output.
 
+### Dry-Run Cost Estimates
+
+Use the global `--estimate` flag, or its alias `--dry-run-cost`, to preview the LLM cost for `pdd generate` before running it.
+
+```
+pdd --estimate generate prompts/example_python.prompt
+pdd --estimate-json generate prompts/example_python.prompt
+```
+
+Estimate mode assembles the generate messages that would be sent to the provider, counts input tokens, predicts output tokens with a generate-specific heuristic, and prints the selected model, input tokens, predicted output tokens, uncertainty range, known input/output rates, rough estimated cost or `unknown`, and context-window usage percentage. It exits before provider invocation and before command output files are written.
+
+This first version supports `generate` only. Other commands, including `sync`, agentic sync, `example`, `test`, `update`, `conflicts`, `crash`, and `fix`, fail closed with a clear unsupported-command message rather than showing a partial first-call or lower-bound estimate.
+
+`--estimate-json` prints the same estimate fields as JSON for scripts. Estimate mode does not append rows to `--output-cost` CSV files; use `--output-cost` for actual-run accounting. Cost CSV rows are written only for real command executions, because no billable LLM call occurs in estimate mode.
+
 ### Cost Calculation and Presentation
 
 PDD calculates costs based on the AI model usage for each operation. Costs are presented in USD (United States Dollars) and are calculated using the following factors:
@@ -958,6 +975,8 @@ Options:
 - `--durable-branch TEXT`: Durable mode only. Override the durable checkpoint branch name. Default is `sync/issue-<N>` derived from the GitHub issue. Refused if it resolves to `main`, `master`, or the repository default branch.
 - `--no-resume`: Durable mode only. Ignore existing `PDD-Sync-Checkpoint-V1` commit trailers on the durable branch and re-run every selected module. By default, durable sync reads checkpoint trailers (`PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>`) and skips modules already checkpointed for the same issue, which is what makes a cloud rerun safely resume completed work after a partial failure.
 - `--durable-max-parallel INT`: Durable mode only. Cap how many module worktrees run concurrently. Defaults to the standard runner concurrency. A total budget still forces sequential execution.
+
+Estimate-mode note: global `--estimate` currently supports `pdd generate` only. `pdd sync` and agentic sync do not expose cost estimates in this first version because downstream prompts depend on generated artifacts that do not exist during a side-effect-free preview.
 
 **Durable Issue Sync** (`--durable`):
 
@@ -1138,7 +1157,7 @@ pdd --context backend --force sync calculator # Explicit context override with v
 When a GitHub issue URL is passed instead of a basename, sync enters agentic mode:
 1. **Module Identification**: Fetches the issue content and uses an LLM to identify which modules need syncing
 2. **Dependency Validation**: Validates architecture.json dependencies and applies corrections if needed
-3. **Parallel Execution**: Dispatches parallel sync via `AsyncSyncRunner` with dependency-aware scheduling (max 4 concurrent workers)
+3. **Parallel Execution**: Dispatches parallel sync via `AsyncSyncRunner` with dependency-aware scheduling (up to 4 concurrent workers by default; set `PDD_SYNC_MAX_WORKERS` to cap concurrency lower — e.g. `1` on memory-constrained runners)
 4. **Live Progress**: Posts and updates a GitHub comment with real-time module sync status
 
 ```bash
@@ -2312,6 +2331,16 @@ For the agentic fallback to function, you need to have at least one of the suppo
 
 You can configure environment-variable keys using `pdd setup` or by setting them in your shell. For OAuth/subscription auth, run each CLI's login command once interactively.
 
+**Provider-limit marker for automation:**
+
+When an agentic provider or credential hits a real rate, usage, session, or credential limit, PDD emits a single secret-safe marker line on plain stdout that automation can parse without scraping raw provider stderr. Quiet mode may suppress the explanatory diagnostic, but it does not suppress this scheduling marker.
+
+```text
+PDD_PROVIDER_LIMIT provider=<anthropic|openai|google|antigravity|opencode> status=<429|credential_limit> reason=<rate_limit|usage_limit|session_limit|credential_limit> reset_at=<UTC ISO-8601 timestamp or empty> reset_source=<provider|parsed_text|estimated|none>
+```
+
+`reset_at` is normalized to UTC (`YYYY-MM-DDTHH:MM:SSZ`) when PDD can read or infer a reset time, for example from Claude Code limit text — `reset_source=parsed_text` for an explicit date/timestamp, `estimated` when only a time-of-day was given and the date was inferred. Generic provider 429s without reset metadata still emit the marker with an empty `reset_at` and `reset_source=none`. The marker fires once per provider after its retry budget is spent (a 429 that recovers on retry emits nothing). It is a **per-provider detection signal, not a job-failure signal**: in a multi-provider run PDD can emit a marker for a limited provider and still succeed via the next provider, so consumers should combine the marker with the command's exit status before rescheduling. It is additive: existing `credential-limit` classification text remains for backward compatibility. The marker never includes raw provider stderr, tokens, API keys, user prompt content, or other untrusted provider text. (Antigravity runs under the `google` provider slot; PDD reports `provider=antigravity` only when the selected Google CLI is `agy`. An unmappable provider is reported as the literal `unknown` rather than any raw text.)
+
 #### Agentic E2E Fix Mode
 
 For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates an iterative 11-step workflow followed by a final PR-mode checkup gate, fixing both unit tests and e2e tests across your codebase, validating CI, and cleaning up code.
@@ -2500,7 +2529,7 @@ The 13-step workflow:
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. If you start the workflow on machine A, you can continue from machine B by checking out the branch and running `pdd change` again. Use `--no-github-state` to disable this feature and use local-only state persistence. You can also set the `PDD_NO_GITHUB_STATE=1` environment variable to disable GitHub state globally.
 
-**Clean Restart** (`--clean-restart`, issue #1149): For `pdd change`, discards any persisted solving state for the issue and runs a fresh 13-step `pdd-issue` flow from the default base branch, ignoring any previously generated `change/issue-N` branch or PR. Use when recovering from a stopped or wrong-model run (e.g. you cancelled a Gemini-based run and want to rerun cleanly under Opus on the same issue). The orchestrator posts a `## Step 0/13: Workflow Startup` comment on the issue naming the mode, model, base branch, and command so reviewers can tell at a glance whether a run is resuming or clean-starting. The same restart intent is also available for `pdd bug`, `pdd test`, and `pdd fix` agentic GitHub issue workflows. Cannot be combined with `--manual`.
+**Clean Restart** (`--clean-restart`, issue #1149): For `pdd change`, discards any persisted solving state for the issue and runs a fresh 13-step `pdd-issue` flow from the default base branch, ignoring any previously generated `change/issue-N` branch or PR. Use when recovering from a stopped or wrong-model run (e.g. you cancelled a Gemini-based run and want to rerun cleanly under Opus on the same issue). The orchestrator posts a `## Step 0/13: Workflow Startup` comment on the issue naming the mode, model, base branch, and command so reviewers can tell at a glance whether a run is resuming or clean-starting. The same restart intent is also available for `pdd bug`, `pdd test`, and `pdd fix` agentic GitHub issue workflows. If the standard issue branch (`{command}/issue-N`) is checked out in another local worktree (e.g. a concurrent runner), the clean restart does not fail: it prunes stale worktree registrations and, if the branch is still genuinely locked, creates a fresh unique fallback branch (`{command}/issue-N-job-<id>`) from the base branch, pushes and opens/updates the PR on that branch, and leaves the locked worktree untouched. Cannot be combined with `--manual`.
 
 **Review Loop**: Steps 11-12 form a review loop that identifies and fixes issues iteratively. The loop runs until no issues are found (max 5 iterations).
 
@@ -2984,7 +3013,7 @@ Options:
 - `--fixer ROLE`: Fixer role for `--review-loop` (for example, `claude`). The fixer must be different from the reviewer unless `--review-only` is used.
 - `--reviewers ROLES`: Legacy comma-separated review-loop role order, interpreted as `reviewer,fixer` (default: `codex,claude`).
 - `--reviewer-fallback ROLE`: Optional secondary reviewer role to invoke once if the primary reviewer cannot complete (for example, because of auth, network, sandbox, or CLI failures). The fallback must resolve to a role different from the reviewer and fixer; if it succeeds, it becomes the active reviewer for the remaining loop and the superseded primary's row in the final report is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters drop the failed primary from the required-reviewer set and resolve to `ship_degraded` instead of `unknown`.
-- `--fixer-fallback ROLE`: Optional secondary fixer role to invoke once if the primary fixer cannot complete (for example, Claude Code subscription-tier `credential-limit` failures). Role aliases are normalized so `claude` and `anthropic` resolve to the same identity; the fallback must resolve to a role different from the active fixer, the active reviewer, AND the originally configured reviewer (so `--reviewer codex --reviewer-fallback gemini --fixer-fallback codex` is skipped even after gemini takes over reviewing). Before the fallback runs the worktree is reset so the primary fixer's partial edits do not leak; on success the fallback takes over as the active fixer for the remaining rounds.
+- `--fixer-fallback ROLE`: Optional secondary fixer role to invoke once if the primary fixer cannot complete (for example, Claude Code subscription-tier `credential-limit` failures). Provider-limit attempts also emit the secret-safe `PDD_PROVIDER_LIMIT ...` marker described in [Agentic Fallback Mode](#agentic-fallback-mode), including `reset_at` when PDD can parse or infer the provider reset time. Role aliases are normalized so `claude` and `anthropic` resolve to the same identity; the fallback must resolve to a role different from the active fixer, the active reviewer, AND the originally configured reviewer (so `--reviewer codex --reviewer-fallback gemini --fixer-fallback codex` is skipped even after gemini takes over reviewing). Before the fallback runs the worktree is reset so the primary fixer's partial edits do not leak; on success the fallback takes over as the active fixer for the remaining rounds.
 - `--max-review-rounds INT`: Maximum primary-reviewer/fixer rounds (default: 5).
 - `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 50.0).
 - `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).
@@ -3533,6 +3562,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_VERIFY_PROGRAM_OUTPUT_PATH`**: Default path for the final program file generated by the `verify` command.
 - **`PDD_CLOUD_TIMEOUT`**: Cloud request timeout in seconds. Default is 900 (15 minutes). Increase this value if you experience timeouts with long-running cloud operations.
 - **`PDD_MODULE_TIMEOUT_SECONDS`**: Per-module wall-clock cap for `pdd sync --agentic` runs in seconds. Default is 2700 (45 minutes).
+- **`PDD_SYNC_MAX_WORKERS`**: Maximum number of modules `pdd sync` (agentic and durable issue sync) runs concurrently. Default is 4; values are clamped to the range 1–4 (non-integer values fall back to 4). Lower it (e.g. `PDD_SYNC_MAX_WORKERS=1`) to reduce peak memory on constrained runners such as Cloud Run. A sync given an explicit `--budget` always runs sequentially regardless of this value; durable runs honor an explicit `--durable-max-parallel` over this default.
 - **`PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S`**: Timeout in seconds for the JWT auth call used by `pdd sync` / `pdd fix --auto-submit` example submission. Default is 300 (5 minutes). Auto-submit is skipped automatically when running inside a Cloud Run / Cloud Functions executor.
 
 ### Configuration Priority

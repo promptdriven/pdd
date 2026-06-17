@@ -95,6 +95,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     # Anthropic Claude
     # -----------------------------------------------------------------------
     "claude-opus-4-8": 1575,            # [EST] provisional, until live arena lists it
+    "claude-opus-4-7": 1565,            # [CODE] reviewed WebDev manifest row
     "claude-opus-4-6": 1561,            # [CODE] #1
     "claude-opus-4-5": 1469,            # [CODE] #6
     "claude-opus-4-1": 1389,            # [CODE] #20
@@ -108,6 +109,7 @@ STATIC_ELO_FALLBACK: Dict[str, int] = {
     "claude-haiku-4-5": 1303,           # [CODE]
     # Dot-separated aliases
     "claude-opus-4.8": 1575,
+    "claude-opus-4.7": 1565,
     "claude-opus-4.6": 1561,
     "claude-opus-4.5": 1469,
     "claude-opus-4.1": 1389,
@@ -341,17 +343,11 @@ _TIER_PATTERN = re.compile(r"^together-ai-[\d.]+b", re.IGNORECASE)
 _SKIP_KEYS = {"sample_spec"}
 
 # Routes PDD intentionally DEFERS from the catalog pending live validation,
-# even if LiteLLM's registry happens to know the id. Without this guard a regen
-# on a LiteLLM build that ships one of these would re-introduce the exact route
-# the bundled CSV deliberately omits — e.g. azure_ai/claude-opus-4-8 rides the
-# legacy budget shape through AzureAIStudioConfig (OpenAI-based), which the
-# Bedrock/Vertex adaptive relay patches in llm_invoke.py do NOT reach and which
-# is unaudited for the adaptive-only Opus 4.7+/4.8 contract. Remove an entry
-# here once its provider/reasoning path is validated and the corresponding
+# even if LiteLLM's registry happens to know the id. Keep this empty until a
+# provider route needs to be omitted despite LiteLLM advertising it; remove an
+# entry once its provider/reasoning path is validated and the corresponding
 # CSV / _MANDATORY_MODEL_ROWS row is added with tests.
-_DEFERRED_MODEL_IDS = frozenset({
-    "azure_ai/claude-opus-4-8",
-})
+_DEFERRED_MODEL_IDS = frozenset()
 
 # Regex matching dated preview model names (after provider prefix is stripped).
 # Examples: gemini-2.5-flash-preview-04-17, gemini-2.5-pro-preview-06-05
@@ -622,28 +618,22 @@ def _has_region(model_id: str) -> bool:
     return bool(_REGION_RE.match(model_id))
 
 
-# Anthropic models that require the new adaptive thinking API
+# Claude models that require the new adaptive thinking API
 # (thinking={"type":"adaptive"} + output_config.effort) instead of the
-# legacy budget shape. Direct-Anthropic-provider routes enforce this;
-# Azure AI / Bedrock / Vertex relays do not yet (as of 2026-05-24) — keep
-# those on budget/effort until separately audited.
-_ADAPTIVE_ANTHROPIC_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
+# legacy budget shape. Direct Anthropic and Azure AI Foundry routes enforce
+# this; Bedrock / Vertex relays stay on effort because their adaptive
+# conversion is handled by LiteLLM relay patches in llm_invoke.py.
+_ADAPTIVE_CLAUDE_MODELS = {"claude-opus-4-7", "claude-opus-4-8"}
+_ADAPTIVE_CLAUDE_PROVIDERS = {"anthropic", "azure_ai"}
 
 
-def _is_adaptive_anthropic_model(model_id: str, litellm_provider: str) -> bool:
-    """Return True for direct-Anthropic-provider Opus 4.7+ rows.
-
-    Only emit ``reasoning_type='adaptive'`` for the Anthropic provider, not
-    Azure AI — adaptive serialization in ``llm_invoke.py`` is gated on
-    ``provider_lower == 'anthropic'`` (line ~3556), so flipping Azure AI
-    rows would silently send no thinking parameter at all rather than the
-    correct adaptive shape.
-    """
+def _is_adaptive_claude_model(model_id: str, litellm_provider: str) -> bool:
+    """Return True for direct Anthropic/Azure AI Opus 4.7+ rows."""
     root = _get_provider_root(litellm_provider)
-    if root != "anthropic":
+    if root not in _ADAPTIVE_CLAUDE_PROVIDERS:
         return False
     base = model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
-    return base in _ADAPTIVE_ANTHROPIC_MODELS
+    return _normalize_model_name(base) in _ADAPTIVE_CLAUDE_MODELS
 
 
 def _infer_reasoning_type(model_id: str, litellm_provider: str, entry: dict) -> str:
@@ -654,7 +644,7 @@ def _infer_reasoning_type(model_id: str, litellm_provider: str, entry: dict) -> 
     # Anthropic (and Azure AI hosting Claude) use "budget" reasoning tokens,
     # except for newer Opus models that require the adaptive thinking API.
     if root in _ANTHROPIC_PROVIDERS:
-        if _is_adaptive_anthropic_model(model_id, litellm_provider):
+        if _is_adaptive_claude_model(model_id, litellm_provider):
             return "adaptive"
         return "budget"
     # All other providers use "effort" (low/medium/high string)
@@ -666,7 +656,7 @@ def _infer_max_reasoning_tokens(model_id: str, litellm_provider: str, entry: dic
     if not entry.get("supports_reasoning", False):
         return 0
     if root in _ANTHROPIC_PROVIDERS:
-        if _is_adaptive_anthropic_model(model_id, litellm_provider):
+        if _is_adaptive_claude_model(model_id, litellm_provider):
             # adaptive serialization doesn't read this value, but match the
             # validated pdd_cloud backend CSV (backend/functions/.pdd/llm_model.csv)
             return 16000
@@ -1401,15 +1391,36 @@ _MANDATORY_MODEL_ROWS: List[Dict[str, Any]] = [
         "reasoning_type": "effort",
         "location": "global",
     },
-    # Azure AI / Microsoft Foundry also surfaces Opus 4.8, and an
-    # azure_ai/claude-opus-4-7 sibling ships today — but it is intentionally
-    # deferred here pending validation, NOT omitted on a "not available" claim.
-    # Reason: Azure routes through AzureAIStudioConfig (OpenAI-based), which the
-    # Bedrock/Vertex adaptive relay patches in llm_invoke.py do NOT reach, so
-    # the 4-7 Azure row still rides the legacy budget shape (unaudited for the
-    # adaptive-only 4.7+/4.8 contract). Third-party aggregators (Perplexity,
-    # OpenRouter, GMI) similarly lag the direct launch. Add these rows once
-    # their reasoning shape is verified against the live relay.
+    {
+        # Opus 4.7 on Azure AI / Microsoft Foundry. Pinned LiteLLM can lag
+        # Foundry availability, and this row already ships in the committed
+        # catalog. Keep it seeded so refreshes preserve the Azure adaptive
+        # reasoning contract until LiteLLM ships the id.
+        "provider": "Azure AI",
+        "model": "azure_ai/claude-opus-4-7",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "AZURE_AI_API_KEY",
+        "max_reasoning_tokens": 16000,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+    },
+    {
+        # Opus 4.8 on Azure AI / Microsoft Foundry. Seed it until LiteLLM ships
+        # the id, and keep it on the same adaptive path as the Azure 4.7 row.
+        "provider": "Azure AI",
+        "model": "azure_ai/claude-opus-4-8",
+        "input": 5.0,
+        "output": 25.0,
+        "base_url": "",
+        "api_key": "AZURE_AI_API_KEY",
+        "max_reasoning_tokens": 16000,
+        "structured_output": True,
+        "reasoning_type": "adaptive",
+        "location": "",
+    },
     {
         "provider": "Google Vertex AI",
         "model": "vertex_ai/gemini-3-flash-preview",

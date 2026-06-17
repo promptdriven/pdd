@@ -89,6 +89,16 @@ def continue_generation(
             language=language,
         )
         total_cost += trim_start_response['cost']
+        # Guard against malformed structured output of any non-``TrimResultsStartOutput``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``) before accessing
+        # ``.code_block`` (issue #1612).
+        if not isinstance(trim_start_response['result'], TrimResultsStartOutput):
+            raise ValueError(
+                "continue_generation received a malformed trim-start result "
+                f"(expected TrimResultsStartOutput, got "
+                f"{type(trim_start_response['result']).__name__})."
+            )
         code_block = trim_start_response['result'].code_block
 
         # Step 4: Continue generation loop
@@ -178,6 +188,19 @@ def continue_generation(
                     language=language,
                 )
                 total_cost += trim_response['cost']
+                # Guard against malformed structured output of any non-``TrimResultsOutput``
+                # shape (``None``, a raw string, or a raw ``dict`` that survives
+                # the cloud validation-failure ``pass`` in ``llm_invoke``) before
+                # accessing ``.trimmed_continued_generation``. The trim-start call
+                # is guarded above; the final trim needs the same check so a
+                # malformed continuation result cannot crash pdd sync with an
+                # AttributeError (issue #1612).
+                if not isinstance(trim_response['result'], TrimResultsOutput):
+                    raise ValueError(
+                        "continue_generation received a malformed final-trim result "
+                        f"(expected TrimResultsOutput, got "
+                        f"{type(trim_response['result']).__name__})."
+                    )
                 code_block += trim_response['result'].trimmed_continued_generation
                 break
 

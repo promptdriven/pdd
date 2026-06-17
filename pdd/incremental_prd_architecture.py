@@ -634,7 +634,22 @@ def _ask_llm_for_patch(
         verbose=verbose,
         output_pydantic=ArchitecturePatch,
     )
-    return response["result"], response.get("cost", 0.0), response.get("model_name", "")
+    patch_result = response["result"]
+    # Guard against malformed structured output of any non-``ArchitecturePatch``
+    # shape (``None``, a raw string, or a raw ``dict`` that survives the cloud
+    # validation-failure ``pass`` in ``llm_invoke``). Return a fallback patch
+    # that requests full regeneration instead of letting the caller crash with
+    # an AttributeError on ``.modules_to_add`` (issue #1612).
+    if not isinstance(patch_result, ArchitecturePatch):
+        patch_result = ArchitecturePatch(
+            requires_full_regeneration=True,
+            rationale=(
+                "Malformed incremental architecture patch response "
+                f"(expected ArchitecturePatch, got {type(patch_result).__name__}); "
+                "falling back to full regeneration."
+            ),
+        )
+    return patch_result, response.get("cost", 0.0), response.get("model_name", "")
 
 
 def _validate_patch_shape(patch: ArchitecturePatch, existing: Dict[str, Dict[str, Any]]) -> None:
