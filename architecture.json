@@ -7892,7 +7892,9 @@
   {
     "reason": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
     "description": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 221,
     "filename": "ci_validation_python.prompt",
     "filepath": "pdd/ci_validation.py",
@@ -7911,6 +7913,11 @@
             "sideEffects": [
               "expected_head_sha_override forces the poll to wait for a specific PR head SHA instead of _get_head_sha(cwd); used by the post-checkup CI re-validation gate where cwd's local HEAD is stale relative to the PR remote because the checkup pushed from its own worktree"
             ]
+          },
+          {
+            "name": "run_github_checks_gate",
+            "signature": "(cwd, repo_owner, repo_name, pr_number, quiet, expected_head_sha=None, required_only=False)",
+            "returns": "Tuple[bool, str, str]"
           },
           {
             "name": "post_ci_failure_comment",

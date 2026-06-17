@@ -279,6 +279,22 @@ def _prompt_path_for_filename(worktree: Path, filename: str) -> Optional[Path]:
     return matches[0] if matches else None
 
 
+def _prompt_sync_scope(
+    worktree: Path, prompt_path: Path, fallback_filename: str
+) -> Tuple[Path, str]:
+    try:
+        rel_parts = prompt_path.relative_to(worktree).parts
+    except ValueError:
+        return prompt_path.parent, fallback_filename
+    prompts_indexes = [index for index, part in enumerate(rel_parts) if part == "prompts"]
+    if not prompts_indexes:
+        return prompt_path.parent, fallback_filename
+    prompts_index = prompts_indexes[-1]
+    prompts_dir = worktree.joinpath(*rel_parts[: prompts_index + 1])
+    rel_filename = Path(*rel_parts[prompts_index + 1 :]).as_posix()
+    return prompts_dir, rel_filename or fallback_filename
+
+
 def _prompt_filename_from_changed(rel: str) -> Optional[str]:
     marker = "/prompts/"
     if rel.startswith("prompts/"):
@@ -357,7 +373,6 @@ def _run_drift_sync(
 ) -> _CheckOutcome:
     architecture = _load_architecture(worktree)
     prompt_pairs = _touched_prompt_files(worktree, changed_files, architecture)
-    only_files = set(prompt_pairs.keys())
     messages: List[str] = []
     failures: List[str] = []
     warnings: List[str] = []
@@ -389,22 +404,36 @@ def _run_drift_sync(
                 basename_to_code[basename] = rel_code
 
     arch_path = worktree / "architecture.json"
-    if only_files:
+    if prompt_pairs:
         arch_sig_before = _file_content_sig(arch_path)
         try:
-            result = sync_all_prompts_to_architecture(
-                prompts_dir=worktree / "pdd" / "prompts",
-                architecture_path=worktree / "architecture.json",
-                dry_run=False,
-                only_files=only_files,
-            )
-            if not result.get("success", False):
-                errors = "; ".join(result.get("errors", []) or ["unknown architecture sync error"])
+            prompts_by_dir: Dict[Path, Set[str]] = {}
+            for filename, (prompt_path, _code_path) in prompt_pairs.items():
+                prompts_dir, rel_filename = _prompt_sync_scope(worktree, prompt_path, filename)
+                prompts_by_dir.setdefault(prompts_dir, set()).add(rel_filename)
+
+            sync_errors: List[str] = []
+            for prompts_dir, filenames in prompts_by_dir.items():
+                result = sync_all_prompts_to_architecture(
+                    prompts_dir=prompts_dir,
+                    architecture_path=worktree / "architecture.json",
+                    dry_run=False,
+                    only_files=filenames,
+                )
+                if not result.get("success", False):
+                    errors = "; ".join(
+                        result.get("errors", []) or ["unknown architecture sync error"]
+                    )
+                    dir_label = _rel_within(prompts_dir, worktree) or str(prompts_dir)
+                    sync_errors.append(f"{dir_label}:{sorted(filenames)}: {errors}")
+            if sync_errors:
                 target = failures if strict else warnings
-                target.append(f"architecture-sync failed for {sorted(only_files)}: {errors}")
+                target.append("architecture-sync failed for " + " | ".join(sync_errors))
         except Exception as exc:
             target = failures if strict else warnings
-            target.append(f"architecture-sync raised for {sorted(only_files)}: {_scrub(exc)}")
+            target.append(
+                f"architecture-sync raised for {sorted(prompt_pairs.keys())}: {_scrub(exc)}"
+            )
         # Revalidate architecture.json ONLY if sync actually rewrote it. Adding it
         # unconditionally would block a PR on a PRE-EXISTING broken architecture.json
         # that the PR never touched and sync left unchanged — a false-block on infra
@@ -525,7 +554,7 @@ def _run_drift_sync(
                 (failures if strict else warnings).append(
                     f"residual non-update drift: {residual}"
                 )
-    elif only_files:
+    elif prompt_pairs:
         warnings.append("no module names resolved for touched prompt files")
 
     if warnings:

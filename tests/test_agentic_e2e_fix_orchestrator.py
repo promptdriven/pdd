@@ -1347,6 +1347,50 @@ class TestIssue545CommitAndPushWithTaintedHashes:
             f"File should be committed. Still uncommitted: {diff_result.stdout.strip()}"
         )
 
+    def test_commit_and_push_treats_empty_index_commit_failure_as_noop(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression: a blank commit failure with an empty index is a no-op.
+
+        In the final pre-checkup gate path, CI remediation can already commit
+        and push files that differ from the workflow's initial hash snapshot.
+        A later _commit_and_push call then sees those files as changed by hash,
+        stages them, and `git commit` can fail even though the index is empty.
+        That must not turn a passing gate into a failed pdd fix run.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _commit_and_push, _get_file_hashes
+        import subprocess
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+        initial_hashes = _get_file_hashes(worktree)
+
+        module.write_text("x = 2  # already committed by CI remediation\n")
+        subprocess.run(["git", "add", "module.py"], cwd=worktree, check=True)
+        subprocess.run(["git", "commit", "-m", "ci: fix gate"], cwd=worktree, check=True)
+        subprocess.run(["git", "push"], cwd=worktree, check=True)
+
+        original_run = subprocess.run
+
+        def fake_blank_commit_failure(cmd, *args, **kwargs):
+            if list(cmd[:2]) == ["git", "commit"]:
+                return subprocess.CompletedProcess(cmd, 1, "", "")
+            return original_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", fake_blank_commit_failure)
+
+        success, message = _commit_and_push(
+            cwd=worktree,
+            issue_number=545,
+            issue_title="Fix unstaged changes",
+            repo_owner="owner",
+            repo_name="repo",
+            initial_file_hashes=initial_hashes,
+            quiet=True,
+        )
+
+        assert success is True
+        assert message == "No changes to commit"
+
     def test_orchestrator_resume_with_pretainted_hashes_commits_changes(self, tmp_path):
         """Integration: resumed orchestrator detects and commits pre-existing
         unstaged modifications when ALL_TESTS_PASS at Step 2.
@@ -11134,3 +11178,88 @@ class TestReadCheckupWorktreeHeadSha:
         ):
             result = _read_checkup_worktree_head_sha(tmp_path, 42)
         assert result == ""
+
+
+class TestPreCheckupGateRemediation:
+    def test_local_gate_failure_is_remediated_and_retried(self, tmp_path, monkeypatch):
+        from pdd import agentic_e2e_fix_orchestrator as orch
+
+        gate_results = [
+            (False, "pre_checkup_gate blocked; black failed", 0.0),
+            (True, "pre_checkup_gate passed", 0.0),
+        ]
+        agent_calls = []
+
+        monkeypatch.setattr(
+            orch,
+            "run_pre_checkup_gate",
+            lambda **_kwargs: gate_results.pop(0),
+        )
+        monkeypatch.setattr(orch, "_commit_ci_fix", lambda **_kwargs: (True, "committed"))
+        monkeypatch.setattr(
+            orch,
+            "_detect_changed_files",
+            lambda _cwd, _hashes: ["app/foo.py", "tests/test_foo.py"],
+        )
+
+        def fake_agentic_task(**kwargs):
+            agent_calls.append(kwargs)
+            return True, "CI_FIX_APPLIED", 0.25, "model"
+
+        success, message, cost, changed_files = orch._run_pre_checkup_gate_with_remediation(
+            cwd=tmp_path,
+            changed_files=["app/foo.py"],
+            repo_owner="owner",
+            repo_name="repo",
+            issue_url="https://github.com/owner/repo/issues/42",
+            issue_number=42,
+            step10_template="Issue {issue_number}\n{ci_check_results}\n{ci_failure_logs}",
+            run_agentic_task_fn=fake_agentic_task,
+            ci_retries=1,
+            timeout=60.0,
+            initial_file_hashes={},
+            quiet=True,
+        )
+
+        assert success is True
+        assert message == "pre_checkup_gate passed"
+        assert cost == 0.25
+        assert changed_files == ["app/foo.py", "tests/test_foo.py"]
+        assert len(agent_calls) == 1
+        assert "black failed" in agent_calls[0]["instruction"]
+        assert agent_calls[0]["label"] == "pre_checkup_gate_attempt1"
+
+    def test_local_gate_failure_respects_zero_retry_budget(self, tmp_path, monkeypatch):
+        from pdd import agentic_e2e_fix_orchestrator as orch
+
+        agent_calls = []
+        monkeypatch.setattr(
+            orch,
+            "run_pre_checkup_gate",
+            lambda **_kwargs: (False, "pre_checkup_gate blocked; mypy failed", 0.0),
+        )
+
+        def fake_agentic_task(**kwargs):
+            agent_calls.append(kwargs)
+            return True, "CI_FIX_APPLIED", 0.0, "model"
+
+        success, message, cost, changed_files = orch._run_pre_checkup_gate_with_remediation(
+            cwd=tmp_path,
+            changed_files=["app/foo.py"],
+            repo_owner="owner",
+            repo_name="repo",
+            issue_url="https://github.com/owner/repo/issues/42",
+            issue_number=42,
+            step10_template="{ci_check_results}",
+            run_agentic_task_fn=fake_agentic_task,
+            ci_retries=0,
+            timeout=60.0,
+            initial_file_hashes={},
+            quiet=True,
+        )
+
+        assert success is False
+        assert "mypy failed" in message
+        assert cost == 0.0
+        assert changed_files == ["app/foo.py"]
+        assert agent_calls == []

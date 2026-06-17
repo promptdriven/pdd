@@ -41,7 +41,12 @@ from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .pytest_output import run_pytest_and_capture_output
-from .ci_validation import _find_open_pr_number, run_ci_validation_loop
+from .ci_validation import (
+    _commit_ci_fix,
+    _find_open_pr_number,
+    _render_step_template,
+    run_ci_validation_loop,
+)
 from .pre_checkup_gate import run_pre_checkup_gate
 
 # Constants
@@ -1564,9 +1569,16 @@ def _commit_and_push(
         # already committed on the branch (merge-base diff includes them).
         # In that case, push any unpushed commits instead of failing.
         commit_output = f"{commit_result.stdout}\n{commit_result.stderr}".lower()
+        staged_check = subprocess.run(
+            ["git", "diff", "--cached", "--quiet", "--"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
         if (
             "nothing to commit" in commit_output
             or "no changes added to commit" in commit_output
+            or staged_check.returncode == 0
         ):
             return _push_unpushed_commits_or_report_noop(cwd, repo_owner, repo_name)
         return False, f"Failed to commit: {commit_result.stderr}"
@@ -1667,6 +1679,117 @@ def _read_review_loop_verified_head_sha(
     if not isinstance(final_state, dict):
         return ""
     return str(final_state.get("verified_head_sha", "") or "")
+
+
+def _run_pre_checkup_gate_with_remediation(
+    *,
+    cwd: Path,
+    changed_files: List[str],
+    repo_owner: str,
+    repo_name: str,
+    issue_url: str,
+    issue_number: int,
+    step10_template: str,
+    run_agentic_task_fn,
+    ci_retries: int,
+    timeout: float,
+    initial_file_hashes: Dict[str, str],
+    quiet: bool,
+) -> Tuple[bool, str, float, List[str]]:
+    """Run the local pre-checkup gate and remediate actionable gate failures."""
+    total_cost = 0.0
+    attempts = 0
+    latest_changed_files = list(changed_files)
+
+    while True:
+        try:
+            gate_success, gate_message, gate_cost = run_pre_checkup_gate(
+                worktree=cwd,
+                changed_files=latest_changed_files,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                quiet=quiet,
+                timeout_per_check=timeout,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            gate_success = False
+            gate_message = f"pre_checkup_gate blocked; phase=infrastructure error: {exc}"
+            gate_cost = 0.0
+
+        total_cost += gate_cost
+        if gate_success:
+            return True, gate_message, total_cost, latest_changed_files
+
+        if attempts >= ci_retries:
+            return False, gate_message, total_cost, latest_changed_files
+
+        attempts += 1
+        if not quiet:
+            console.print(
+                "[yellow][Step 10/10] Local pre-checkup gate failed; applying "
+                f"fix attempt {attempts}/{ci_retries}...[/yellow]"
+            )
+
+        prompt = _render_step_template(
+            step10_template,
+            {
+                "issue_url": issue_url,
+                "repo_owner": repo_owner,
+                "repo_name": repo_name,
+                "issue_number": issue_number,
+                "ci_attempt": attempts,
+                "ci_max_retries": ci_retries,
+                "ci_check_results": gate_message,
+                "ci_failure_logs": gate_message,
+                "ci_system": "local pre-checkup gate",
+            },
+        )
+
+        success, output, cost, _model = run_agentic_task_fn(
+            instruction=prompt,
+            cwd=cwd,
+            verbose=False,
+            quiet=quiet,
+            timeout=timeout,
+            label=f"pre_checkup_gate_attempt{attempts}",
+            max_retries=DEFAULT_MAX_RETRIES,
+        )
+        total_cost += cost
+
+        if not success:
+            return (
+                False,
+                (
+                    f"{gate_message}\n\n"
+                    f"pre_checkup_gate fix attempt {attempts} failed: {output}"
+                ),
+                total_cost,
+                latest_changed_files,
+            )
+        if "CI_FIX_APPLIED" not in output:
+            return (
+                False,
+                (
+                    f"{gate_message}\n\n"
+                    "pre_checkup_gate fix task did not apply an actionable fix"
+                ),
+                total_cost,
+                latest_changed_files,
+            )
+
+        commit_success, commit_message = _commit_ci_fix(
+            cwd=cwd,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+        )
+        if not commit_success:
+            return False, commit_message, total_cost, latest_changed_files
+        if not quiet:
+            console.print(f"[green]{commit_message}[/green]")
+
+        latest_changed_files = _detect_changed_files(cwd, initial_file_hashes) or latest_changed_files
 
 
 def _run_final_checkup_on_pr(
@@ -3521,20 +3644,22 @@ def run_agentic_e2e_fix_orchestrator(
                 }:
                     final_message = ci_message
 
-                try:
-                    gate_success, gate_message, gate_cost = run_pre_checkup_gate(
-                        worktree=cwd,
+                gate_success, gate_message, gate_cost, changed_files = (
+                    _run_pre_checkup_gate_with_remediation(
+                        cwd=cwd,
                         changed_files=changed_files,
                         repo_owner=repo_owner,
                         repo_name=repo_name,
+                        issue_url=issue_url,
                         issue_number=issue_number,
+                        step10_template=step10_template,
+                        run_agentic_task_fn=run_agentic_task,
+                        ci_retries=ci_retries,
+                        timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
+                        initial_file_hashes=initial_file_hashes,
                         quiet=quiet,
-                        timeout_per_check=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
                     )
-                except Exception as _exc:  # pylint: disable=broad-except
-                    gate_success = False
-                    gate_message = f"pre_checkup_gate blocked; phase=infrastructure error: {_exc}"
-                    gate_cost = 0.0
+                )
                 total_cost += gate_cost
                 if not gate_success:
                     return False, gate_message, total_cost, model_used, changed_files
