@@ -2509,7 +2509,10 @@ class TestStep7PassedHelper:
         passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
         assert passed is True, reason
 
-    def test_targeted_pr_blocking_false_flag_alone_does_not_block(self) -> None:
+    def test_targeted_pr_blocking_false_flag_alone_still_blocks(self) -> None:
+        # A bare ``blocking: false`` is a self-reported severity downgrade, not
+        # an out-of-scope claim, so it must NOT wave through an unfixed critical
+        # on its own (#1574 review, fail-closed).
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
         out = _step7_output(
@@ -2521,7 +2524,8 @@ class TestStep7PassedHelper:
             ],
         )
         passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
-        assert passed is True, reason
+        assert passed is False
+        assert "unfixed critical" in reason
 
     def test_targeted_pr_in_scope_blocking_critical_still_blocks(self) -> None:
         from pdd.agentic_checkup_orchestrator import _step7_passed
@@ -2539,10 +2543,10 @@ class TestStep7PassedHelper:
         assert passed is False
         assert "unfixed critical" in reason
 
-    def test_full_scope_out_of_scope_critical_flags_only_does_not_block(self) -> None:
-        # Step 7's explicit non-blocking signal is authoritative in PR mode,
-        # including after a full-suite attempt: the verifier owns the distinction
-        # between PR-introduced failures and pre-existing baseline failures.
+    def test_full_scope_out_of_scope_critical_still_blocks(self) -> None:
+        # Full PR mode is the comprehensive gate: the #1574 carveout is scoped to
+        # targeted runs, so even an explicitly out-of-scope / ``blocking: false``
+        # critical blocks under a full-suite attempt.
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
         out = _step7_output(
@@ -2555,7 +2559,8 @@ class TestStep7PassedHelper:
             ],
         )
         passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="full")
-        assert passed is True, reason
+        assert passed is False
+        assert "unfixed critical" in reason
 
 
 def _run_orch_with_fake_step7(

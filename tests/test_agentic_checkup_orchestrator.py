@@ -6994,7 +6994,15 @@ class TestStep7PassedMeritReview:
         )
         assert passed, reason
 
-    def test_targeted_pr_allows_blocking_false_critical_without_reason(self):
+    def test_targeted_pr_blocks_blocking_false_critical_without_out_of_scope_signal(self):
+        """A bare ``blocking: false`` is not a scope claim and must not bypass.
+
+        Fail-closed regression (#1574 review): an unfixed critical tagged only
+        ``blocking: false`` — with no non-blocking ``scope``, no
+        ``in_scope: false``, and no explicit ``*_reason`` — still blocks even in
+        a targeted run. Trusting a self-reported severity downgrade alone would
+        fail open on a real PR-introduced critical.
+        """
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
         passed, reason = _step7_passed(
@@ -7003,9 +7011,17 @@ class TestStep7PassedMeritReview:
             has_issue=True,
             pr_test_scope="targeted",
         )
-        assert passed, reason
+        assert not passed
+        assert "critical" in reason.lower()
 
-    def test_full_pr_scope_allows_explicit_nonblocking_out_of_scope_critical(self):
+    def test_full_pr_scope_blocks_out_of_scope_critical(self):
+        """Full PR mode is the comprehensive gate — no out-of-scope carveout.
+
+        The #1574 carveout is scoped to targeted runs. Under a full-suite
+        attempt, even an explicitly out-of-scope / ``blocking: false`` critical
+        blocks: the full suite is authoritative, so an unfixed critical is a
+        real failure.
+        """
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
         passed, reason = _step7_passed(
@@ -7014,7 +7030,8 @@ class TestStep7PassedMeritReview:
             has_issue=True,
             pr_test_scope="full",
         )
-        assert passed, reason
+        assert not passed
+        assert "critical" in reason.lower()
 
     def test_targeted_pr_blocks_changed_file_critical_with_blocking_false(self):
         """A blocking:false flag must not wave through a PR-introduced critical.

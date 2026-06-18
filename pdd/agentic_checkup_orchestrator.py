@@ -967,29 +967,37 @@ def _step7_finding_in_pr_diff(
     return False
 
 
-def _step7_unfixed_critical_blocks_pr(
+def _step7_unfixed_critical_blocks_targeted_pr(
     issue: Dict[str, Any],
     *,
     changed_files: List[str],
     payload_message: str,
 ) -> bool:
-    """Decide whether an unfixed critical Step 7 finding blocks PR mode.
+    """Decide whether an unfixed critical blocks a **targeted** PR run.
 
-    An unfixed critical blocks by default. It is waved through only when BOTH
-    hold:
+    This carveout exists only for targeted PR verification (issue #1574): a
+    targeted run tests the PR diff, not the whole suite, so it can surface a
+    pre-existing, project-wide baseline critical that the PR neither introduced
+    nor can fix. Full PR mode is the comprehensive gate and does NOT use this
+    helper — there every unfixed critical blocks.
 
-    1. the verifier marks it non-blocking — ``blocking: false``,
-       ``in_scope: false``, a non-blocking ``scope`` value, or an explicitly
-       non-blocking ``*_reason`` field (a generic ``reason`` is not a signal);
-       and
-    2. it is demonstrably **out of the PR's scope** — its file/module does not
-       overlap ``changed_files`` and its ``scope`` is not a PR/in-scope value.
+    An unfixed critical blocks by default. It is waved through only when it
+    carries a **positive out-of-scope signal**:
 
-    This keeps the #1574 carveout (pre-existing, out-of-scope baseline
-    criticals must not fail a clean PR) while failing **closed** on
-    PR-introduced criticals: a ``blocking: false`` flag alone can never wave
-    through a finding that lives in the PR diff or is tagged in-scope (issue
-    #1574 review).
+    * a non-blocking ``scope``/``verification_scope``/``pr_scope`` value
+      (``out-of-scope``, ``baseline``, ``project-wide`` …), or
+    * ``in_scope: false``, or
+    * an explicitly non-blocking ``*_reason`` field (a generic ``reason`` is
+      not a signal).
+
+    A bare ``blocking: false`` is NOT sufficient on its own (issue #1574
+    review): it is a self-reported severity/blocking downgrade, not a claim
+    about PR scope, so trusting it alone would fail **open** on a real
+    PR-introduced critical the verifier merely tagged non-blocking.
+
+    Regardless of any signal, the gate fails **closed** when the finding is
+    PR-scoped: its ``scope`` is a PR/in-scope value, or its file overlaps
+    ``changed_files`` (see ``_step7_finding_in_pr_diff``).
     """
     del payload_message
 
@@ -1002,7 +1010,7 @@ def _step7_unfixed_critical_blocks_pr(
 
     # Fail closed: a PR-scoped critical always blocks, regardless of any
     # non-blocking flag — either the verifier tagged it with a PR/in-scope
-    # ``scope`` value, or its file/module overlaps the PR diff.
+    # ``scope`` value, or its file overlaps the PR diff.
     pr_in_scope_scopes = {
         "pr",
         "pr-diff",
@@ -1017,10 +1025,9 @@ def _step7_unfixed_critical_blocks_pr(
     if _step7_finding_in_pr_diff(issue, changed_files):
         return True
 
-    # Out-of-PR-scope critical: an explicit non-blocking signal from the
-    # verifier is now authoritative. An explicitly non-blocking ``*_reason``
-    # field corroborates too; a generic ``reason`` is intentionally excluded by
-    # the helper, so it cannot bypass the gate.
+    # Out-of-PR-scope critical: a positive out-of-scope signal waves it through.
+    # ``blocking: false`` is intentionally NOT in this set — it is corroboration
+    # only, never authoritative on its own.
     explicit_nonblocking_scopes = {
         "out-of-scope",
         "outside-pr",
@@ -1033,8 +1040,6 @@ def _step7_unfixed_critical_blocks_pr(
         "repository",
         "global",
     }
-    if issue.get("blocking") is False:
-        return False
     if issue.get("in_scope") is False:
         return False
     if scope in explicit_nonblocking_scopes:
@@ -1042,7 +1047,7 @@ def _step7_unfixed_critical_blocks_pr(
     if _step7_nonblocking_reason(issue):
         return False
 
-    # Default: an unfixed critical with no non-blocking signal blocks.
+    # Default: an unfixed critical with no out-of-scope signal blocks.
     return True
 
 
@@ -1074,8 +1079,11 @@ def _step7_passed(
       ``True``; with no issue (#1292) the alignment gate is dropped and the
       verdict rests on code findings alone (review the PR on its own merits);
     * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
-      In PR mode, unfixed critical findings explicitly marked non-blocking or
-      outside the PR scope are informational; all other unfixed criticals block.
+      In **targeted** PR mode only, an unfixed critical carrying a positive
+      out-of-scope signal (non-blocking ``scope``, ``in_scope: false``, or an
+      explicit non-blocking ``*_reason``) and not touching the PR diff is
+      informational (issue #1574). Full PR mode is the comprehensive gate: every
+      unfixed critical blocks.
 
     Fails closed: if no JSON object can be extracted, returns
     ``(False, "Step 7 verdict JSON could not be parsed: ...")`` so the
@@ -1128,7 +1136,7 @@ def _step7_passed(
             if _normalise_step7_path(path)
         ]
     payload_message = str(payload.get("message") or "").lower()
-    del pr_test_scope
+    targeted_pr_mode = pr_mode and pr_test_scope == "targeted"
 
     issues = payload.get("issues")
     if isinstance(issues, list):
@@ -1141,7 +1149,7 @@ def _step7_passed(
                 continue
             if issue.get("fixed") is True:
                 continue
-            if pr_mode and not _step7_unfixed_critical_blocks_pr(
+            if targeted_pr_mode and not _step7_unfixed_critical_blocks_targeted_pr(
                 issue,
                 changed_files=changed_files,
                 payload_message=payload_message,
