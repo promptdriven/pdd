@@ -1454,3 +1454,64 @@ def test_loop_not_ready_when_live_head_cross_check_is_unreadable(
     assert success is False
     assert "unreadable" in message
     assert "No CI checks detected" not in message
+
+
+# ---------------------------------------------------------------------------
+# Issue #1632: ci_validation's ``gh`` subprocesses must use a freshly read
+# PDD_GH_TOKEN_FILE token, not the stale ambient GH_TOKEN. ``_run_command`` is
+# the single chokepoint behind ``_run_gh``/``_run_gh_api``/``_run_gh_bytes`` and
+# is imported by the long-running checkup / e2e-fix flows, so CI-status polling
+# late in a run 401s once the original 1-hour installation token expires.
+# ---------------------------------------------------------------------------
+from pdd import ci_validation as _civ_1632
+
+_STALE_TOKEN_1632 = "ghs_STALE_EXPIRED_INSTALLATION_TOKEN"
+_FRESH_TOKEN_1632 = "ghs_FRESH_REFRESHED_INSTALLATION_TOKEN"
+
+
+def test_ci_validation_gh_uses_refreshed_token_and_keeps_git_working_1632(tmp_path, monkeypatch):
+    """``_find_open_pr_number`` shells a local ``git`` command (branch lookup)
+    AND a ``gh pr list``. After the fix the ``gh`` call must carry the refreshed
+    PDD_GH_TOKEN_FILE token, while the non-``gh`` ``git`` call must still run
+    normally (negative guard — the fix must not break local git)."""
+    token_path = tmp_path / "gh_token_1632"
+    token_path.write_text(_FRESH_TOKEN_1632, encoding="utf-8")
+    monkeypatch.setenv("GH_TOKEN", _STALE_TOKEN_1632)
+    monkeypatch.setenv("GITHUB_TOKEN", _STALE_TOKEN_1632)
+    monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_path))
+
+    gh_envs = []
+    git_ran = []
+
+    def fake_run(cmd, *args, **kwargs):
+        env = kwargs.get("env")
+        if cmd and cmd[0] == "git":
+            git_ran.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, stdout="fix/issue-1632\n", stderr="")
+        if cmd and cmd[0] == "gh":
+            gh_envs.append(env)
+            return subprocess.CompletedProcess(cmd, 0, stdout='[{"number": 77}]', stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    with patch("pdd.ci_validation.subprocess.run", side_effect=fake_run):
+        pr_number = _civ_1632._find_open_pr_number("promptdriven", "pdd", tmp_path)
+
+    # Negative guard: the local git branch lookup still succeeded end-to-end,
+    # so the open PR was resolved normally.
+    assert git_ran, "expected the local git branch lookup to run"
+    assert pr_number == 77
+
+    # The gh subprocess must have used the refreshed token.
+    assert gh_envs, "expected at least one gh subprocess invocation"
+    for env in gh_envs:
+        assert env is not None, (
+            "gh subprocess ran with no custom env= — it inherits the stale "
+            "ambient GH_TOKEN and ignores the refreshed PDD_GH_TOKEN_FILE "
+            "(issue #1632)."
+        )
+        token = env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")
+        assert token == _FRESH_TOKEN_1632, (
+            f"gh subprocess used token {token!r}; expected refreshed "
+            f"{_FRESH_TOKEN_1632!r} (issue #1632)."
+        )

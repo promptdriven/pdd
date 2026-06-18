@@ -7586,3 +7586,84 @@ class TestSetupWorktreeCleanRestart:
         assert err and "clean restart" in err.lower(), (
             f"Expected a clean-restart-refusal error; got {err!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1632: late-running ``gh`` calls in the 13-step change flow
+# (``_fetch_issue_updated_at`` after a clarification stop, ``_check_existing_pr``
+# near PR creation) must use a freshly read PDD_GH_TOKEN_FILE token instead of
+# replaying the stale launch-time installation token (which 401s after its
+# 1-hour TTL on long Cloud Run jobs).
+# ---------------------------------------------------------------------------
+from pdd import agentic_change_orchestrator as _aco_1632
+
+_STALE_TOKEN_1632 = "ghs_STALE_EXPIRED_INSTALLATION_TOKEN"
+_FRESH_TOKEN_1632 = "ghs_FRESH_REFRESHED_INSTALLATION_TOKEN"
+
+
+def _stale_plus_fresh_token_env_1632(tmp_path, monkeypatch):
+    """Stale ambient GH_TOKEN/GITHUB_TOKEN + a valid fresh PDD_GH_TOKEN_FILE."""
+    token_path = tmp_path / "gh_token_1632"
+    token_path.write_text(_FRESH_TOKEN_1632, encoding="utf-8")
+    monkeypatch.setenv("GH_TOKEN", _STALE_TOKEN_1632)
+    monkeypatch.setenv("GITHUB_TOKEN", _STALE_TOKEN_1632)
+    monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
+    monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_path))
+    return token_path
+
+
+def _assert_gh_env_fresh_1632(captured):
+    assert captured, "expected at least one gh subprocess invocation"
+    for env in captured:
+        assert env is not None, (
+            "gh subprocess ran with no custom env= — it inherits the stale "
+            "ambient GH_TOKEN and ignores the refreshed PDD_GH_TOKEN_FILE "
+            "(issue #1632)."
+        )
+        token = env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")
+        assert token == _FRESH_TOKEN_1632, (
+            f"gh subprocess used token {token!r}; expected refreshed "
+            f"{_FRESH_TOKEN_1632!r} (issue #1632)."
+        )
+
+
+def test_fetch_issue_updated_at_uses_refreshed_token_1632(tmp_path, monkeypatch):
+    """``_fetch_issue_updated_at`` re-fetches the issue timestamp via ``gh api``
+    late in the flow; it must carry the refreshed token and still parse the
+    returned ``updated_at``."""
+    _stale_plus_fresh_token_env_1632(tmp_path, monkeypatch)
+    captured = []
+
+    def fake_run(cmd, *args, **kwargs):
+        captured.append(kwargs.get("env"))
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="2026-06-17T20:00:00Z\n", stderr=""
+        )
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        result = _aco_1632._fetch_issue_updated_at("promptdriven", "pdd", 1632)
+
+    assert result == "2026-06-17T20:00:00Z"
+    _assert_gh_env_fresh_1632(captured)
+
+
+def test_check_existing_pr_uses_refreshed_token_1632(tmp_path, monkeypatch):
+    """``_check_existing_pr`` shells ``gh pr list`` near PR creation; it must use
+    the refreshed token and still return the matching PR url."""
+    _stale_plus_fresh_token_env_1632(tmp_path, monkeypatch)
+    captured = []
+
+    pr_json = (
+        '[{"url": "https://github.com/promptdriven/pdd/pull/1", '
+        '"headRefName": "change/issue-1632"}]'
+    )
+
+    def fake_run(cmd, *args, **kwargs):
+        captured.append(kwargs.get("env"))
+        return subprocess.CompletedProcess(cmd, 0, stdout=pr_json, stderr="")
+
+    with patch("pdd.agentic_change_orchestrator.subprocess.run", side_effect=fake_run):
+        url = _aco_1632._check_existing_pr("promptdriven", "pdd", 1632)
+
+    assert url == "https://github.com/promptdriven/pdd/pull/1"
+    _assert_gh_env_fresh_1632(captured)

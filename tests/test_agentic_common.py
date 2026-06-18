@@ -12163,3 +12163,337 @@ class TestDuplicateStateCommentHandling:
         assert "1003" in warning_text, (
             f"Expected stale id 1003 named in warning; got: {warning_text!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1632: refreshed PDD_GH_TOKEN_FILE must win over a stale ambient token
+# on every trusted ``gh`` comment / state-sync subprocess.
+#
+# Background: GitHub App *installation* tokens expire exactly one hour after
+# creation. Long Cloud Run jobs exceed that, so the executor's refresh loop
+# writes a freshly minted token to ``PDD_GH_TOKEN_FILE`` every ~30 min. The
+# trusted ``gh``/``gh api`` calls in ``agentic_common`` previously ran with no
+# explicit ``env=`` and therefore inherited the parent process' frozen
+# ``os.environ`` (the original, now-expired token) -> ``HTTP 401: Bad
+# credentials``. The fix adds ``_github_token_from_env()`` (prefer freshly read
+# ``PDD_GH_TOKEN_FILE`` -> ``GH_TOKEN`` -> ``GITHUB_TOKEN`` -> ``PDD_GITHUB_TOKEN``)
+# and ``_gh_subprocess_env()`` (overlay that token onto ``os.environ.copy()``),
+# threaded as ``env=`` into every authenticated ``gh`` invocation.
+#
+# These are BEHAVIORAL tests: they call the real functions, capture the ``env``
+# kwarg actually handed to ``subprocess.run``, and assert it carries the fresh
+# token. They FAIL on the current buggy code (env is None / helpers absent).
+# ---------------------------------------------------------------------------
+from pdd import agentic_common as ac_1632
+
+_STALE_TOKEN_1632 = "ghs_STALE_EXPIRED_INSTALLATION_TOKEN"
+_FRESH_TOKEN_1632 = "ghs_FRESH_REFRESHED_INSTALLATION_TOKEN"
+
+
+@pytest.fixture
+def fresh_token_file_1632(tmp_path, monkeypatch):
+    """Simulate the cloud refresh loop: a stale ambient ``GH_TOKEN`` plus a
+    valid, freshly written ``PDD_GH_TOKEN_FILE``."""
+    token_path = tmp_path / "gh_token_1632"
+    token_path.write_text(_FRESH_TOKEN_1632, encoding="utf-8")
+    monkeypatch.setenv("GH_TOKEN", _STALE_TOKEN_1632)
+    monkeypatch.setenv("GITHUB_TOKEN", _STALE_TOKEN_1632)
+    monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("PDD_NO_GITHUB_STATE", raising=False)
+    monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_path))
+    return token_path
+
+
+def _capturing_run_1632(captured):
+    """``subprocess.run`` stand-in that records the ``env`` kwarg of every call
+    and returns a generic success result."""
+
+    def fake_run(cmd, *args, **kwargs):
+        captured.append(kwargs.get("env"))
+        result = MagicMock()
+        result.returncode = 0
+        result.stdout = '{"id": 4242}'
+        result.stderr = ""
+        return result
+
+    return fake_run
+
+
+def _assert_used_fresh_token_1632(captured):
+    """Every recorded subprocess call must have received an explicit env whose
+    GitHub token equals the refreshed ``PDD_GH_TOKEN_FILE`` value."""
+    assert captured, "expected at least one gh subprocess invocation"
+    for env in captured:
+        assert env is not None, (
+            "gh subprocess was invoked with no custom env= — it inherits the "
+            "stale ambient GH_TOKEN and ignores the refreshed PDD_GH_TOKEN_FILE "
+            "(issue #1632)."
+        )
+        token = env.get("GH_TOKEN") or env.get("GITHUB_TOKEN")
+        assert token == _FRESH_TOKEN_1632, (
+            f"gh subprocess used token {token!r}; expected the refreshed token "
+            f"{_FRESH_TOKEN_1632!r} read from PDD_GH_TOKEN_FILE (issue #1632)."
+        )
+        assert token != _STALE_TOKEN_1632, "stale ambient token leaked into gh subprocess"
+
+
+# -- Test 1: centralized token helper prefers the refreshed file -------------
+def test_github_token_from_env_prefers_fresh_file_over_stale_ambient_1632(fresh_token_file_1632):
+    """``_github_token_from_env`` must return the freshly read token file value,
+    not the expired ambient ``GH_TOKEN``/``GITHUB_TOKEN``."""
+    token = ac_1632._github_token_from_env()
+    assert token == _FRESH_TOKEN_1632, (
+        f"expected refreshed token {_FRESH_TOKEN_1632!r} from PDD_GH_TOKEN_FILE, "
+        f"got {token!r} (issue #1632)"
+    )
+    assert token != _STALE_TOKEN_1632
+
+
+# -- Test 2: per-call re-read (no caching) + documented fallback order -------
+def test_github_token_from_env_rereads_per_call_and_fallbacks_1632(tmp_path, monkeypatch):
+    """The helper must re-read the file on every call (the cloud loop rewrites
+    it every ~30 min) and fall back GH_TOKEN -> GITHUB_TOKEN -> PDD_GITHUB_TOKEN,
+    skipping an empty/whitespace file."""
+    token_path = tmp_path / "rotating_token"
+    token_path.write_text("ghs_FRESH_A", encoding="utf-8")
+    monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_path))
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
+
+    assert ac_1632._github_token_from_env() == "ghs_FRESH_A"
+    # Simulate the next refresh writing a brand new token to the same file.
+    token_path.write_text("ghs_FRESH_B", encoding="utf-8")
+    assert ac_1632._github_token_from_env() == "ghs_FRESH_B", (
+        "helper cached the first token instead of re-reading PDD_GH_TOKEN_FILE per call"
+    )
+
+    # No file -> fall through the documented ambient order to PDD_GITHUB_TOKEN.
+    monkeypatch.delenv("PDD_GH_TOKEN_FILE", raising=False)
+    monkeypatch.setenv("PDD_GITHUB_TOKEN", "ghs_PDD_FALLBACK")
+    assert ac_1632._github_token_from_env() == "ghs_PDD_FALLBACK"
+
+    # Empty/whitespace file is skipped, falling through to ambient GH_TOKEN.
+    empty_path = tmp_path / "empty_token"
+    empty_path.write_text("   \n", encoding="utf-8")
+    monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(empty_path))
+    monkeypatch.setenv("GH_TOKEN", "ghs_AMBIENT")
+    assert ac_1632._github_token_from_env() == "ghs_AMBIENT"
+
+
+# -- Test 3: subprocess env overlay is isolated from os.environ --------------
+def test_gh_subprocess_env_overlays_fresh_token_on_copy_1632(fresh_token_file_1632, monkeypatch):
+    """``_gh_subprocess_env`` returns a *copy* of os.environ with GH_TOKEN and
+    GITHUB_TOKEN overwritten by the refreshed token; unrelated keys are
+    preserved and mutating the result does not mutate os.environ."""
+    monkeypatch.setenv("SOME_UNRELATED_KEY_1632", "keep-me")
+    env = ac_1632._gh_subprocess_env()
+
+    assert env["GH_TOKEN"] == _FRESH_TOKEN_1632
+    assert env["GITHUB_TOKEN"] == _FRESH_TOKEN_1632
+    assert env["SOME_UNRELATED_KEY_1632"] == "keep-me"
+
+    # Isolation: mutating the returned env must not leak back into os.environ.
+    env["GH_TOKEN"] = "mutated"
+    assert os.environ.get("GH_TOKEN") == _STALE_TOKEN_1632
+
+
+# -- Test 4: step/progress comment path ("Failed to post step comment") ------
+def test_post_step_comment_once_injects_fresh_token_1632(fresh_token_file_1632, tmp_path):
+    """``post_step_comment_once`` must shell ``gh issue comment`` with the
+    refreshed token so long runs keep posting per-step progress."""
+    captured = []
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), patch(
+        "pdd.agentic_common.subprocess.run", side_effect=_capturing_run_1632(captured)
+    ):
+        ok = ac_1632.post_step_comment_once(
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1632,
+            step_num=7,
+            body="step 7 progress",
+            posted_steps=set(),
+            cwd=tmp_path,
+        )
+    assert ok is True
+    _assert_used_fresh_token_1632(captured)
+
+
+# -- Test 5: state sync save path ("Failed to sync state to GitHub") ---------
+def test_github_save_state_injects_fresh_token_patch_and_post_1632(fresh_token_file_1632, tmp_path):
+    """``github_save_state`` must PATCH (existing comment_id) AND POST (new
+    comment) the state through the refreshed token."""
+    captured = []
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), patch(
+        "pdd.agentic_common.subprocess.run", side_effect=_capturing_run_1632(captured)
+    ):
+        # PATCH path (comment_id supplied)
+        ac_1632.github_save_state(
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1632,
+            workflow_type="bug",
+            state={"last_completed_step": 7},
+            cwd=tmp_path,
+            comment_id=4242,
+        )
+        # POST path (no comment_id -> create a new state comment)
+        ac_1632.github_save_state(
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1632,
+            workflow_type="bug",
+            state={"last_completed_step": 8},
+            cwd=tmp_path,
+        )
+    _assert_used_fresh_token_1632(captured)
+
+
+# -- Test 6: state RESTORE path symmetry (github_load_state -> gh api GET) ----
+def test_github_load_state_restore_uses_fresh_token_1632(fresh_token_file_1632, tmp_path):
+    """The restore side (``github_load_state`` -> ``_find_state_comment`` gh api
+    GET) must also use the refreshed token, so a resumed run can re-read state
+    after the original installation token expires (Step 6 save/restore symmetry)."""
+    captured = []
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), patch(
+        "pdd.agentic_common.subprocess.run", side_effect=_capturing_run_1632(captured)
+    ):
+        ac_1632.github_load_state(
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1632,
+            workflow_type="bug",
+            cwd=tmp_path,
+        )
+    _assert_used_fresh_token_1632(captured)
+
+
+# -- Test 7: PR comment + final comment paths --------------------------------
+def test_post_pr_and_final_comment_use_fresh_token_1632(fresh_token_file_1632, tmp_path):
+    """``post_pr_comment`` and ``post_final_comment`` (the "Final reports or PR
+    comments can also fail" symptom) must each use the refreshed token."""
+    captured = []
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), patch(
+        "pdd.agentic_common.subprocess.run", side_effect=_capturing_run_1632(captured)
+    ):
+        ac_1632.post_pr_comment(
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            pr_number=99,
+            body="PR progress",
+            cwd=tmp_path,
+        )
+        ac_1632.post_final_comment(
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1632,
+            reason="NOT_A_BUG",
+            total_cost=1.23,
+            steps_completed=3,
+            total_steps=12,
+            cwd=tmp_path,
+        )
+    _assert_used_fresh_token_1632(captured)
+
+
+# -- Test 11: graceful degradation when no token source exists ---------------
+def test_gh_subprocess_env_graceful_when_no_token_1632(tmp_path, monkeypatch):
+    """With no PDD_GH_TOKEN_FILE and no ambient token, the fix must still pass an
+    explicit env (never None) and must NOT blank out GH_TOKEN to an empty string
+    (which would clobber a token gh might resolve from its own config)."""
+    monkeypatch.delenv("PDD_GH_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("PDD_GITHUB_TOKEN", raising=False)
+    monkeypatch.delenv("PDD_NO_GITHUB_STATE", raising=False)
+
+    captured = []
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), patch(
+        "pdd.agentic_common.subprocess.run", side_effect=_capturing_run_1632(captured)
+    ):
+        ok = ac_1632.post_step_comment_once(
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1632,
+            step_num=1,
+            body="step 1 progress",
+            posted_steps=set(),
+            cwd=tmp_path,
+        )
+    assert ok is True
+    assert captured, "expected at least one gh subprocess invocation"
+    for env in captured:
+        assert env is not None, (
+            "fix must still spawn gh with an explicit env even when no token is found"
+        )
+        # No real token available -> must not inject a blank GH_TOKEN.
+        assert env.get("GH_TOKEN", None) != "", (
+            "fix blanked GH_TOKEN to '' with no token source, clobbering gh's own auth"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step 5 reproduction tests (issue #1632) — call existing code and prove the
+# bug on current main. Preserved verbatim (assertions/logic) and folded in as
+# permanent regression coverage per the test plan.
+# ---------------------------------------------------------------------------
+def test_post_step_comment_once_uses_refreshed_token_file_repro1632(fresh_token_file_1632, tmp_path):
+    """[Step 5 reproduction] `post_step_comment_once` must post the per-step
+    progress comment using the refreshed token from PDD_GH_TOKEN_FILE."""
+    captured = []
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), patch(
+        "pdd.agentic_common.subprocess.run", side_effect=_capturing_run_1632(captured)
+    ):
+        ok = ac_1632.post_step_comment_once(
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1632,
+            step_num=5,
+            body="step 5 progress",
+            posted_steps=set(),
+            cwd=tmp_path,
+        )
+    assert ok is True
+    _assert_used_fresh_token_1632(captured)
+
+
+def test_github_save_state_uses_refreshed_token_file_repro1632(fresh_token_file_1632, tmp_path):
+    """[Step 5 reproduction] `github_save_state` (state sync) must PATCH the
+    state comment using the refreshed token from PDD_GH_TOKEN_FILE."""
+    captured = []
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), patch(
+        "pdd.agentic_common.subprocess.run", side_effect=_capturing_run_1632(captured)
+    ):
+        ac_1632.github_save_state(
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            issue_number=1632,
+            workflow_type="bug",
+            state={"last_completed_step": 5},
+            cwd=tmp_path,
+            comment_id=4242,  # forces a single PATCH call
+        )
+    _assert_used_fresh_token_1632(captured)
+
+
+def test_save_workflow_state_sync_uses_refreshed_token_file_repro1632(fresh_token_file_1632, tmp_path):
+    """[Step 5 reproduction] `save_workflow_state` syncs via `github_save_state`;
+    the sync must use the refreshed token so 'Failed to sync state to GitHub'
+    does not fire after the original installation token expires."""
+    captured = []
+    state_dir = tmp_path / "state"
+    with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), patch(
+        "pdd.agentic_common.subprocess.run", side_effect=_capturing_run_1632(captured)
+    ):
+        ac_1632.save_workflow_state(
+            cwd=tmp_path,
+            issue_number=1632,
+            workflow_type="bug",
+            state={"last_completed_step": 5},
+            state_dir=state_dir,
+            repo_owner="promptdriven",
+            repo_name="pdd",
+            use_github_state=True,
+            github_comment_id=4242,  # forces a single PATCH call
+        )
+    _assert_used_fresh_token_1632(captured)
