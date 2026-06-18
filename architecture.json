@@ -10436,5 +10436,35 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Extracts bounded public compatibility surface from a .py file for generation context injection (#1652).",
+    "description": "Extracts public symbols, callable signatures, and patch-target helpers from a generated Python file, serializes them into a bounded CompatibilityContract suitable for injection into generation context.",
+    "dependencies": [],
+    "priority": 99,
+    "filename": "compatibility_contract_python.prompt",
+    "filepath": "pdd/compatibility_contract.py",
+    "tags": [
+      "module",
+      "python",
+      "context"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "extract_compatibility_contract",
+            "signature": "(py_file: Path, *, max_symbols: int = 200, test_files: Optional[List[Path]] = None)",
+            "returns": "CompatibilityContract"
+          },
+          {
+            "name": "CompatibilityContract.to_prompt_block",
+            "signature": "()",
+            "returns": "str"
+          }
+        ]
+      }
+    }
   }
 ]
