@@ -6855,6 +6855,22 @@ class TestStep7PassedMeritReview:
         '"changed_files": ["auth.py"]}\n'
         '```'
     )
+    # A critical that lives in the PR diff (its file is a changed file) with
+    # only a blocking:false flag and NO out-of-scope signal must still block —
+    # a self-reported non-blocking flag cannot wave through a PR-introduced
+    # critical (#1574 review, fail-closed).
+    TARGETED_CHANGED_FILE_BLOCKING_FALSE_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "PR-introduced token leak", '
+        '"module": "auth", "file": "auth.py", '
+        '"blocking": false}], '
+        '"changed_files": ["auth.py"]}\n'
+        '```'
+    )
 
     def test_issue_aligned_required_when_issue_present(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
@@ -6962,6 +6978,37 @@ class TestStep7PassedMeritReview:
             pr_test_scope="full",
         )
         assert passed, reason
+
+    def test_targeted_pr_blocks_changed_file_critical_with_blocking_false(self):
+        """A blocking:false flag must not wave through a PR-introduced critical.
+
+        Fail-closed regression (#1574 review): a critical whose file is in the
+        PR diff blocks even when tagged ``blocking: false``, because there is no
+        out-of-scope signal and the finding touches a changed file.
+        """
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_CHANGED_FILE_BLOCKING_FALSE_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
+
+    def test_full_pr_scope_blocks_changed_file_critical_with_blocking_false(self):
+        """The fail-closed rule also holds in full PR scope."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_CHANGED_FILE_BLOCKING_FALSE_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="full",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
 
     def test_targeted_pr_still_blocks_changed_file_critical(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed

@@ -92,13 +92,25 @@ Step completed successfully.
 """
         return True, success_report, 0.0005, "mock-gpt-4o"
 
-    # Patch the per-step LLM runner so the example never makes real API calls,
-    # and run with use_github_state=False so no remote GitHub interaction is
-    # attempted. The orchestrator still drives its real 8-step state machine
+    # Patch the per-step LLM runner so the example never makes real API calls.
+    # `use_github_state=False` skips state read/write, but the orchestrator still
+    # posts trusted per-step / PR comments and seeds the steering cursor, which
+    # hit the GitHub API. With fake repo metadata those calls 404, so we also
+    # stub the comment-posting and steer-seed helpers to keep the example fully
+    # offline. The orchestrator still drives its real 8-step state machine
     # against the local mock git repository created above.
     with patch(
         "pdd.agentic_checkup_orchestrator.run_agentic_task",
         side_effect=mock_run_agentic_task,
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.post_step_comment_once", return_value=None
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.ensure_issue_steer_cursor_seeded",
+        return_value=True,
     ):
         success, _message, _cost, _model = run_agentic_checkup_orchestrator(
             issue_url=issue_url,

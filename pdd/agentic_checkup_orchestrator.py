@@ -924,6 +924,45 @@ def _step7_nonblocking_reason(issue: Dict[str, Any]) -> str:
     return ""
 
 
+def _step7_finding_in_pr_diff(
+    issue: Dict[str, Any], changed_files: List[str]
+) -> bool:
+    """Return True when the finding's file/module overlaps the PR diff.
+
+    Ground-truth signal: the verifier's own ``changed_files`` list. A critical
+    whose ``file`` (or ``module``) equals, contains, or sits under a changed
+    file is PR-scoped and must block regardless of any ``blocking: false`` flag
+    — a self-reported non-blocking flag cannot be trusted to wave through a
+    PR-introduced critical (issue #1574 review). Comparison is on normalised
+    paths and counts both exact matches and directory-prefix containment in
+    either direction.
+    """
+    changed = [
+        _normalise_step7_path(path)
+        for path in (changed_files or [])
+        if _normalise_step7_path(path)
+    ]
+    if not changed:
+        return False
+    candidates = [
+        path
+        for path in (
+            _normalise_step7_path(issue.get("file")),
+            _normalise_step7_path(issue.get("module")),
+        )
+        if path
+    ]
+    for cand in candidates:
+        for changed_file in changed:
+            if cand == changed_file:
+                return True
+            if changed_file.startswith(cand + "/") or cand.startswith(
+                changed_file + "/"
+            ):
+                return True
+    return False
+
+
 def _step7_unfixed_critical_blocks_pr(
     issue: Dict[str, Any],
     *,
@@ -932,24 +971,23 @@ def _step7_unfixed_critical_blocks_pr(
 ) -> bool:
     """Decide whether an unfixed critical Step 7 finding blocks PR mode.
 
-    A critical finding blocks by default, but an explicit non-blocking signal
-    from the verifier is authoritative in PR mode: ``blocking: false``,
-    ``in_scope: false``, or a non-blocking ``scope`` value. This applies even
-    when a full suite was attempted locally, because the final Step 7 verdict
-    owns the distinction between PR-introduced failures and pre-existing
-    baseline failures. A structured free-text reason is treated as an
-    *additional* corroborating signal, never a precondition — the Step 7 verify
-    prompt emits the flags without a separate ``*_reason`` field, so requiring
-    one (the previous ``... and reason`` guard) let pre-existing, out-of-scope
-    criticals fail clean PRs (issue #1574).
+    An unfixed critical blocks by default. It is waved through only when BOTH
+    hold:
+
+    1. the verifier marks it non-blocking — ``blocking: false``,
+       ``in_scope: false``, a non-blocking ``scope`` value, or an explicitly
+       non-blocking ``*_reason`` field (a generic ``reason`` is not a signal);
+       and
+    2. it is demonstrably **out of the PR's scope** — its file/module does not
+       overlap ``changed_files`` and its ``scope`` is not a PR/in-scope value.
+
+    This keeps the #1574 carveout (pre-existing, out-of-scope baseline
+    criticals must not fail a clean PR) while failing **closed** on
+    PR-introduced criticals: a ``blocking: false`` flag alone can never wave
+    through a finding that lives in the PR diff or is tagged in-scope (issue
+    #1574 review).
     """
-    del changed_files, payload_message
-
-    if issue.get("blocking") is False:
-        return False
-
-    if issue.get("in_scope") is False:
-        return False
+    del payload_message
 
     scope = str(
         issue.get("scope")
@@ -957,6 +995,28 @@ def _step7_unfixed_critical_blocks_pr(
         or issue.get("pr_scope")
         or ""
     ).strip().lower().replace("_", "-")
+
+    # Fail closed: a PR-scoped critical always blocks, regardless of any
+    # non-blocking flag — either the verifier tagged it with a PR/in-scope
+    # ``scope`` value, or its file/module overlaps the PR diff.
+    pr_in_scope_scopes = {
+        "pr",
+        "pr-diff",
+        "pr-scope",
+        "changed-file",
+        "changed-files",
+        "in-scope",
+        "blocking",
+    }
+    if scope in pr_in_scope_scopes:
+        return True
+    if _step7_finding_in_pr_diff(issue, changed_files):
+        return True
+
+    # Out-of-PR-scope critical: an explicit non-blocking signal from the
+    # verifier is now authoritative. An explicitly non-blocking ``*_reason``
+    # field corroborates too; a generic ``reason`` is intentionally excluded by
+    # the helper, so it cannot bypass the gate.
     explicit_nonblocking_scopes = {
         "out-of-scope",
         "outside-pr",
@@ -969,12 +1029,12 @@ def _step7_unfixed_critical_blocks_pr(
         "repository",
         "global",
     }
+    if issue.get("blocking") is False:
+        return False
+    if issue.get("in_scope") is False:
+        return False
     if scope in explicit_nonblocking_scopes:
         return False
-    # No explicit flag/scope, but an explicitly non-blocking reason field
-    # (e.g. ``out_of_scope_reason``) is itself an authoritative non-blocking
-    # signal. A generic ``reason`` is ordinary explanatory text and is
-    # intentionally excluded by the helper, so it cannot bypass the gate.
     if _step7_nonblocking_reason(issue):
         return False
 
