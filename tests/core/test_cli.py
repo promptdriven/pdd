@@ -598,23 +598,94 @@ def test_apply_color_preference_env_and_shared_console():
     from pdd.core import errors
 
     with _restore_shared_console_color() as con:
-        errors.apply_color_preference(False)
-        assert os.environ.get("NO_COLOR") == "1"
-        assert "FORCE_COLOR" not in os.environ
-        assert con.no_color is True
+        restore_no_color = errors.apply_color_preference(False)
+        try:
+            assert os.environ.get("NO_COLOR") == "1"
+            assert "FORCE_COLOR" not in os.environ
+            assert con.no_color is True
 
-        restore = errors.apply_color_preference(True)
-        assert os.environ.get("FORCE_COLOR") == "1"
-        assert "NO_COLOR" not in os.environ
-        assert con.no_color is False
-        assert "\x1b[" in _render(con)
+            restore_color = errors.apply_color_preference(True)
+            try:
+                assert os.environ.get("FORCE_COLOR") == "1"
+                assert "NO_COLOR" not in os.environ
+                assert con.no_color is False
+                assert "\x1b[" in _render(con)
 
-        # None is auto (the default) and must change nothing it was just set to.
-        errors.apply_color_preference(None)
-        assert os.environ.get("FORCE_COLOR") == "1"
+                # None is auto (the default) and must change nothing it was just set to.
+                errors.apply_color_preference(None)
+                assert os.environ.get("FORCE_COLOR") == "1"
+            finally:
+                restore_color()
+
+            assert os.environ.get("NO_COLOR") == "1"
+            assert "FORCE_COLOR" not in os.environ
+        finally:
+            restore_no_color()
+
+
+def test_apply_color_preference_updates_preexisting_command_consoles():
+    """Module-level command consoles imported before the root callback must
+    honor the later global ``--no-color`` preference."""
+    from pdd.commands.auth import console as auth_console
+    from pdd.cmd_test_main import console as test_console
+    from pdd.core import errors
+
+    consoles = (errors.console, auth_console, test_console)
+    before = [
+        (con.no_color, con._force_terminal, con._color_system)
+        for con in consoles
+    ]
+
+    restore = errors.apply_color_preference(False)
+    try:
+        assert all(con.no_color is True for con in consoles)
+    finally:
         restore()
-        assert os.environ.get("NO_COLOR") == "1"
-        assert "FORCE_COLOR" not in os.environ
+
+    assert [
+        (con.no_color, con._force_terminal, con._color_system)
+        for con in consoles
+    ] == before
+
+
+def test_apply_color_preference_forces_later_bare_console_output(monkeypatch):
+    """A Rich ``Console()`` built after ``--color`` must emit ANSI even when
+    output is captured or piped."""
+    from rich.console import Console
+    from pdd.core import errors
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    restore = errors.apply_color_preference(True)
+    try:
+        con = Console()
+        assert con.no_color is False
+        assert con._force_terminal is True
+        with con.capture() as cap:
+            con.print("[red]RED[/red]")
+        assert "\x1b[" in cap.get()
+    finally:
+        restore()
+
+
+def test_apply_color_preference_restores_later_bare_console_to_auto(monkeypatch):
+    """A console constructed during ``--no-color`` must not keep the temporary
+    preference after the invocation cleanup restores a clean environment."""
+    from rich.console import Console
+    from pdd.core import errors
+
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+
+    restore = errors.apply_color_preference(False)
+    con = Console()
+    assert con.no_color is True
+    restore()
+
+    assert "NO_COLOR" not in os.environ
+    assert "FORCE_COLOR" not in os.environ
+    assert con.no_color is False
+    assert con._force_terminal is None
+    assert con._color_system is None
 
 
 def test_cli_no_color_flag_disables_color(runner):

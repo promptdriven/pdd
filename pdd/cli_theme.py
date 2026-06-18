@@ -14,6 +14,8 @@ for the role -> color mapping and rationale.
 from __future__ import annotations
 
 import os
+import weakref
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from rich.console import Console
 from rich.theme import Theme
@@ -93,6 +95,136 @@ SEMANTIC_STYLES = {
 # renders consistently everywhere.
 PDD_THEME = Theme(SEMANTIC_STYLES)
 
+_ConsoleColorState = Tuple[bool, Optional[bool], Any]
+_registered_consoles: "weakref.WeakSet[Console]" = weakref.WeakSet()
+_console_default_states: "weakref.WeakKeyDictionary[Console, _ConsoleColorState]" = (
+    weakref.WeakKeyDictionary()
+)
+_active_color_preference: Optional[bool] = None
+
+
+def _snapshot_console_color(con: Console) -> _ConsoleColorState:
+    """Capture the mutable Rich color state controlled by the global CLI flag."""
+    return (con.no_color, con._force_terminal, con._color_system)
+
+
+def _restore_console_color(con: Console, state: _ConsoleColorState) -> None:
+    """Restore a Rich console color snapshot."""
+    try:
+        con.no_color, con._force_terminal, con._color_system = state
+    except Exception:  # pragma: no cover - defensive only
+        pass
+
+
+def _preferred_color_system() -> str:
+    """Return the Rich color system to use when ``--color`` forces ANSI output."""
+    return "truecolor" if _supports_truecolor() else "256color"
+
+
+def _force_console_color(con: Console, enabled: bool) -> None:
+    """Apply the active global color choice to an already-built Rich console."""
+    try:
+        if enabled:
+            con.no_color = False
+            con._force_terminal = True
+            if getattr(con, "_color_system", None) is None:
+                from rich.color import ColorSystem
+
+                con._color_system = (
+                    ColorSystem.TRUECOLOR
+                    if _preferred_color_system() == "truecolor"
+                    else ColorSystem.EIGHT_BIT
+                )
+        else:
+            con.no_color = True
+    except Exception:  # pragma: no cover - defensive only
+        pass
+
+
+def _console_kwargs_with_global_preference(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Translate the active global preference into Rich constructor kwargs."""
+    if _active_color_preference is True:
+        kwargs["no_color"] = False
+        kwargs["force_terminal"] = True
+        kwargs.setdefault("color_system", _preferred_color_system())
+    elif _active_color_preference is False:
+        kwargs["no_color"] = True
+    return kwargs
+
+
+def _register_console(con: Console) -> None:
+    """Track PDD-created Rich consoles so global color flags can update them."""
+    try:
+        _registered_consoles.add(con)
+        _console_default_states.setdefault(con, _snapshot_console_color(con))
+        if _active_color_preference is not None:
+            _force_console_color(con, _active_color_preference)
+    except Exception:  # pragma: no cover - WeakSet/WeakKey fallback safety
+        pass
+
+
+_ORIGINAL_CONSOLE_INIT = Console.__init__
+
+
+def _pdd_console_init(self: Console, *args: Any, **kwargs: Any) -> None:
+    """Register every Rich console constructed after PDD's theme module loads."""
+    _ORIGINAL_CONSOLE_INIT(self, *args, **kwargs)
+    _register_console(self)
+
+
+if Console.__init__ is not _pdd_console_init:
+    Console.__init__ = _pdd_console_init  # type: ignore[method-assign]
+
+
+def apply_global_color_preference(preference: Optional[bool]) -> Callable[[], None]:
+    """Apply and later restore the process-local PDD color preference.
+
+    Existing registered consoles are updated in place. Consoles created while
+    the preference is active are registered by the patched Rich constructor and
+    immediately inherit the same choice, including forced ANSI output when
+    output is captured or piped.
+    """
+    global _active_color_preference
+
+    if preference is None:
+        return lambda: None
+
+    previous_preference = _active_color_preference
+    saved_states = {
+        con: _snapshot_console_color(con)
+        for con in list(_registered_consoles)
+    }
+
+    _active_color_preference = preference
+    for con in list(_registered_consoles):
+        _force_console_color(con, preference)
+
+    def restore() -> None:
+        global _active_color_preference
+        _active_color_preference = previous_preference
+
+        for con, state in list(saved_states.items()):
+            _restore_console_color(con, state)
+
+        # Consoles constructed while the preference was active did not exist in
+        # ``saved_states``. When returning to auto mode, reset them against the
+        # restored environment so a temporary NO_COLOR/FORCE_COLOR does not leak
+        # past one CLI invocation.
+        for con in list(_registered_consoles):
+            if con not in saved_states:
+                if previous_preference is None:
+                    _restore_console_color(
+                        con,
+                        (os.environ.get("NO_COLOR") is not None, None, None),
+                    )
+                else:
+                    default_state = _console_default_states.get(con)
+                    if default_state is not None:
+                        _restore_console_color(con, default_state)
+                    _force_console_color(con, previous_preference)
+
+    return restore
+
 
 # ---------------------------------------------------------------------------
 # Raw-ANSI helpers.
@@ -171,7 +303,10 @@ def get_console(**kwargs) -> Console:
     palette. A caller-supplied ``theme`` overrides the default.
     """
     kwargs.setdefault("theme", PDD_THEME)
-    return Console(**kwargs)
+    kwargs = _console_kwargs_with_global_preference(kwargs)
+    con = Console(**kwargs)
+    _register_console(con)
+    return con
 
 
 def style(role: str, text: str) -> str:
@@ -205,6 +340,7 @@ __all__ = [
     "ANSI_FAINT",
     "hex_to_ansi",
     "get_console",
+    "apply_global_color_preference",
     "style",
     "console",
 ]

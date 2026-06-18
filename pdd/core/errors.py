@@ -2,9 +2,8 @@
 Error handling logic for PDD CLI.
 """
 import os
-import sys
 import traceback
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional
 import click
 from rich.console import Console
 from rich.markup import MarkupError, escape
@@ -26,7 +25,7 @@ except ImportError:
 # names below are a superset of the historical ones (``info``/``warning``/
 # ``error``/``success``/``path``/``command``), so existing call sites keep
 # working unchanged.
-from ..cli_theme import SEMANTIC_STYLES
+from ..cli_theme import SEMANTIC_STYLES, apply_global_color_preference
 
 custom_theme = Theme(SEMANTIC_STYLES)
 console = Console(theme=custom_theme)
@@ -57,29 +56,6 @@ def _set_console_color(con: Console, enabled: bool) -> None:
         pass
 
 
-_ConsoleColorState = Tuple[bool, Optional[bool], Any]
-
-
-def _snapshot_console_color(con: Console) -> _ConsoleColorState:
-    """Capture the mutable color state touched by color preference logic."""
-    return (con.no_color, con._force_terminal, con._color_system)
-
-
-def _restore_console_color(con: Console, state: _ConsoleColorState) -> None:
-    """Restore a Rich console color snapshot."""
-    try:
-        con.no_color, con._force_terminal, con._color_system = state
-    except Exception:  # pragma: no cover - defensive
-        pass
-
-
-def _sibling_update_console() -> Optional[Console]:
-    """Return the update command's shared console if its module is loaded."""
-    update_main = sys.modules.get("pdd.update_main")
-    sibling = getattr(update_main, "console", None) if update_main else None
-    return sibling if isinstance(sibling, Console) else None
-
-
 def apply_color_preference(preference: Optional[bool]) -> Callable[[], None]:
     """Apply the global ``--color`` / ``--no-color`` preference for this run.
 
@@ -89,17 +65,14 @@ def apply_color_preference(preference: Optional[bool]) -> Callable[[], None]:
 
     The choice is wired two ways so it reaches every surface:
 
-    * The ``NO_COLOR`` / ``FORCE_COLOR`` environment variables are set, which
-      every Rich console constructed *after* this point honors automatically —
-      ``pdd.cli_theme.get_console`` (and thus every ``StatusReporter``), plus the
-      per-command ad-hoc consoles.
-    * The shared consoles already built at import time (this module's
-      :data:`console`, and ``pdd.update_main.console`` if it is loaded) are
-      updated in place, since they captured their color state before the flag
-      was parsed.
+    * The ``NO_COLOR`` / ``FORCE_COLOR`` environment variables are set for
+      non-Rich surfaces and subprocesses that honor the conventional flags.
+    * ``pdd.cli_theme`` translates the active preference into Rich constructor
+      arguments and maintains a registry of Rich consoles, so consoles created
+      before and after this callback are updated consistently.
 
     Returns a cleanup callback that restores the pre-invocation environment and
-    shared-console state. That keeps ``--color`` / ``--no-color`` scoped to a
+    Rich console state. That keeps ``--color`` / ``--no-color`` scoped to a
     single CLI invocation even when tests, servers, or other callers run the CLI
     repeatedly in one Python process.
     """
@@ -107,12 +80,6 @@ def apply_color_preference(preference: Optional[bool]) -> Callable[[], None]:
         return lambda: None
 
     saved_env = {key: os.environ.get(key) for key in ("NO_COLOR", "FORCE_COLOR")}
-    saved_consoles: Dict[int, Tuple[Console, _ConsoleColorState]] = {
-        id(console): (console, _snapshot_console_color(console))
-    }
-    sibling = _sibling_update_console()
-    if sibling is not None:
-        saved_consoles[id(sibling)] = (sibling, _snapshot_console_color(sibling))
 
     if preference:
         os.environ.pop("NO_COLOR", None)
@@ -121,12 +88,7 @@ def apply_color_preference(preference: Optional[bool]) -> Callable[[], None]:
         os.environ.pop("FORCE_COLOR", None)
         os.environ["NO_COLOR"] = "1"
 
-    _set_console_color(console, preference)
-    # Mutate sibling shared consoles only if their module is already imported;
-    # ones imported later inherit the choice from the env vars set above.
-    sibling = _sibling_update_console()
-    if isinstance(sibling, Console):
-        _set_console_color(sibling, preference)
+    restore_consoles = apply_global_color_preference(preference)
 
     def restore() -> None:
         for key, value in saved_env.items():
@@ -134,20 +96,7 @@ def apply_color_preference(preference: Optional[bool]) -> Callable[[], None]:
                 os.environ.pop(key, None)
             else:
                 os.environ[key] = value
-        for con, state in saved_consoles.values():
-            _restore_console_color(con, state)
-
-        # If update_main was imported after the preference was applied, it may
-        # have captured FORCE_COLOR/NO_COLOR from this invocation. Reset it to
-        # auto mode after restoring the environment.
-        current_sibling = _sibling_update_console()
-        if current_sibling is not None and id(current_sibling) not in saved_consoles:
-            try:
-                current_sibling.no_color = os.environ.get("NO_COLOR") is not None
-                current_sibling._force_terminal = None
-                current_sibling._color_system = None
-            except Exception:  # pragma: no cover - defensive
-                pass
+        restore_consoles()
 
     return restore
 
