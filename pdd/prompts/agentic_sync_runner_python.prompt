@@ -129,7 +129,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - Use the same catalog-aware language suffix stripping as `_basename_from_architecture_filename`; target aliases and architecture filename aliases must not diverge.
 
 % Helper Functions
-- `_find_pdd_executable() -> Optional[str]`: find pdd binary (same pattern as `server/jobs.py`)
+- `_find_pdd_executable() -> Optional[str]`: always return `None`; callers must use `[sys.executable, "-m", "pdd"]` for interpreter parity. Do NOT use `shutil.which("pdd")` — PATH-resolved binaries may point to a different installed version than the calling process (see `pdd/__main__.py` docstring and the pattern in `agentic_change_orchestrator.py`).
 - `_parse_cost_from_csv(csv_path: str) -> float`: sum cost column from PDD_OUTPUT_COST_PATH CSV
 - `_format_duration(start, end) -> str`: format seconds as "Xs" or "Xm Ys"
 - `_parse_conformance_failure(stdout: str, stderr: str) -> Optional[Tuple[str, Tuple[str, ...]]]`: scan combined stdout+stderr for the line prefix `Architecture conformance error for ` and, when matched, return `(repair_directive, missing_symbols)` where `missing_symbols` is a sorted tuple of the symbols listed after any of the following inline shapes (route each into its own directive bucket — they MUST NOT be merged):
@@ -188,7 +188,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - Use `threading.Lock` for thread-safe state updates
 - Reuse `_run_gh_command` from `agentic_change.py` for GitHub comment API calls
 - Set subprocess env: `CI=1`, `PDD_FORCE=1`, `TERM=dumb`, `PDD_AUTO_UPDATE=false`, `PYTHONUNBUFFERED=1` for headless execution
-- Fallback to `sys.executable -m pdd` if `_find_pdd_executable()` returns None
+- Always use `[sys.executable, "-m", "pdd"]` for subprocess invocations (since `_find_pdd_executable()` always returns `None`). This guarantees the subprocess uses the same Python interpreter and installed package as the parent process.
 - Separate `run()` into `run()` (signal handler setup) and `_run_inner()` (actual execution loop)
 - `_record_result()`: finalize current_phase by moving to completed_phases (unless skip: prefixed), then persist state
 

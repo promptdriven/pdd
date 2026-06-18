@@ -79,7 +79,7 @@
   <server.models><include>context/server/models_example.py</include></server.models>
 
 % Instructions
-  - Locate `pdd` executable or fallback to `sys.executable -c`.
+  - Always invoke pdd as `[sys.executable, "-m", "pdd"]` for interpreter parity; do NOT use `shutil.which("pdd")` — PATH-resolved binaries may resolve to a different installed version than the calling process.
   - Use `asyncio.run_coroutine_threadsafe` for reader thread callbacks.
   - Import `JobStatus` from `.models`. Robust fallback for `rich.console`.
   - Export: Job, JobManager, JobCallbacks.
