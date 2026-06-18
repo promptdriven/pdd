@@ -1,5 +1,5 @@
 """
-TDD tests for jobs.py sync failure detection bugs.
+TDD tests for jobs.py sync failure detection bugs and interpreter-parity fix (issue #1648).
 
 Bug 1: jobs.py:534 checks for "Failed" anywhere in stdout, not just on the
        "Overall status:" line. This causes false positives when other code
@@ -221,4 +221,46 @@ class TestGetJwtTokenWarnings:
         assert "Failed" not in stdout_output, (
             f"_get_stored_refresh_token printed 'Failed' to stdout: {stdout_output!r}. "
             "Should use logging.warning() instead."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1648: _build_subprocess_command_args must use sys.executable -m pdd
+# ---------------------------------------------------------------------------
+
+class TestBuildSubprocessCommandArgsInterpreterParity:
+    """Tests that server/jobs.py _build_subprocess_command_args() uses the current interpreter.
+
+    Issue #1648: _find_pdd_executable() in pdd/server/jobs.py also uses
+    shutil.which("pdd") first, so subprocess commands resolve to the installed
+    binary instead of the checkout interpreter.
+    """
+
+    def test_build_subprocess_command_args_ignores_path_pdd(self):
+        """Test 2: _build_subprocess_command_args uses sys.executable even when PATH has pdd.
+
+        Simulates a developer machine where shutil.which("pdd") returns
+        /opt/anaconda3/bin/pdd (the installed version 0.0.276) while the
+        checkout is 0.0.278.dev0.
+
+        Fails on buggy code: _find_pdd_executable() returns the PATH binary, so
+        _build_subprocess_command_args() produces ["/opt/anaconda3/bin/pdd", ...].
+        """
+        from pdd.server.jobs import _build_subprocess_command_args
+
+        with patch("shutil.which", return_value="/opt/anaconda3/bin/pdd"):
+            cmd = _build_subprocess_command_args("sync", {"basename": "mymodule"}, None)
+
+        assert cmd[0] == sys.executable, (
+            f"Expected sys.executable ({sys.executable!r}), got {cmd[0]!r}. "
+            "Bug: _find_pdd_executable() in server/jobs.py returned the PATH binary."
+        )
+        assert "-m" in cmd, f"Expected '-m' in command, got: {cmd}"
+        assert "pdd" in cmd, f"Expected 'pdd' module name in command, got: {cmd}"
+        assert "/opt/anaconda3/bin/pdd" not in cmd, (
+            f"PATH binary must not appear in command: {cmd}"
+        )
+        # The old -c fallback must also be gone after the fix
+        assert not any("from pdd.cli import cli" in arg for arg in cmd), (
+            f"Old -c import fallback must not appear in command after fix: {cmd}"
         )

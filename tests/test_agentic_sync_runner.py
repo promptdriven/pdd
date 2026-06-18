@@ -4268,3 +4268,73 @@ class TestRealSubprocessOutputCapture:
         assert "Overall status: Failed" in error, (
             "failure reason must preserve the streamed marker after eviction"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1648: _build_command() must use sys.executable -m pdd, not PATH pdd
+# ---------------------------------------------------------------------------
+
+class TestBuildCommandInterpreterParity:
+    """Tests that _build_command() always uses the current Python interpreter.
+
+    Issue #1648: _find_pdd_executable() prefers shutil.which("pdd"), which
+    resolves to the installed site-packages binary rather than the checkout.
+    This causes sync subprocesses to silently execute an older installed version.
+
+    Fix: always use [sys.executable, "-m", "pdd"] regardless of PATH.
+    """
+
+    def test_build_command_ignores_path_pdd_binary(self):
+        """Test 1: _build_command uses sys.executable -m pdd even when PATH has older binary.
+
+        Simulates a developer machine where shutil.which("pdd") returns the
+        installed site-packages binary (e.g., /opt/anaconda3/bin/pdd, version 0.0.276)
+        while the checkout is version 0.0.278.dev0.  The subprocess command must
+        use the current interpreter, not the PATH-resolved binary.
+
+        Fails on buggy code: _find_pdd_executable() returns the PATH binary path,
+        so _build_command() produces ["/opt/anaconda3/bin/pdd", "--force", ...].
+        """
+        with patch("pdd.agentic_sync_runner.shutil.which", return_value="/opt/anaconda3/bin/pdd"):
+            runner = AsyncSyncRunner(
+                basenames=["mymodule"],
+                dep_graph={"mymodule": []},
+                sync_options={},
+                github_info=None,
+                quiet=True,
+            )
+            cmd = runner._build_command("mymodule")
+
+        assert cmd[0] == sys.executable, (
+            f"Expected sys.executable ({sys.executable!r}) as first element, "
+            f"got {cmd[0]!r}. Bug: _find_pdd_executable() returned the PATH binary."
+        )
+        assert "-m" in cmd, f"Expected '-m' flag for module invocation, got: {cmd}"
+        assert "pdd" in cmd, f"Expected 'pdd' module name in command, got: {cmd}"
+        assert "/opt/anaconda3/bin/pdd" not in cmd, (
+            f"PATH binary must not appear in command: {cmd}"
+        )
+
+    def test_build_command_uses_interpreter_when_no_path_pdd(self):
+        """Test 6: Regression — _build_command still works when no PATH pdd binary exists.
+
+        Verifies that after the fix, behavior is correct in a clean venv where
+        shutil.which("pdd") returns None.  Addresses the acceptance criterion from
+        issue #1648: "Existing installed-package usage is not broken."
+        """
+        with patch("pdd.agentic_sync_runner.shutil.which", return_value=None):
+            runner = AsyncSyncRunner(
+                basenames=["mymodule"],
+                dep_graph={"mymodule": []},
+                sync_options={},
+                github_info=None,
+                quiet=True,
+            )
+            cmd = runner._build_command("mymodule")
+
+        assert cmd[0] == sys.executable, (
+            f"Expected sys.executable ({sys.executable!r}) as first element, "
+            f"got {cmd[0]!r}"
+        )
+        assert "-m" in cmd, f"Expected '-m' flag in command, got: {cmd}"
+        assert "pdd" in cmd, f"Expected 'pdd' in command, got: {cmd}"

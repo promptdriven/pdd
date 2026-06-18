@@ -61,8 +61,8 @@
        - auto-deps: ["prompt_file", "directory_path"]
        - conflicts: ["prompt_file", "prompt2"]
        - preprocess: ["prompt_file"]
-     - `_find_pdd_executable()`: Find pdd in PATH or Python env bin dir
-     - Fallback: python -c "from pdd.cli import cli; sys.exit(cli())"
+     - `_find_pdd_executable()`: always return `None`; subprocess commands must use `[sys.executable, "-m", "pdd"]` for interpreter parity. Do NOT use `shutil.which("pdd")` — PATH-resolved binaries may point to a different installed version than the calling process.
+     - Fallback when _find_pdd_executable() returns None: `[sys.executable, "-m", "pdd"]`
 
   8. **Response models**:
      - RunResult: success, message, exit_code, stdout (optional), stderr (optional), error_details (optional)
