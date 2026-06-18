@@ -3719,6 +3719,51 @@ class TestMetadataFinalizationBoundary:
 
         assert ok is False
 
+    def test_commit_and_push_allows_missing_gitignored_fingerprint(self):
+        """A finalized fingerprint excluded by the repo's ignore policy is
+        not stageable, so it must not block an otherwise valid heal commit."""
+
+        commit_called = {"value": False}
+        push_called = {"value": False}
+
+        def mock_run(cmd, **kwargs):
+            r = MagicMock()
+            r.stdout = ""
+            r.stderr = ""
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                r.returncode = 1  # changes exist
+            elif cmd == ["git", "diff", "--cached", "--name-only"]:
+                # Prompt was staged, but the fingerprint was ignored.
+                r.returncode = 0
+                r.stdout = "pdd/prompts/auth_python.prompt\n"
+            elif cmd == [
+                "git",
+                "check-ignore",
+                "--",
+                ".pdd/meta/auth_python.json",
+            ]:
+                r.returncode = 0
+                r.stdout = ".pdd/meta/auth_python.json\n"
+            elif cmd[0:2] == ["git", "commit"]:
+                commit_called["value"] = True
+                r.returncode = 0
+            elif cmd == ["git", "push"]:
+                push_called["value"] = True
+                r.returncode = 0
+            else:
+                r.returncode = 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            ok = commit_and_push(
+                ["auth"], skip_ci=False, checkpoint=False,
+                finalized_modules=[("auth", "python")],
+            )
+
+        assert ok is True
+        assert commit_called["value"]
+        assert push_called["value"]
+
     def test_commit_and_push_aborts_when_finalized_module_has_empty_index(self):
         """An empty staged index is not success when metadata was finalized."""
 
@@ -3740,6 +3785,85 @@ class TestMetadataFinalizationBoundary:
             ok = commit_and_push(
                 ["auth"], skip_ci=False, checkpoint=False,
                 finalized_modules=[("auth", "python")],
+            )
+
+        assert ok is False
+
+    def test_commit_and_push_succeeds_when_nothing_staged_and_all_fingerprints_gitignored(self):
+        """Nothing staged AND every finalized fingerprint excluded by the repo's
+        ignore policy is a legitimate no-op success: there is nothing to commit and
+        the fingerprints are absent by policy, not because finalization failed. The
+        function must report success WITHOUT creating an empty commit (exercises the
+        ``return bool(ignored) and all(...)`` true-path in the empty-index branch)."""
+
+        commit_called = {"value": False}
+        push_called = {"value": False}
+
+        def mock_run(cmd, **kwargs):
+            r = MagicMock()
+            r.stdout = ""
+            r.stderr = ""
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                r.returncode = 0  # nothing staged
+            elif cmd == [
+                "git",
+                "check-ignore",
+                "--",
+                ".pdd/meta/auth_python.json",
+            ]:
+                r.returncode = 0
+                r.stdout = ".pdd/meta/auth_python.json\n"  # fingerprint is gitignored
+            elif cmd[0:2] == ["git", "commit"]:
+                commit_called["value"] = True
+                r.returncode = 0
+            elif cmd == ["git", "push"]:
+                push_called["value"] = True
+                r.returncode = 0
+            else:
+                r.returncode = 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            ok = commit_and_push(
+                ["auth"], skip_ci=False, checkpoint=False,
+                finalized_modules=[("auth", "python")],
+            )
+
+        assert ok is True
+        assert not commit_called["value"]  # nothing to commit -> no empty commit
+        assert not push_called["value"]
+
+    def test_commit_and_push_blocks_when_some_finalized_fingerprints_not_ignored(self):
+        """Nothing staged with a MIX of gitignored and genuinely-missing fingerprints
+        must still block: the non-ignored module's fingerprint is truly absent
+        (finalization was claimed but not produced), so success here would silently
+        ship a heal without its metadata. Guards the ``all(...)`` term against a
+        partial-ignore false pass."""
+
+        def mock_run(cmd, **kwargs):
+            r = MagicMock()
+            r.stdout = ""
+            r.stderr = ""
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                r.returncode = 0  # nothing staged
+            elif cmd[0:3] == ["git", "check-ignore", "--"]:
+                # Only auth's fingerprint is ignored; billing's is genuinely missing.
+                r.returncode = 0
+                r.stdout = ".pdd/meta/auth_python.json\n"
+            elif cmd[0:2] == ["git", "commit"]:
+                raise AssertionError(
+                    "commit must not run when a non-ignored fingerprint is missing"
+                )
+            elif cmd == ["git", "push"]:
+                raise AssertionError("push must not run")
+            else:
+                r.returncode = 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            ok = commit_and_push(
+                ["auth", "billing"], skip_ci=False, checkpoint=False,
+                finalized_modules=[("auth", "python"), ("billing", "python")],
             )
 
         assert ok is False
