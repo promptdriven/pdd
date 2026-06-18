@@ -6,7 +6,8 @@
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
       "_keyring_timeout_python.prompt",
-      "git_porcelain_python.prompt"
+      "git_porcelain_python.prompt",
+      "routing_policy_python.prompt"
     ],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
@@ -61,8 +62,13 @@
           },
           {
             "name": "run_agentic_task",
-            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None) -> AgenticTaskResult",
+            "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None) -> AgenticTaskResult",
             "returns": "AgenticTaskResult"
+          },
+          {
+            "name": "select_harness_for_task",
+            "signature": "(task_class: str, candidates: List[str]) -> List[str]",
+            "returns": "List[str]"
           },
           {
             "name": "detect_control_token",
@@ -179,12 +185,199 @@
             "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> bool",
             "returns": "bool"
           }
+        ],
+        "enums": [
+          {
+            "name": "EffortCapability",
+            "values": [
+              "FULL",
+              "CLAMPED",
+              "CONFIG_ONLY",
+              "INTERACTIVE_ONLY",
+              "UNSUPPORTED"
+            ]
+          }
+        ],
+        "typeAliases": [
+          {
+            "name": "TaskClass",
+            "definition": "Literal['single_file', 'multi_file', 'repo_scale', 'high_isolation']"
+          }
         ]
       }
     },
     "position": {
       "x": 14400,
       "y": 800
+    }
+  },
+  {
+    "reason": "Static task-class routing table and bounded escalation ladder for agentic CLI config selection.",
+    "description": "Provides a static YAML-configurable lookup table keyed by coarse task class and a bounded four-step escalation ladder. Consumed by run_agentic_task() via optional routing_policy argument. Records policy version, task class, selected config, escalation step, fallback reason, cost, latency, and verifier result.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "routing_policy_python.prompt",
+    "filepath": "pdd/routing_policy.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "dataclasses": [
+          {
+            "name": "RoutingConfig",
+            "fields": [
+              {
+                "name": "harness",
+                "type": "str"
+              },
+              {
+                "name": "model_tier",
+                "type": "int"
+              },
+              {
+                "name": "thinking_effort",
+                "type": "EffortLevel"
+              },
+              {
+                "name": "repeat_runs",
+                "type": "int"
+              }
+            ]
+          },
+          {
+            "name": "EscalationStep",
+            "fields": [
+              {
+                "name": "axis",
+                "type": "str"
+              },
+              {
+                "name": "value",
+                "type": "Any"
+              },
+              {
+                "name": "reason",
+                "type": "str"
+              }
+            ]
+          },
+          {
+            "name": "RoutingPolicyRow",
+            "fields": [
+              {
+                "name": "initial_config",
+                "type": "Optional[RoutingConfig]"
+              },
+              {
+                "name": "escalation_steps",
+                "type": "List[EscalationStep]"
+              }
+            ]
+          },
+          {
+            "name": "RoutingPolicy",
+            "fields": [
+              {
+                "name": "version",
+                "type": "str"
+              },
+              {
+                "name": "rows",
+                "type": "Dict[str, RoutingPolicyRow]"
+              },
+              {
+                "name": "path",
+                "type": "Optional[Path]"
+              }
+            ]
+          },
+          {
+            "name": "RoutingRecord",
+            "fields": [
+              {
+                "name": "timestamp_utc",
+                "type": "str"
+              },
+              {
+                "name": "job_id",
+                "type": "Optional[str]"
+              },
+              {
+                "name": "policy_version",
+                "type": "str"
+              },
+              {
+                "name": "task_class",
+                "type": "str"
+              },
+              {
+                "name": "selected_config",
+                "type": "Optional[RoutingConfig]"
+              },
+              {
+                "name": "escalation_step",
+                "type": "int"
+              },
+              {
+                "name": "fallback_reason",
+                "type": "Optional[str]"
+              },
+              {
+                "name": "cost_usd",
+                "type": "float"
+              },
+              {
+                "name": "latency_seconds",
+                "type": "float"
+              },
+              {
+                "name": "verifier_result",
+                "type": "Optional[str]"
+              }
+            ]
+          }
+        ],
+        "functions": [
+          {
+            "name": "default_policy",
+            "signature": "() -> RoutingPolicy",
+            "returns": "RoutingPolicy"
+          },
+          {
+            "name": "load_policy",
+            "signature": "(path: Optional[Path]) -> RoutingPolicy",
+            "returns": "RoutingPolicy"
+          },
+          {
+            "name": "select_config",
+            "signature": "(policy: RoutingPolicy, task_class: Optional[str], budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]",
+            "returns": "tuple[RoutingConfig | None, RoutingRecord]"
+          },
+          {
+            "name": "escalate",
+            "signature": "(policy: RoutingPolicy, record: RoutingRecord, verifier_result: str, budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]",
+            "returns": "tuple[RoutingConfig | None, RoutingRecord]"
+          },
+          {
+            "name": "resolve_model_for_tier",
+            "signature": "(tier: int) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "emit_routing_record",
+            "signature": "(record: RoutingRecord, log_dir: Path) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 14400,
+      "y": 1200
     }
   },
   {
@@ -1241,34 +1434,22 @@
           {
             "name": "track_cost",
             "signature": "(func)",
-            "returns": "Callable",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Callable"
           },
           {
             "name": "extract_cost_and_model",
             "signature": "(result: Any) -> Tuple[Any, str]",
-            "returns": "Tuple[Any, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[Any, str]"
           },
           {
             "name": "collect_files",
-            "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
-            "returns": "Tuple[List[str], List[str]]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(args, kwargs)",
+            "returns": "Tuple[List[str], List[str]]"
           },
           {
             "name": "looks_like_file",
-            "signature": "(path_str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(path_str)",
+            "returns": "bool"
           }
         ]
       }
@@ -2218,9 +2399,15 @@
     }
   },
   {
-    "reason": "Determines needed dependencies and inserts them into a prompt with optional deduplication.",
+    "reason": "Determines needed dependencies via auto_include and inserts them into a prompt, handling both new and updated includes.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "auto_include_python.prompt",
+      "preprocess_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 60,
     "filename": "insert_includes_python.prompt",
     "filepath": "pdd/insert_includes.py",
@@ -2234,19 +2421,8 @@
         "functions": [
           {
             "name": "insert_includes",
-            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)",
-            "returns": "Tuple[str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "main",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True, compress: bool = False)",
+            "returns": "Tuple[str, str, float, str]"
           }
         ]
       }
@@ -2406,8 +2582,8 @@
     }
   },
   {
-    "reason": "Classifies test/verification failure modes for failure-aware retries.",
-    "description": "Heuristic classifier (regex-based, no LLM) used by fix_error_loop to skip unproductive retries on syntax/import or timeout/flaky failures.",
+    "reason": "Classify pytest / verification output for `fix_error_loop` and `agentic_multishot` by failure type: syntax_import, assertion_logic, timeout_flaky, budget_truncated, infrastructure_error.",
+    "description": "Heuristic classifier (regex-based, no LLM) used by fix_error_loop and agentic_multishot to categorize failures. Covers five FailureKind values; budget_truncated and infrastructure_error are set programmatically by the multi-shot controller rather than derived from output text.",
     "dependencies": [],
     "priority": 64,
     "filename": "failure_classification_python.prompt",
@@ -2424,34 +2600,126 @@
           {
             "name": "classify_failure",
             "signature": "(text: str) -> FailureKind",
-            "returns": "FailureKind",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "FailureKind"
           },
           {
             "name": "extract_failure_signature",
             "signature": "(text: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           },
           {
             "name": "failure_classification_hint",
             "signature": "(kind: FailureKind) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "str"
           },
           {
             "name": "format_signature_hint",
             "signature": "(sig: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Sequential multi-shot repeat-run controller for agentic CLI harnesses; wraps run_agentic_task with per-shot budget/timeout, hidden-verifier selection, and append-only JSONL telemetry.",
+    "description": "Orchestration controller for sequential multi-shot CLI repeat-runs. Wraps run_agentic_task with per-shot and total budget/timeout caps, hidden-verifier candidate selection, append-only JSONL persistence, and stop-early behavior on first pass.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "failure_classification_python.prompt"
+    ],
+    "priority": 65,
+    "filename": "agentic_multishot_python.prompt",
+    "filepath": "pdd/agentic_multishot.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "dataclasses": [
+          {
+            "name": "MultishotCandidateRecord",
+            "fields": [
+              {
+                "name": "shot_id",
+                "type": "int"
+              },
+              {
+                "name": "task_id",
+                "type": "str"
+              },
+              {
+                "name": "multishot_run_id",
+                "type": "str"
+              },
+              {
+                "name": "cli_version",
+                "type": "str"
+              },
+              {
+                "name": "config_id",
+                "type": "str"
+              },
+              {
+                "name": "verdict",
+                "type": "str"
+              },
+              {
+                "name": "failure_class",
+                "type": "Optional[str]"
+              },
+              {
+                "name": "cost_usd",
+                "type": "float"
+              },
+              {
+                "name": "latency_ms",
+                "type": "float"
+              },
+              {
+                "name": "started_at",
+                "type": "str"
+              },
+              {
+                "name": "finished_at",
+                "type": "str"
+              },
+              {
+                "name": "stop_reason",
+                "type": "Optional[str]"
+              }
             ]
+          },
+          {
+            "name": "MultishotResult",
+            "fields": [
+              {
+                "name": "winner",
+                "type": "Optional[MultishotCandidateRecord]"
+              },
+              {
+                "name": "candidates",
+                "type": "List[MultishotCandidateRecord]"
+              },
+              {
+                "name": "total_cost_usd",
+                "type": "float"
+              },
+              {
+                "name": "total_latency_ms",
+                "type": "float"
+              }
+            ]
+          }
+        ],
+        "functions": [
+          {
+            "name": "run_multishot_candidates",
+            "signature": "(instruction, cwd, *, n_shots=1, per_shot_budget, total_budget, per_shot_timeout_s, total_timeout_s, stop_on_first_pass=True, verifier_fn, config_id, task_id, jsonl_path=None, **kwargs) -> MultishotResult",
+            "returns": "MultishotResult"
           }
         ]
       }
@@ -2463,7 +2731,8 @@
     "dependencies": [
       "failure_classification_python.prompt",
       "fix_focus_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "test_context_packer_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2479,7 +2748,7 @@
         "functions": [
           {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None, compressed_context=None)",
+            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose = False, time = DEFAULT_TIME, code_file_ext = '.py', protect_tests = False, failure_classification = None, compressed_context = None)",
             "returns": "Tuple[bool, bool, str, str, str, float, str]"
           },
           {
@@ -3871,6 +4140,33 @@
     }
   },
   {
+    "reason": "Generates the task_routing.csv skeleton: per-task static routing table for the E[pass]−λ·cost router in llm_invoke.",
+    "description": "Defines the static per-task config routing table (task_class, model, temperature, effort, shots, pass_rate, avg_cost_usd) consumed by llm_invoke()'s E[pass]−λ·cost router when PDD_ENABLE_TASK_ROUTING=1.",
+    "dependencies": [
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 115,
+    "filename": "task_routing_csv.prompt",
+    "filepath": "pdd/data/task_routing.csv",
+    "tags": [
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "config": {
+        "keys": [
+          "task_class",
+          "model",
+          "temperature",
+          "effort",
+          "shots",
+          "pass_rate",
+          "avg_cost_usd"
+        ]
+      }
+    }
+  },
+  {
     "reason": "Shell completion script for bash.",
     "description": "Provides command-line completion for pdd in bash. Lists commands and options.",
     "dependencies": [],
@@ -4290,7 +4586,8 @@
               "provider: str",
               "cli_path: str",
               "api_key_configured: bool",
-              "skipped: bool"
+              "skipped: bool",
+              "cli_version: str"
             ]
           }
         ]
@@ -5113,9 +5410,13 @@
     }
   },
   {
-    "reason": "Applies targeted patches to existing code based on prompt changes.",
+    "reason": "Analyzes prompt changes and incrementally patches existing code or triggers full regeneration.",
     "description": "Detects changes between prompt versions and generates minimal code patches. More efficient than full regeneration for small modifications.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "preprocess_python.prompt",
+      "postprocess_python.prompt"
+    ],
     "priority": 149,
     "filename": "incremental_code_generator_python.prompt",
     "filepath": "pdd/incremental_code_generator.py",
@@ -5131,10 +5432,7 @@
           {
             "name": "incremental_code_generator",
             "signature": "(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = 0.25, force_incremental: bool = False, verbose: bool = False, preprocess_prompt: bool = True) -> Tuple[Optional[str], bool, float, str]",
-            "returns": "Tuple[Optional[str], bool, float, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[Optional[str], bool, float, str]"
           }
         ]
       }
@@ -5436,7 +5734,7 @@
     }
   },
   {
-    "reason": "Applies guarded incremental PRD changes to architecture.json and related prompts without full regeneration.",
+    "reason": "Incrementally propagates PRD changes into architecture.json and affected prompt Requirements using validated targeted patches.",
     "description": "Reads a PRD diff from hash/provenance metadata and ignored local raw-baseline cache, asks the LLM for a structured architecture patch, validates dependency, prompt filename, filepath, and file invariants deterministically, rejects unsafe or secret-like code filepaths before reads, retries invalid patches with explicit validation feedback, writes targeted architecture updates atomically, validates prompt previews under the write lock to avoid lost edits, syncs prompt metadata tags, creates prompts for new modules, deletes prompts for removed modules, updates prompt Requirements through detect_change/change, and avoids persisting raw PRD or GitHub issue/comment text in tracked metadata.",
     "dependencies": [
       "architecture_sync_python.prompt",
@@ -5459,13 +5757,13 @@
         "functions": [
           {
             "name": "run_incremental_prd_propagation",
-            "signature": "(prd_source: str, *, architecture_path: Path | str, prompts_dir: Path | str, project_root: Path | str | None, issue_content: Optional[str], dry_run: bool, verbose: bool, quiet: bool, strength: float, temperature: float, time: float, max_patch_attempts: int, update_prompt_requirements: bool, generate_new_prompts: bool)",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(prd_source: str, *, architecture_path: Path | str = \"architecture.json\", prompts_dir: Path | str = \"prompts\", project_root: Path | str | None = None, issue_content: Optional[str] = None, dry_run: bool = False, verbose: bool = False, quiet: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, max_patch_attempts: int = 3, update_prompt_requirements: bool = True, generate_new_prompts: bool = True) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple of success flag, message, cost, model, and changed files"
           },
           {
             "name": "apply_architecture_patch",
-            "signature": "(raw_architecture: Any, patch: ArchitecturePatch)",
-            "returns": "PatchApplication"
+            "signature": "(raw_architecture: Any, patch: ArchitecturePatch) -> PatchApplication",
+            "returns": "Validated in-memory architecture patch application result"
           }
         ]
       }
@@ -9159,7 +9457,7 @@
     }
   },
   {
-    "reason": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "reason": "Provides unified LLM invocation with provider retries, context checks, and dry-run cost estimates.",
     "description": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
     "dependencies": [
       "path_resolution_python.prompt",
@@ -9178,7 +9476,7 @@
         "functions": [
           {
             "name": "llm_invoke",
-            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud, grounding_overrides=None, source_prompt=None, estimate_only=None, shots=1, verifier=None, task_class=None)",
             "returns": "Dict[str, Any]"
           },
           {
@@ -9776,6 +10074,33 @@
     }
   },
   {
+    "reason": "Ranks candidate test files by a four-signal composite score and packs them under a configurable token budget, emitting a TestPackingManifest for every selection and omission decision.",
+    "dependencies": [
+      "pytest_slicer_python.prompt"
+    ],
+    "priority": 102,
+    "filename": "test_context_packer_python.prompt",
+    "filepath": "pdd/test_context_packer.py",
+    "tags": [
+      "module",
+      "python",
+      "testing",
+      "context"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "TestContextPacker.pack",
+            "signature": "(module_path: str, failing_tests: list[str] | None = None, budget_tokens: int | None = None) -> TestPackingResult",
+            "returns": "TestPackingResult"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
     "description": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
     "dependencies": [
@@ -9980,7 +10305,8 @@
     "dependencies": [
       "context_snapshot_python.prompt",
       "contract_ir_python.prompt",
-      "operation_log_python.prompt"
+      "operation_log_python.prompt",
+      "test_context_packer_python.prompt"
     ],
     "priority": 249,
     "filename": "compressed_sync_context_python.prompt",
@@ -9996,7 +10322,7 @@
         "functions": [
           {
             "name": "build_compressed_sync_context",
-            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None) -> CompressedSyncContext",
+            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None) -> CompressedSyncContext",
             "returns": "CompressedSyncContext"
           },
           {

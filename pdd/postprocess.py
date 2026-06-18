@@ -131,6 +131,21 @@ def postprocess(
             console.print(f"[red]Error during LLM invocation:[/red] {error_msg}")
             raise ValueError(error_msg)
 
+        # Guard against malformed structured output of any non-``ExtractedCode``
+        # shape (``None``, a raw string, or a raw ``dict`` that survives the
+        # cloud validation-failure ``pass`` in ``llm_invoke``). The ``"result"
+        # not in result`` check above does not catch a present-but-malformed
+        # value, so verify the type before accessing ``.extracted_code`` and
+        # raise a meaningful error rather than crashing pdd sync with an
+        # AttributeError (issue #1612).
+        if not isinstance(result["result"], ExtractedCode):
+            error_msg = (
+                "LLM returned a malformed extraction result "
+                f"(expected ExtractedCode, got {type(result['result']).__name__})."
+            )
+            console.print(f"[red]Error during LLM invocation:[/red] {error_msg}")
+            raise ValueError(error_msg)
+
         extracted_code = result["result"].extracted_code
 
         # Clean up triple backticks

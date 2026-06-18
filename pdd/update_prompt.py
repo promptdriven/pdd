@@ -168,6 +168,17 @@ def update_prompt(
 
             total_cost += second_response['cost']
 
+            # Guard against malformed structured output of any non-``PromptUpdate``
+            # shape (``None``, a raw string, or a raw ``dict`` that survives the
+            # cloud validation-failure ``pass`` in ``llm_invoke``) before
+            # accessing ``.modified_prompt`` (issue #1612).
+            if not isinstance(second_response['result'], PromptUpdate):
+                raise ValueError(
+                    "update_prompt received a malformed structured result "
+                    f"(expected PromptUpdate, got "
+                    f"{type(second_response['result']).__name__})."
+                )
+
             # Validate that modified_prompt is not empty or whitespace-only
             modified_prompt_text = second_response['result'].modified_prompt
             if not modified_prompt_text or not modified_prompt_text.strip():
