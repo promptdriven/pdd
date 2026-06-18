@@ -5,32 +5,38 @@ the Sizzle site (`https://video.promptdriven.ai/sizzle`), which are cleaner and 
 consistent. Sizzle is a PromptDriven.ai product, so the two surfaces should share one
 visual identity.
 
+**Scope note:** the existing (glowing cyan) logo is **kept**. This epic matches Sizzle's
+**text** style and clean look only.
+
 ## Target (Sizzle) branding
 
-- **Logo:** `PromptDriven_Logo_MonoWhite.svg` — a clean **white-filled** "P" speech-bubble
-  with **no glow** filter.
+- **Wordmark text style:** a semibold sans wordmark in near-white `brand-sleet` beside a
+  tiny, wide-tracked, uppercase **mono `brand-cyan`** descriptor, baseline-aligned —
+  mirroring Sizzle's `Sizzle` / `by Prompt Driven` lockup:
+  ```html
+  <span class="font-sans font-semibold tracking-[0.01em] text-brand-sleet text-lg">Sizzle</span>
+  <span class="font-mono font-medium tracking-[0.12em] text-brand-cyan text-xs">by Prompt Driven</span>
+  ```
 - **Brand color system:** `brand-cyan #00d8ff`, `brand-navy #0a0a23`,
   `brand-graphite #1a1b26`, `brand-magenta #ff2aa6`, `brand-purple #8c47ff`,
   `brand-green #18c07a`, `brand-sleet #f5f7fa`, `brand-mute #5b6378`.
 - **Fonts:** Inter (sans) + JetBrains Mono (mono) — already used by the main site.
-- **Wordmark:** `PromptDriven.ai` lockup next to the logo, cyan accent.
 
 ## Current state (`pdd/frontend`) being replaced
 
-- `public/logo.svg`: a glowing **cyan #00e3ff** "P" with a Gaussian-blur glow filter.
-- `components/Header.tsx`: text-only heading "Prompt Driven Development IDE" with a generic
-  blue (`#3b82f6`) accent, no logo lockup.
+- `components/Header.tsx`: bold-white heading "Prompt Driven Development IDE" + slogan link
+  with a generic blue (`#3b82f6`) accent — busier than Sizzle's lockup.
 - `index.html` `<title>`: "Prompt Driven Development"; Tailwind config has no shared brand
   palette.
+- `public/logo.svg`: the glowing cyan logo — **kept as-is**.
 
 ## Sub-PRs
 
 This epic is delivered as focused sub-PRs that each target this epic branch
 (`epic/sizzle-brand-consistency`):
 
-- [ ] **Logo** — replace `public/logo.svg` with the clean mono-white brand logo.
 - [ ] **Colors** — add Sizzle's brand color tokens to the Tailwind config.
-- [ ] **Header** — adopt the `PromptDriven.ai` logo + wordmark lockup and cyan accent;
-  align the page `<title>`.
+- [ ] **Header** — match Sizzle's clean wordmark text style (`brand-sleet` semibold sans +
+  mono `brand-cyan` descriptor), align the page `<title>`; keep the existing logo.
 
 Once all sub-PRs merge into this branch, this epic PR merges into `main`.
