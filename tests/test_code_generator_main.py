@@ -7763,6 +7763,101 @@ class TestSyncCompatibilityGates:
         )
 
     # -----------------------------------------------------------------
+    # Issue #1612: syntactically invalid generated Python must raise
+    # ArchitectureConformanceError (not PublicSurfaceRegressionError).
+    #
+    # Root cause: _snapshot_public_surface silently returns set() on
+    # SyntaxError, so after = set() while before = {'process_data',
+    # 'validate'}.  _verify_public_surface_regression then raises
+    # PublicSurfaceRegressionError with post_surface_size=0, misrouting
+    # the failure as a phantom symbol-removal regression instead of a
+    # syntax error.  The repair loop then chases phantom removed symbols
+    # rather than the real syntax problem.
+    # -----------------------------------------------------------------
+
+    def test_syntax_error_in_generated_python_raises_arch_conformance_not_surface_regression_issue_1612(
+        self,
+    ):
+        """When generated_code has a Python syntax error,
+        _verify_public_surface_regression must raise ArchitectureConformanceError
+        rather than PublicSurfaceRegressionError.
+
+        Before the fix: _snapshot_public_surface silently returns set() on
+        SyntaxError.  _verify_public_surface_regression sees
+        before={'process_data', 'validate'} and after=set(), raises
+        PublicSurfaceRegressionError with post_surface_size=0 — a misleading
+        phantom-removal report that directs the repair loop away from the real
+        syntax error.
+        """
+        from pdd.code_generator_main import (
+            ArchitectureConformanceError,
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        existing_code = (
+            "def process_data(x):\n"
+            "    return x\n"
+            "\n"
+            "def validate(x):\n"
+            "    return bool(x)\n"
+        )
+        # Syntactically invalid Python: truncated/prose-wrapped LLM output.
+        generated_code = "def process_data(:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError):
+            _verify_public_surface_regression(
+                existing_code,
+                generated_code,
+                "some_module_Python.prompt",
+                "pdd/some_module.py",
+                "python",
+                None,
+            )
+
+    def test_syntax_error_arch_conformance_lists_expected_symbols_and_syntax_directive_issue_1612(
+        self,
+    ):
+        """ArchitectureConformanceError raised for syntax-invalid generated Python
+        must carry the expected public symbols as missing_symbols and must include
+        the word 'syntax' in the repair_directive so the repair loop targets the
+        actual problem rather than phantom removed exports.
+        """
+        from pdd.code_generator_main import (
+            ArchitectureConformanceError,
+            _verify_public_surface_regression,
+        )
+
+        existing_code = (
+            "def process_data(x):\n"
+            "    return x\n"
+            "\n"
+            "def validate(x):\n"
+            "    return bool(x)\n"
+        )
+        generated_code = "def process_data(:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_public_surface_regression(
+                existing_code,
+                generated_code,
+                "some_module_Python.prompt",
+                "pdd/some_module.py",
+                "python",
+                None,
+            )
+
+        # Sorted symbols snapshotted from existing_code.
+        assert excinfo.value.missing_symbols == ["process_data", "validate"]
+        # Repair directive must name the expected symbols so the model knows
+        # what to restore once the syntax is fixed.
+        assert "process_data" in excinfo.value.repair_directive
+        assert "validate" in excinfo.value.repair_directive
+        # Repair directive must mention 'syntax' so the repair loop targets
+        # the syntax error, not phantom removed exports.
+        assert "syntax" in excinfo.value.repair_directive.lower()
+
+    # -----------------------------------------------------------------
     # External review (PR #1015) iter-13 BLOCKING follow-up: an empty
     # generated body MUST trigger the compatibility gates rather than
     # silently truncating the existing file to 0 bytes. The original

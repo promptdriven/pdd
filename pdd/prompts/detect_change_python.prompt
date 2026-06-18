@@ -1,3 +1,22 @@
+<pdd-reason>Identifies which prompts need updates based on changes.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "detect_change",
+        "signature": "(prompt_files: List[str], change_description: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: Optional[float] = DEFAULT_TIME, verbose: bool = False) -> Tuple[List[Dict[str, str]], float, str]",
+        "returns": "Tuple[List[Dict[str, str]], float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "detect_change", that will analyze a list of prompt files and a change description to determine which prompts need to be changed.
 
 <include>context/python_preamble.prompt</include>
@@ -65,7 +84,7 @@
             * 'input_data': A dictionary containing:
                 * 'llm_output': The output string from Step 2.
         - b. If verbose is True, pretty print the running message with the token count and cost.
-        - c. Extract 'changes_list' key values from the Pydantic output.
+        - c. Guard the structured result before reading its fields: if the llm_invoke result is not a `ChangesList` instance (e.g. `None`, a raw string, or a raw `dict` left by llm_invoke's cloud validation-failure fallback), do not access `.changes_list` — instead raise a typed ValueError. A malformed response is a failure, and returning `[]` would let callers (e.g. incremental PRD propagation) treat it as "no changes" and proceed with stale prompt Requirements; a genuinely empty result is a real `ChangesList` that passes the check and still returns `[]`. Use a positive `isinstance(result, ChangesList)` check (NOT a `None`/`str` blacklist) so any non-`ChangesList` shape is caught (issue #1612). Otherwise extract 'changes_list' key values from the `ChangesList` Pydantic output.
     Step 4. If verbose is True, pretty print the extracted changes_list using Rich Markdown function. Include token counts and costs. The list will contain a dictionary with the following keys "prompt_name" and "change_instructions".
     Step 5. Return the 'changes_list', the 'total_cost' from both `llm_invoke` calls, and 'model_name' used for the detect_change_LLM prompt.
 

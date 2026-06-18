@@ -20,7 +20,9 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from .agentic_sync_runner import AsyncSyncRunner, MAX_WORKERS
+from .agentic_sync_runner import AsyncSyncRunner, _read_sync_max_workers
+
+MAX_WORKERS = _read_sync_max_workers()
 
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
 CHECKPOINT_AUTHOR_NAME = "PDD Durable Sync"
@@ -79,7 +81,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         elif durable_max_parallel is not None:
             self.max_workers = max(1, int(durable_max_parallel))
         else:
-            self.max_workers = MAX_WORKERS
+            self.max_workers = _read_sync_max_workers()
 
     def _load_state(self) -> None:
         """Durable mode resumes from git trailers, not local JSON state."""

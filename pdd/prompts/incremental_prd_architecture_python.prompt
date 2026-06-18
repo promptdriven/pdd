@@ -41,7 +41,7 @@ Implement incremental PRD-to-architecture propagation. The LLM may propose a pat
    - `.pdd/meta/prd_hashes.json` must store hashes and minimal provenance only. Never persist raw PRD, GitHub issue body, or issue comment text in tracked metadata.
    - For local PRD files without a snapshot, try `git show HEAD:<path>` as the baseline; otherwise treat the full PRD as new content.
    - Load `architecture.json` in either bare-array or `{prd_files, modules}` format.
-   - Ask the LLM for an `ArchitecturePatch` using `incremental_prd_architecture_patch_LLM`.
+   - Ask the LLM for an `ArchitecturePatch` using `incremental_prd_architecture_patch_LLM`. Guard the structured result before reading its fields: if the result is not an `ArchitecturePatch` instance (e.g. `None`, a raw string, or a raw `dict` left by llm_invoke's cloud validation-failure fallback), do not return it as-is — instead fall back to a patch that requests full regeneration (`ArchitecturePatch(requires_full_regeneration=True, ...)`), using a positive `isinstance(result, ArchitecturePatch)` check (NOT a `None`/`str` blacklist) so any non-`ArchitecturePatch` shape is caught and the caller never crashes on `None.modules_to_add` (issue #1612).
    - If the patch requests full regeneration or reports conflicts, stop without writing.
    - Apply the patch through deterministic validation and merge code:
      - validate prompt filenames and module filepaths as safe relative paths;
