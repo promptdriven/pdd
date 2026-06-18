@@ -9792,7 +9792,7 @@
         "functions": [
           {
             "name": "TestContextPacker.pack",
-            "signature": "(module_path: str, failing_tests: list[str] | None = None, budget_tokens: int | None = None) -> TestPackingResult",
+            "signature": "(module_path: str, failing_tests: list[str] | None = None, budget_tokens: int | None = None, candidate_files: list[str] | None = None, slice_failing_tests: bool = False) -> TestPackingResult",
             "returns": "TestPackingResult"
           }
         ]
