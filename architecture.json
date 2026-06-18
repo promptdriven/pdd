@@ -31,6 +31,11 @@
             "returns": "List[str]"
           },
           {
+            "name": "validate_claude_policy",
+            "signature": "(policy: Any, *, interactive: bool = False) -> ClaudePolicy",
+            "returns": "ClaudePolicy"
+          },
+          {
             "name": "run_agentic_task",
             "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]"
