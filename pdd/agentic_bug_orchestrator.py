@@ -1280,6 +1280,8 @@ def _maybe_post_step_comment(
     repo_name: str,
     use_github_state: bool,
     github_comment_id: Optional[str],
+    failure_mode: Optional[str] = None,
+    failure_detail: Optional[str] = None,
 ) -> Optional[str]:
     """Post a per-step visible comment via trusted credentials (issue #964).
 
@@ -1313,6 +1315,8 @@ def _maybe_post_step_comment(
             description=description,
             output=step_output,
             cwd=cwd,
+            failure_mode=failure_mode or "recoverable",
+            failure_detail=failure_detail,
         )
         state["step_comments"][str(step_num)] = {
             "failed_posted": bool(posted),
@@ -2536,6 +2540,7 @@ def run_agentic_bug_orchestrator(
                     repo_name=repo_name,
                     use_github_state=use_github_state,
                     github_comment_id=github_comment_id,
+                    failure_mode="fatal",
                 )
                 return False, "Aborting: 3 consecutive steps failed — agent providers unavailable", total_cost, model_used, changed_files
         else:
@@ -3377,6 +3382,13 @@ def run_agentic_bug_orchestrator(
             repo_name=repo_name,
             use_github_state=use_github_state,
             github_comment_id=github_comment_id,
+            failure_mode="fatal" if step_num == 12 else "recoverable",
+            failure_detail=(
+                "Test strategy failed; later test generation will use "
+                "fallback/default planning."
+                if (not step_success and step_num == 8)
+                else None
+            ),
         )
 
         # Print step completion marker (required for credential waterfall detection)

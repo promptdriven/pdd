@@ -439,10 +439,10 @@ def test_bug_orchestrator_posts_step_comment_on_success(bug_orchestrator_mocks, 
     assert "No duplicates found" in step1_body
 
 
-def test_bug_orchestrator_posts_failed_step_fallback(
+def test_bug_orchestrator_posts_degraded_step8_fallback_and_continues_to_success(
     bug_orchestrator_mocks, bug_default_args
 ):
-    """Soft failed steps should still get a visible FAILED fallback comment."""
+    """Step 8 provider failures are degraded and the workflow still completes."""
     from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 
     captured_states: list = []
@@ -455,8 +455,8 @@ def test_bug_orchestrator_posts_failed_step_fallback(
 
     def run_side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
-        if label == "step6":
-            return (False, "Provider timeout during root cause", 0.1, "claude")
+        if label == "step8":
+            return (False, "Provider timeout during test strategy", 0.1, "claude")
         if label == "step9":
             return (
                 True,
@@ -473,21 +473,31 @@ def test_bug_orchestrator_posts_failed_step_fallback(
     )
     assert success is True
 
-    step6_calls = [
+    step8_calls = [
         c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
-        if c.kwargs.get("step_num") == 6
+        if c.kwargs.get("step_num") == 8
     ]
-    assert step6_calls
-    assert step6_calls[0].kwargs.get("body") is None
-    assert "Provider timeout" in step6_calls[0].kwargs.get("output", "")
+    assert step8_calls
+    assert step8_calls[0].kwargs.get("body") is None
+    assert step8_calls[0].kwargs.get("failure_mode") == "recoverable"
+    assert "Provider timeout" in step8_calls[0].kwargs.get("output", "")
+    assert "test strategy failed" in step8_calls[0].kwargs.get("failure_detail", "").lower()
+    assert "fallback/default planning" in step8_calls[0].kwargs.get("failure_detail", "")
 
-    step6_comment_states = [
-        s.get("step_comments", {}).get("6", {}) for s in captured_states
-        if s.get("step_comments", {}).get("6")
+    step8_comment_states = [
+        s.get("step_comments", {}).get("8", {}) for s in captured_states
+        if s.get("step_comments", {}).get("8")
     ]
-    assert step6_comment_states
-    assert step6_comment_states[-1].get("failed_posted") is True
-    assert step6_comment_states[-1].get("posted") is not True
+    assert step8_comment_states
+    assert step8_comment_states[-1].get("failed_posted") is True
+    assert step8_comment_states[-1].get("posted") is not True
+
+    step12_calls = [
+        c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+        if c.kwargs.get("step_num") == 12
+    ]
+    assert step12_calls
+    assert step12_calls[-1].kwargs.get("body") is not None
 
 
 def test_bug_orchestrator_posts_fallback_before_provider_failure_abort(
@@ -514,6 +524,11 @@ def test_bug_orchestrator_posts_fallback_before_provider_failure_abort(
         for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
     ]
     assert posted_steps == [1, 2, 3]
+    fatal_call = bug_orchestrator_mocks["post_step_comment"].call_args_list[-1]
+    assert fatal_call.kwargs.get("step_num") == 3
+    assert fatal_call.kwargs.get("body") is None
+    assert fatal_call.kwargs.get("failure_mode") == "fatal"
+    assert bug_orchestrator_mocks["run_agentic_task"].call_count == 3
 
 
 def test_bug_orchestrator_step12_failure_returns_failure(

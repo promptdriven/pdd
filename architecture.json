@@ -101,7 +101,7 @@
           },
           {
             "name": "post_step_comment",
-            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd, body=None) -> bool",
+            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd, body=None, failure_mode: Optional[str] = None, failure_detail: Optional[str] = None) -> bool",
             "returns": "bool"
           },
           {

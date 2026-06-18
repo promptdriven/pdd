@@ -6914,6 +6914,111 @@ def test_post_step_comment_posts_to_github(tmp_path):
         assert "owner/repo" in cmd
 
 
+def test_post_step_comment_recoverable_mode_posts_degraded_detail(tmp_path):
+    """Recoverable fallback comments must read as degraded, not fatal."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=8,
+            total_steps=12,
+            description="Test strategy",
+            output="All agent providers failed: strategy timed out",
+            cwd=tmp_path,
+            failure_mode="recoverable",
+            failure_detail="Test strategy failed; using fallback/default planning.",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** DEGRADED - workflow continuing" in body
+        assert "FAILED - workflow aborting" not in body
+        assert "Test strategy failed; using fallback/default planning." in body
+
+
+def test_post_step_comment_fatal_mode_posts_aborting_detail(tmp_path):
+    """Fatal fallback comments must make the workflow abort explicit."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=3,
+            total_steps=12,
+            description="Triage",
+            output="All agent providers failed: third consecutive failure",
+            cwd=tmp_path,
+            failure_mode="fatal",
+            failure_detail="Stopping after 3 consecutive provider failures.",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** FAILED - workflow aborting" in body
+        assert "Stopping after 3 consecutive provider failures." in body
+
+
+@pytest.mark.parametrize("failure_mode", [None, "unexpected"])
+def test_post_step_comment_unknown_mode_keeps_legacy_failed_body(tmp_path, failure_mode):
+    """Missing or unknown modes keep the legacy fallback wording."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=4,
+            total_steps=12,
+            description="Research",
+            output="Provider unavailable",
+            cwd=tmp_path,
+            failure_mode=failure_mode,
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** FAILED\n" in body
+        assert "workflow continuing" not in body
+        assert "workflow aborting" not in body
+        assert "Automated fallback comment - agent did not execute" in body
+
+
+def test_post_step_comment_fallback_modes_redact_and_truncate(tmp_path):
+    """New fallback modes use the same redaction/truncation path as legacy comments."""
+    secret = "ghp_" + "A" * 36
+    long_tail_marker = "x" * 1500
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=8,
+            total_steps=12,
+            description="Test strategy",
+            output=f"Provider failed {secret} {long_tail_marker}",
+            cwd=tmp_path,
+            failure_mode="recoverable",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert secret not in body
+        assert "[REDACTED_GITHUB_TOKEN]" in body
+        assert "[truncated]" in body
+
+
 def test_post_step_comment_skips_github_when_disabled(tmp_path):
     """PDD_NO_GITHUB_STATE suppresses visible step comments too."""
     with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}), \

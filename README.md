@@ -2846,6 +2846,8 @@ Options:
 
 **Cross-Machine Resume**: By default, workflow state is stored in a hidden comment on the GitHub issue, enabling resume from any machine. Use `--no-github-state` to disable this feature, or `--clean-restart` to discard saved state and rerun from the beginning. You can also set `PDD_NO_GITHUB_STATE=1` environment variable.
 
+**Step comment status:** In GitHub issue comments, recoverable step failures are reported as `Status: DEGRADED - workflow continuing`. The workflow continues with fallback/default behavior when possible, such as using fallback test planning after a Step 8 test-strategy provider failure. Terminal failures that stop the workflow are reported as `Status: FAILED - workflow aborting`. Later successful step comments and the final PR success comment are still posted when the workflow recovers and completes.
+
 Example:
 ```bash
 # Agentic mode (recommended)
