@@ -92,4 +92,40 @@ Step completed successfully.
 """
         return True, success_report, 0.0005, "mock-gpt-4o"
 
-    # Mock Git/GitHub utilities to bypass remote interaction
+    # Patch the per-step LLM runner so the example never makes real API calls,
+    # and run with use_github_state=False so no remote GitHub interaction is
+    # attempted. The orchestrator still drives its real 8-step state machine
+    # against the local mock git repository created above.
+    with patch(
+        "pdd.agentic_checkup_orchestrator.run_agentic_task",
+        side_effect=mock_run_agentic_task,
+    ):
+        success, message, cost, model = run_agentic_checkup_orchestrator(
+            issue_url=issue_url,
+            issue_content=issue_content,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            issue_title=issue_title,
+            architecture_json=architecture_json,
+            pddrc_content=pddrc_content,
+            cwd=repo_dir,
+            verbose=True,
+            quiet=False,
+            no_fix=True,            # Report only — do not generate/push fixes
+            use_github_state=False,  # Stay offline: no GitHub state posting
+        )
+
+    print("\n--- Checkup Result ---")
+    print(f"Success: {success}")
+    print(f"Message: {message}")
+    print(f"Total Cost: ${cost:.4f}")
+    print(f"Model Used: {model}")
+
+    # Clean up the generated output directory.
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+
+
+if __name__ == "__main__":
+    main()

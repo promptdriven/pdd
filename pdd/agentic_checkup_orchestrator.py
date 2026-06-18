@@ -904,12 +904,19 @@ def _normalise_step7_path(value: Any) -> str:
 
 
 def _step7_nonblocking_reason(issue: Dict[str, Any]) -> str:
-    """Return Step 7's structured reason for treating a critical as non-blocking."""
+    """Return Step 7's *explicit* non-blocking reason for a critical, if any.
+
+    Only reason fields whose key explicitly declares a non-blocking intent are
+    honored. A generic ``reason`` field is ordinary explanatory text that the
+    verifier attaches to most findings (including PR-introduced criticals), so
+    it must NOT be treated as a non-blocking signal — doing so would let an
+    in-scope PR critical (e.g. ``scope: "pr-diff"`` with
+    ``reason: "introduced token leak"``) bypass the gate (issue #1574 review).
+    """
     for key in (
         "non_blocking_reason",
         "out_of_scope_reason",
         "scope_reason",
-        "reason",
     ):
         value = issue.get(key)
         if isinstance(value, str) and value.strip():
@@ -964,7 +971,10 @@ def _step7_unfixed_critical_blocks_pr(
     }
     if scope in explicit_nonblocking_scopes:
         return False
-    # No explicit flag/scope, but a structured non-blocking reason still excludes.
+    # No explicit flag/scope, but an explicitly non-blocking reason field
+    # (e.g. ``out_of_scope_reason``) is itself an authoritative non-blocking
+    # signal. A generic ``reason`` is ordinary explanatory text and is
+    # intentionally excluded by the helper, so it cannot bypass the gate.
     if _step7_nonblocking_reason(issue):
         return False
 

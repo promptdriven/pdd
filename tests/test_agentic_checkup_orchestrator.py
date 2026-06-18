@@ -6840,6 +6840,21 @@ class TestStep7PassedMeritReview:
         '"changed_files": ["frontend/package.json"]}\n'
         '```'
     )
+    # An in-scope PR critical with only a *generic* ``reason`` field (ordinary
+    # explanatory text, not a non-blocking declaration) must still block.
+    TARGETED_IN_SCOPE_CRITICAL_GENERIC_REASON_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "introduced token leak", '
+        '"module": "auth", "file": "auth.py", '
+        '"scope": "pr-diff", "in_scope": true, '
+        '"reason": "introduced token leak"}], '
+        '"changed_files": ["auth.py"]}\n'
+        '```'
+    )
 
     def test_issue_aligned_required_when_issue_present(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
@@ -6879,6 +6894,24 @@ class TestStep7PassedMeritReview:
 
         passed, reason = _step7_passed(
             self.TARGETED_OUT_OF_DIFF_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
+
+    def test_targeted_pr_blocks_in_scope_critical_with_generic_reason(self):
+        """A generic ``reason`` field must not bypass an in-scope PR critical.
+
+        Regression for the #1574 review: a critical with ``scope: "pr-diff"``,
+        ``in_scope: true`` and only an explanatory ``reason`` (no non-blocking
+        flag/scope/``*_reason``) must still block the PR.
+        """
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_IN_SCOPE_CRITICAL_GENERIC_REASON_VERDICT,
             pr_mode=True,
             has_issue=True,
             pr_test_scope="targeted",
