@@ -2111,6 +2111,16 @@ def _extract_codex_jsonl_error(stdout: str) -> str:
     """Extract the most useful error message from Codex JSON/JSONL stdout."""
     if not stdout:
         return ""
+    return _extract_codex_jsonl_error_from_lines(stdout.splitlines() or [stdout])
+
+
+def _extract_codex_jsonl_error_from_lines(lines) -> str:
+    """Extract the most useful Codex error message from a line iterator.
+
+    Issue #1646: line-based variant so spooled stdout can be scanned without
+    materializing the whole transcript. Preserves the terminal-vs-last
+    precedence and ``MAX_ERROR_SNIPPET_LENGTH`` cap of the string version.
+    """
 
     def _message_from_value(value: Any) -> str:
         if isinstance(value, str):
@@ -2149,7 +2159,7 @@ def _extract_codex_jsonl_error(stdout: str) -> str:
 
     terminal_error = ""
     last_error = ""
-    for raw_line in stdout.splitlines() or [stdout]:
+    for raw_line in lines:
         line = raw_line.strip()
         if not line or not line.startswith("{"):
             continue
@@ -2164,6 +2174,77 @@ def _extract_codex_jsonl_error(stdout: str) -> str:
             if event_type in {"turn.failed", "task.failed", "session.failed"}:
                 terminal_error = msg
     return (terminal_error or last_error)[:MAX_ERROR_SNIPPET_LENGTH]
+
+
+def _parse_codex_jsonl(lines) -> Dict[str, Any]:
+    """Parse Codex ``exec --json`` NDJSON into the event dict callers expect.
+
+    Issue #1646: takes a line iterator and does NOT materialize all lines or
+    ``.strip()`` the whole transcript, so spooled stdout can be scanned with a
+    flat memory profile. Selection rules (unchanged from the previous inline
+    logic in ``_run_with_provider``):
+
+    - First ``type == "result"`` event wins outright (legacy single-event
+      format) and short-circuits the scan.
+    - Otherwise track the last ``item.completed`` whose item is an
+      ``agent_message`` (modern Codex text) and the last ``session.end`` /
+      ``turn.completed`` (usage + model).
+    - Fall back to the last line that parsed as valid JSON (``last_json``).
+
+    After the scan: result > agent_message (merging ``usage``/``model`` from
+    session_end when present, preserving Issue #1376) > session_end >
+    last-valid-json > ``{}``.
+
+    The ``last_json`` fallback is intentional and improves on the prior
+    ``json.loads(lines[-1])`` behavior: the old code gave up (empty dict) when
+    the very last physical line was non-JSON, whereas this keeps the last line
+    that actually parsed.
+    """
+    agent_message_data: Optional[Dict[str, Any]] = None
+    session_end: Optional[Dict[str, Any]] = None
+    last_json: Optional[Dict[str, Any]] = None
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(item, dict):
+            continue
+        last_json = item
+        # Legacy Codex format: single event contains both text and usage.
+        if item.get("type") == "result":
+            return item
+        # Modern Codex CLI (0.104.0+): text in item.completed agent_message.
+        if (item.get("type") == "item.completed"
+                and isinstance(item.get("item"), dict)
+                and item["item"].get("type") == "agent_message"):
+            agent_message_data = item
+        # usage/cost stats are in session.end or turn.completed
+        # (Codex CLI 0.105.0+ uses turn.completed instead of session.end).
+        if item.get("type") in ("session.end", "turn.completed"):
+            session_end = item
+
+    if agent_message_data is not None:
+        if session_end is not None:
+            # Merge usage AND model from session.end so cost calculation works
+            # AND the audit log captures the actual model name (Issue #1376
+            # codex round 3: previously only `usage` was carried over, so
+            # default-model Codex runs logged `model: null`).
+            merged: Dict[str, Any] = {**agent_message_data}
+            if "usage" in session_end:
+                merged["usage"] = session_end.get("usage", {})
+            if "model" in session_end:
+                merged["model"] = session_end.get("model")
+            return merged
+        return agent_message_data
+    if session_end is not None:
+        return session_end
+    if last_json is not None:
+        return last_json
+    return {}
 
 
 def _is_codex_stdin_notice(text: str) -> bool:
@@ -4895,6 +4976,267 @@ def _subprocess_run(cmd, *, cwd=None, env=None, input=None, capture_output=False
     return result
 
 
+# Issue #1646: Codex `exec --json` can emit tens-to-hundreds of MiB of NDJSON.
+# Capturing it via PIPE + communicate() + text=True holds the full decoded str
+# in RAM, and the openai parse path then makes more copies (.strip(),
+# .splitlines()), so peak parent heap reached ~3-4x the transcript and crossed
+# RSS limits -> SIGKILL surfaced as OOM. `_subprocess_run_spooled` streams
+# stdout/stderr to temp files so the parent only ever materializes bounded
+# snippets, cutting peak heap from ~3-4N to ~1N.
+_AGENT_STDIO_SNIPPET_BYTES: int = 64 * 1024  # HEAD/TAIL diagnostic snippet size
+# Issue #1646: a single pathological NDJSON line (e.g. a multi-MB tool_output
+# blob) must never be read whole, decoded, and json.loads'd — that would spike
+# the parent heap even with the spool. ``_iter_spooled_lines`` reads each line
+# with a bounded ``readline(cap)`` so the parent never materializes more than
+# ~cap bytes at a time. A line that exceeds this cap is classified by its event
+# TYPE (see ``_AGENT_RETAINED_TYPE_RE``): a giant tool-output blob is dropped
+# without ever being decoded, while a retained-type line is still read (so we
+# never silently drop a real answer/usage/error) up to the larger ceiling below.
+_AGENT_MAX_JSONL_LINE_BYTES: int = 16 * 1024 * 1024
+# A retained-type line (an answer/usage/error event) is, in pathological cases,
+# allowed to exceed the per-line cap so it is never silently dropped — but only
+# up to this generous hard ceiling, beyond which even a retained-type line is
+# dropped rather than risk OOM. Real Codex retained events are KiB-to-low-MiB,
+# so this ceiling is never reached in practice; it is purely a safety bound.
+_AGENT_MAX_RETAINED_LINE_BYTES: int = 64 * 1024 * 1024
+# The Codex event ``type`` discriminator sits at the START of each NDJSON line,
+# so we classify an oversize line by probing only its first few KiB — never its
+# multi-MiB payload (which would reintroduce the heap spike). Matched
+# case-insensitively, mirroring the error scanner which lowercases event types.
+_AGENT_TYPE_PROBE_BYTES: int = 8 * 1024
+_AGENT_RETAINED_TYPE_RE = re.compile(
+    rb'"type"\s*:\s*"(?:result|agent_message|session\.end|turn\.completed'
+    rb'|[^"]*(?:error|failed)[^"]*)"',
+    re.IGNORECASE,
+)
+
+
+_AGENT_SPOOL_DIR_WARNED = False
+
+
+def _agent_spool_dir() -> Optional[str]:
+    """Directory for agent stdio spool files, or None for the system default.
+
+    Operators can set ``PDD_AGENT_SPOOL_DIR`` to a disk-backed path. The system
+    temp dir may be tmpfs/RAM-backed in some containers (Cloud Run/GKE), so
+    pointing this at real disk also relieves cgroup memory pressure. Even on
+    tmpfs the spool still cuts peak heap from ~3-4N to ~1N.
+
+    Issue #1646: when the env var is SET but unusable (missing / not a directory
+    / not writable) we warn ONCE rather than silently falling back, so operators
+    don't believe disk-backed spooling is active when it isn't.
+    """
+    spool = os.environ.get("PDD_AGENT_SPOOL_DIR")
+    if not spool:
+        return None
+    if os.path.isdir(spool) and os.access(spool, os.W_OK):
+        return spool
+    global _AGENT_SPOOL_DIR_WARNED
+    if not _AGENT_SPOOL_DIR_WARNED:
+        _AGENT_SPOOL_DIR_WARNED = True
+        console.print(
+            f"[yellow]PDD_AGENT_SPOOL_DIR={spool!r} is not a writable directory; "
+            "falling back to the system temp dir for agent output spooling.[/yellow]"
+        )
+    return None
+
+
+@dataclass
+class _SpooledCompletedProcess:
+    """Result of ``_subprocess_run_spooled`` with stdio spooled to temp files.
+
+    ``stdout_file``/``stderr_file`` are open binary temp files positioned at
+    offset 0; callers stream them (e.g. via ``_iter_spooled_lines``) instead of
+    reading the whole transcript into RAM. ``*_head``/``*_tail`` are bounded
+    decoded snippets for diagnostics. Always call ``close()`` (the files are
+    unlinked-on-create on POSIX, so closing deletes them).
+    """
+
+    args: Any
+    returncode: int
+    stdout_file: Any
+    stderr_file: Any
+    stdout_bytes: int
+    stderr_bytes: int
+    stdout_head: str
+    stdout_tail: str
+    stderr_head: str
+    stderr_tail: str
+
+    def close(self) -> None:
+        for handle in (self.stdout_file, self.stderr_file):
+            try:
+                handle.close()
+            except Exception:
+                pass
+
+
+def _read_spool_snippets(spool_file: Any, total_bytes: int) -> Tuple[str, str]:
+    """Return bounded (head, tail) decoded snippets from a binary spool file."""
+    snippet = _AGENT_STDIO_SNIPPET_BYTES
+    spool_file.seek(0)
+    head = spool_file.read(snippet).decode("utf-8", errors="replace")
+    if total_bytes <= snippet:
+        # Whole file already in head; avoid duplicating it as the tail.
+        return head, ""
+    spool_file.seek(max(0, total_bytes - snippet))
+    tail = spool_file.read(snippet).decode("utf-8", errors="replace")
+    return head, tail
+
+
+def _bounded_head_tail(head: str, tail: str, limit: int) -> str:
+    """Combine head/tail diagnostic snippets within ``limit`` chars.
+
+    Issue #1646: ``(head + tail)[:limit]`` silently drops the
+    tail because ``head`` alone can be up to ``_AGENT_STDIO_SNIPPET_BYTES``.
+    When both ends are present and don't fit, split the budget so a truncated /
+    garbled transcript shows both where it started and where it ended.
+    """
+    if limit <= 0:
+        return ""
+    if not tail or len(head) + len(tail) <= limit:
+        return (head + tail)[:limit]
+    if limit < 3:
+        # Too small to show both ends with a separator; prefer the head.
+        return head[:limit]
+    head_budget = max(1, (limit - 1) // 2)
+    tail_budget = limit - 1 - head_budget  # >= 1 for limit >= 3
+    return head[:head_budget] + "…" + tail[-tail_budget:]
+
+
+def _subprocess_run_spooled(
+    cmd,
+    *,
+    cwd=None,
+    env=None,
+    input=None,
+    text=True,
+    timeout=None,
+    start_new_session=False,
+):
+    """Like ``_subprocess_run`` but spools stdout/stderr to temp files.
+
+    Issue #1646: keeps the parent from holding a large agent transcript in RAM.
+    ``text`` is accepted for signature parity but ignored — the spool files are
+    always binary and decoded lazily by the caller.
+
+    Test note: the openai/Codex provider in ``_run_with_provider`` routes through
+    THIS function, not ``_subprocess_run``. A test that mocks ``_subprocess_run``
+    for an openai ``_run_with_provider`` / ``run_agentic_task`` path must ALSO
+    mock ``_subprocess_run_spooled`` (share the mock, e.g.
+    ``spooled_mock.side_effect = run_mock``). The shared ``mock_subprocess`` /
+    ``mock_subprocess_run`` fixtures already do this.
+    """
+    spool_dir = _agent_spool_dir()
+    # Issue #1646: ownership of the temp files only transfers to the returned
+    # _SpooledCompletedProcess on success. If anything below raises (opening the
+    # 2nd file, Popen, communicate, or the snippet reads), close whatever we
+    # already opened before re-raising so the caller — which catches the
+    # exception and never sees a result to close() — can't leak fds.
+    stdout_file = tempfile.TemporaryFile(mode="w+b", dir=spool_dir)
+    stderr_file = None
+    try:
+        stderr_file = tempfile.TemporaryFile(mode="w+b", dir=spool_dir)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdin=subprocess.PIPE if input is not None else None,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=start_new_session,
+        )
+        stdin_data = input.encode("utf-8") if isinstance(input, str) else input
+        try:
+            proc.communicate(input=stdin_data, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if start_new_session:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass
+            proc.kill()
+            proc.wait(timeout=5)
+            raise
+
+        stdout_bytes = stdout_file.seek(0, os.SEEK_END)
+        stderr_bytes = stderr_file.seek(0, os.SEEK_END)
+        stdout_head, stdout_tail = _read_spool_snippets(stdout_file, stdout_bytes)
+        stderr_head, stderr_tail = _read_spool_snippets(stderr_file, stderr_bytes)
+        return _SpooledCompletedProcess(
+            args=cmd,
+            returncode=proc.returncode,
+            stdout_file=stdout_file,
+            stderr_file=stderr_file,
+            stdout_bytes=stdout_bytes,
+            stderr_bytes=stderr_bytes,
+            stdout_head=stdout_head,
+            stdout_tail=stdout_tail,
+            stderr_head=stderr_head,
+            stderr_tail=stderr_tail,
+        )
+    except BaseException:
+        for handle in (stdout_file, stderr_file):
+            if handle is not None:
+                try:
+                    handle.close()
+                except Exception:
+                    pass
+        raise
+
+
+def _iter_spooled_lines(file_obj: Any):
+    """Yield decoded NDJSON lines from a spool file with a bounded per-line read.
+
+    Issue #1646: each line is read with a bounded ``readline(cap)``
+    (``cap == _AGENT_MAX_JSONL_LINE_BYTES``) so the parent never materializes
+    more than ~cap bytes at a time. A line longer than the cap is classified by
+    its event TYPE in the already-read prefix (probing only the first few KiB,
+    never the payload):
+
+    * a giant tool-output blob (no retained type) is drained and dropped without
+      ever being decoded — the common oversize case, and what bounds the heap;
+    * a retained-type line (result / agent_message / session.end /
+      turn.completed / any error/failed event) is read in full and yielded — so
+      a pathologically large real answer/usage/error is never silently lost —
+      but only up to ``_AGENT_MAX_RETAINED_LINE_BYTES``, beyond which it too is
+      dropped rather than risk OOM.
+
+    This bounded reader lives only here (the spooled/production path); the in-RAM
+    string path is unaffected.
+    """
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+    ceiling = _AGENT_MAX_RETAINED_LINE_BYTES
+    file_obj.flush()
+    file_obj.seek(0)
+    while True:
+        line = file_obj.readline(cap)
+        if not line:
+            return
+        if line.endswith(b"\n") or len(line) < cap:
+            # Whole line fits within the cap — safe to decode and parse.
+            yield line.decode("utf-8", errors="replace")
+            continue
+        # Oversize line: ``line`` holds only its first ``cap`` bytes. Classify by
+        # the event type in that prefix — keep retained-type lines (bounded by
+        # the ceiling), drop tool-output blobs.
+        keep = bool(_AGENT_RETAINED_TYPE_RE.search(line[:_AGENT_TYPE_PROBE_BYTES]))
+        buffered = [line] if keep else None
+        total = len(line)
+        while not line.endswith(b"\n"):
+            line = file_obj.readline(cap)
+            if not line:
+                break  # EOF mid-line
+            total += len(line)
+            if keep and total > ceiling:
+                keep = False        # too big even for a retained line -> drop it
+                buffered = None     # release what we accumulated
+            elif keep:
+                buffered.append(line)
+        if buffered is not None:
+            yield b"".join(buffered).decode("utf-8", errors="replace")
+
+
 def _claude_code_interactive_enabled(env: Optional[Dict[str, str]] = None) -> bool:
     """Return True when Anthropic provider should use interactive Claude Code."""
     if env is None:
@@ -6071,196 +6413,191 @@ def _run_with_provider(
         or (provider == "google" and _get_google_cli_name(env) == "agy")
     ) else None
 
+    # Issue #1646: Codex (openai) NDJSON transcripts can be huge, so spool the
+    # CLI's stdout/stderr to disk instead of holding the decoded string in the
+    # parent heap. Routed UNCONDITIONALLY for openai (no os.path.exists gate);
+    # all other providers keep the in-RAM ``_subprocess_run``. When tests mock
+    # ``_subprocess_run_spooled`` to return a plain CompletedProcess,
+    # ``result_is_spooled`` is False and the in-RAM code paths below still work.
+    runner = _subprocess_run_spooled if provider == "openai" else _subprocess_run
+    runner_kwargs: Dict[str, Any] = dict(
+        cwd=cwd,
+        env=env,
+        input=stdin_content,
+        text=True,
+        timeout=timeout,
+        start_new_session=True,
+    )
+    if provider != "openai":
+        runner_kwargs["capture_output"] = True
     try:
-        result = _subprocess_run(
-            cmd,
-            cwd=cwd,
-            env=env,
-            input=stdin_content,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            start_new_session=True,
-        )
+        result = runner(cmd, **runner_kwargs)
     except subprocess.TimeoutExpired:
         return False, "Timeout expired", 0.0, None
     except Exception as e:
         return False, str(e), 0.0, None
 
-    if result.returncode != 0:
-        if provider == "openai":
-            stdout_error = _extract_codex_jsonl_error(result.stdout or "")
-            combined_error = "\n".join(
-                part for part in [
-                    result.stderr or "",
-                    (result.stdout or "")[:MAX_ERROR_SNIPPET_LENGTH],
-                ]
-                if part
-            )
-            codex_auth_message = _codex_auth_failure_message(combined_error)
-            if codex_auth_message:
-                return False, codex_auth_message, 0.0, None
-            if stdout_error:
-                return False, f"Exit code {result.returncode}: {stdout_error}", 0.0, None
-            if result.stderr and not _is_codex_stdin_notice(result.stderr):
-                error_detail = result.stderr
-            else:
-                error_detail = (result.stdout or result.stderr or "")[:MAX_ERROR_SNIPPET_LENGTH]
-            return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
-        error_detail = result.stderr or result.stdout[:500]
-        return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
-
-    # OpenCode: parse JSONL output via the dedicated parser. OpenCode emits a
-    # different event schema than Codex/Claude (step_start, text, step_finish,
-    # error...) and routes cost via ``step_finish.part.cost``, so it doesn't
-    # belong in the shared single-JSON / Codex-NDJSON path below.
-    if provider == "opencode":
-        parsed = _parse_opencode_jsonl(result.stdout)
-        actual_model = parsed.get("model") or None
-        err = parsed.get("error") or ""
-        # Cost: prefer JSONL-reported cost; fall back to CSV pricing when
-        # OpenCode did not surface a cost field (some backends/sessions omit
-        # ``step_finish.part.cost``). Returning $0.00 for a successful run
-        # silently breaks cost-accounting acceptance.
-        if parsed.get("cost_reported"):
-            cost = float(parsed.get("cost") or 0.0)
-        else:
-            tokens = parsed.get("tokens") or {}
-            csv_model_id = actual_model or _resolve_opencode_model_for_run(env, cwd=cwd)
-            cost = _opencode_csv_cost(csv_model_id, tokens)
-        if err:
-            # An error event with returncode==0 still represents a routing /
-            # provider failure inside OpenCode (e.g., "provider not
-            # configured"). Surface as failure, but keep cost and any
-            # captured model so callers can audit partial spend.
-            return False, str(err), cost, actual_model
-        return (
-            True,
-            str(parsed.get("text") or ""),
-            cost,
-            actual_model,
-        )
-
-    # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
-    # Cloud one-session sync runs hit "All agent providers failed: anthropic: "
-    # with a blank provider error and no log trail. Stderr tail + prompt size
-    # + auth-key presence is usually enough to tell apart auth failures, rate
-    # limits, and genuine empty responses.
-    if not result.stdout.strip():
-        auth_keys_present = sorted(
-            k for k in env
-            if ("TOKEN" in k or "API_KEY" in k) and env.get(k)
-        )
-        stderr_tail = (result.stderr or "")[-500:]
-        console.print(
-            f"[bold red]Provider {provider} returned exit 0 with EMPTY stdout[/bold red]"
-        )
-        console.print(
-            f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
-            f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
-        )
-
-    # Antigravity (`agy`): the CLI emits plain text on stdout (no
-    # --output-format flag is supported as of agy 1.0.1, see cmd-build
-    # comment above). agy ALSO exits 0 in two failure modes that we must
-    # surface as failures instead of treating as a successful response:
-    #   - timeout: stdout is exactly `Error: timed out waiting for response`
-    #   - missing/expired OAuth in headless mode: stdout starts with
-    #     `Authentication required.` followed by the device-code URL.
-    # Anything else with exit 0 is treated as the response body. Cost and
-    # model are unknown — the audit log will show `cost=0, model=null`
-    # until Google ships a structured-output mode.
-    if provider == "google" and _get_google_cli_name(env) == "agy":
-        text = result.stdout.strip()
-        if (
-            text.startswith("Error:")
-            or text.startswith("Authentication required.")
-        ):
-            return False, text[:MAX_ERROR_SNIPPET_LENGTH], 0.0, None
-        return True, text, 0.0, None
-
-    # Parse JSON Output
+    result_is_spooled = isinstance(result, _SpooledCompletedProcess)
     try:
-        # Handle JSONL output (Codex sometimes streams)
-        output_str = result.stdout.strip()
-        data = {}
-        
-        if provider == "openai" and "\n" in output_str:
-            # Parse NDJSON, collecting both the agent response and usage stats
-            lines = output_str.splitlines()
-            agent_message_data = None
-            session_end = None
-            for line in lines:
-                try:
-                    item = json.loads(line)
-                    # Legacy Codex format: single event contains both text and usage
-                    if item.get("type") == "result":
-                        data = item
-                        break
-                    # Modern Codex CLI (0.104.0+): text in item.completed agent_message
-                    if (item.get("type") == "item.completed"
-                            and isinstance(item.get("item"), dict)
-                            and item["item"].get("type") == "agent_message"):
-                        agent_message_data = item
-                    # usage/cost stats are in session.end or turn.completed
-                    # (Codex CLI 0.105.0+ uses turn.completed instead of session.end)
-                    if item.get("type") in ("session.end", "turn.completed"):
-                        session_end = item
-                except json.JSONDecodeError:
-                    continue
-            if not data:
-                if agent_message_data is not None:
-                    # Merge usage AND model from session.end so cost calculation
-                    # works AND the audit log captures the actual model name
-                    # (Issue #1376 codex round 3: previously only `usage` was
-                    # carried over, so default-model Codex runs logged
-                    # `model: null` because session.end.model was discarded).
-                    if session_end is not None:
-                        merged: Dict[str, Any] = {**agent_message_data}
-                        if "usage" in session_end:
-                            merged["usage"] = session_end.get("usage", {})
-                        if "model" in session_end:
-                            merged["model"] = session_end.get("model")
-                        data = merged
-                    else:
-                        data = agent_message_data
-                elif session_end is not None:
-                    data = session_end
-                elif lines:
-                    try:
-                        data = json.loads(lines[-1])
-                    except:
-                        pass
-        else:
-            # Claude Code may emit non-JSON text to stdout (npm warnings,
-            # upgrade prompts) alongside the JSON result.  Try parsing as
-            # single JSON first, then fall back to line-by-line extraction.
-            try:
-                data = json.loads(output_str)
-            except json.JSONDecodeError:
-                data = _extract_json_from_output(output_str)
+        if result.returncode != 0:
+            if provider == "openai":
+                if result_is_spooled:
+                    stdout_error = _extract_codex_jsonl_error_from_lines(
+                        _iter_spooled_lines(result.stdout_file)
+                    )
+                    stderr_snippet = result.stderr_head + result.stderr_tail
+                    stdout_snippet = result.stdout_head + result.stdout_tail
+                else:
+                    stdout_error = _extract_codex_jsonl_error(result.stdout or "")
+                    stderr_snippet = result.stderr or ""
+                    stdout_snippet = (result.stdout or "")[:MAX_ERROR_SNIPPET_LENGTH]
+                combined_error = "\n".join(
+                    part for part in [stderr_snippet, stdout_snippet] if part
+                )
+                codex_auth_message = _codex_auth_failure_message(combined_error)
+                if codex_auth_message:
+                    return False, codex_auth_message, 0.0, None
+                if stdout_error:
+                    return False, f"Exit code {result.returncode}: {stdout_error}", 0.0, None
+                if stderr_snippet and not _is_codex_stdin_notice(stderr_snippet):
+                    error_detail = stderr_snippet
+                else:
+                    error_detail = (stdout_snippet or stderr_snippet)[:MAX_ERROR_SNIPPET_LENGTH]
+                return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
+            error_detail = result.stderr or result.stdout[:500]
+            return False, f"Exit code {result.returncode}: {error_detail}", 0.0, None
 
-        success, text, cost, actual_model = _parse_provider_json(provider, data)
-        if cost == 0.0 and verbose and isinstance(data, dict):
-            console.print(
-                f"[dim]Warning: {provider} returned $0 cost. "
-                f"JSON keys: {sorted(data.keys())}[/dim]"
-            )
-        if provider == "anthropic":
-            return _ProviderRunResult(
-                success,
-                text,
+        # OpenCode: parse JSONL output via the dedicated parser. OpenCode emits a
+        # different event schema than Codex/Claude (step_start, text, step_finish,
+        # error...) and routes cost via ``step_finish.part.cost``, so it doesn't
+        # belong in the shared single-JSON / Codex-NDJSON path below.
+        if provider == "opencode":
+            parsed = _parse_opencode_jsonl(result.stdout)
+            actual_model = parsed.get("model") or None
+            err = parsed.get("error") or ""
+            # Cost: prefer JSONL-reported cost; fall back to CSV pricing when
+            # OpenCode did not surface a cost field (some backends/sessions omit
+            # ``step_finish.part.cost``). Returning $0.00 for a successful run
+            # silently breaks cost-accounting acceptance.
+            if parsed.get("cost_reported"):
+                cost = float(parsed.get("cost") or 0.0)
+            else:
+                tokens = parsed.get("tokens") or {}
+                csv_model_id = actual_model or _resolve_opencode_model_for_run(env, cwd=cwd)
+                cost = _opencode_csv_cost(csv_model_id, tokens)
+            if err:
+                # An error event with returncode==0 still represents a routing /
+                # provider failure inside OpenCode (e.g., "provider not
+                # configured"). Surface as failure, but keep cost and any
+                # captured model so callers can audit partial spend.
+                return False, str(err), cost, actual_model
+            return (
+                True,
+                str(parsed.get("text") or ""),
                 cost,
                 actual_model,
-                _extract_anthropic_standard_usage(
-                    data,
-                    actual_model=actual_model,
-                ),
             )
-        return success, text, cost, actual_model
-    except json.JSONDecodeError:
-        # Fallback if CLI didn't output valid JSON (sometimes happens on crash)
-        return False, f"Invalid JSON output: {result.stdout[:MAX_ERROR_SNIPPET_LENGTH]}...", 0.0, None
+
+        # Diagnostic: capture when CLI exits 0 with empty / whitespace-only stdout.
+        # Cloud one-session sync runs hit "All agent providers failed: anthropic: "
+        # with a blank provider error and no log trail. Stderr tail + prompt size
+        # + auth-key presence is usually enough to tell apart auth failures, rate
+        # limits, and genuine empty responses.
+        stdout_is_blank = (
+            result.stdout_bytes == 0 if result_is_spooled else not result.stdout.strip()
+        )
+        if stdout_is_blank:
+            auth_keys_present = sorted(
+                k for k in env
+                if ("TOKEN" in k or "API_KEY" in k) and env.get(k)
+            )
+            stderr_tail = (
+                result.stderr_tail[-500:] if result_is_spooled else (result.stderr or "")[-500:]
+            )
+            console.print(
+                f"[bold red]Provider {provider} returned exit 0 with EMPTY stdout[/bold red]"
+            )
+            console.print(
+                f"[dim]stderr_tail={stderr_tail!r} prompt_chars={len(stdin_content or '')} "
+                f"auth_keys={auth_keys_present} cwd={cwd}[/dim]"
+            )
+
+        # Antigravity (`agy`): the CLI emits plain text on stdout (no
+        # --output-format flag is supported as of agy 1.0.1, see cmd-build
+        # comment above). agy ALSO exits 0 in two failure modes that we must
+        # surface as failures instead of treating as a successful response:
+        #   - timeout: stdout is exactly `Error: timed out waiting for response`
+        #   - missing/expired OAuth in headless mode: stdout starts with
+        #     `Authentication required.` followed by the device-code URL.
+        # Anything else with exit 0 is treated as the response body. Cost and
+        # model are unknown — the audit log will show `cost=0, model=null`
+        # until Google ships a structured-output mode. (agy is never spooled.)
+        if provider == "google" and _get_google_cli_name(env) == "agy":
+            text = result.stdout.strip()
+            if (
+                text.startswith("Error:")
+                or text.startswith("Authentication required.")
+            ):
+                return False, text[:MAX_ERROR_SNIPPET_LENGTH], 0.0, None
+            return True, text, 0.0, None
+
+        # Parse JSON Output
+        try:
+            # Handle JSONL output (Codex sometimes streams). For spooled openai
+            # results we scan the temp file line-by-line; otherwise we work on
+            # the in-RAM string.
+            output_str = "" if result_is_spooled else result.stdout.strip()
+            data: Dict[str, Any] = {}
+
+            if provider == "openai" and result_is_spooled:
+                data = _parse_codex_jsonl(_iter_spooled_lines(result.stdout_file))
+                if not data:
+                    raise json.JSONDecodeError("No JSON", result.stdout_tail[:200], 0)
+            elif provider == "openai" and "\n" in output_str:
+                data = _parse_codex_jsonl(output_str.splitlines())
+            else:
+                # Claude Code may emit non-JSON text to stdout (npm warnings,
+                # upgrade prompts) alongside the JSON result.  Try parsing as
+                # single JSON first, then fall back to line-by-line extraction.
+                try:
+                    data = json.loads(output_str)
+                except json.JSONDecodeError:
+                    data = _extract_json_from_output(output_str)
+
+            success, text, cost, actual_model = _parse_provider_json(provider, data)
+            if cost == 0.0 and verbose and isinstance(data, dict):
+                console.print(
+                    f"[dim]Warning: {provider} returned $0 cost. "
+                    f"JSON keys: {sorted(data.keys())}[/dim]"
+                )
+            if provider == "anthropic":
+                return _ProviderRunResult(
+                    success,
+                    text,
+                    cost,
+                    actual_model,
+                    _extract_anthropic_standard_usage(
+                        data,
+                        actual_model=actual_model,
+                    ),
+                )
+            return success, text, cost, actual_model
+        except json.JSONDecodeError:
+            # Fallback if CLI didn't output valid JSON (sometimes happens on
+            # crash). Use HEAD+TAIL for spooled results: _read_spool_snippets
+            # returns tail="" for files <=64KiB, so short invalid output would
+            # otherwise yield an empty diagnostic.
+            snippet = (
+                _bounded_head_tail(
+                    result.stdout_head, result.stdout_tail, MAX_ERROR_SNIPPET_LENGTH
+                )
+                if result_is_spooled
+                else result.stdout[:MAX_ERROR_SNIPPET_LENGTH]
+            )
+            return False, f"Invalid JSON output: {snippet}...", 0.0, None
+    finally:
+        if result_is_spooled:
+            result.close()
 
 
 def _extract_json_from_output(output_str: str) -> dict:
