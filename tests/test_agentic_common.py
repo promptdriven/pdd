@@ -3008,6 +3008,49 @@ def test_run_agentic_task_routing_policy_selects_initial_config(
     assert payload["verifier_result"] == "pass"
 
 
+def test_run_agentic_task_routing_policy_selected_harness_unavailable_uses_feasible_provider(
+    mock_cwd,
+    monkeypatch,
+):
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.delenv("CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "key")
+    monkeypatch.setattr("pdd.agentic_common.get_available_agents", lambda: ["google"])
+    monkeypatch.setattr("pdd.agentic_common.get_agent_provider_preference", lambda: ["google"])
+    monkeypatch.setattr("pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model")
+
+    calls = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        calls.append((provider, kwargs, os.environ.get("CLAUDE_MODEL"), os.environ.get("GEMINI_MODEL")))
+        return (True, "done via fallback", 0.25, "google-model", None)
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    assert result.success is True
+    assert result.provider == "google"
+    assert calls == [("google", calls[0][1], None, None)]
+    assert calls[0][1]["reasoning_time"] is None
+    assert os.environ.get("CLAUDE_MODEL") is None
+    assert os.environ.get("GEMINI_MODEL") is None
+    records = list((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl"))
+    assert len(records) == 1
+    payload = json.loads(records[0].read_text().splitlines()[0])
+    assert payload["task_class"] == "bug-fix"
+    assert payload["selected_config"]["harness"] == "anthropic"
+    assert payload["fallback_reason"] == "selected_harness_unavailable:anthropic"
+    assert payload["verifier_result"] == "pass"
+
+
 def test_run_agentic_task_routing_policy_unknown_task_class_falls_back_without_env_mutation(
     mock_cwd,
     monkeypatch,

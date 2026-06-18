@@ -4642,10 +4642,19 @@ def run_agentic_task(
             deadline=deadline,
         )
         if routing_config is not None:
-            candidates = [routing_config.harness] if routing_config.harness in agents else []
-            max_retries = max(1, int(routing_config.repeat_runs))
-            reasoning_time = _routing_effort_to_reasoning_time(str(routing_config.thinking_effort))
-            _apply_routing_model_env(routing_config.harness, routing_config, routing_model_env_originals)
+            if routing_config.harness in candidates:
+                candidates = [routing_config.harness]
+                max_retries = max(1, int(routing_config.repeat_runs))
+                reasoning_time = _routing_effort_to_reasoning_time(str(routing_config.thinking_effort))
+                _apply_routing_model_env(
+                    routing_config.harness,
+                    routing_config,
+                    routing_model_env_originals,
+                )
+            elif routing_record is not None:
+                routing_record.fallback_reason = (
+                    f"selected_harness_unavailable:{routing_config.harness}"
+                )
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
