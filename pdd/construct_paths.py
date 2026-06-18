@@ -12,9 +12,9 @@ import warnings
 
 import click
 import yaml
-from rich.console import Console
 from rich.theme import Theme
 
+from .cli_theme import get_console
 from .get_extension import get_extension
 from .get_language import get_language
 from .generate_output_paths import EXAMPLES_DIR, generate_output_paths
@@ -52,7 +52,7 @@ def _default_examples_project_root(pddrc_path: Optional[Path]) -> Path:
 # Add csv import for the new helper function
 import csv
 
-console = Console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
+console = get_console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))
 
 def _extract_prefix_from_prompts_dir(prompts_dir: str) -> str:
     """Extract the path suffix after the 'prompts' segment in a prompts_dir value.

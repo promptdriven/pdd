@@ -688,6 +688,47 @@ def test_apply_color_preference_restores_later_bare_console_to_auto(monkeypatch)
     assert con._color_system is None
 
 
+def test_apply_color_preference_reaches_construct_paths_early_import():
+    """Regression for CLI import order: ``pdd.core.cli`` imports
+    ``construct_paths`` before ``pdd.core.errors``. The construct_paths module
+    console must still be registered for global color preferences."""
+    script = """
+from pdd.core import cli as _cli
+from pdd import construct_paths
+from pdd.core.errors import apply_color_preference
+
+restore = apply_color_preference(False)
+try:
+    print('no-color', construct_paths.console.no_color)
+finally:
+    restore()
+
+restore = apply_color_preference(True)
+try:
+    print(
+        'color',
+        construct_paths.console.no_color,
+        construct_paths.console._force_terminal,
+        construct_paths.console._color_system is not None,
+    )
+finally:
+    restore()
+"""
+    env = os.environ.copy()
+    env.pop("NO_COLOR", None)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "no-color True" in result.stdout
+    assert "color False True True" in result.stdout
+
+
 def test_cli_no_color_flag_disables_color(runner):
     """`pdd --no-color …` is invocation-scoped and does not leak into later runs."""
     with _restore_shared_console_color() as con:
