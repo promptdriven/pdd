@@ -23,26 +23,26 @@ const Header: React.FC<HeaderProps> = ({ currentView, onViewChange }) => {
     <header className="bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10 py-4 mb-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 flex-1 min-w-0">
+          <a
+            href="https://promptdriven.ai"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-3 flex-1 min-w-0 group"
+          >
             <img
               src="/logo.svg"
               alt="PromptDriven.ai logo"
               className="h-11 w-11 flex-shrink-0"
             />
-            <div className="min-w-0">
-              <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-                PromptDriven<span className="text-brand-cyan">.ai</span>
+            <div className="flex items-baseline gap-2.5 min-w-0">
+              <h1 className="font-sans font-semibold tracking-[0.01em] text-brand-sleet text-3xl sm:text-4xl group-hover:text-white transition-colors">
+                PromptDriven.ai
               </h1>
-              <a
-                href="https://promptdriven.ai"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-0.5 inline-block text-sm text-brand-cyan hover:underline"
-              >
-                Prompt Driven Development IDE — Regenerate, don't patch
-              </a>
+              <span className="font-mono font-medium uppercase tracking-[0.12em] text-brand-cyan text-[0.65rem] sm:text-xs">
+                Prompt Driven Development
+              </span>
             </div>
-          </div>
+          </a>
           <nav className="flex items-center space-x-2 flex-shrink-0">
             <Tooltip content="View prompt dependency graph">
               <button onClick={() => onViewChange('dependencies')} className={navButtonClasses('dependencies')}>
