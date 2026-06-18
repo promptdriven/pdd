@@ -1,20 +1,21 @@
-# EPIC #1560 — Design refresh, Phase 2 (theming, connect, AI review, motion)
+# EPIC #1560 — Design refresh follow-up
 
 Tracking issue: [promptdriven/pdd#1560](https://github.com/promptdriven/pdd/issues/1560)
 Parent EPIC: [promptdriven/pdd#1540](https://github.com/promptdriven/pdd/issues/1540) (Phase 1)
 
-This is the **Phase 2** integration branch for the PDD design refresh. The work
-was split out of #1540 so it ships in two trackable halves:
+This branch is the design-refresh follow-up that is merging the concrete work
+that actually landed after Phase 1:
 
 - **Phase 1 — #1540 / PR #1557** delivered the foundational visual workstreams
   ① command color system, ② status & progress messaging, and ③ `pdd context`
   token visualization (all merged into the Phase 1 epic branch).
-- **Phase 2 — this branch** covers the remaining workstreams ④–⑦: adaptive
-  theming and the larger per-surface redesigns.
+- **This follow-up — #1560 / PR #1561** makes the enhanced CLI experience the
+  default, adds a global `pdd --color/--no-color` preference, and redesigns the
+  `pdd sync` animation around the real execution pipeline.
 
-Each workstream lands as its **own PR targeting this branch**
-(`epic/1560-design-refresh-phase-2`), not `main`. The EPIC merges to `main` once
-the in-scope workstreams are done.
+Earlier planning notes also mentioned adaptive theming, a `pdd connect`
+redesign, and an AI-review refresh. Those are not implemented here and are not
+part of this PR's merge scope.
 
 ## Design source of truth
 
@@ -23,21 +24,19 @@ All visual decisions derive from the **PromptDriven.ai Brand Guidelines
 system (`pdd/cli_theme.py`) and the status/progress vocabulary
 (`pdd/cli_status.py`) — rather than re-introducing ad-hoc visuals.
 
-## Workstream status
+## Delivered scope
 
 | # | Workstream | PR | Status |
 |---|------------|----|--------|
-| 4 | Adaptive theming — detect the user's IDE/editor light/dark theme and apply a matching/complementary CLI theme; fall back gracefully when detection is unavailable | — | ⬜ Not started |
-| 5 | `pdd connect` redesign — clearer visual hierarchy and communication of connection state, actions, and outcomes | — | ⬜ Not started |
-| 6 | AI review refresh — more polished, legible presentation of feedback, reasoning, and review state | — | ⬜ Not started |
-| 7 | Sync & checkup animation improvements — smoother, more modern, more informative motion that supports usability | — | ⬜ Not started |
+| 1 | Enhanced CLI default — shared brand palette for console output and shared success/failure glyphs in the execution summary | #1629 | ✅ Merged into follow-up |
+| 2 | Global color preference — root-level `pdd --color/--no-color`, inherited by `pdd context` unless overridden locally | #1629 | ✅ Merged into follow-up |
+| 3 | Sync animation pipeline model — Entry → Inspect → Plan → Execute → Output, with execute-step strip and fixed-height rendering | #1621, #1630, #1631 | ✅ Merged into follow-up |
+| 4 | Generated regression coverage for enhanced CLI defaults, color precedence, and sync animation contracts | #1637 | ✅ Merged into follow-up |
 
 Legend: ✅ merged · 🟡 in progress · ⬜ not started
 
-## Conventions for child PRs
+## Out of scope
 
-- Branch off `epic/1560-design-refresh-phase-2`; target it in the PR base.
-- Reference this EPIC (#1560) and the workstream number in the PR description.
-- Build on `pdd/cli_theme.py` and `pdd/cli_status.py` from Phase 1 rather than
-  re-introducing ad-hoc color or messaging choices, so the CLI stays consistent.
-- Update the status table above when a workstream PR is merged.
+- Adaptive theming based on IDE/editor light/dark theme.
+- `pdd connect` redesign.
+- AI-review presentation refresh.

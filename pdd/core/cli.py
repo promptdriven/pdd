@@ -718,7 +718,7 @@ def cli(
     # or disable it across every command. Apply it before any console output below
     # so the choice covers the whole run, including later-constructed consoles.
     ctx.obj["color"] = color
-    apply_color_preference(color)
+    ctx.call_on_close(apply_color_preference(color))
     ctx.obj["estimate"] = estimate_mode
     ctx.obj["estimate_json"] = bool(estimate_json)
     ctx.obj["estimate_results"] = []

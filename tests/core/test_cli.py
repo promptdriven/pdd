@@ -554,12 +554,12 @@ def _restore_shared_console_color():
     from pdd.core import errors as _errors
 
     con = _errors.console
-    saved = (con.no_color, con._force_terminal, con._color_system, con.file)
+    saved = (con.no_color, con._force_terminal, con._color_system)
     saved_env = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
     try:
         yield con
     finally:
-        con.no_color, con._force_terminal, con._color_system, con.file = saved
+        con.no_color, con._force_terminal, con._color_system = saved
         for k, v in saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -569,9 +569,13 @@ def _restore_shared_console_color():
 
 def _render(con):
     buf = _io.StringIO()
-    con.file = buf
-    con.print("[command]pdd[/command]")
-    return buf.getvalue()
+    saved_file = getattr(con, "_file", None)
+    try:
+        con.file = buf
+        con.print("[command]pdd[/command]")
+        return buf.getvalue()
+    finally:
+        con._file = saved_file
 
 
 def test_set_console_color_toggles_a_console():
@@ -599,7 +603,7 @@ def test_apply_color_preference_env_and_shared_console():
         assert "FORCE_COLOR" not in os.environ
         assert con.no_color is True
 
-        errors.apply_color_preference(True)
+        restore = errors.apply_color_preference(True)
         assert os.environ.get("FORCE_COLOR") == "1"
         assert "NO_COLOR" not in os.environ
         assert con.no_color is False
@@ -608,26 +612,58 @@ def test_apply_color_preference_env_and_shared_console():
         # None is auto (the default) and must change nothing it was just set to.
         errors.apply_color_preference(None)
         assert os.environ.get("FORCE_COLOR") == "1"
+        restore()
+        assert os.environ.get("NO_COLOR") == "1"
+        assert "FORCE_COLOR" not in os.environ
 
 
 def test_cli_no_color_flag_disables_color(runner):
-    """`pdd --no-color …` flows through the group callback and disables color
-    globally (NO_COLOR set, shared console stripped) before any command runs."""
+    """`pdd --no-color …` is invocation-scoped and does not leak into later runs."""
     with _restore_shared_console_color() as con:
+        before = (con.no_color, con._force_terminal, con._color_system)
+        before_env = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
         result = runner.invoke(cli_command, ["--no-color", "--list-contexts"])
         assert result.exit_code == 0
-        assert os.environ.get("NO_COLOR") == "1"
-        assert con.no_color is True
+        assert {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")} == before_env
+        assert (con.no_color, con._force_terminal, con._color_system) == before
 
 
 def test_cli_color_flag_forces_color(runner):
-    """`pdd --color …` forces color on (FORCE_COLOR set) even though the test
-    runner is not a TTY."""
+    """`pdd --color …` is invocation-scoped and does not leak into later runs."""
     with _restore_shared_console_color() as con:
+        before = (con.no_color, con._force_terminal, con._color_system)
+        before_env = {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")}
         result = runner.invoke(cli_command, ["--color", "--list-contexts"])
         assert result.exit_code == 0
-        assert os.environ.get("FORCE_COLOR") == "1"
-        assert con.no_color is False
+        assert {k: os.environ.get(k) for k in ("NO_COLOR", "FORCE_COLOR")} == before_env
+        assert (con.no_color, con._force_terminal, con._color_system) == before
+
+
+def test_cli_color_flags_do_not_break_later_output_capture(runner, monkeypatch, tmp_path):
+    """Regression guard for full-suite ordering: a forced-color invocation must not
+    leave the shared Rich console writing outside the next CliRunner capture."""
+    import pdd.cli as package_cli
+    from pdd.core import utils as core_utils
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    rc_path = home_dir / ".bashrc"
+
+    monkeypatch.setattr(core_cli_module, "auto_update", lambda: None)
+    monkeypatch.setattr(core_utils, "get_current_shell", lambda: "bash")
+    monkeypatch.setattr(core_utils, "get_shell_rc_path", lambda _shell: str(rc_path))
+    monkeypatch.delenv("PDD_SUPPRESS_SETUP_REMINDER", raising=False)
+
+    with _restore_shared_console_color():
+        first = runner.invoke(cli_command, ["--color", "--list-contexts"])
+        assert first.exit_code == 0
+
+        with patch("pdd.core.utils.Path.home", return_value=home_dir):
+            with runner.isolated_filesystem():
+                second = runner.invoke(package_cli.cli, [])
+
+    assert second.exit_code == 0
+    assert "Complete onboarding with `pdd setup`" in second.output
 
 @patch('pdd.core.cli.auto_update')
 @patch('pdd.commands.generate.code_generator_main')
