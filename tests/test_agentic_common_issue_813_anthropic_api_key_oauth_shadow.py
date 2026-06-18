@@ -629,7 +629,11 @@ def test_pop_does_not_run_for_non_anthropic_providers(_isolated_env, tmp_path):
          patch.object(agentic_common, "_has_legacy_gemini_oauth_credentials", return_value=False), \
          patch.object(agentic_common, "_find_cli_binary", return_value="/bin/codex"), \
          patch.object(agentic_common, "_claude_has_oauth_login", return_value=True), \
-         patch.object(agentic_common, "_subprocess_run") as mock_run:
+         patch.object(agentic_common, "_subprocess_run") as mock_run, \
+         patch.object(agentic_common, "_subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: the openai branch runs through the spooled runner; share
+        # the mock so call_args (the env we assert on) reflects that call.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value.returncode = 0
         mock_run.return_value.stdout = json.dumps(
             {"type": "result", "output": "ok",
