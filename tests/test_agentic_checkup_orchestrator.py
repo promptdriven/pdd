@@ -6871,6 +6871,24 @@ class TestStep7PassedMeritReview:
         '"changed_files": ["auth.py"]}\n'
         '```'
     )
+    # A pre-existing, out-of-scope critical located by a coarse ``module`` label
+    # ("frontend") whose precise ``file`` is NOT in the diff must still pass when
+    # the PR only changes a doc that happens to live *under* that module dir
+    # (``frontend/README.md``). The module label must not prefix-match the
+    # changed file and re-block a baseline critical the PR cannot fix (#1574
+    # review follow-up).
+    TARGETED_OUT_OF_SCOPE_MODULE_DIR_DOC_CHANGE_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "frontend/src/ missing; TS18003 no inputs found", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"scope": "out-of-scope"}], '
+        '"changed_files": ["frontend/README.md"]}\n'
+        '```'
+    )
 
     def test_issue_aligned_required_when_issue_present(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
@@ -6951,6 +6969,25 @@ class TestStep7PassedMeritReview:
 
         passed, reason = _step7_passed(
             self.TARGETED_OUT_OF_DIFF_NONBLOCKING_NO_REASON_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed, reason
+
+    def test_targeted_pr_module_dir_doc_change_does_not_block_out_of_scope_critical(self):
+        """A doc change under a finding's module dir must not re-block it.
+
+        Regression for the #1574 review follow-up: the coarse ``module`` label
+        ("frontend") must match a changed file only on an exact path hit, never
+        by directory-prefix containment. A README under ``frontend/`` must not
+        wave the pre-existing, out-of-scope ``TS18003`` critical back into the
+        blocking path.
+        """
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_SCOPE_MODULE_DIR_DOC_CHANGE_VERDICT,
             pr_mode=True,
             has_issue=True,
             pr_test_scope="targeted",

@@ -927,15 +927,22 @@ def _step7_nonblocking_reason(issue: Dict[str, Any]) -> str:
 def _step7_finding_in_pr_diff(
     issue: Dict[str, Any], changed_files: List[str]
 ) -> bool:
-    """Return True when the finding's file/module overlaps the PR diff.
+    """Return True when the finding's file overlaps the PR diff.
 
     Ground-truth signal: the verifier's own ``changed_files`` list. A critical
-    whose ``file`` (or ``module``) equals, contains, or sits under a changed
-    file is PR-scoped and must block regardless of any ``blocking: false`` flag
-    — a self-reported non-blocking flag cannot be trusted to wave through a
-    PR-introduced critical (issue #1574 review). Comparison is on normalised
-    paths and counts both exact matches and directory-prefix containment in
-    either direction.
+    whose ``file`` equals, contains, or sits under a changed file is PR-scoped
+    and must block regardless of any ``blocking: false`` flag — a self-reported
+    non-blocking flag cannot be trusted to wave through a PR-introduced critical
+    (issue #1574 review). The ``file`` comparison counts exact matches and
+    directory-prefix containment in either direction.
+
+    The ``module`` label is matched only on an EXACT changed-path hit, never by
+    directory-prefix containment. A module is a coarse package/area name, not a
+    precise diff locator: a changed file that merely lives *under* the module
+    directory (e.g. ``frontend/README.md`` for ``module: "frontend"``) must not
+    override an explicit out-of-scope tag and re-block a pre-existing baseline
+    critical the PR neither introduced nor can fix (issue #1574 review
+    follow-up).
     """
     changed = [
         _normalise_step7_path(path)
@@ -944,22 +951,19 @@ def _step7_finding_in_pr_diff(
     ]
     if not changed:
         return False
-    candidates = [
-        path
-        for path in (
-            _normalise_step7_path(issue.get("file")),
-            _normalise_step7_path(issue.get("module")),
-        )
-        if path
-    ]
-    for cand in candidates:
-        for changed_file in changed:
-            if cand == changed_file:
+    file_cand = _normalise_step7_path(issue.get("file"))
+    module_cand = _normalise_step7_path(issue.get("module"))
+    for changed_file in changed:
+        if file_cand:
+            if file_cand == changed_file:
                 return True
-            if changed_file.startswith(cand + "/") or cand.startswith(
+            if changed_file.startswith(file_cand + "/") or file_cand.startswith(
                 changed_file + "/"
             ):
                 return True
+        # Coarse module label: exact path match only, no prefix containment.
+        if module_cand and module_cand == changed_file:
+            return True
     return False
 
 
