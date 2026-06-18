@@ -251,7 +251,7 @@ def _pack_test_paths(
         return None
     test_root = _common_test_root(test_path_list)
     try:
-        packer = TestContextPacker(test_root=test_root)
+        packer = TestContextPacker(test_root=test_root, candidate_paths=test_path_list)
         result = packer.pack(module_path=str(code_path) if code_path else "", budget_tokens=None)
     except Exception:
         return None

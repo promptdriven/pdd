@@ -122,8 +122,13 @@ class TestContextPacker:
     # Prevent pytest from mis-collecting this ``Test*``-named class.
     __test__ = False
 
-    def __init__(self, test_root: str | None = None) -> None:
+    def __init__(
+        self,
+        test_root: str | None = None,
+        candidate_paths: Sequence[str | Path] | None = None,
+    ) -> None:
         self.test_root = test_root or "tests"
+        self.candidate_paths = [str(path) for path in candidate_paths] if candidate_paths else None
         self.budget_tokens = self._read_int_env("PDD_TEST_TOKEN_BUDGET", _DEFAULT_TOKEN_BUDGET)
         self.dedup_threshold = self._read_float_env("PDD_TEST_DEDUP_THRESHOLD", _DEFAULT_DEDUP_THRESHOLD)
         self.weights = self._read_weights_env()
@@ -206,14 +211,15 @@ class TestContextPacker:
             content = self._read_text(file)
             if content is None:
                 continue
+            # Preserve legacy --compress-test-context behavior: when concrete
+            # failing test names are known, send only those tests and their
+            # required fixtures/helpers. If slicing cannot isolate them, the
+            # configured compression fallback policy decides whether to use the
+            # full file or abort.
+            sliced = self._slice_failing(content, file, names)
+            if sliced is not None:
+                content = sliced
             tokens = _count_tokens(content)
-            if tokens > (budget - used):
-                # Oversized failing-test file: slice to only the failing
-                # functions and their fixtures rather than the whole file.
-                sliced = self._slice_failing(content, file, names)
-                if sliced is not None:
-                    content = sliced
-                    tokens = _count_tokens(content)
             blocks.append((file, content))
             used += tokens
             manifest.selected.append(
@@ -363,11 +369,39 @@ class TestContextPacker:
             sliced, _ = PytestSlicer(content, file_path=file).slice(list(names))
             return sliced
         except SlicerError as exc:
+            message = f"pytest slice failed for {file}: {exc}"
+            try:
+                from .compression_reporting import (
+                    CompressionFallbackError,
+                    record_compression_fallback,
+                )
+
+                record_compression_fallback(message)
+                if (os.environ.get("PDD_COMPRESSION_FALLBACK", "full") or "full").lower() == "error":
+                    raise CompressionFallbackError(message) from exc
+            except ImportError:
+                pass
             logger.warning("Could not slice %s (%s); using full file", file, exc)
             return None
 
     # ----------------------------------------------------------- file scanning
     def _discover_test_files(self) -> List[str]:
+        if self.candidate_paths is not None:
+            files = {
+                str(Path(path))
+                for path in self.candidate_paths
+                if Path(path).is_file()
+                and Path(path).name.startswith("test_")
+                and Path(path).suffix == ".py"
+            }
+            files.update(
+                str(Path(path))
+                for path in self.candidate_paths
+                if Path(path).is_file()
+                and Path(path).name.endswith("_test.py")
+                and Path(path).suffix == ".py"
+            )
+            return sorted(files)
         root = Path(self.test_root)
         if not root.exists() or not root.is_dir():
             return []

@@ -91,6 +91,48 @@ def test_test_paths_ranked_when_compression_test(tmp_path: Path) -> None:
     assert "test_packing_manifest" in metadata(package)
 
 
+def test_ranked_test_packing_respects_explicit_test_paths(tmp_path: Path) -> None:
+    prompt = tmp_path / "prompts" / "calc_python.prompt"
+    code = tmp_path / "pdd" / "calc.py"
+    tests = tmp_path / "tests"
+    prompt.parent.mkdir()
+    code.parent.mkdir()
+    tests.mkdir()
+    prompt.write_text("<pdd-interface>iface</pdd-interface>\n", encoding="utf-8")
+    code.write_text(
+        "def selected():\n    return 1\n\n\ndef unselected():\n    return 2\n",
+        encoding="utf-8",
+    )
+    selected = tests / "test_selected.py"
+    selected.write_text(
+        "from calc import selected\n\n\ndef test_selected():\n    assert selected() == 1\n",
+        encoding="utf-8",
+    )
+    unselected = tests / "test_unselected.py"
+    unselected.write_text(
+        "from calc import unselected\n\n\ndef test_unselected():\n    assert unselected() == 2\n",
+        encoding="utf-8",
+    )
+
+    package = build_compressed_sync_context(
+        "generate",
+        prompt,
+        code_path=code,
+        test_paths=[selected],
+        context_compression="test",
+    )
+
+    assert package.test_packing_manifest is not None
+    assert "test_selected" in package.content
+    assert "test_unselected" not in package.content
+    manifest_files = {
+        Path(entry["file"]).name
+        for key in ("selected", "omitted")
+        for entry in package.test_packing_manifest[key]
+    }
+    assert manifest_files == {"test_selected.py"}
+
+
 def test_compressed_sync_context_soft_omits_missing_optional_sources(tmp_path: Path) -> None:
     prompt = tmp_path / "prompt.prompt"
     prompt.write_text("Create a module.\n", encoding="utf-8")
