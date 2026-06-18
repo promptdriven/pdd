@@ -132,6 +132,33 @@ def test_select_route_swallows_errors(monkeypatch):
     assert m._select_task_route("generate") is None
 
 
+def test_select_route_empty_model_column_produces_no_model_key(monkeypatch):
+    """A row with an empty 'model' string must not inject a model override."""
+    rows = [
+        {"task_class": "fix", "model": "", "temperature": "0.5",
+         "effort": "low", "shots": "2", "pass_rate": "0.9", "avg_cost_usd": "0.05"},
+    ]
+    _stub_table(monkeypatch, rows)
+    route = m._select_task_route("fix")
+    assert route is not None
+    assert "model" not in route
+    assert route["temperature"] == 0.5
+    assert route["shots"] == 2
+
+
+def test_select_route_all_optional_columns_empty_returns_empty_override(monkeypatch):
+    """All optional override columns empty -> empty dict returned (no overrides applied)."""
+    rows = [
+        {"task_class": "fix", "model": "", "temperature": "",
+         "effort": "", "shots": "", "pass_rate": "0.9", "avg_cost_usd": "0.05"},
+    ]
+    _stub_table(monkeypatch, rows)
+    route = m._select_task_route("fix")
+    # Row matched -> not None, but every optional field absent -> empty override dict.
+    assert route is not None
+    assert route == {}
+
+
 # --------------------------------------------------------------------------- #
 # _load_task_routing_table
 # --------------------------------------------------------------------------- #

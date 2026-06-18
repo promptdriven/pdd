@@ -130,3 +130,59 @@ def test_emit_routing_record_serializes_config(tmp_path):
     payload = json.loads(rows[0].read_text(encoding="utf-8"))
     assert payload["selected_config"]["harness"] == "anthropic"
     assert payload["verifier_result"] == "pass"
+
+
+# ---------------------------------------------------------------------------
+# Additional coverage: select_config happy-path + dormancy edge cases
+# ---------------------------------------------------------------------------
+
+def test_select_config_known_task_class_returns_non_none_config():
+    """select_config must return a concrete RoutingConfig for a known task class."""
+    policy = default_policy()
+    config, record = select_config(policy, "bug-fix", None, None)
+
+    assert config is not None
+    assert config.model_tier == 2
+    assert config.thinking_effort == "medium"
+    assert record.task_class == "bug-fix"
+    assert record.fallback_reason is None
+    assert record.escalation_step == 0
+
+
+def test_select_config_none_task_class_resolves_to_default_row():
+    """None task_class must resolve to the 'default' row, which has no config."""
+    policy = default_policy()
+    config, record = select_config(policy, None, None, None)
+
+    assert config is None
+    assert record.task_class == "default"
+    assert record.fallback_reason == "no_policy_row"
+
+
+def test_escalate_halts_on_deadline_exhaustion():
+    """escalate must return deadline_exhausted when the deadline has already passed."""
+    policy = default_policy()
+    _, record = select_config(policy, "bug-fix", None, None)
+    record.latency_seconds = 1000.0  # estimated cost of next shot is very high
+
+    # deadline in the past relative to monotonic clock
+    past_deadline = time.monotonic() - 1
+    _, halted = escalate(policy, record, "fail", budget_remaining=None, deadline=past_deadline)
+
+    assert halted.fallback_reason == "deadline_exhausted"
+
+
+def test_load_policy_malformed_row_type_falls_back_to_builtin_default(tmp_path, monkeypatch):
+    """A YAML row whose value is not a mapping is ignored; the built-in default survives."""
+    policy_path = tmp_path / "bad_row.yaml"
+    policy_path.write_text(
+        "rows:\n  bug-fix: not-a-mapping\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PDD_ROUTING_POLICY", str(policy_path))
+
+    policy = load_policy(None)
+
+    # Malformed row type -> falls back to the built-in "bug-fix" default.
+    assert policy.rows["bug-fix"].initial_config is not None
+    assert policy.rows["bug-fix"].initial_config.model_tier == 2
