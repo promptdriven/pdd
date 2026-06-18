@@ -1,283 +1,180 @@
-"""Tests for the agentic-config benchmark harness (PR #1582 / #1209).
-
-The harness lives in research/agentic-config-benchmark/ and is only present on
-epic/1431-task-routing-v1.  All tests skip gracefully when the directory or its
-entry-point module is absent.
-
-Coverage:
-  - Harness module imports cleanly
-  - run_benchmark() (or equivalent) accepts a config dict and returns a result
-  - Results include required fields (score, cost, provider, task_class)
-  - Integration smoke: harness runs at least one benchmark iteration with
-    providers fully stubbed
-  - Error path: malformed config raises a clear ValueError (not a crash)
-"""
-
 from __future__ import annotations
 
-import importlib
-import os
-import sys
+import importlib.util
+import json
 from pathlib import Path
-from typing import Any, Dict
-from unittest.mock import MagicMock, patch
 
-import pytest
 
-# ---------------------------------------------------------------------------
-# Harness location guard
-# ---------------------------------------------------------------------------
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BENCH_DIR = REPO_ROOT / "research" / "agentic-config-benchmark"
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-_BENCHMARK_DIR = _REPO_ROOT / "research" / "agentic-config-benchmark"
 
-if not _BENCHMARK_DIR.exists():
-    pytest.skip(
-        "research/agentic-config-benchmark/ not present on this branch "
-        "(epic/1431-task-routing-v1 only)",
-        allow_module_level=True,
+def _load_module(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+run_benchmark = _load_module("agentic_config_run_benchmark", BENCH_DIR / "run_benchmark.py")
+generate_report = _load_module("agentic_config_generate_report", BENCH_DIR / "generate_report.py")
+
+
+def _outcome(**overrides):
+    outcome = {
+        "hidden_pass": True,
+        "visible_pass": True,
+        "failure_class": None,
+        "cost_usd": 0.25,
+        "cost_source": "provider_usage_api",
+        "input_tokens": 100,
+        "output_tokens": 50,
+        "wall_clock_seconds": 12.5,
+        "timed_out": False,
+        "files_read_before_first_edit": 3,
+        "files_read_source": "transcript_tap",
+        "wrong_file_edit_count": 0,
+        "raw_trace_path": None,
+    }
+    outcome.update(overrides)
+    return outcome
+
+
+def test_compute_config_sha256_is_order_independent():
+    first = run_benchmark.compute_config_sha256("h", "1", "m", True, "medium")
+    second = run_benchmark.compute_config_sha256(
+        harness_version="1",
+        harness_id="h",
+        thinking_effort="medium",
+        thinking_enabled=True,
+        model_id="m",
     )
 
-# Add the benchmark directory to sys.path so its modules are importable
-if str(_BENCHMARK_DIR) not in sys.path:
-    sys.path.insert(0, str(_BENCHMARK_DIR))
-
-# Attempt to import the benchmark entry-point
-_HARNESS_MODULE = None
-_HARNESS_MODULE_NAME = None
-for _candidate in ("benchmark", "run_benchmark", "agentic_config_benchmark",
-                   "harness", "main"):
-    try:
-        _HARNESS_MODULE = importlib.import_module(_candidate)
-        _HARNESS_MODULE_NAME = _candidate
-        break
-    except ModuleNotFoundError:
-        continue
-
-if _HARNESS_MODULE is None:
-    pytest.skip(
-        "No benchmark entry-point module found in research/agentic-config-benchmark/",
-        allow_module_level=True,
-    )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-_MINIMAL_CONFIG: Dict[str, Any] = {
-    "task_class": "bugfix",
-    "model": "claude-sonnet-4-6",
-    "temperature": 0.0,
-    "thinking": 0.5,
-    "shots": 1,
-    "instruction": "Fix the trivial off-by-one error in add(a, b).",
-}
-
-_REQUIRED_RESULT_FIELDS = {"score", "cost", "provider", "task_class"}
+    assert first == second
+    assert len(first) == 64
 
 
-def _get_run_fn():
-    """Return the main benchmark runner function."""
-    for name in ("run_benchmark", "run", "execute", "benchmark", "main"):
-        fn = getattr(_HARNESS_MODULE, name, None)
-        if callable(fn):
-            return fn
-    return None
-
-
-def _make_stub_result(score: float = 1.0, cost: float = 0.02,
-                      provider: str = "claude", task_class: str = "bugfix"):
-    return {
-        "score": score,
-        "cost": cost,
-        "provider": provider,
-        "task_class": task_class,
-        "output": "fixed code",
+def test_build_run_record_includes_config_identity_and_locked_seed():
+    config = {
+        "label": "baseline",
+        "config_rank": 0,
+        "harness_id": "pdd-agentic-cli",
+        "harness_version": "1.0.0",
+        "model_id": "model-a",
+        "thinking_enabled": False,
+        "thinking_effort": None,
+        "is_default_baseline": True,
+        "model_rank_score": 10,
+        "model_rank_source": "static-prefix",
+        "reasoning_type": "none",
+    }
+    locked = {
+        "task_id": "task-a",
+        "seed": "seed-a",
+        "visible_tests_sha256": "v",
+        "hidden_verifier_sha256": "h",
+        "materialized_repo_sha256": "r",
+        "timeout_seconds": 1800,
+        "repeat_runs": 5,
     }
 
+    record = run_benchmark.build_run_record(
+        config=config,
+        task_id="task-a",
+        trial_index=3,
+        locked=locked,
+        outcome=_outcome(),
+        model_registry={},
+    )
 
-# ---------------------------------------------------------------------------
-# Section 1: Import sanity
-# ---------------------------------------------------------------------------
-
-class TestHarnessImport:
-    """The harness module must import cleanly with no side effects."""
-
-    def test_harness_module_imports(self):
-        """Import must succeed (guarded at module level above)."""
-        assert _HARNESS_MODULE is not None
-
-    def test_harness_has_callable_entry_point(self):
-        """The harness must expose at least one callable entry-point."""
-        run_fn = _get_run_fn()
-        assert run_fn is not None, (
-            f"No callable entry-point found in {_HARNESS_MODULE_NAME}; "
-            "expected run_benchmark, run, execute, benchmark, or main"
-        )
+    assert record["config_label"] == "baseline"
+    assert record["config_rank"] == 0
+    assert record["trial_index"] == 3
+    assert record["repeat_run_index"] == 3
+    assert record["seed_locked"] == "seed-a"
+    assert record["hash_verified"] is True
 
 
-# ---------------------------------------------------------------------------
-# Section 2: Unit tests — config validation
-# ---------------------------------------------------------------------------
+def test_deepswe_metadata_is_recorded_with_caveat():
+    config = {
+        "label": "stronger",
+        "harness_id": "pdd-agentic-cli",
+        "harness_version": "1.0.0",
+        "model_id": "model-a",
+        "thinking_enabled": False,
+        "thinking_effort": None,
+        "model_rank_score": 1,
+        "model_rank_source": "static-prefix",
+    }
+    registry = {
+        "model-a": {
+            "model_rank_score": 15400.0,
+            "model_rank_source": "deepswe-solve-rate",
+            "reasoning_type": "effort",
+            "interactive_only": False,
+        }
+    }
 
-class TestConfigValidation:
-    """Harness validates its config dict before running."""
+    record = run_benchmark.build_run_record(
+        config=config,
+        task_id="task-a",
+        trial_index=0,
+        locked={},
+        outcome=_outcome(),
+        model_registry=registry,
+    )
 
-    def test_minimal_config_accepted(self):
-        """A minimal valid config must not raise on validation."""
-        run_fn = _get_run_fn()
-        if run_fn is None:
-            pytest.skip("No entry-point found")
-
-        validate_fn = getattr(_HARNESS_MODULE, "validate_config", None)
-        if validate_fn is not None:
-            # Should not raise
-            validate_fn(_MINIMAL_CONFIG)
-        else:
-            pytest.skip("validate_config not found — skipping config validation test")
-
-    def test_missing_required_field_raises(self):
-        """A config missing 'task_class' must raise ValueError (or similar)."""
-        validate_fn = getattr(_HARNESS_MODULE, "validate_config", None)
-        if validate_fn is None:
-            pytest.skip("validate_config not found")
-
-        bad_config = {k: v for k, v in _MINIMAL_CONFIG.items() if k != "task_class"}
-        with pytest.raises((ValueError, KeyError, TypeError)):
-            validate_fn(bad_config)
-
-    def test_invalid_temperature_raises(self):
-        """A temperature outside [0, 2] must raise ValueError."""
-        validate_fn = getattr(_HARNESS_MODULE, "validate_config", None)
-        if validate_fn is None:
-            pytest.skip("validate_config not found")
-
-        bad_config = dict(_MINIMAL_CONFIG, temperature=99.0)
-        with pytest.raises((ValueError, TypeError)):
-            validate_fn(bad_config)
+    assert record["model_rank_score"] == 15400.0
+    assert record["external_deepswe_rank_score"] == 15400.0
+    assert "DeepSWE harness" in record["deepswe_rank_caveat"]
 
 
-# ---------------------------------------------------------------------------
-# Section 3: Unit tests — result schema
-# ---------------------------------------------------------------------------
+def test_render_report_sorts_config_rank_zero_first():
+    report = generate_report.render_report(
+        {
+            "stronger": {
+                "config_label": "stronger",
+                "config_rank": 2,
+                "is_default_baseline": False,
+                "model_id": "model-b",
+                "thinking_enabled": False,
+                "has_deepswe": False,
+                "n_hidden_valid": 1,
+                "hidden_pass_k": 1,
+                "n_hidden_null": 0,
+                "cost_usd_median": None,
+                "wall_clock_seconds_p50": None,
+                "timeout_count": 0,
+                "wrong_edit_count": 0,
+                "n": 1,
+                "files_read_before_first_edit_p50": None,
+            },
+            "baseline": {
+                "config_label": "baseline",
+                "config_rank": 0,
+                "is_default_baseline": True,
+                "model_id": "model-a",
+                "thinking_enabled": False,
+                "has_deepswe": False,
+                "n_hidden_valid": 1,
+                "hidden_pass_k": 0,
+                "n_hidden_null": 0,
+                "cost_usd_median": None,
+                "wall_clock_seconds_p50": None,
+                "timeout_count": 0,
+                "wrong_edit_count": 0,
+                "n": 1,
+                "files_read_before_first_edit_p50": None,
+            },
+        }
+    )
 
-class TestResultSchema:
-    """Benchmark results must include the required fields."""
-
-    def test_result_has_required_fields(self, tmp_path):
-        """run_benchmark must return a dict (or object) with score, cost,
-        provider, and task_class."""
-        run_fn = _get_run_fn()
-        if run_fn is None:
-            pytest.skip("No entry-point found")
-
-        mock_result = _make_stub_result()
-
-        # Stub out the provider call inside the harness
-        for stub_target in ("pdd.agentic_common.run_agentic_task",
-                             f"{_HARNESS_MODULE_NAME}.run_agentic_task",
-                             f"{_HARNESS_MODULE_NAME}._run_shot"):
-            try:
-                with patch(stub_target, return_value=MagicMock(
-                    success=True, output_text="fixed", cost_usd=0.02,
-                    provider_used="claude"
-                )):
-                    result = run_fn(_MINIMAL_CONFIG, cwd=tmp_path)
-                    break
-            except (AttributeError, ModuleNotFoundError):
-                continue
-        else:
-            pytest.skip("Could not stub provider call in harness")
-
-        if isinstance(result, dict):
-            for field in _REQUIRED_RESULT_FIELDS:
-                assert field in result, (
-                    f"Benchmark result must include '{field}'; got keys: {list(result.keys())}"
-                )
-        else:
-            for field in _REQUIRED_RESULT_FIELDS:
-                assert hasattr(result, field), (
-                    f"Benchmark result must have attribute '{field}'"
-                )
+    assert report.index("**baseline**") < report.index("stronger")
 
 
-# ---------------------------------------------------------------------------
-# Section 4: Integration smoke test
-# ---------------------------------------------------------------------------
+def test_axis_uses_real_model_registry_column_name_and_locks_seed():
+    axis = json.loads((BENCH_DIR / "benchmark_config_axis.json").read_text())
 
-class TestIntegrationSmoke:
-    """Smoke test: harness runs at least one iteration with providers stubbed."""
-
-    @pytest.mark.timeout(30)
-    def test_smoke_run_with_stubbed_provider(self, tmp_path):
-        """run_benchmark completes in under 30 s with a stubbed provider."""
-        run_fn = _get_run_fn()
-        if run_fn is None:
-            pytest.skip("No entry-point found")
-
-        stub_result = MagicMock(
-            success=True,
-            output_text="def add(a, b): return a + b",
-            cost_usd=0.01,
-            provider_used="claude",
-        )
-
-        stub_targets = [
-            "pdd.agentic_common.run_agentic_task",
-            f"{_HARNESS_MODULE_NAME}.run_agentic_task",
-            f"{_HARNESS_MODULE_NAME}._run_shot",
-            "pdd.llm_invoke.llm_invoke",
-        ]
-
-        ran = False
-        for target in stub_targets:
-            try:
-                with patch(target, return_value=stub_result):
-                    result = run_fn(_MINIMAL_CONFIG, cwd=tmp_path)
-                    ran = True
-                    break
-            except (AttributeError, ModuleNotFoundError, TypeError):
-                continue
-
-        if not ran:
-            pytest.skip("Could not stub any provider path in harness")
-
-        assert result is not None, "Smoke run must return a non-None result"
-
-    def test_benchmark_handles_provider_failure_gracefully(self, tmp_path):
-        """If the provider fails, run_benchmark must return a failure result
-        rather than propagating an unhandled exception."""
-        run_fn = _get_run_fn()
-        if run_fn is None:
-            pytest.skip("No entry-point found")
-
-        fail_result = MagicMock(
-            success=False,
-            output_text="provider error: rate limit",
-            cost_usd=0.0,
-            provider_used="claude",
-        )
-
-        stub_targets = [
-            "pdd.agentic_common.run_agentic_task",
-            f"{_HARNESS_MODULE_NAME}.run_agentic_task",
-            f"{_HARNESS_MODULE_NAME}._run_shot",
-        ]
-
-        for target in stub_targets:
-            try:
-                with patch(target, return_value=fail_result):
-                    result = run_fn(_MINIMAL_CONFIG, cwd=tmp_path)
-                    # Must not raise; result should reflect failure
-                    success = (
-                        result.get("score", 1) if isinstance(result, dict)
-                        else getattr(result, "score", 1)
-                    )
-                    assert success == 0 or success is False or success <= 0.5, (
-                        "Benchmark result must reflect provider failure"
-                    )
-                    return
-            except (AttributeError, ModuleNotFoundError, TypeError):
-                continue
-
-        pytest.skip("Could not stub provider failure path in harness")
+    assert "seed" in axis["locked_invariants"]
+    assert axis["model_registry_fields_used"][0] == "model"

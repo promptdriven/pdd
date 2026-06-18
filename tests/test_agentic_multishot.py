@@ -1,303 +1,536 @@
-"""Tests for pdd.agentic_multishot — multi-shot execution engine.
+"""Tests for pdd.agentic_multishot.run_multishot_candidates.
 
-These tests target the agentic_multishot module introduced in PR #1582
-(epic/1431-task-routing-v1).  The module is skipped gracefully when absent.
+Test plan (one+ test per spec requirement / branch):
 
-Coverage:
-  - run_multishot() executes the configured number of shots
-  - Early exit when a shot succeeds (configurable)
-  - Shot failure handling: record failure, continue or raise
-  - Provider calls are fully stubbed via unittest.mock
-  - Cost accumulation across shots
+R1  MultishotCandidateRecord — 12 fields exist with correct names.
+R2  MultishotResult — 4 fields exist; winner None when all fail.
+R3  Signature / defaults:
+    - n_shots defaults to 1 (single-shot backward compat).
+    - **kwargs forwarded to run_agentic_task unchanged.
+    - config_id frozen/identical across all shot records.
+R4  Candidate isolation contract — multishot_run_id is a sha256 hex digest,
+    identical across all shot records of one run, sensitive to cwd contents.
+R5  Pre-shot budget pre-check — remaining < per_shot_budget stops WITHOUT
+    invoking run_agentic_task; record verdict=fail, failure_class=budget_truncated,
+    stop_reason=budget_exhausted, zero cost/latency.
+R6  Total timeout enforcement — elapsed >= total_timeout_s stops with
+    stop_reason=timeout before invoking the task.
+R7  Per-shot invocation — run_agentic_task called with timeout=per_shot_timeout_s
+    and forwarded kwargs; exception => failure_class/stop_reason=infrastructure_error,
+    cost 0.0, loop stops.
+R8  Hidden verifier — verifier_fn called with the task result; failed shots get
+    failure_class from classify_failure; verifier exception => failure_class
+    infrastructure_error (verdict fail).
+R9  JSONL persistence — one JSON line appended per shot; absent when jsonl_path is None.
+R10 Stop-early logic — stop_on_first_pass True stops after first pass
+    (stop_reason=verifier_pass); False runs all n_shots, intermediate passes have
+    stop_reason None; last shot without early stop => max_shots_reached.
+R11 Winner selection — first passing record by ascending shot_id; None if all fail.
+R12 CLI version capture — subprocess pdd --version stdout stored in all records;
+    empty string on nonzero exit / exception.
 """
 
 from __future__ import annotations
 
-import os
+import json
 from pathlib import Path
-from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-# ---------------------------------------------------------------------------
-# Module guard
-# ---------------------------------------------------------------------------
-
-agentic_multishot = pytest.importorskip(
-    "pdd.agentic_multishot",
-    reason="pdd.agentic_multishot not present on this branch (epic/1431-task-routing-v1 only)",
+from pdd.agentic_common import AgenticTaskResult
+from pdd.agentic_multishot import (
+    MultishotCandidateRecord,
+    MultishotResult,
+    run_multishot_candidates,
 )
 
+MODULE = "pdd.agentic_multishot"
+
+
+def make_result(success: bool, output_text: str = "", cost_usd: float = 0.1) -> AgenticTaskResult:
+    return AgenticTaskResult(success, output_text, cost_usd, "anthropic", None)
+
+
+def always_pass(_result: AgenticTaskResult) -> bool:
+    return True
+
+
+def always_fail(_result: AgenticTaskResult) -> bool:
+    return False
+
+
+def verify_by_success(result: AgenticTaskResult) -> bool:
+    """Verifier that mirrors the task's own success flag."""
+    return bool(result.success)
+
+
+@pytest.fixture
+def patched(monkeypatch):
+    """Patch run_agentic_task and subprocess.run with controllable doubles.
+
+    Returns a helper object exposing ``task`` (MagicMock) and a setter for the
+    pdd --version subprocess stdout/returncode.
+    """
+    import unittest.mock as mock
+
+    task_mock = mock.MagicMock(name="run_agentic_task")
+    subproc_mock = mock.MagicMock(name="subprocess_run")
+    subproc_mock.return_value.returncode = 0
+    subproc_mock.return_value.stdout = "pdd 9.9.9"
+
+    monkeypatch.setattr(f"{MODULE}.run_agentic_task", task_mock)
+    monkeypatch.setattr(f"{MODULE}.subprocess.run", subproc_mock)
+
+    class Harness:
+        task = task_mock
+        subproc = subproc_mock
+
+    return Harness()
+
+
+def base_kwargs(**overrides):
+    kw = dict(
+        per_shot_budget=1.0,
+        total_budget=10.0,
+        per_shot_timeout_s=30.0,
+        total_timeout_s=120.0,
+        verifier_fn=always_pass,
+        config_id="cfg",
+        task_id="task",
+    )
+    kw.update(overrides)
+    return kw
+
+
 # ---------------------------------------------------------------------------
-# Helpers
+# R1 / R2 — dataclass shapes
 # ---------------------------------------------------------------------------
+class TestDataclasses:
+    def test_candidate_record_fields(self):
+        fields = MultishotCandidateRecord.__dataclass_fields__.keys()
+        assert set(fields) == {
+            "shot_id", "task_id", "multishot_run_id", "cli_version", "config_id",
+            "verdict", "failure_class", "cost_usd", "latency_ms", "started_at",
+            "finished_at", "stop_reason",
+        }
 
-
-def _make_agentic_result(success: bool, output: str = "output",
-                         cost: float = 0.01, provider: str = "claude"):
-    """Return a minimal AgenticTaskResult-compatible mock."""
-    result = MagicMock()
-    result.success = success
-    result.output_text = output
-    result.cost_usd = cost
-    result.provider_used = provider
-    # Support tuple-style unpacking for legacy callers
-    result.__iter__ = lambda self: iter([success, output, cost, provider])
-    return result
-
-
-def _get_run_multishot():
-    """Return the main entry-point function from agentic_multishot."""
-    for name in ("run_multishot", "execute_multishot", "multishot_run"):
-        fn = getattr(agentic_multishot, name, None)
-        if fn is not None:
-            return fn
-    return None
+    def test_result_fields(self):
+        fields = MultishotResult.__dataclass_fields__.keys()
+        assert set(fields) == {"winner", "candidates", "total_cost_usd", "total_latency_ms"}
 
 
 # ---------------------------------------------------------------------------
-# Section 1: Basic multi-shot execution
+# R3 — defaults, kwargs forwarding, config_id immutability
 # ---------------------------------------------------------------------------
+class TestSignatureAndForwarding:
+    def test_n_shots_default_is_single_shot(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        assert len(result.candidates) == 1
+        assert patched.task.call_count == 1
 
-class TestBasicMultiShot:
-    """run_multishot fires the configured number of shots."""
-
-    def test_single_shot_executes_once(self, tmp_path):
-        """With shots=1, the provider must be called exactly once."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found in agentic_multishot")
-
-        mock_provider = MagicMock(return_value=_make_agentic_result(True, "done"))
-
-        with patch.object(agentic_multishot, "_invoke_shot", mock_provider,
-                          create=True):
-            run_fn(
-                instruction="Do task",
-                cwd=tmp_path,
-                shots=1,
-            )
-        assert mock_provider.call_count == 1
-
-    def test_three_shots_executes_three_times(self, tmp_path):
-        """With shots=3, the provider must be called three times."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found")
-
-        mock_provider = MagicMock(return_value=_make_agentic_result(True, "done"))
-        with patch.object(agentic_multishot, "_invoke_shot", mock_provider,
-                          create=True):
-            run_fn(
-                instruction="Run analysis",
-                cwd=tmp_path,
-                shots=3,
-            )
-        assert mock_provider.call_count == 3
-
-    def test_multishot_returns_aggregate_result(self, tmp_path):
-        """run_multishot must return an aggregate result object (not a raw list)."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found")
-
-        mock_provider = MagicMock(return_value=_make_agentic_result(True, "result"))
-        with patch.object(agentic_multishot, "_invoke_shot", mock_provider,
-                          create=True):
-            result = run_fn(
-                instruction="Do something",
-                cwd=tmp_path,
-                shots=2,
-            )
-        assert result is not None, "run_multishot must return a non-None result"
-
-    def test_cost_accumulates_across_shots(self, tmp_path):
-        """Total cost must be the sum of per-shot costs."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found")
-
-        mock_provider = MagicMock(
-            return_value=_make_agentic_result(True, "out", cost=0.05)
+    def test_kwargs_forwarded_to_run_agentic_task(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        run_multishot_candidates(
+            "do", Path("/work"),
+            **base_kwargs(), verbose=True, quiet=False, label="L",
         )
-        with patch.object(agentic_multishot, "_invoke_shot", mock_provider,
-                          create=True):
-            result = run_fn(
-                instruction="Cost test",
-                cwd=tmp_path,
-                shots=3,
-            )
-        # Expected total cost = 3 × 0.05 = 0.15
-        total_cost = getattr(result, "cost_usd", None) or getattr(result, "cost", None)
-        if total_cost is not None:
-            assert abs(total_cost - 0.15) < 1e-6, (
-                f"Total cost must be sum of shot costs (3 × 0.05 = 0.15), got {total_cost}"
-            )
+        args, kwargs = patched.task.call_args
+        assert args[0] == "do"
+        assert args[1] == Path("/work")
+        assert kwargs["timeout"] == 30.0
+        assert kwargs["verbose"] is True
+        assert kwargs["quiet"] is False
+        assert kwargs["label"] == "L"
 
+    def test_per_shot_timeout_passed(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        run_multishot_candidates("do", Path("."), **base_kwargs(per_shot_timeout_s=7.5))
+        _, kwargs = patched.task.call_args
+        assert kwargs["timeout"] == 7.5
 
-# ---------------------------------------------------------------------------
-# Section 2: Early exit
-# ---------------------------------------------------------------------------
-
-class TestEarlyExit:
-    """run_multishot stops after the first successful shot when early_exit=True."""
-
-    def test_early_exit_stops_after_first_success(self, tmp_path):
-        """With early_exit=True and first shot succeeding, only 1 shot fires."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found")
-
-        mock_provider = MagicMock(return_value=_make_agentic_result(True, "success"))
-        with patch.object(agentic_multishot, "_invoke_shot", mock_provider,
-                          create=True):
-            run_fn(
-                instruction="Early exit test",
-                cwd=tmp_path,
-                shots=3,
-                early_exit=True,
-            )
-        assert mock_provider.call_count == 1, (
-            "With early_exit=True and first shot success, only 1 shot should fire"
+    def test_config_id_frozen_across_shots(self, patched):
+        patched.task.return_value = make_result(False, "boom", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(n_shots=3, verifier_fn=always_fail, config_id="frozen")
         )
+        assert len(result.candidates) == 3
+        assert all(c.config_id == "frozen" for c in result.candidates)
 
-    def test_no_early_exit_runs_all_shots_even_on_success(self, tmp_path):
-        """With early_exit=False (default for multi-shot), all shots run."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found")
 
-        mock_provider = MagicMock(return_value=_make_agentic_result(True, "ok"))
-        with patch.object(agentic_multishot, "_invoke_shot", mock_provider,
-                          create=True):
-            run_fn(
-                instruction="All shots test",
-                cwd=tmp_path,
-                shots=3,
-                early_exit=False,
-            )
-        assert mock_provider.call_count == 3, (
-            "With early_exit=False, all 3 shots must run regardless of success"
+# ---------------------------------------------------------------------------
+# R4 — candidate isolation / multishot_run_id
+# ---------------------------------------------------------------------------
+class TestIsolationContract:
+    def test_run_id_is_sha256_and_identical_across_shots(self, patched):
+        patched.task.return_value = make_result(False, "boom", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(n_shots=2, verifier_fn=always_fail)
         )
+        ids = {c.multishot_run_id for c in result.candidates}
+        assert len(ids) == 1
+        only = ids.pop()
+        assert len(only) == 64
+        int(only, 16)  # hex digest
+
+    def test_run_id_changes_with_cwd_contents(self, patched, tmp_path):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        r1 = run_multishot_candidates("do", tmp_path, **base_kwargs())
+        (tmp_path / "newfile.txt").write_text("data")
+        r2 = run_multishot_candidates("do", tmp_path, **base_kwargs())
+        assert r1.candidates[0].multishot_run_id != r2.candidates[0].multishot_run_id
 
 
 # ---------------------------------------------------------------------------
-# Section 3: Shot failure handling
+# R5 — budget pre-check
 # ---------------------------------------------------------------------------
+class TestBudgetPrecheck:
+    def test_budget_exhausted_before_first_shot(self, patched):
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(per_shot_budget=2.0, total_budget=1.0)
+        )
+        assert patched.task.call_count == 0
+        rec = result.candidates[0]
+        assert rec.verdict == "fail"
+        assert rec.failure_class == "budget_truncated"
+        assert rec.stop_reason == "budget_exhausted"
+        assert rec.cost_usd == 0.0
+        assert rec.latency_ms == 0.0
+        assert result.winner is None
 
-class TestShotFailureHandling:
-    """Failed shots are recorded and execution continues or raises."""
+    def test_budget_exhausted_after_accumulation(self, patched):
+        # First shot costs 0.6, leaving 0.4 < per_shot_budget 0.5 -> stop on shot 2.
+        patched.task.return_value = make_result(False, "boom", 0.6)
+        result = run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=3, per_shot_budget=0.5, total_budget=1.0, verifier_fn=always_fail),
+        )
+        assert patched.task.call_count == 1
+        assert result.candidates[-1].stop_reason == "budget_exhausted"
+        assert result.candidates[-1].failure_class == "budget_truncated"
 
-    def test_partial_failure_does_not_abort_all_shots(self, tmp_path):
-        """If shot 1 fails and shots 2-3 succeed, all 3 shots must still run."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found")
 
-        responses = [
-            _make_agentic_result(False, "fail"),   # shot 1 fails
-            _make_agentic_result(True, "ok"),       # shot 2 succeeds
-            _make_agentic_result(True, "ok"),       # shot 3 succeeds
+# ---------------------------------------------------------------------------
+# R6 — total timeout enforcement
+# ---------------------------------------------------------------------------
+class TestTotalTimeout:
+    def test_timeout_stops_before_invoking_task(self, patched):
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(total_timeout_s=-1.0)
+        )
+        assert patched.task.call_count == 0
+        rec = result.candidates[0]
+        assert rec.stop_reason == "timeout"
+        assert rec.verdict == "fail"
+        assert rec.cost_usd == 0.0
+
+
+# ---------------------------------------------------------------------------
+# R7 — per-shot invocation & infrastructure error
+# ---------------------------------------------------------------------------
+class TestInfrastructureError:
+    def test_exception_from_task_sets_infrastructure_error(self, patched):
+        patched.task.side_effect = RuntimeError("provider exploded")
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(n_shots=3)
+        )
+        # Stops immediately after the exception.
+        assert len(result.candidates) == 1
+        rec = result.candidates[0]
+        assert rec.verdict == "fail"
+        assert rec.failure_class == "infrastructure_error"
+        assert rec.stop_reason == "infrastructure_error"
+        assert rec.cost_usd == 0.0
+        assert result.winner is None
+
+
+# ---------------------------------------------------------------------------
+# R8 — hidden verifier
+# ---------------------------------------------------------------------------
+class TestVerifier:
+    def test_verifier_receives_task_result(self, patched):
+        sentinel = make_result(True, "ok", 0.1)
+        patched.task.return_value = sentinel
+        seen = {}
+
+        def verifier(result):
+            seen["result"] = result
+            return True
+
+        run_multishot_candidates("do", Path("."), **base_kwargs(verifier_fn=verifier))
+        assert seen["result"] is sentinel
+
+    def test_failed_shot_classified_via_classify_failure(self, patched):
+        patched.task.return_value = make_result(False, "SyntaxError: bad token", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(verifier_fn=always_fail)
+        )
+        # classify_failure maps SyntaxError -> syntax_import.
+        assert result.candidates[0].failure_class == "syntax_import"
+        assert result.candidates[0].verdict == "fail"
+
+    def test_verifier_exception_marks_infrastructure_error(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+
+        def boom(_):
+            raise ValueError("verifier crashed")
+
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(verifier_fn=boom)
+        )
+        rec = result.candidates[0]
+        assert rec.verdict == "fail"
+        assert rec.failure_class == "infrastructure_error"
+
+    def test_passing_shot_has_no_failure_class(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        assert result.candidates[0].failure_class is None
+        assert result.candidates[0].verdict == "pass"
+
+
+# ---------------------------------------------------------------------------
+# R9 — JSONL persistence
+# ---------------------------------------------------------------------------
+class TestJsonlPersistence:
+    def test_none_path_writes_nothing(self, patched, tmp_path):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        run_multishot_candidates("do", Path("."), **base_kwargs(jsonl_path=None))
+        assert list(tmp_path.iterdir()) == []
+
+    def test_one_line_per_shot(self, patched, tmp_path):
+        patched.task.return_value = make_result(False, "boom", 0.1)
+        out = tmp_path / "telemetry.jsonl"
+        run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=3, verifier_fn=always_fail, jsonl_path=out),
+        )
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3
+        first = json.loads(lines[0])
+        assert first["shot_id"] == 1
+        assert first["verdict"] == "fail"
+        assert first["task_id"] == "task"
+
+    def test_record_serializes_failure_class_as_string(self, patched, tmp_path):
+        patched.task.return_value = make_result(False, "SyntaxError: x", 0.1)
+        out = tmp_path / "t.jsonl"
+        run_multishot_candidates(
+            "do", Path("."), **base_kwargs(verifier_fn=always_fail, jsonl_path=out)
+        )
+        rec = json.loads(out.read_text(encoding="utf-8").splitlines()[0])
+        assert rec["failure_class"] == "syntax_import"
+
+
+# ---------------------------------------------------------------------------
+# R10 — stop-early logic
+# ---------------------------------------------------------------------------
+class TestStopEarly:
+    def test_stop_on_first_pass_true_stops(self, patched):
+        results = [make_result(False, "boom", 0.1), make_result(True, "ok", 0.1)]
+        patched.task.side_effect = results
+        result = run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=5, stop_on_first_pass=True, verifier_fn=verify_by_success),
+        )
+        assert len(result.candidates) == 2
+        assert result.candidates[1].stop_reason == "verifier_pass"
+        assert patched.task.call_count == 2
+
+    def test_stop_on_first_pass_false_runs_all(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(n_shots=3, stop_on_first_pass=False)
+        )
+        assert len(result.candidates) == 3
+        # Intermediate passing records carry stop_reason None.
+        assert result.candidates[0].stop_reason is None
+        assert result.candidates[1].stop_reason is None
+        # Final shot completing the loop.
+        assert result.candidates[2].stop_reason == "max_shots_reached"
+
+    def test_max_shots_reached_when_all_fail(self, patched):
+        patched.task.return_value = make_result(False, "boom", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(n_shots=2, verifier_fn=always_fail)
+        )
+        assert result.candidates[-1].stop_reason == "max_shots_reached"
+        assert result.winner is None
+
+
+# ---------------------------------------------------------------------------
+# R11 — winner selection
+# ---------------------------------------------------------------------------
+class TestWinnerSelection:
+    def test_winner_is_first_pass_by_shot_id(self, patched):
+        results = [
+            make_result(False, "boom", 0.1),
+            make_result(True, "ok", 0.1),
+            make_result(True, "ok", 0.1),
         ]
-        mock_provider = MagicMock(side_effect=responses)
-        with patch.object(agentic_multishot, "_invoke_shot", mock_provider,
-                          create=True):
-            result = run_fn(
-                instruction="Partial failure",
-                cwd=tmp_path,
-                shots=3,
-                early_exit=False,
-            )
-        assert mock_provider.call_count == 3, (
-            "A partial failure must not abort remaining shots when early_exit=False"
+        patched.task.side_effect = results
+        result = run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=3, stop_on_first_pass=False, verifier_fn=verify_by_success),
         )
+        assert result.winner is not None
+        assert result.winner.shot_id == 2
 
-    def test_all_shots_fail_result_is_failure(self, tmp_path):
-        """When every shot fails, the aggregate result must reflect failure."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found")
-
-        mock_provider = MagicMock(
-            return_value=_make_agentic_result(False, "failed")
+    def test_winner_none_when_all_fail(self, patched):
+        patched.task.return_value = make_result(False, "boom", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(n_shots=2, verifier_fn=always_fail)
         )
-        with patch.object(agentic_multishot, "_invoke_shot", mock_provider,
-                          create=True):
-            result = run_fn(
-                instruction="All fail",
-                cwd=tmp_path,
-                shots=2,
-                early_exit=False,
-            )
-        # The aggregate result should indicate failure
-        success = getattr(result, "success", None)
-        if success is not None:
-            assert success is False, (
-                "Aggregate result must be failure when all shots fail"
-            )
+        assert result.winner is None
 
-    def test_shot_exception_recorded_not_propagated(self, tmp_path):
-        """A shot that raises must have its exception recorded; remaining
-        shots must still execute (no unhandled propagation)."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found")
-
-        call_count = [0]
-
-        def side_effect(*args, **kwargs):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                raise RuntimeError("simulated provider crash")
-            return _make_agentic_result(True, "ok after crash")
-
-        with patch.object(agentic_multishot, "_invoke_shot", side_effect=side_effect,
-                          create=True):
-            # Must not propagate RuntimeError
-            result = run_fn(
-                instruction="Exception handling",
-                cwd=tmp_path,
-                shots=2,
-                early_exit=False,
-            )
-        assert call_count[0] == 2, (
-            "Both shots must be attempted even if shot 1 raises"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Section 4: Provider stub integration
-# ---------------------------------------------------------------------------
-
-class TestProviderStubIntegration:
-    """Verify multishot works with the real agentic provider stubs."""
-
-    def test_multishot_with_stubbed_run_agentic_task(self, tmp_path):
-        """run_multishot must delegate each shot to run_agentic_task (or
-        equivalent) and forward the instruction and cwd."""
-        run_fn = _get_run_multishot()
-        if run_fn is None:
-            pytest.skip("run_multishot not found")
-
-        mock_task = MagicMock(return_value=_make_agentic_result(True, "out"))
-
-        # Patch both potential delegation targets
-        targets = [
-            "pdd.agentic_common.run_agentic_task",
-            "pdd.agentic_multishot.run_agentic_task",
+    def test_total_cost_accumulates(self, patched):
+        patched.task.side_effect = [
+            make_result(False, "boom", 0.2),
+            make_result(False, "boom", 0.3),
         ]
-        for target in targets:
-            try:
-                with patch(target, mock_task):
-                    run_fn(
-                        instruction="Test delegation",
-                        cwd=tmp_path,
-                        shots=2,
-                    )
-                    if mock_task.call_count >= 1:
-                        break
-            except (AttributeError, ModuleNotFoundError):
-                continue
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(n_shots=2, verifier_fn=always_fail)
+        )
+        assert abs(result.total_cost_usd - 0.5) < 1e-9
 
-        # If neither target worked, the module may inline the call differently
-        # — just verify the function completed without error
+
+# ---------------------------------------------------------------------------
+# R12 — CLI version capture
+# ---------------------------------------------------------------------------
+class TestCliVersion:
+    def test_version_stored_in_records(self, patched):
+        patched.subproc.return_value.returncode = 0
+        patched.subproc.return_value.stdout = "pdd 1.2.3\n"
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        assert result.candidates[0].cli_version == "pdd 1.2.3"
+
+    def test_version_empty_on_nonzero_exit(self, patched):
+        patched.subproc.return_value.returncode = 1
+        patched.subproc.return_value.stdout = "pdd 1.2.3"
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        assert result.candidates[0].cli_version == ""
+
+    def test_version_empty_on_subprocess_exception(self, patched):
+        patched.subproc.side_effect = FileNotFoundError("pdd not found")
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        assert result.candidates[0].cli_version == ""
+
+
+
+import sys
+from pathlib import Path
+
+# Add project root to sys.path to ensure local code is prioritized
+# This allows testing local changes without installing the package
+project_root = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(project_root))
+
+from datetime import datetime
+import json
+from pathlib import Path
+
+
+class TestTimestampsAndLatency:
+    def test_started_and_finished_are_iso8601_utc(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        rec = result.candidates[0]
+        # datetime.fromisoformat round-trips the ISO-8601 strings written.
+        started = datetime.fromisoformat(rec.started_at)
+        finished = datetime.fromisoformat(rec.finished_at)
+        assert started.tzinfo is not None
+        assert finished.tzinfo is not None
+        assert finished >= started
+
+    def test_latency_ms_nonnegative_on_success(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        assert result.candidates[0].latency_ms >= 0.0
+        assert result.total_latency_ms >= 0.0
+
+    def test_cost_recorded_from_task_result(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.42)
+        result = run_multishot_candidates("do", Path("."), **base_kwargs())
+        assert result.candidates[0].cost_usd == 0.42
+
+
+class TestIntermediateStopReason:
+    def test_failing_intermediate_shot_has_no_stop_reason(self, patched):
+        # n_shots=3, all fail -> shots 1,2 have stop_reason None; shot 3 max_shots_reached.
+        patched.task.return_value = make_result(False, "boom", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=3, verifier_fn=always_fail),
+        )
+        assert result.candidates[0].stop_reason is None
+        assert result.candidates[1].stop_reason is None
+        assert result.candidates[2].stop_reason == "max_shots_reached"
+
+
+class TestVerifierFailOnSuccessfulTask:
+    def test_task_success_but_verifier_fail_is_assertion_logic(self, patched):
+        # task_result.success=True but verifier returns False -> failure_class assertion_logic.
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        result = run_multishot_candidates(
+            "do", Path("."), **base_kwargs(verifier_fn=always_fail)
+        )
+        rec = result.candidates[0]
+        assert rec.verdict == "fail"
+        assert rec.failure_class == "assertion_logic"
+
+
+class TestJsonlFlushBeforeEarlyReturn:
+    def test_jsonl_written_before_stop_on_first_pass(self, patched, tmp_path):
+        results = [make_result(False, "boom", 0.1), make_result(True, "ok", 0.1)]
+        patched.task.side_effect = results
+        out = tmp_path / "t.jsonl"
+        run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=5, verifier_fn=verify_by_success, jsonl_path=out),
+        )
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+        last = json.loads(lines[-1])
+        assert last["verdict"] == "pass"
+        assert last["stop_reason"] == "verifier_pass"
+
+    def test_jsonl_written_on_infrastructure_error(self, patched, tmp_path):
+        patched.task.side_effect = RuntimeError("boom")
+        out = tmp_path / "t.jsonl"
+        run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(n_shots=3, jsonl_path=out),
+        )
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        rec = json.loads(lines[0])
+        assert rec["failure_class"] == "infrastructure_error"
+        assert rec["stop_reason"] == "infrastructure_error"
+
+    def test_jsonl_written_on_budget_exhaustion(self, patched, tmp_path):
+        out = tmp_path / "t.jsonl"
+        run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(per_shot_budget=2.0, total_budget=1.0, jsonl_path=out),
+        )
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        rec = json.loads(lines[0])
+        assert rec["stop_reason"] == "budget_exhausted"
+
+
+class TestArbitraryKwargsForwarded:
+    def test_extra_kwargs_passed_through(self, patched):
+        patched.task.return_value = make_result(True, "ok", 0.1)
+        run_multishot_candidates(
+            "do", Path("."),
+            **base_kwargs(),
+            max_retries=3,
+            reasoning_time=0.5,
+        )
+        _, kwargs = patched.task.call_args
+        assert kwargs["max_retries"] == 3
+        assert kwargs["reasoning_time"] == 0.5

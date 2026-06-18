@@ -1,314 +1,188 @@
-"""Tests for pdd.routing_policy — select → escalate ladder → telemetry.
-
-These tests target the routing_policy module introduced in PR #1582
-(epic/1431-task-routing-v1).  The entire module is skipped gracefully on
-branches where it is absent so the main-branch suite remains green.
-
-Coverage:
-  - select_policy() picks the right row from the routing table
-  - Escalation ladder advances through the configured tiers
-  - Telemetry hooks fire on selection and escalation events
-  - Provider calls are fully stubbed (no real LLM calls)
-"""
-
 from __future__ import annotations
 
-import io
-import os
-import textwrap
-from pathlib import Path
-from unittest.mock import MagicMock, call, patch
+import json
+import time
 
-import pandas as pd
 import pytest
 
-# ---------------------------------------------------------------------------
-# Module guard — skip entire module if routing_policy is absent
-# ---------------------------------------------------------------------------
-
-routing_policy = pytest.importorskip(
-    "pdd.routing_policy",
-    reason="pdd.routing_policy not present on this branch (epic/1431-task-routing-v1 only)",
+from pdd.routing_policy import (
+    RoutingConfig,
+    RoutingRecord,
+    default_policy,
+    emit_routing_record,
+    escalate,
+    load_policy,
+    resolve_model_for_tier,
+    select_config,
 )
 
-# ---------------------------------------------------------------------------
-# Fixtures and helpers
-# ---------------------------------------------------------------------------
 
-_ROUTING_TABLE = textwrap.dedent("""\
-    task_class,tier,model,temperature,thinking,multi_shot
-    bugfix,0,gpt-4o-mini,0.0,0.0,1
-    bugfix,1,claude-sonnet-4-6,0.0,0.5,1
-    bugfix,2,claude-opus-4-6,0.0,0.8,2
-    code-gen,0,gpt-4o,0.2,0.0,1
-    code-gen,1,claude-sonnet-4-6,0.1,0.3,1
-    analysis,0,claude-sonnet-4-6,0.1,0.5,3
-""")
+def test_default_policy_has_task_class_rows_and_default_fallback():
+    policy = default_policy()
 
-
-@pytest.fixture
-def routing_df():
-    """Minimal routing DataFrame with tiers for select/escalate testing."""
-    return pd.read_csv(io.StringIO(_ROUTING_TABLE))
+    assert policy.rows["bug-fix"].initial_config == RoutingConfig(
+        harness="anthropic",
+        model_tier=2,
+        thinking_effort="medium",
+        repeat_runs=1,
+    )
+    assert len(policy.rows["bug-fix"].escalation_steps) == 4
+    assert policy.rows["architecture"].initial_config.model_tier == 1
+    assert policy.rows["default"].initial_config is None
 
 
-@pytest.fixture
-def routing_policy_env(routing_df):
-    """Patch the CSV loader and enable the flag for the duration of the test."""
-    csv_loader = getattr(routing_policy, "_load_routing_table", None)
-    if csv_loader is None:
-        # Try alternate name
-        csv_loader = getattr(routing_policy, "_load_task_routing_csv", None)
+def test_load_policy_merges_yaml_rows_and_env_var(tmp_path, monkeypatch):
+    policy_path = tmp_path / "routing.yaml"
+    policy_path.write_text(
+        """
+version: "custom"
+rows:
+  bug-fix:
+    initial_config:
+      harness: google
+      model_tier: 1
+      thinking_effort: high
+      repeat_runs: 2
+  docs:
+    initial_config:
+      harness: anthropic
+      model_tier: 3
+      thinking_effort: low
+      repeat_runs: 1
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PDD_ROUTING_POLICY", str(policy_path))
 
-    loader_target = (
-        f"pdd.routing_policy.{csv_loader.__name__}"
-        if csv_loader is not None
-        else "pdd.routing_policy._load_routing_table"
+    policy = load_policy(None)
+
+    assert policy.version == "custom"
+    assert policy.path == policy_path
+    assert policy.rows["bug-fix"].initial_config.harness == "google"
+    assert policy.rows["bug-fix"].initial_config.repeat_runs == 2
+    assert policy.rows["feature"].initial_config.model_tier == 2
+    assert policy.rows["docs"].initial_config.model_tier == 3
+
+
+def test_load_policy_missing_explicit_path_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        load_policy(tmp_path / "missing.yaml")
+
+
+def test_select_config_falls_back_for_unknown_task_class(monkeypatch):
+    monkeypatch.setenv("PDD_JOB_ID", "job-1")
+    config, record = select_config(default_policy(), "unknown", None, None)
+
+    assert config is None
+    assert record.job_id == "job-1"
+    assert record.task_class == "default"
+    assert record.fallback_reason == "no_policy_row"
+
+
+def test_escalate_applies_steps_and_stops_on_budget_first():
+    policy = default_policy()
+    config, record = select_config(policy, "bug-fix", None, None)
+    assert config is not None
+    record.cost_usd = 10.0
+    record.latency_seconds = 10.0
+
+    next_config, next_record = escalate(policy, record, "fail", budget_remaining=100.0, deadline=time.monotonic() + 100)
+    assert next_config.harness == "google"
+    assert next_record.escalation_step == 1
+    assert next_record.fallback_reason is None
+
+    _, halted = escalate(policy, next_record, "fail", budget_remaining=1.0, deadline=time.monotonic() - 1)
+    assert halted.fallback_reason == "budget_exhausted"
+
+
+def test_escalate_exhausts_without_wrapping():
+    policy = default_policy()
+    _, record = select_config(policy, "bug-fix", None, None)
+
+    for _ in range(4):
+        _, record = escalate(policy, record, "fail", None, None)
+
+    _, exhausted = escalate(policy, record, "fail", None, None)
+    assert exhausted.escalation_step == 4
+    assert exhausted.fallback_reason == "ladder_exhausted"
+
+
+def test_resolve_model_for_tier_uses_deepswe_manifest():
+    assert resolve_model_for_tier(1) == "gpt-5.5"
+    assert resolve_model_for_tier(3) == "claude-opus-4-7"
+    assert resolve_model_for_tier(999) is None
+
+
+def test_emit_routing_record_serializes_config(tmp_path):
+    record = RoutingRecord(
+        timestamp_utc="2026-06-16T12:00:00Z",
+        job_id="job-1",
+        policy_version="1",
+        task_class="bug-fix",
+        selected_config=RoutingConfig(),
+        verifier_result="pass",
     )
 
-    with patch.dict(os.environ, {"PDD_ENABLE_TASK_ROUTING": "1",
-                                  "PDD_FORCE_LOCAL": "1"}):
-        with patch(loader_target, return_value=routing_df):
-            yield routing_df
+    emit_routing_record(record, tmp_path)
+
+    rows = list(tmp_path.glob("routing-*.jsonl"))
+    assert len(rows) == 1
+    payload = json.loads(rows[0].read_text(encoding="utf-8"))
+    assert payload["selected_config"]["harness"] == "anthropic"
+    assert payload["verifier_result"] == "pass"
 
 
 # ---------------------------------------------------------------------------
-# Section 1: select_policy
+# Additional coverage: select_config happy-path + dormancy edge cases
 # ---------------------------------------------------------------------------
 
-class TestSelectPolicy:
-    """select_policy (or equivalent entry-point) returns the right tier-0 row."""
+def test_select_config_known_task_class_returns_non_none_config():
+    """select_config must return a concrete RoutingConfig for a known task class."""
+    policy = default_policy()
+    config, record = select_config(policy, "bug-fix", None, None)
 
-    def test_select_returns_policy_for_known_task_class(self, routing_policy_env):
-        """Selecting 'bugfix' must return tier-0 configuration."""
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        if select_fn is None:
-            pytest.skip("select_policy / get_policy not found in routing_policy module")
-
-        policy = select_fn("bugfix")
-        assert policy is not None, "select_policy must return a non-None policy for 'bugfix'"
-
-    def test_select_tier0_uses_cheapest_model(self, routing_policy_env):
-        """Tier-0 for 'bugfix' must use the least expensive / baseline model."""
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        if select_fn is None:
-            pytest.skip("select_policy not found")
-
-        policy = select_fn("bugfix")
-        # Tier-0 in the CSV is gpt-4o-mini for bugfix
-        model = getattr(policy, "model", None) or (
-            policy.get("model") if isinstance(policy, dict) else None
-        )
-        assert model is not None, "Policy must include a model field"
-        assert "gpt-4o-mini" in str(model), (
-            "Tier-0 bugfix policy must use gpt-4o-mini (cheapest tier)"
-        )
-
-    def test_select_returns_none_for_unknown_task_class(self, routing_policy_env):
-        """An unknown task_class must return None (or a default) without raising."""
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        if select_fn is None:
-            pytest.skip("select_policy not found")
-
-        result = select_fn("completely-unknown-task-xyz")
-        # Either None or a default fallback policy — must not raise
-        assert result is None or result is not None  # noqa: PLR0124 (always True)
-
-    def test_select_without_flag_returns_none(self, routing_df):
-        """When PDD_ENABLE_TASK_ROUTING is unset, select_policy must return None."""
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        if select_fn is None:
-            pytest.skip("select_policy not found")
-
-        env_no_flag = {k: v for k, v in os.environ.items()
-                       if k != "PDD_ENABLE_TASK_ROUTING"}
-        with patch.dict(os.environ, env_no_flag, clear=True):
-            result = select_fn("bugfix")
-        assert result is None, (
-            "select_policy must return None when PDD_ENABLE_TASK_ROUTING is unset"
-        )
+    assert config is not None
+    assert config.model_tier == 2
+    assert config.thinking_effort == "medium"
+    assert record.task_class == "bug-fix"
+    assert record.fallback_reason is None
+    assert record.escalation_step == 0
 
 
-# ---------------------------------------------------------------------------
-# Section 2: Escalation ladder
-# ---------------------------------------------------------------------------
+def test_select_config_none_task_class_resolves_to_default_row():
+    """None task_class must resolve to the 'default' row, which has no config."""
+    policy = default_policy()
+    config, record = select_config(policy, None, None, None)
 
-class TestEscalationLadder:
-    """Escalation advances through tiers in ascending order."""
-
-    def test_escalate_advances_to_tier1(self, routing_policy_env):
-        """escalate_policy (or equivalent) must move from tier-0 to tier-1."""
-        escalate_fn = getattr(routing_policy, "escalate_policy", None) or getattr(
-            routing_policy, "escalate", None
-        )
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        if escalate_fn is None or select_fn is None:
-            pytest.skip("escalate_policy / select_policy not found")
-
-        tier0 = select_fn("bugfix")
-        tier1 = escalate_fn("bugfix", tier0)
-
-        assert tier1 is not None, "escalate_policy must return a tier-1 policy"
-        tier1_model = getattr(tier1, "model", None) or (
-            tier1.get("model") if isinstance(tier1, dict) else None
-        )
-        assert "claude-sonnet-4-6" in str(tier1_model), (
-            "Tier-1 bugfix must use claude-sonnet-4-6"
-        )
-
-    def test_escalate_to_tier2_uses_max_model(self, routing_policy_env):
-        """Final escalation must use the highest-quality model in the CSV."""
-        escalate_fn = getattr(routing_policy, "escalate_policy", None) or getattr(
-            routing_policy, "escalate", None
-        )
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        if escalate_fn is None or select_fn is None:
-            pytest.skip("escalate_policy / select_policy not found")
-
-        tier0 = select_fn("bugfix")
-        tier1 = escalate_fn("bugfix", tier0)
-        tier2 = escalate_fn("bugfix", tier1)
-
-        assert tier2 is not None
-        tier2_model = getattr(tier2, "model", None) or (
-            tier2.get("model") if isinstance(tier2, dict) else None
-        )
-        assert "claude-opus-4-6" in str(tier2_model), (
-            "Tier-2 (max) bugfix must use claude-opus-4-6"
-        )
-
-    def test_escalate_beyond_max_tier_returns_none_or_max(self, routing_policy_env):
-        """Escalating past the final tier must return None or the max-tier policy."""
-        escalate_fn = getattr(routing_policy, "escalate_policy", None) or getattr(
-            routing_policy, "escalate", None
-        )
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        if escalate_fn is None or select_fn is None:
-            pytest.skip("escalate_policy / select_policy not found")
-
-        tier0 = select_fn("bugfix")
-        tier1 = escalate_fn("bugfix", tier0)
-        tier2 = escalate_fn("bugfix", tier1)
-        beyond = escalate_fn("bugfix", tier2)
-
-        # Must not raise — must return None or the last known tier
-        assert beyond is None or beyond is not None  # noqa: PLR0124
+    assert config is None
+    assert record.task_class == "default"
+    assert record.fallback_reason == "no_policy_row"
 
 
-# ---------------------------------------------------------------------------
-# Section 3: Telemetry
-# ---------------------------------------------------------------------------
+def test_escalate_halts_on_deadline_exhaustion():
+    """escalate must return deadline_exhausted when the deadline has already passed."""
+    policy = default_policy()
+    _, record = select_config(policy, "bug-fix", None, None)
+    record.latency_seconds = 1000.0  # estimated cost of next shot is very high
 
-class TestTelemetry:
-    """Telemetry hooks fire when a policy is selected or escalated."""
+    # deadline in the past relative to monotonic clock
+    past_deadline = time.monotonic() - 1
+    _, halted = escalate(policy, record, "fail", budget_remaining=None, deadline=past_deadline)
 
-    def test_telemetry_fires_on_selection(self, routing_policy_env):
-        """A telemetry event must be emitted when select_policy returns a policy."""
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        emit_fn_name = None
-        for candidate in ("_emit_routing_telemetry", "_record_routing_event",
-                           "emit_telemetry", "_emit_telemetry"):
-            if hasattr(routing_policy, candidate):
-                emit_fn_name = candidate
-                break
-
-        if select_fn is None:
-            pytest.skip("select_policy not found")
-        if emit_fn_name is None:
-            pytest.skip("No telemetry emitter found in routing_policy module")
-
-        with patch.object(routing_policy, emit_fn_name) as mock_emit:
-            select_fn("bugfix")
-            mock_emit.assert_called()
-
-    def test_telemetry_fires_on_escalation(self, routing_policy_env):
-        """A telemetry event must be emitted on each escalation."""
-        escalate_fn = getattr(routing_policy, "escalate_policy", None) or getattr(
-            routing_policy, "escalate", None
-        )
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        emit_fn_name = None
-        for candidate in ("_emit_routing_telemetry", "_record_routing_event",
-                           "emit_telemetry", "_emit_telemetry"):
-            if hasattr(routing_policy, candidate):
-                emit_fn_name = candidate
-                break
-
-        if select_fn is None or escalate_fn is None:
-            pytest.skip("select_policy / escalate_policy not found")
-        if emit_fn_name is None:
-            pytest.skip("No telemetry emitter found in routing_policy module")
-
-        tier0 = select_fn("bugfix")
-        with patch.object(routing_policy, emit_fn_name) as mock_emit:
-            escalate_fn("bugfix", tier0)
-            mock_emit.assert_called()
-
-    def test_telemetry_includes_task_class(self, routing_policy_env):
-        """Telemetry payloads must include the task_class for attribution."""
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        emit_fn_name = None
-        for candidate in ("_emit_routing_telemetry", "_record_routing_event",
-                           "emit_telemetry", "_emit_telemetry"):
-            if hasattr(routing_policy, candidate):
-                emit_fn_name = candidate
-                break
-
-        if select_fn is None or emit_fn_name is None:
-            pytest.skip("select_policy or telemetry emitter not found")
-
-        with patch.object(routing_policy, emit_fn_name) as mock_emit:
-            select_fn("code-gen")
-            # At least one call arg or kwarg must contain the task_class
-            calls_str = str(mock_emit.call_args_list)
-            assert "code-gen" in calls_str, (
-                "Telemetry must include the task_class ('code-gen') in its payload"
-            )
+    assert halted.fallback_reason == "deadline_exhausted"
 
 
-# ---------------------------------------------------------------------------
-# Section 4: End-to-end stub test
-# ---------------------------------------------------------------------------
+def test_load_policy_malformed_row_type_falls_back_to_builtin_default(tmp_path, monkeypatch):
+    """A YAML row whose value is not a mapping is ignored; the built-in default survives."""
+    policy_path = tmp_path / "bad_row.yaml"
+    policy_path.write_text(
+        "rows:\n  bug-fix: not-a-mapping\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PDD_ROUTING_POLICY", str(policy_path))
 
-class TestEndToEndStub:
-    """Simulate a full select → escalate → provider-call sequence with all
-    external dependencies stubbed."""
+    policy = load_policy(None)
 
-    def test_full_select_escalate_cycle_stubbed(self, routing_policy_env):
-        """A full select → escalate cycle with a stubbed provider must complete
-        without errors and return a non-empty result."""
-        select_fn = getattr(routing_policy, "select_policy", None) or getattr(
-            routing_policy, "get_policy", None
-        )
-        escalate_fn = getattr(routing_policy, "escalate_policy", None) or getattr(
-            routing_policy, "escalate", None
-        )
-        if select_fn is None:
-            pytest.skip("select_policy not found")
-
-        policy = select_fn("bugfix")
-        assert policy is not None
-
-        if escalate_fn is not None:
-            escalated = escalate_fn("bugfix", policy)
-            assert escalated is not None or escalated is None  # no crash
+    # Malformed row type -> falls back to the built-in "bug-fix" default.
+    assert policy.rows["bug-fix"].initial_config is not None
+    assert policy.rows["bug-fix"].initial_config.model_tier == 2
