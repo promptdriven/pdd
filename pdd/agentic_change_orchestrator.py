@@ -39,6 +39,7 @@ from pdd.agentic_common import (
     issue_update_should_clear_workflow_state,
     apply_clarification_steers_on_resume,
     ensure_issue_steer_cursor_seeded,
+    _gh_subprocess_env,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
@@ -1588,6 +1589,7 @@ def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) 
             ["gh", "api", f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
              "--jq", ".updated_at"],
             capture_output=True, text=True, check=False, timeout=15,
+            env=_gh_subprocess_env(),
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
@@ -1754,6 +1756,7 @@ def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Op
              "--search", f"head:{canonical}", "--state", "open",
              "--json", "url,headRefName", "--limit", "30"],
             capture_output=True, text=True, check=False, timeout=30,
+            env=_gh_subprocess_env(),
         )
         if result.returncode != 0:
             return None

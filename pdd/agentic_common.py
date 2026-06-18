@@ -6492,6 +6492,56 @@ def _load_gh_paginated_comments(stdout: str) -> List[Dict]:
         comments.extend(_flatten_comment_pages(payload))
     return comments
 
+def _github_token_from_env() -> Optional[str]:
+    """Return the freshest GitHub token available, re-reading the file per call.
+
+    Precedence (first non-empty wins):
+    1. The stripped contents of the file named by ``PDD_GH_TOKEN_FILE`` (ignored
+       when the env var is unset, or the file is missing/empty/unreadable).
+    2. Ambient ``GH_TOKEN``.
+    3. ``GITHUB_TOKEN``.
+    4. ``PDD_GITHUB_TOKEN``.
+
+    The token file is read on every call (no import-time / launch-time caching)
+    so each invocation observes the latest value written by the cloud refresh
+    loop, which rewrites ``PDD_GH_TOKEN_FILE`` periodically as the original
+    GitHub App installation token expires (issue #1632). Never raises; returns
+    ``None`` when no source yields a token.
+    """
+    token_file_path = os.environ.get("PDD_GH_TOKEN_FILE")
+    if token_file_path:
+        try:
+            token = Path(token_file_path).read_text(encoding="utf-8").strip()
+            if token:
+                return token
+        except Exception:  # pylint: disable=broad-except
+            pass
+    for var in ("GH_TOKEN", "GITHUB_TOKEN", "PDD_GITHUB_TOKEN"):
+        value = os.environ.get(var)
+        if value and value.strip():
+            return value.strip()
+    return None
+
+
+def _gh_subprocess_env() -> Dict[str, str]:
+    """Build the env for an authenticated ``gh`` subprocess.
+
+    Returns ``os.environ.copy()`` with ``GH_TOKEN`` and ``GITHUB_TOKEN``
+    overwritten by :func:`_github_token_from_env` when a token is found. When no
+    token is available the inherited environment is returned unchanged (we never
+    blank out ``GH_TOKEN`` to ``""``, which would clobber any auth ``gh`` could
+    otherwise resolve from its own config). Returns a copy, so mutating the
+    result never leaks back into ``os.environ``. Call it once per ``gh``
+    invocation so each spawned process consumes the refreshed token (#1632).
+    """
+    env = os.environ.copy()
+    token = _github_token_from_env()
+    if token:
+        env["GH_TOKEN"] = token
+        env["GITHUB_TOKEN"] = token
+    return env
+
+
 def _find_state_comment(
     repo_owner: str,
     repo_name: str,
@@ -6514,7 +6564,7 @@ def _find_state_comment(
             "--paginate",
             "--slurp",
         ]
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env())
         if result.returncode != 0:
             return None
 
@@ -6567,7 +6617,7 @@ def _find_all_state_comments(
             "--paginate",
             "--slurp",
         ]
-        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env())
         if result.returncode != 0:
             return []
         comments = _load_gh_paginated_comments(result.stdout)
@@ -6592,7 +6642,7 @@ def _github_delete_comment(repo_owner: str, repo_name: str, comment_id: int, cwd
             f"repos/{repo_owner}/{repo_name}/issues/comments/{comment_id}",
             "-X", "DELETE",
         ]
-        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env())
         return res.returncode == 0
     except Exception:
         return False
@@ -6624,7 +6674,7 @@ def _github_edit_comment(
             "-X", "PATCH",
             "-f", f"body={body}",
         ]
-        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env())
         return res.returncode == 0
     except Exception:
         return False
@@ -6667,7 +6717,7 @@ def github_save_state(
                 "-X", "PATCH",
                 "-f", f"body={body}"
             ]
-            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env())
             if res.returncode == 0:
                 return comment_id
         else:
@@ -6687,7 +6737,7 @@ def github_save_state(
                     "-X", "PATCH",
                     "-f", f"body={body}",
                 ]
-                res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+                res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env())
                 if res.returncode != 0:
                     return None
                 failed_ids = [
@@ -6711,7 +6761,7 @@ def github_save_state(
                 "-X", "POST",
                 "-f", f"body={body}"
             ]
-            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=_gh_subprocess_env())
             if res.returncode == 0:
                 data = json.loads(res.stdout)
                 return data.get("id")
@@ -7501,6 +7551,7 @@ def post_step_comment_once(
             cwd=cwd,
             capture_output=True,
             text=True,
+            env=_gh_subprocess_env(),
         )
         if result.returncode != 0:
             console.print(
@@ -7641,6 +7692,7 @@ def post_step_comment(
                 cwd=cwd,
                 capture_output=True,
                 text=True,
+                env=_gh_subprocess_env(),
             )
             if result.returncode == 0:
                 return True
@@ -7707,6 +7759,7 @@ def post_pr_comment(
                 cwd=cwd,
                 capture_output=True,
                 text=True,
+                env=_gh_subprocess_env(),
             )
             if result.returncode == 0:
                 return True
@@ -7771,6 +7824,7 @@ def post_final_comment(
             cwd=cwd,
             capture_output=True,
             text=True,
+            env=_gh_subprocess_env(),
         )
         if result.returncode != 0:
             console.print(f"[yellow]Warning: Failed to post final comment: {result.stderr}[/yellow]")
