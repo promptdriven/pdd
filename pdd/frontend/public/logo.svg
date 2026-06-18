@@ -1,23 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
-      <feGaussianBlur in="SourceGraphic" stdDeviation="40" result="blur"/>
-      <feMerge>
-        <feMergeNode in="blur"/>
-        <feMergeNode in="SourceGraphic"/>
-      </feMerge>
-    </filter>
-  </defs>
-
-  <g stroke="#00e3ff"
-     stroke-width="60"
+  <!-- PromptDriven brand logo (mono-white), matching the Sizzle site.
+       Glow filter removed for a clean wordmark/favicon. -->
+  <g stroke="#FFFFFF"
+     stroke-width="70"
      stroke-linecap="round"
-     stroke-linejoin="round"
-     fill="none"
-     filter="url(#glow)">
+     stroke-linejoin="round">
 
-    <!-- speech-bubble "P" outline -->
+    <!-- speech-bubble "P" outline, filled white -->
     <path d="
       M 260 180
       H 600
@@ -25,9 +15,10 @@
       H 480
       L 260 880
       V 180
-      Z"/>
+      Z"
+      fill="#FFFFFF"/>
 
-    <!-- chevron shifted +15 px -->
-    <polyline points="505 340 585 420 505 500"/>
+    <!-- chevron (white stroke, no fill) -->
+    <polyline points="505 340 585 420 505 500" fill="none"/>
   </g>
 </svg>
