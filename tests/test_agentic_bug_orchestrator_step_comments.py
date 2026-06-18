@@ -452,6 +452,13 @@ def test_bug_orchestrator_posts_degraded_step8_fallback_and_continues_to_success
         return None
 
     bug_orchestrator_mocks["save_state"].side_effect = save_side_effect
+    bug_orchestrator_mocks["load_prompt_template"].side_effect = (
+        lambda name: (
+            "Prompt for {issue_number}\n{step8_output}\n{planned_test_count}"
+            if "step9" in name
+            else "Prompt for {issue_number}"
+        )
+    )
 
     def run_side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
@@ -483,6 +490,16 @@ def test_bug_orchestrator_posts_degraded_step8_fallback_and_continues_to_success
     assert "Provider timeout" in step8_calls[0].kwargs.get("output", "")
     assert "test strategy failed" in step8_calls[0].kwargs.get("failure_detail", "").lower()
     assert "fallback/default planning" in step8_calls[0].kwargs.get("failure_detail", "")
+
+    step9_run_calls = [
+        c for c in bug_orchestrator_mocks["run_agentic_task"].call_args_list
+        if c.kwargs.get("label") == "step9"
+    ]
+    assert step9_run_calls
+    step9_instruction = step9_run_calls[0].kwargs.get("instruction", "")
+    assert "Fallback/default test planning" in step9_instruction
+    assert "PLANNED_TEST_COUNT: 1" in step9_instruction
+    assert "Provider timeout during test strategy" in step9_instruction
 
     step8_comment_states = [
         s.get("step_comments", {}).get("8", {}) for s in captured_states

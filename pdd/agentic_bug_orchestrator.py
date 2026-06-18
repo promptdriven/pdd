@@ -435,6 +435,27 @@ def _count_generated_tests(file_paths: List[str], cwd: Path) -> Tuple[int, int]:
     return total, stubs
 
 
+def _build_step8_fallback_test_plan(step8_output: str) -> str:
+    """Build the default plan Step 9 should use when Step 8 fails recoverably."""
+    failure_detail = _sanitize_comment_body(
+        step8_output or "No Step 8 failure output was captured.",
+        max_chars=1000,
+    )
+    return (
+        "Step 8 test strategy failed before producing a structured plan.\n\n"
+        "### Fallback/default test planning\n"
+        "- Derive regression tests from the issue, Step 5 reproduction, "
+        "Step 6 root cause, and changed files.\n"
+        "- Prefer an existing nearby test file; create a focused regression "
+        "test file when none exists.\n"
+        "- Cover the root cause and any confirmed Step 6 expansion/sibling "
+        "items.\n\n"
+        "PLANNED_TEST_COUNT: 1\n\n"
+        "### Step 8 failure detail\n"
+        f"{failure_detail}"
+    )
+
+
 def _parse_changed_files(output: str, marker: str) -> List[str]:
     """Extract file paths from marker lines (multiple lines and comma-separated)."""
     files = []
@@ -2942,8 +2963,14 @@ def run_agentic_bug_orchestrator(
                         console.print("[yellow]Warning: DEFECT_TYPE is 'prompt' but no .prompt files detected in changed_files[/yellow]")
 
         if step_num == 8:
-            # Parse planned test count for Step 9 prompt injection
-            planned = _count_planned_tests(step_output)
+            # Parse planned test count for Step 9 prompt injection. If Step 8
+            # failed recoverably, give Step 9 a deterministic fallback plan
+            # instead of only the provider error text.
+            step8_plan = step_output
+            if not step_success:
+                step8_plan = _build_step8_fallback_test_plan(step_output)
+                context["step8_output"] = step8_plan
+            planned = _count_planned_tests(step8_plan)
             context["planned_test_count"] = str(planned) if planned > 0 else "all"
 
         if step_num == 9:
