@@ -257,7 +257,45 @@ def _augment_architecture_from_pr_branch(
         if isinstance(entry, dict) and entry.get("filename")
     }
 
-    branch_ref = f"origin/change/issue-{issue_number}"
+    canonical_ref = f"origin/change/issue-{issue_number}"
+    fallback_refs: List[str] = []
+    try:
+        ref_result = subprocess.run(
+            [
+                "git",
+                "for-each-ref",
+                "--sort=-committerdate",
+                "--format=%(refname:short)",
+                f"refs/remotes/origin/change/issue-{issue_number}-job-*",
+            ],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        seen_refs = {canonical_ref}
+        for line in ref_result.stdout.splitlines():
+            ref = line.strip()
+            if ref and ref not in seen_refs:
+                fallback_refs.append(ref)
+                seen_refs.add(ref)
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
+    # Consult the newest clean-restart fallback branch (if any) plus the canonical
+    # branch. `for-each-ref` is sorted by -committerdate, so fallback_refs[0] is the
+    # most recently committed change/issue-N-job-* ref; only that one is used, because
+    # each clean-restart attempt creates a fresh job branch and older job branches are
+    # abandoned (consulting all of them would revive stale module names and scale the
+    # git-show work with the number of accumulated remote refs).
+    #
+    # The fallback is listed BEFORE canonical so that, when both branches define the
+    # same filename, the active clean-restart branch's entry wins the filename-dedup
+    # below: clean-restart branches the job fallback from main and deliberately abandons
+    # the canonical change/issue-N branch, so canonical's metadata is stale. Canonical is
+    # still consulted for entries unique to it, so a plain (non-clean-restart)
+    # canonical-only new module is never dropped.
+    branch_refs = fallback_refs[:1] + [canonical_ref]
 
     for arch_path in arch_files:
         try:
@@ -265,25 +303,26 @@ def _augment_architecture_from_pr_branch(
         except ValueError:
             continue
 
-        try:
-            result = subprocess.run(
-                ["git", "show", f"{branch_ref}:{rel_path.as_posix()}"],
-                cwd=project_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            pr_arch = json.loads(result.stdout)
-        except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
-            continue
-
-        pr_modules = extract_modules(pr_arch)
-        for entry in pr_modules:
-            filename = entry.get("filename")
-            if not filename or filename in existing_filenames:
+        for branch_ref in branch_refs:
+            try:
+                result = subprocess.run(
+                    ["git", "show", f"{branch_ref}:{rel_path.as_posix()}"],
+                    cwd=project_root,
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                pr_arch = json.loads(result.stdout)
+            except (subprocess.CalledProcessError, json.JSONDecodeError, OSError):
                 continue
-            architecture.append(entry)
-            existing_filenames.add(filename)
+
+            pr_modules = extract_modules(pr_arch)
+            for entry in pr_modules:
+                filename = entry.get("filename")
+                if not filename or filename in existing_filenames:
+                    continue
+                architecture.append(entry)
+                existing_filenames.add(filename)
 
     return architecture
 
