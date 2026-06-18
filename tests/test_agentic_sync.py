@@ -3935,6 +3935,239 @@ class TestAugmentArchitectureFromPrBranch:
         )
 
 
+    # --- Issue #1609: fallback branch (change/issue-N-job-*) support ---
+
+    def test_adds_new_entries_from_fallback_branch_when_canonical_missing(self, tmp_path):
+        """New entries should be picked up from a fallback change/issue-N-job-* branch
+        when the canonical change/issue-N branch does not exist (clean-restart scenario).
+
+        Regression test for Issue #1609: _augment_architecture_from_pr_branch hardcodes
+        origin/change/issue-N and silently swallows CalledProcessError when that ref
+        is missing, so new-module entries from the fallback branch are never merged.
+        """
+        local_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py"},
+        ]
+        fallback_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py"},
+            {"filename": "new_module_python.prompt", "filepath": "pdd/new_module.py"},
+        ]
+
+        def fake_subprocess(args, **kwargs):
+            subcmd = args[1]
+            if subcmd == "for-each-ref":
+                return MagicMock(returncode=0, stdout="origin/change/issue-1609-job-abc123\n", stderr="")
+            # subcmd == "show"
+            ref_path = args[2]
+            if "issue-1609-job-abc123:" in ref_path:
+                return MagicMock(returncode=0, stdout=json.dumps(fallback_arch), stderr="")
+            # canonical branch does not exist
+            raise subprocess.CalledProcessError(128, "git show")
+
+        with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_subprocess):
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 1609)
+
+        filenames = [e["filename"] for e in result]
+        assert "foo_python.prompt" in filenames, "Existing entry should be preserved"
+        assert "new_module_python.prompt" in filenames, (
+            "New module on fallback branch change/issue-1609-job-abc123 must be discovered — "
+            "currently _augment_architecture_from_pr_branch only checks the canonical branch "
+            "and silently fails when it does not exist"
+        )
+
+    def test_merges_entries_from_both_canonical_and_fallback_branches(self, tmp_path):
+        """When both canonical and fallback branches exist, unique new entries from
+        each should be merged into the architecture.
+
+        Regression test for Issue #1609.
+        """
+        local_arch: list = []
+        canonical_arch = [{"filename": "module_a_python.prompt", "filepath": "pdd/module_a.py"}]
+        fallback_arch = [{"filename": "module_b_python.prompt", "filepath": "pdd/module_b.py"}]
+
+        def fake_subprocess(args, **kwargs):
+            subcmd = args[1]
+            if subcmd == "for-each-ref":
+                return MagicMock(returncode=0, stdout="origin/change/issue-1609-job-xyz\n", stderr="")
+            ref_path = args[2]
+            if "issue-1609-job-xyz:" in ref_path:
+                return MagicMock(returncode=0, stdout=json.dumps(fallback_arch), stderr="")
+            # canonical branch (issue-1609:) succeeds
+            return MagicMock(returncode=0, stdout=json.dumps(canonical_arch), stderr="")
+
+        with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_subprocess):
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 1609)
+
+        filenames = [e["filename"] for e in result]
+        assert "module_a_python.prompt" in filenames, "Entry from canonical branch should be merged"
+        assert "module_b_python.prompt" in filenames, (
+            "Entry from fallback branch change/issue-1609-job-xyz must also be merged — "
+            "currently _augment_architecture_from_pr_branch ignores fallback branches"
+        )
+        assert len(filenames) == 2, f"Expected exactly 2 entries, got {len(filenames)}: {filenames}"
+
+    def test_no_fallback_branches_returns_original_architecture(self, tmp_path):
+        """When git for-each-ref returns no fallback branches and the canonical branch
+        also fails, the architecture is returned unchanged (non-regression).
+
+        Regression test for Issue #1609.
+        """
+        local_arch = [{"filename": "foo_python.prompt"}]
+
+        def fake_subprocess(args, **kwargs):
+            subcmd = args[1]
+            if subcmd == "for-each-ref":
+                return MagicMock(returncode=0, stdout="", stderr="")
+            # canonical branch does not exist either
+            raise subprocess.CalledProcessError(128, "git show")
+
+        with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_subprocess):
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 1609)
+
+        assert result == local_arch, (
+            "When no branches (canonical or fallback) exist, architecture should be returned unchanged"
+        )
+
+    def test_fallback_branch_does_not_duplicate_entries_already_in_canonical(self, tmp_path):
+        """When the fallback branch repeats entries from the canonical branch, each
+        filename should appear exactly once in the merged result.
+
+        Regression test for Issue #1609.
+        """
+        local_arch: list = []
+        canonical_arch = [
+            {"filename": "shared_python.prompt", "filepath": "pdd/shared.py"},
+            {"filename": "only_canonical_python.prompt", "filepath": "pdd/only_canonical.py"},
+        ]
+        fallback_arch = [
+            {"filename": "shared_python.prompt", "filepath": "pdd/shared.py"},
+            {"filename": "only_fallback_python.prompt", "filepath": "pdd/only_fallback.py"},
+        ]
+
+        def fake_subprocess(args, **kwargs):
+            subcmd = args[1]
+            if subcmd == "for-each-ref":
+                return MagicMock(returncode=0, stdout="origin/change/issue-1609-job-abc123\n", stderr="")
+            ref_path = args[2]
+            if "issue-1609-job-abc123:" in ref_path:
+                return MagicMock(returncode=0, stdout=json.dumps(fallback_arch), stderr="")
+            # canonical branch succeeds
+            return MagicMock(returncode=0, stdout=json.dumps(canonical_arch), stderr="")
+
+        with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_subprocess):
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 1609)
+
+        filenames = [e["filename"] for e in result]
+        assert "shared_python.prompt" in filenames
+        assert "only_canonical_python.prompt" in filenames
+        assert "only_fallback_python.prompt" in filenames, (
+            "Entry unique to fallback branch must be merged — "
+            "currently only canonical branch is checked"
+        )
+        assert filenames.count("shared_python.prompt") == 1, (
+            "shared_python.prompt must appear exactly once (no duplication across branches)"
+        )
+
+    def test_only_newest_fallback_branch_is_consulted_when_multiple_exist(self, tmp_path):
+        """Only the newest clean-restart fallback branch should be consulted; entries
+        from older/abandoned change/issue-N-job-* branches must NOT be merged.
+
+        Regression test for the Issue #1609 follow-up: clean-restart creates a fresh
+        change/issue-N-job-<slug> branch per attempt, so older job branches are
+        abandoned. Merging architecture entries from every historical fallback ref can
+        revive stale module names that then wrongly pass _filter_invalid_basenames, and
+        makes the work scale with the number of historical remote refs. The lookup is
+        bounded to the most recently committed fallback ref (git for-each-ref is sorted
+        by -committerdate, so the first listed ref is newest).
+        """
+        local_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py"},
+        ]
+        newest_arch = [
+            {"filename": "active_module_python.prompt", "filepath": "pdd/active_module.py"},
+        ]
+        stale_arch = [
+            {"filename": "stale_module_python.prompt", "filepath": "pdd/stale_module.py"},
+        ]
+
+        def fake_subprocess(args, **kwargs):
+            subcmd = args[1]
+            if subcmd == "for-each-ref":
+                # --sort=-committerdate => newest first
+                return MagicMock(
+                    returncode=0,
+                    stdout=(
+                        "origin/change/issue-1609-job-newest\n"
+                        "origin/change/issue-1609-job-stale\n"
+                    ),
+                    stderr="",
+                )
+            ref_path = args[2]
+            if "issue-1609-job-newest:" in ref_path:
+                return MagicMock(returncode=0, stdout=json.dumps(newest_arch), stderr="")
+            if "issue-1609-job-stale:" in ref_path:
+                return MagicMock(returncode=0, stdout=json.dumps(stale_arch), stderr="")
+            # canonical branch does not exist (clean-restart scenario)
+            raise subprocess.CalledProcessError(128, "git show")
+
+        with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_subprocess):
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 1609)
+
+        filenames = [e["filename"] for e in result]
+        assert "foo_python.prompt" in filenames, "Existing entry should be preserved"
+        assert "active_module_python.prompt" in filenames, (
+            "Module on the newest fallback branch must be discovered"
+        )
+        assert "stale_module_python.prompt" not in filenames, (
+            "Module that only exists on an older/abandoned fallback branch must NOT be "
+            "merged — only the newest clean-restart fallback ref should be consulted"
+        )
+
+    def test_active_fallback_metadata_wins_over_stale_canonical_on_shared_filename(self, tmp_path):
+        """When canonical and the active (newest) fallback branch both define the same
+        filename with divergent metadata, the fallback's version must win the dedup, while
+        canonical's UNIQUE entries are still merged.
+
+        Clean-restart branches the job fallback from main and abandons the canonical
+        branch, so canonical's metadata is stale. The merged architecture feeds
+        build_dep_graph_from_architecture_data, so a stale canonical filepath/dependencies
+        winning would corrupt the dependency graph. Listing the fallback before canonical
+        makes the active branch win on shared filenames; keeping canonical in the list
+        means a canonical-only new module is never dropped (no #1609 regression).
+        """
+        local_arch: list = []
+        canonical_arch = [
+            {"filename": "shared_python.prompt", "filepath": "pdd/STALE.py", "dependencies": ["stale_dep"]},
+            {"filename": "only_canonical_python.prompt", "filepath": "pdd/only_canonical.py"},
+        ]
+        fallback_arch = [
+            {"filename": "shared_python.prompt", "filepath": "pdd/ACTIVE.py", "dependencies": ["active_dep"]},
+        ]
+
+        def fake_subprocess(args, **kwargs):
+            subcmd = args[1]
+            if subcmd == "for-each-ref":
+                return MagicMock(returncode=0, stdout="origin/change/issue-1609-job-active\n", stderr="")
+            ref_path = args[2]
+            if "issue-1609-job-active:" in ref_path:
+                return MagicMock(returncode=0, stdout=json.dumps(fallback_arch), stderr="")
+            # canonical branch exists but is stale (clean-restart abandoned it)
+            return MagicMock(returncode=0, stdout=json.dumps(canonical_arch), stderr="")
+
+        with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_subprocess):
+            result = _augment_architecture_from_pr_branch(local_arch, tmp_path, 1609)
+
+        by_name = {e["filename"]: e for e in result}
+        assert by_name["shared_python.prompt"]["filepath"] == "pdd/ACTIVE.py", (
+            "Active fallback branch's metadata must win the filename-dedup over stale canonical"
+        )
+        assert by_name["shared_python.prompt"]["dependencies"] == ["active_dep"]
+        assert "only_canonical_python.prompt" in by_name, (
+            "Entry unique to canonical must still be merged — fallback-first ordering must "
+            "not drop canonical-only modules (that would re-open #1609 under-inclusion)"
+        )
+
+
 class TestFilterInvalidBasenamesCodeExtensions:
     """_filter_invalid_basenames must strip code file extensions (.tsx, .ts, .py, etc.)
     from architecture.json filename entries before matching against sync basenames.
@@ -4079,6 +4312,51 @@ class TestAugmentAndFilterIntegration:
         )
         assert "frontend/components/dashboard/GitHubAppCTA" in valid, (
             f"New module from PR branch should pass filter after augmentation, got invalid={invalid}"
+        )
+
+    def test_new_module_on_fallback_branch_passes_basename_filter(self, tmp_path):
+        """Integration regression test for Issue #1609.
+
+        When a new module is created on a clean-restart fallback branch
+        (change/issue-N-job-*), _augment_architecture_from_pr_branch must discover
+        and merge the new entry so that _filter_invalid_basenames accepts the basename
+        rather than rejecting it as a hallucination.
+        """
+        local_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py"},
+        ]
+        fallback_arch = [
+            {"filename": "foo_python.prompt", "filepath": "pdd/foo.py"},
+            {"filename": "new_module_python.prompt", "filepath": "pdd/new_module.py"},
+        ]
+
+        # Set up disk structure so find_architecture_for_project discovers architecture.json
+        (tmp_path / "architecture.json").write_text(json.dumps(local_arch))
+
+        def fake_subprocess(args, **kwargs):
+            subcmd = args[1]
+            if subcmd == "for-each-ref":
+                return MagicMock(returncode=0, stdout="origin/change/issue-1609-job-abc123\n", stderr="")
+            ref_path = args[2]
+            if "issue-1609-job-abc123:" in ref_path:
+                return MagicMock(returncode=0, stdout=json.dumps(fallback_arch), stderr="")
+            # canonical branch does not exist
+            raise subprocess.CalledProcessError(128, "git show")
+
+        with patch("pdd.agentic_sync.subprocess.run", side_effect=fake_subprocess):
+            augmented = _augment_architecture_from_pr_branch(list(local_arch), tmp_path, 1609)
+
+        # Simulate the sync pipeline: basename filter runs immediately after augmentation
+        modules_to_sync = ["foo", "new_module"]
+        valid, invalid = _filter_invalid_basenames(modules_to_sync, augmented)
+
+        assert "foo" in valid, f"Existing module should pass filter, got invalid={invalid}"
+        assert "new_module" in valid, (
+            f"New module on fallback branch should pass filter after augmentation — "
+            f"currently augmentation misses the fallback branch so new_module appears in invalid={invalid}"
+        )
+        assert invalid == [], (
+            f"No basenames should be rejected as hallucinations, got invalid={invalid}"
         )
 
 
