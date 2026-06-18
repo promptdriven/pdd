@@ -35,6 +35,99 @@ _GITHUB_ISSUE_RE = re.compile(
 )
 
 
+def _estimate_mode_active(ctx: click.Context) -> bool:
+    """Return whether the global dry-run cost estimate mode is active."""
+    return bool((ctx.obj or {}).get("estimate")) or os.getenv("PDD_ESTIMATE", "").lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _is_estimate_only_result(exception: Exception) -> bool:
+    """Identify llm_invoke.EstimateOnlyResult without importing llm_invoke eagerly."""
+    return (
+        exception.__class__.__name__ == "EstimateOnlyResult"
+        and isinstance(getattr(exception, "estimate", None), dict)
+    )
+
+
+def _estimate_result_tuple(exception: Exception) -> Tuple[Dict[str, Any], float, str]:
+    """Convert EstimateOnlyResult into the normal command return tuple."""
+    payload = getattr(exception, "payload", None) or getattr(exception, "estimate", {})
+    model = str(payload.get("model") or "unknown") if isinstance(payload, dict) else "unknown"
+    return payload, 0.0, model
+
+
+def _strip_prompt_language_suffix(path: Path) -> Optional[str]:
+    stem = path.stem
+    for suffix in _prompt_target_extensions(path):
+        if stem.endswith(suffix):
+            return stem[: -len(suffix)]
+    return None
+
+
+def _prompt_target_extensions(path: Path) -> Dict[str, str]:
+    return {
+        "_python": ".py",
+        "_Python": ".py",
+        "_typescript": ".ts",
+        "_TypeScript": ".ts",
+        "_typescriptreact": ".tsx",
+        "_TypeScriptReact": ".tsx",
+        "_javascript": ".js",
+        "_JavaScript": ".js",
+    }
+
+
+def _estimate_output_path_hint(prompt_file: Optional[str], output: Optional[str]) -> Optional[str]:
+    """Best-effort existing target file hint for output-token estimation."""
+    if output:
+        output_path = Path(output)
+        if output_path.is_file():
+            return str(output_path)
+
+    if not prompt_file:
+        return None
+    prompt_path = Path(prompt_file)
+    basename = _strip_prompt_language_suffix(prompt_path)
+    if not basename:
+        return None
+    suffix_to_extension = _prompt_target_extensions(prompt_path)
+    extension = next(
+        (
+            target_extension
+            for prompt_suffix, target_extension in suffix_to_extension.items()
+            if prompt_path.stem.endswith(prompt_suffix)
+        ),
+        ".py",
+    )
+
+    candidates: List[Path] = []
+    parts = prompt_path.parts
+    if "pdd" in parts and "prompts" in parts:
+        try:
+            prompts_index = parts.index("prompts")
+            rel_dir = Path(*parts[prompts_index + 1 : -1])
+            repo_prefix = Path(*parts[:prompts_index])
+            candidates.append(repo_prefix / rel_dir / f"{basename}{extension}")
+        except (TypeError, ValueError):
+            pass
+
+    candidates.extend(
+        [
+            prompt_path.with_name(f"{basename}{extension}"),
+            prompt_path.parent.parent / "src" / f"{basename}{extension}",
+            prompt_path.parent.parent / f"{basename}{extension}",
+        ]
+    )
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
 def _maybe_run_prompt_gate(
     *,
     output_files: Tuple[str, ...] | List[str],
@@ -43,9 +136,11 @@ def _maybe_run_prompt_gate(
     project_root: Optional[str],
     quiet: bool,
     dry_run: bool = False,
+    interactive: bool = False,
+    apply: bool = False,
 ) -> tuple[bool, int]:
     """Run the prompt gate; return ``(should_continue, exit_code)``."""
-    if dry_run:
+    if dry_run and not interactive:
         return True, 0
     root = Path(project_root or Path.cwd()).resolve()
     return maybe_run_workflow_prompt_gate(
@@ -54,6 +149,9 @@ def _maybe_run_prompt_gate(
         no_prompt_checkup=no_prompt_checkup,
         project_root=root,
         quiet=quiet,
+        interactive=interactive,
+        apply=apply,
+        dry_run=dry_run,
     )
 
 
@@ -65,6 +163,8 @@ def _enforce_prompt_gate_or_exit(
     project_root: Optional[str],
     quiet: bool,
     dry_run: bool = False,
+    interactive: bool = False,
+    apply: bool = False,
 ) -> None:
     """Raise ``click.Exit`` when strict prompt checkup blocks downstream work."""
     should_continue, exit_code = _maybe_run_prompt_gate(
@@ -74,6 +174,8 @@ def _enforce_prompt_gate_or_exit(
         project_root=project_root,
         quiet=quiet,
         dry_run=dry_run,
+        apply=apply,
+        interactive=interactive,
     )
     if not should_continue:
         raise click.exceptions.Exit(exit_code)
@@ -181,6 +283,20 @@ class GenerateCommand(click.Command):
     default=False,
     help="Disable automatic prompt checkup for this run.",
 )
+@click.option(
+    "--interactive",
+    "interactive",
+    is_flag=True,
+    default=False,
+    help="With --prompt-checkup: run interactive per-finding repair on changed prompts.",
+)
+@click.option(
+    "--apply",
+    "apply",
+    is_flag=True,
+    default=False,
+    help="With --interactive: write approved low-risk repairs to the prompt files.",
+)
 @click.pass_context
 @log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)
 @track_cost
@@ -206,6 +322,8 @@ def generate(
     compress: bool,
     prompt_checkup: Optional[str],
     no_prompt_checkup: bool,
+    interactive: bool,
+    apply: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Create runnable code from a prompt file.
@@ -250,6 +368,7 @@ def generate(
 
         verbose = ctx.obj.get("verbose", False) if ctx.obj else False
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
+        estimate_mode = _estimate_mode_active(ctx)
         is_github_issue = bool(prompt_file and _GITHUB_ISSUE_RE.match(prompt_file.strip()))
         has_code_generation_options = bool(
             output
@@ -304,6 +423,8 @@ def generate(
             )
 
         if is_incremental_prd:
+            if estimate_mode:
+                raise click.UsageError("Estimate mode currently supports standard prompt-file `generate` only.")
             from .. import DEFAULT_STRENGTH, DEFAULT_TIME
             from ..agentic_architecture import run_incremental_architecture
 
@@ -349,6 +470,8 @@ def generate(
                     project_root=project_root,
                     quiet=quiet,
                     dry_run=dry_run,
+                    interactive=interactive,
+                    apply=apply,
                 )
             return (message, cost, model) if success else None
 
@@ -360,6 +483,8 @@ def generate(
 
         # Detect GitHub issue URL -> agentic architecture mode
         if is_github_issue:
+            if estimate_mode:
+                raise click.UsageError("Estimate mode currently supports standard prompt-file `generate` only.")
             from ..agentic_architecture import run_agentic_architecture
 
             success, message, cost, model, output_files = run_agentic_architecture(
@@ -396,6 +521,8 @@ def generate(
                     no_prompt_checkup=no_prompt_checkup,
                     project_root=project_root,
                     quiet=quiet,
+                    interactive=interactive,
+                    apply=apply,
                 )
             return (message, cost, model) if success else None
 
@@ -429,18 +556,79 @@ def generate(
         os.environ.update(env_vars)
 
         # 4. Call Code Generator
-        generated_code, is_incremental, cost, model = code_generator_main(
-            ctx=ctx,
-            prompt_file=target_prompt_file,
-            output=output,
-            original_prompt_file_path=original_prompt,
-            force_incremental_flag=incremental,
-            env_vars=env_vars if env_vars else None,
-            unit_test_file=unit_test,
-            exclude_tests=exclude_tests,
-            snapshot_context=snapshot_context,
-            compress=compress,
-        )
+        force_was_present = False
+        original_force = None
+        output_hint_was_present = False
+        original_output_hint = None
+        incremental_module = None
+        original_incremental_func = None
+        had_incremental_func = False
+        try:
+            if estimate_mode and isinstance(ctx.obj, dict):
+                force_was_present = "force" in ctx.obj
+                original_force = ctx.obj.get("force")
+                ctx.obj["force"] = True
+                output_hint_was_present = "estimate_output_path_hint" in ctx.obj
+                original_output_hint = ctx.obj.get("estimate_output_path_hint")
+                output_path_hint = _estimate_output_path_hint(target_prompt_file, output)
+                if output_path_hint:
+                    ctx.obj["estimate_output_path_hint"] = output_path_hint
+                else:
+                    ctx.obj.pop("estimate_output_path_hint", None)
+                try:
+                    import importlib
+
+                    incremental_module = importlib.import_module("pdd.code_generator_main")
+                    had_incremental_func = hasattr(
+                        incremental_module,
+                        "incremental_code_generator_func",
+                    )
+                    original_incremental_func = getattr(
+                        incremental_module,
+                        "incremental_code_generator_func",
+                        None,
+                    )
+
+                    def _estimate_skip_incremental(*_args: Any, **_kwargs: Any) -> Tuple[None, bool, float, str]:
+                        return None, False, 0.0, "estimate"
+
+                    incremental_module.incremental_code_generator_func = _estimate_skip_incremental
+                except Exception:
+                    incremental_module = None
+            generated_code, is_incremental, cost, model = code_generator_main(
+                ctx=ctx,
+                prompt_file=target_prompt_file,
+                output=output,
+                original_prompt_file_path=original_prompt,
+                force_incremental_flag=incremental,
+                env_vars=env_vars if env_vars else None,
+                unit_test_file=unit_test,
+                exclude_tests=exclude_tests,
+                snapshot_context=snapshot_context,
+                compress=compress,
+            )
+        except Exception as exception:
+            if _is_estimate_only_result(exception):
+                return _estimate_result_tuple(exception)
+            raise
+        finally:
+            if estimate_mode and isinstance(ctx.obj, dict):
+                if force_was_present:
+                    ctx.obj["force"] = original_force
+                else:
+                    ctx.obj.pop("force", None)
+                if output_hint_was_present:
+                    ctx.obj["estimate_output_path_hint"] = original_output_hint
+                else:
+                    ctx.obj.pop("estimate_output_path_hint", None)
+            if estimate_mode and incremental_module is not None:
+                if had_incremental_func:
+                    incremental_module.incremental_code_generator_func = original_incremental_func
+                else:
+                    try:
+                        delattr(incremental_module, "incremental_code_generator_func")
+                    except AttributeError:
+                        pass
 
         if evidence:
             ctx_obj = ctx.obj or {}
@@ -470,6 +658,8 @@ def generate(
     except (click.Abort, click.exceptions.Exit, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
+        if _is_estimate_only_result(e):
+            return _estimate_result_tuple(e)
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
         handle_error(e, "generate", quiet)
         return None
@@ -518,6 +708,8 @@ def example(
     except click.Abort:
         raise
     except Exception as exception:
+        if _is_estimate_only_result(exception):
+            return _estimate_result_tuple(exception)
         handle_error(exception, "example", (ctx.obj or {}).get("quiet", False))
         raise click.exceptions.Exit(1) from exception
 
@@ -585,6 +777,7 @@ def test(
             raise click.UsageError("Missing arguments. See 'pdd test --help'.")
 
         is_url = bool(_GITHUB_ISSUE_RE.match(args[0].strip()))
+        estimate_mode = _estimate_mode_active(ctx)
         if clean_restart and (manual or not is_url):
             raise click.UsageError("--clean-restart can only be used with an agentic GitHub issue URL.")
 
@@ -592,6 +785,8 @@ def test(
         if (len(args) == 1 and not manual
                 and Path(args[0]).suffix.lower() == ".md"
                 and Path(args[0]).name.startswith("story__")):
+            if estimate_mode:
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
             story_path = Path(args[0])
             obj = ctx.obj or {}
             success, message, cost, model, linked_prompts = cache_story_prompt_links(
@@ -630,6 +825,8 @@ def test(
 
         # Story generation: pdd test prompt1.prompt [prompt2.prompt ...]
         if not manual and args and all(Path(arg).suffix.lower() == ".prompt" for arg in args):
+            if estimate_mode:
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
             obj = ctx.obj or {}
             story_prompt_args = [str(Path(arg)) for arg in args]
             success, message, cost, model, generated_story_file, linked_prompts = generate_user_story(
@@ -670,6 +867,8 @@ def test(
             return result_dict, cost, model
 
         if is_url and not manual:
+            if estimate_mode:
+                raise click.UsageError("Estimate mode currently supports `generate` only.")
             # Agentic Mode
             if len(args) != 1:
                 raise click.UsageError("Agentic mode requires exactly one argument (the GitHub issue URL).")
@@ -722,20 +921,25 @@ def test(
             strength = ctx.obj.get("strength") if ctx.obj else None
             temperature = ctx.obj.get("temperature") if ctx.obj else None
 
-            test_result = cmd_test_main(
-                ctx=ctx,
-                prompt_file=prompt_file,
-                code_file=code_file,
-                output=output,
-                language=language,
-                coverage_report=coverage_report,
-                existing_tests=existing_tests,
-                target_coverage=target_coverage,
-                merge=merge,
-                strength=strength,
-                temperature=temperature,
-                manual=manual
-            )
+            try:
+                test_result = cmd_test_main(
+                    ctx=ctx,
+                    prompt_file=prompt_file,
+                    code_file=code_file,
+                    output=output,
+                    language=language,
+                    coverage_report=coverage_report,
+                    existing_tests=existing_tests,
+                    target_coverage=target_coverage,
+                    merge=merge,
+                    strength=strength,
+                    temperature=temperature,
+                    manual=manual
+                )
+            except Exception as exception:
+                if _is_estimate_only_result(exception):
+                    return _estimate_result_tuple(exception)
+                raise
 
             if evidence:
                 ctx_obj = ctx.obj or {}
@@ -764,6 +968,8 @@ def test(
     except (click.Abort, click.exceptions.Exit, click.ClickException, click.UsageError, click.BadArgumentUsage, click.FileError, click.BadParameter):
         raise
     except Exception as e:
+        if _is_estimate_only_result(e):
+            return _estimate_result_tuple(e)
         quiet = ctx.obj.get("quiet", False) if ctx.obj else False
         handle_error(e, "test", quiet)
         return None

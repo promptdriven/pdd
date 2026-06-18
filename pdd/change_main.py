@@ -522,6 +522,8 @@ def change_main(
                 no_prompt_checkup=ctx.obj.get("no_prompt_checkup", False),
                 project_root=resolve_prompt_gate_project_root(saved_prompt_paths),
                 quiet=quiet,
+                interactive=ctx.obj.get("interactive", False),
+                apply=ctx.obj.get("apply", False),
             )
             if not should_continue:
                 msg = prompt_gate_block_message(gate_exit)

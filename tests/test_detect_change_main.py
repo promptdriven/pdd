@@ -1,9 +1,24 @@
 import pytest
 import click
+from io import StringIO
 from click.testing import CliRunner
 from unittest.mock import patch, MagicMock
+from rich.console import Console
 from pdd.detect_change_main import detect_change_main
+from pdd.cli_status import Status, StatusReporter
 from pdd import DEFAULT_STRENGTH
+
+
+@pytest.fixture
+def mock_status():
+    """Inject a recording StatusReporter so tests can assert message *shape*.
+
+    The reporter writes to a throwaway StringIO console (no terminal, no
+    spinner, no timing), so assertions stay deterministic.
+    """
+    reporter = StatusReporter("pdd detect", console=Console(file=StringIO()))
+    with patch('pdd.detect_change_main.from_context', return_value=reporter):
+        yield reporter
 
 @pytest.fixture
 def mock_construct_paths():
@@ -35,7 +50,7 @@ def mock_sys_exit():
     with patch('sys.exit') as mock:
         yield mock
 
-def test_detect_change_main_success(mock_construct_paths, mock_detect_change, mock_rprint, mock_csv_writer, mock_open):
+def test_detect_change_main_success(mock_status, mock_construct_paths, mock_detect_change, mock_rprint, mock_csv_writer, mock_open):
     """
     Test case for successful execution of detect_change_main.
     """
@@ -99,13 +114,23 @@ def test_detect_change_main_success(mock_construct_paths, mock_detect_change, mo
         verbose=True
     )
 
-    mock_rprint.assert_any_call("[bold green]Change detection completed successfully.[/bold green]")
+    # Detailed data report still flows through rprint, unchanged.
     mock_rprint.assert_any_call("[bold]Model used:[/bold] gpt-4")
     mock_rprint.assert_any_call("[bold]Total cost:[/bold] $0.050000")
     mock_rprint.assert_any_call("[bold]Results saved to:[/bold] output.csv")
     mock_rprint.assert_any_call("\n[bold]Changes needed:[/bold]")
     mock_rprint.assert_any_call("[bold]Prompt:[/bold] prompt1.prompt")
     mock_rprint.assert_any_call("[bold]Instructions:[/bold] Update prompt")
+
+    # Status messaging: a start, a waiting indicator, and a success with a
+    # next action — the UX acceptance criteria for a covered command.
+    kinds = [m.status for m in mock_status.messages]
+    assert kinds[0] == Status.START
+    assert Status.WAITING in kinds
+    success = [m for m in mock_status.messages if m.status == Status.SUCCESS]
+    assert success and success[-1].next_step
+    waiting = [m for m in mock_status.messages if m.status == Status.WAITING]
+    assert waiting[0].waiting_on == "LLM"
 
 def test_detect_change_main_no_changes(mock_construct_paths, mock_detect_change, mock_rprint):
     """
@@ -150,7 +175,7 @@ def test_detect_change_main_no_changes(mock_construct_paths, mock_detect_change,
     )
     mock_rprint.assert_any_call("No changes needed for any of the analyzed prompts.")
 
-def test_detect_change_main_error(mock_construct_paths, mock_rprint, mock_sys_exit):
+def test_detect_change_main_error(mock_status, mock_construct_paths, mock_rprint, mock_sys_exit):
     """
     Test case for detect_change_main when an error occurs.
     """
@@ -174,8 +199,13 @@ def test_detect_change_main_error(mock_construct_paths, mock_rprint, mock_sys_ex
     # Call the function
     detect_change_main(mock_ctx, prompt_files, change_file, output)
 
-    # Assertions
-    mock_rprint.assert_called_with("[bold red]Error:[/bold red] File not found")
+    # Assertions: an actionable failure (what failed, why, what to try) and exit 1.
+    failures = [m for m in mock_status.messages if m.status == Status.FAILURE]
+    assert failures, "a FAILURE status should be reported"
+    failure = failures[-1]
+    assert failure.reason == "File not found"          # root cause surfaced
+    assert len(failure.suggestions) >= 1               # concrete next steps
+    assert failure.text                                 # names the step that failed
     mock_sys_exit.assert_called_with(1)
 
 def test_detect_change_main_quiet_mode(mock_construct_paths, mock_detect_change, mock_rprint):

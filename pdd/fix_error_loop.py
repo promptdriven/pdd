@@ -516,6 +516,8 @@ def fix_error_loop(
                     module_path=code_file,
                     failing_tests=failing_tests,
                     budget_tokens=None,
+                    candidate_files=[unit_test_file],
+                    slice_failing_tests=True,
                 )
                 compressed_test = pack_result.context_text
             except CompressionFallbackError as exc:

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -655,7 +657,7 @@ def test_build_verify_command_scopes_mypy_to_explicit_files() -> None:
         "mypy pdd",
         ["pdd/checkup_simplify.py"],
         repo_root=repo_root,
-    ) == "mypy --follow-imports=skip pdd/checkup_simplify.py"
+    ) == "mypy --follow-imports=skip --ignore-missing-imports pdd/checkup_simplify.py"
 
 
 def test_build_verify_command_scopes_pytest_to_colocated_tests(tmp_path: Path) -> None:
@@ -757,7 +759,8 @@ def test_default_pytest_verify_command_runs_colocated_tests() -> None:
 
     # Run one fast test from the colocated module to prove the scoped command works.
     smoke_command = (
-        "pytest -q tests/commands/test_checkup_simplify.py::test_parse_claude_code_version"
+        f"{shlex.quote(sys.executable)} -m pytest -q "
+        "tests/commands/test_checkup_simplify.py::test_parse_claude_code_version"
     )
     result = subprocess.run(
         smoke_command,

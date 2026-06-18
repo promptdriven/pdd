@@ -22,6 +22,7 @@ Own durable snapshot and replay primitives for expanded prompt context, independ
 
 % Requirements
 1. Provide a `ContextSnapshotRecorder` or equivalent small API for starting a run, recording static includes, dynamic tag outputs, semantic extraction outputs, web snapshots, shell snapshots, selected grounding examples, and final prompt/code/test hashes.
+   - The include-recording method must accept the same keyword contract that `preprocess` calls every `snapshot_recorder` with, including an optional `include_depth` (the recursion depth of the resolved include). The snapshot manifest does not depend on recursion depth, so `include_depth` is accepted and ignored here; it exists so attribution-oriented recorders (e.g. the `pdd context` audit) can keep only top-level includes. Tolerate any additional keyword the caller may add (e.g. via a trailing catch-all) so instrumenting `preprocess` never raises `unexpected keyword argument`.
 2. Store the canonical run artifact at `.pdd/evidence/runs/<run_id>.json` and all replayable context artifacts in the sibling directory `.pdd/evidence/runs/<run_id>/` with stable filenames and JSON manifests. Do not introduce any alternate snapshot layout.
    - Auto-generated run IDs must be unique per invocation so repeated snapshots for the same prompt and command never overwrite earlier run artifacts.
 3. Compute SHA-256 hashes over canonical bytes for every captured input/output and for the final expanded prompt.

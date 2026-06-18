@@ -3,6 +3,7 @@ Checkup command — GitHub issue-driven project health check, or local diagnosti
 """
 # pylint: disable=unknown-option-value
 import math
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -11,7 +12,11 @@ import click
 from ..agentic_change import _parse_pr_url
 from ..agentic_checkup import run_agentic_checkup
 from ..checkup_prompt_main import build_prompt_source_set_report, run_checkup_prompt
-from ..checkup_target import is_prompt_shaped_target
+from ..checkup_target import (
+    CheckupTargetKind,
+    classify_checkup_target,
+    is_prompt_shaped_target,
+)
 from ..prompt_repair import (
     PromptRepairConfig,
     discover_prompt_paths,
@@ -30,6 +35,11 @@ from .coverage import coverage_cmd
 from .gate import gate_cmd
 from .drift import drift_cmd
 from .prompt import prompt_lint
+
+
+def _interactive_tty_available() -> bool:
+    """Return True when stdin and stdout are interactive terminals."""
+    return sys.stdin.isatty() and sys.stdout.isatty()
 
 
 def _forward_subcommand_json(
@@ -385,6 +395,76 @@ def _forward_subcommand_json(
     help="Wall-clock timeout for the prompt repair loop in seconds (default: 120).",
 )
 @click.option(
+    "--interactive",
+    "interactive",
+    is_flag=True,
+    default=False,
+    help="With .prompt targets: enter interactive per-finding repair session.",
+)
+@click.option(
+    "--apply",
+    "apply",
+    is_flag=True,
+    default=False,
+    help=(
+        "Write the selected low-risk repairs to the prompt, then re-verify. "
+        "Requires --interactive or --auto. Without it, fixes are only queued/saved."
+    ),
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --apply: preview the changes without writing any files. "
+        "--preview is kept as a compatibility alias."
+    ),
+)
+@click.option(
+    "--preview",
+    "preview",
+    is_flag=True,
+    default=False,
+    help="Compatibility alias for --dry-run in prompt repair/apply flows.",
+)
+@click.option(
+    "--planner",
+    "planner",
+    type=click.Choice(["deterministic", "llm"], case_sensitive=False),
+    default=None,
+    help=(
+        "With --interactive: planning strategy for the agentic checkup session. "
+        "'deterministic' (default) runs all tools in fixed order. "
+        "'llm' asks an LLM to suggest which tools matter most."
+    ),
+)
+@click.option(
+    "--auto",
+    "auto_mode",
+    is_flag=True,
+    default=False,
+    help=(
+        "Resolve every finding without per-finding prompts: low-risk fixes are "
+        "queued (or written with --apply); medium-risk are saved for review; "
+        "high-risk are left as manual TODOs. Nothing is written unless --apply."
+    ),
+)
+@click.option(
+    "--llm-repair",
+    "llm_repair",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --auto: let the LLM draft the real fix for every finding in one "
+        "pass. Preview by default — the rewrite is written to the prompt files "
+        "only with --apply (also honors --dry-run/--preview). v1 has no "
+        "auto-apply-by-confidence. Offline / no key falls back to deterministic "
+        "review. (The interactive [5]/[f] options select a draft in-session but "
+        "also write only with --apply.)"
+    ),
+)
+@click.option(
     "--json",
     "as_json",
     is_flag=True,
@@ -449,6 +529,13 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     max_prompt_repair_rounds: Optional[int],
     max_prompt_token_growth: Optional[int],
     max_prompt_repair_seconds: Optional[float],
+    interactive: bool,
+    apply: bool,
+    dry_run: bool,
+    preview: bool,
+    planner: Optional[str],
+    auto_mode: bool,
+    llm_repair: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     pdd checkup = verifier namespace
@@ -498,6 +585,19 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
       pdd checkup drift <DEVUNIT> [OPTIONS]
     """
     ctx.ensure_object(dict)
+    effective_dry_run = dry_run or preview
+
+    # --auto runs the agentic session with no per-finding prompts, so it is safe
+    # without a terminal (CI / scripted demo replay). Only a genuinely
+    # prompt-driven interactive session requires a real TTY.
+    if interactive and not auto_mode and not _interactive_tty_available():
+        raise click.UsageError(
+            "--interactive requires a TTY (stdin and stdout must be a terminal). "
+            "Use --auto for a non-interactive agentic session."
+        )
+
+    if interactive and as_json:
+        raise click.UsageError("--interactive cannot be combined with --json.")
 
     if show_help and target not in {
         "lint",
@@ -566,6 +666,11 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
 
     if target == "simplify":
         simplify_args = list(ctx.args)
+        # The parent ``checkup`` consumes ``--apply`` into its own flag, so
+        # re-inject it for ``checkup simplify`` (which has its own ``--apply``)
+        # — otherwise ``pdd checkup simplify --apply`` would silently preview.
+        if apply and "--apply" not in simplify_args:
+            simplify_args.append("--apply")
         if show_help:
             simplify_args.append("--help")
         exit_code = checkup_simplify.main(
@@ -658,6 +763,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             )
             return None
         drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
+        # Only an explicit checkup-level --dry-run forwards to drift. --preview is
+        # the interactive apply-preview alias and is intentionally NOT mapped to
+        # drift's --dry-run (which suppresses regeneration, an unrelated concept;
+        # see tests/commands/test_drift_cli.py::test_preview_does_not_inject_dry_run_into_drift).
+        if dry_run and "--dry-run" not in drift_args:
+            drift_args.insert(0, "--dry-run")
         exit_code = drift_cmd.main(
             args=drift_args,
             prog_name="pdd checkup drift",
@@ -683,15 +794,133 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
         return "validate-arch-includes: ok", 0.0, ""
 
-    if pr_url is None and target is not None and is_prompt_shaped_target(
+    target_kind = classify_checkup_target(target, project_root=project_root)
+
+    if interactive and target is not None and not is_prompt_shaped_target(
         target,
         project_root=project_root,
     ):
+        raise click.UsageError(
+            "--interactive is only supported for prompt-shaped checkup targets."
+        )
+
+    if (
+        pr_url is None
+        and target is not None
+        and is_prompt_shaped_target(target, project_root=project_root)
+    ):
+        # Validate the agentic-checkup flags here (inside prompt-target handling)
+        # rather than at the top of the command. The parent ``checkup`` defines
+        # ``--apply`` so it can land on a focused subcommand (e.g.
+        # ``pdd checkup simplify --apply``) — those dispatch and return above, and
+        # must reach their own ``--apply`` option instead of this guard.
+        if apply and not (interactive or auto_mode):
+            raise click.UsageError("--apply requires --interactive or --auto.")
+        if llm_repair and not auto_mode:
+            raise click.UsageError(
+                "--llm-repair requires --auto (interactive mode already offers the "
+                "per-finding 'let the LLM draft this fix' option)."
+            )
+
+        _quiet = ctx.obj.get("quiet", False)
+        _repair_defaults = load_prompt_repair_defaults(Path.cwd())
+        _effective_repair = (
+            prompt_repair if prompt_repair is not None else _repair_defaults.mode
+        )
+        _repair_active = _effective_repair not in (None, "off")
+        _machine_output = as_json or explain
+
+        # Agentic checkup is opt-in for prompt targets. Bare
+        # `pdd checkup <prompt>` stays on the structured source-set path so the
+        # issue #1423 interactive repair flow only runs after explicit intent.
+        _single_prompt_file = target_kind == CheckupTargetKind.PROMPT_FILE
+        _agent_requested = (
+            _single_prompt_file
+            and (interactive or planner is not None or auto_mode)
+        ) and not _machine_output
+        if _agent_requested:
+            from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
+                MODE_AUTO,
+                MODE_INTERACTIVE,
+                MODE_REVIEW,
+                CheckupAgent,
+                TerminalCheckupSession,
+            )
+            from ..checkup_planner import make_planner  # pylint: disable=import-outside-toplevel
+
+            _effective_planner = planner or "deterministic"
+            if interactive and auto_mode:
+                _mode = MODE_AUTO
+            elif interactive:
+                _mode = MODE_INTERACTIVE
+            elif auto_mode:
+                _mode = MODE_AUTO
+            else:
+                # --planner without --interactive: safe, non-interactive review.
+                _mode = MODE_REVIEW
+
+            _planner = make_planner(_effective_planner)
+            _agent_session = TerminalCheckupSession(quiet=_quiet)
+            _agent = CheckupAgent(_planner, _agent_session)
+            return _agent.run(
+                target,
+                project_root=project_root,
+                strict=strict,
+                apply=apply,
+                dry_run=effective_dry_run,
+                quiet=_quiet,
+                explicit_interactive=interactive,
+                auto=auto_mode,
+                mode=_mode,
+                llm_repair=llm_repair,
+            )
+
+        # Directory target: run the agentic review over every prompt and print
+        # one aggregate pass/warn/block summary (one gate for the whole set).
+        if (
+            target_kind == CheckupTargetKind.PROMPT_DIRECTORY
+            and not _machine_output
+            and not _repair_active
+        ):
+            if interactive:
+                raise click.UsageError(
+                    "Interactive checkup runs on a single .prompt file. For a "
+                    "directory, omit --interactive (review) or add --auto."
+                )
+            from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
+                MODE_AUTO,
+                MODE_REVIEW,
+                discover_prompt_files,
+                run_checkup_directory,
+            )
+            from ..checkup_planner import make_planner  # pylint: disable=import-outside-toplevel
+
+            _root = (project_root if project_root is not None else Path.cwd()).resolve()
+            _raw_dir = Path(target)
+            if _raw_dir.is_absolute():
+                _dir = _raw_dir
+            else:
+                _rooted_dir = _root / target
+                _dir = _rooted_dir if _rooted_dir.is_dir() else _raw_dir
+            _files = discover_prompt_files(_dir)
+            if not _files:
+                raise click.UsageError(f"No .prompt files found under {target!r}.")
+            return run_checkup_directory(
+                make_planner(planner or "deterministic"),
+                _files,
+                project_root=_root.resolve(),
+                strict=strict,
+                apply=apply,
+                dry_run=effective_dry_run,
+                auto=auto_mode,
+                mode=MODE_AUTO if auto_mode else MODE_REVIEW,
+                quiet=_quiet,
+                llm_repair=llm_repair,
+            )
+
         import json as _json  # pylint: disable=import-outside-toplevel
 
-        quiet = ctx.obj.get("quiet", False)
-        _repair_defaults = load_prompt_repair_defaults(Path.cwd())
-        _effective_repair = prompt_repair if prompt_repair is not None else _repair_defaults.mode
+        quiet = _quiet
 
         passed, message, cost, model, exit_code = run_checkup_prompt(
             target,
@@ -721,7 +950,16 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                     else _repair_defaults.max_seconds
                 ),
             )
+            # Resolve a relative target against project_root (not cwd) so a
+            # single-file repair like
+            #   pdd checkup prompts/foo.prompt --project-root /repo --prompt-repair ...
+            # targets only that file instead of falling through to a whole-project
+            # repair sweep when cwd != project_root.
             _target_path = Path(target)
+            if not _target_path.is_absolute():
+                _rooted_target = _root / target
+                if _rooted_target.is_file():
+                    _target_path = _rooted_target
             if _target_path.is_file() and _target_path.suffix == ".prompt":
                 _prompt_paths = [_target_path]
             else:

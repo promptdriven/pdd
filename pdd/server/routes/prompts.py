@@ -66,6 +66,43 @@ class PromptAnalyzeResponse(BaseModel):
     preprocessing_error: Optional[str] = Field(None, description="Preprocessing error if any")
 
 
+class ContextAuditRow(BaseModel):
+    """One attributed source segment of a hydrated prompt's context usage."""
+    source: str = Field(..., description="Segment label (include path, prompt_body, grounding, …)")
+    tokens: int = Field(..., description="Tokens this segment contributes to the hydrated payload")
+    percent: float = Field(..., description="Percent of total_tokens")
+    status: str = Field(..., description="resolved | unresolved | deferred | unavailable | body")
+    note: Optional[str] = Field(None, description="Human note (e.g. why a row is unresolved/deferred)")
+
+
+class ContextAuditRequest(BaseModel):
+    """Request to audit a prompt file's context-window usage by source."""
+    path: str = Field(..., description="Path to prompt file (relative to project root)")
+    model: str = Field("claude-sonnet-4-20250514", description="Model used for context-limit lookup")
+    threshold: int = Field(80, ge=0, le=100, description="Budget threshold percent; 0 disables")
+    content: Optional[str] = Field(
+        None,
+        description="Optional prompt content to audit instead of reading from disk "
+        "(so connect reflects unsaved editor edits); includes still resolve "
+        "relative to path's project root",
+    )
+
+
+class ContextAuditResponse(BaseModel):
+    """Deterministic, no-LLM per-source context-window audit of a prompt.
+
+    Mirrors the ``pdd context --json`` shape 1:1 so the CLI and the connect API
+    return the same audit facts from one shared implementation (PR #1387).
+    """
+    total_tokens: int = Field(..., description="Deterministic hydrated token total (excludes deferred markup)")
+    context_limit: Optional[int] = Field(None, description="Model context limit (None if unknown)")
+    percent_used: Optional[float] = Field(None, description="total_tokens as a percent of context_limit")
+    model: str = Field(..., description="Model the audit was computed for")
+    rows: list[ContextAuditRow] = Field(default_factory=list, description="Per-source attribution, largest first")
+    warnings: list[str] = Field(default_factory=list, description="Deferred/unresolved warnings")
+    threshold_exceeded: bool = Field(False, description="Whether percent_used exceeds the threshold")
+
+
 class SyncStatusResponse(BaseModel):
     """Response from sync status check."""
     status: str = Field(..., description="Sync status: in_sync, prompt_changed, code_changed, conflict, never_synced")
@@ -311,18 +348,25 @@ async def analyze_prompt(
             try:
                 # Import here to avoid circular imports
                 from pdd.preprocess import preprocess
+                # Share the context-audit core's cwd/env lock: /analyze and the
+                # context-audit endpoint both resolve includes by changing cwd and
+                # run together in connect's debounced cycle, so serialize them so
+                # concurrent requests cannot cross-contaminate include resolution
+                # (PR #1387 review #3).
+                from pdd.context_audit import cwd_env_lock
 
                 # Change to project root for relative includes to work
-                original_cwd = os.getcwd()
-                try:
-                    os.chdir(validator.project_root)
-                    processed_content = preprocess(
-                        raw_content,
-                        recursive=True,
-                        double_curly_brackets=True
-                    )
-                finally:
-                    os.chdir(original_cwd)
+                with cwd_env_lock():
+                    original_cwd = os.getcwd()
+                    try:
+                        os.chdir(validator.project_root)
+                        processed_content = preprocess(
+                            raw_content,
+                            recursive=True,
+                            double_curly_brackets=True
+                        )
+                    finally:
+                        os.chdir(original_cwd)
 
                 processed_metrics_obj = get_token_metrics(
                     processed_content,
@@ -357,6 +401,90 @@ async def analyze_prompt(
             processed_metrics=processed_metrics,
             preprocessing_succeeded=preprocessing_succeeded,
             preprocessing_error=preprocessing_error,
+        )
+
+    except SecurityError as e:
+        raise HTTPException(status_code=403, detail=e.message)
+
+
+@router.post("/context-audit", response_model=ContextAuditResponse)
+async def context_audit(
+    request: ContextAuditRequest,
+    validator: PathValidator = Depends(get_path_validator),
+):
+    """
+    Audit a prompt file's context-window usage by source.
+
+    Deterministic and LLM-free: preprocesses the prompt the same way generation's
+    first pass does and attributes tokens per source (prompt body, each include,
+    grounding), flagging unresolved includes and deferred dynamic tags. Backed by
+    the shared ``pdd.context_audit`` core — the exact implementation the
+    ``pdd context`` CLI uses — so the API and CLI never drift (PR #1387).
+    """
+    try:
+        # Always validate path for project scope / base-dir semantics, even when
+        # auditing override content — includes still resolve from its project root.
+        abs_path = validator.validate(request.path)
+
+        # Imported here (matching this module's circular-import convention) and
+        # never via pdd.commands.* — the CLI and this endpoint share ONE core.
+        from pdd.context_audit import (
+            audit_prompt_file,
+            audit_prompt_text,
+            row_percent,
+            threshold_exceeded,
+        )
+
+        if request.content is not None:
+            # Audit the editor's unsaved content (matches /analyze's override
+            # behavior), so connect metrics agree with the visible buffer.
+            if len(request.content.encode("utf-8")) > 500 * 1024:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Content too large for audit (max 500KB)",
+                )
+            # Resolve relative includes from the project root, mirroring a CLI
+            # run from there, so override and on-disk audits use one base dir.
+            audit = audit_prompt_text(
+                request.content,
+                model=request.model,
+                base_dir=str(validator.project_root),
+            )
+        else:
+            if not abs_path.exists():
+                raise HTTPException(status_code=404, detail=f"File not found: {request.path}")
+            if abs_path.is_dir():
+                raise HTTPException(status_code=400, detail=f"Cannot audit directory: {request.path}")
+
+            # Resolve includes relative to the project root exactly as the CLI
+            # does when run from there, so the audit rows match the CLI's answer.
+            # Pass base_dir instead of changing cwd in the route: the shared core
+            # performs (and serializes) the cwd change under its lock, so
+            # concurrent connect audits never cross-contaminate include
+            # resolution (PR #1387 review #3).
+            audit = audit_prompt_file(
+                str(abs_path),
+                model=request.model,
+                base_dir=str(validator.project_root),
+            )
+
+        return ContextAuditResponse(
+            total_tokens=audit.total_tokens,
+            context_limit=audit.context_limit,
+            percent_used=audit.percent_used,
+            model=audit.model,
+            rows=[
+                ContextAuditRow(
+                    source=r.source,
+                    tokens=r.tokens,
+                    percent=row_percent(r, audit.total_tokens),
+                    status=r.status,
+                    note=r.note,
+                )
+                for r in audit.rows
+            ],
+            warnings=audit.warnings,
+            threshold_exceeded=threshold_exceeded(audit.percent_used, request.threshold),
         )
 
     except SecurityError as e:

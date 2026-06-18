@@ -9,7 +9,7 @@ Requirements
 1. Export default `PromptMetricsBar` as `React.FC<PromptMetricsBarProps>`.
 2. `PromptMetricsBarProps` must include:
    - required: `rawMetrics`, `processedMetrics`, `viewMode: 'raw' | 'processed'`, `onViewModeChange`, `isLoading`
-   - optional: `preprocessingError`, `timeValue`, `promptLineCount`, `codeLineCount`, `contextLimit`, `maxThinkingTokens`, `selectedModel`
+   - optional: `preprocessingError`, `timeValue`, `promptLineCount`, `codeLineCount`, `contextLimit`, `maxThinkingTokens`, `selectedModel`, `contextAudit: ContextAuditResponse | null`
    - optional action props: `showCodePanel`, `onToggleCodePanel`, `hasCodeFile`, `showTestPanel`, `onToggleTestPanel`, `hasTestFile`, `showExamplePanel`, `onToggleExamplePanel`, `hasExampleFile`, `showPreview`, `onTogglePreview`, `onShowDiff`
 3. Default `timeValue` to `0.25`. Select `currentMetrics` from `viewMode` (`processed` uses `processedMetrics`, otherwise `rawMetrics`).
 4. Compute context budgeting with exact fallback priority:
@@ -40,7 +40,11 @@ Requirements
    - widths from `inputPercent`, `thinkingPercent`, `outputPercent` derived from `contextLimit`
    - segment tooltips include formatted token counts and one-decimal percentages
    - legend row for Input/Thinking/Output; append `(low)` and warning text color when output is low.
-9. Use responsive Tailwind dark-surface styling consistent with `PromptSpace` and keep inline SVG icons (no external icon package).
+9. Add an optional per-source context breakdown from the shared context-audit core (the same data `pdd context` reports), rendered only when `contextAudit` is provided and `contextAudit.rows.length > 0`:
+   - A `Context usage by source` header; append a red `budget exceeded` marker when `contextAudit.threshold_exceeded`.
+   - One row per `contextAudit.rows` entry showing the `source` and `formatTokens(tokens) (percent.toFixed(1)%)`; for non-`resolved`/non-`body` rows append a muted `(status)` tag and dim the row; set each row's `title` to `note ?? status`.
+   - When `contextAudit.warnings.length > 0`, show a small `<n> deferred/unresolved warning(s)` summary line.
+10. Use responsive Tailwind dark-surface styling consistent with `PromptSpace` and keep inline SVG icons (no external icon package).
 
 Deliverable
 - Output only `pdd/frontend/components/PromptMetricsBar.tsx`.

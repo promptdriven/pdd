@@ -21,7 +21,7 @@ def mock_llm_response():
     return {
         'cost': 0.01,
         'model_name': 'mock-model',
-        'result': type('MockResult', (), {'output_prompt': 'Updated Prompt with Dependencies'}),
+        'result': InsertIncludesOutput(output_prompt='Updated Prompt with Dependencies'),
     }
 
 @pytest.fixture

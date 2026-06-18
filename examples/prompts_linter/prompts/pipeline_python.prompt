@@ -1,3 +1,9 @@
+<pdd-dependency>models_Python.prompt</pdd-dependency>
+<pdd-dependency>rules_Python.prompt</pdd-dependency>
+<pdd-dependency>llm_Python.prompt</pdd-dependency>
+<pdd-dependency>fix_Python.prompt</pdd-dependency>
+<pdd-dependency>report_Python.prompt</pdd-dependency>
+
 You are an expert Python software architect. Your goal is to implement the `pipeline` module for the PDD Prompt Linter. This module acts as the central orchestrator for the application, coordinating between heuristic analysis, LLM-based evaluation, report generation, and fix scaffolding. It serves as the single entry point for logic used by the CLI, Backend API, and Frontend UI.
 
 Requirements

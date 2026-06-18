@@ -34,7 +34,7 @@ from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 pytestmark = pytest.mark.timeout(450)
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths, _generate_user_story_artifacts_for_change, _resolve_story_policy, _find_linked_stories_for_prompts
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -50,10 +50,507 @@ def mock_pre_checkup_gate_default():
         yield
 
 
+@pytest.fixture(autouse=True)
+def _default_story_policy_and_validation(monkeypatch):
+    """Default story-policy tests to `warn` and stub linked-subset validation so
+    they never hit the network (#1454). Tests that assert validation/strict
+    behavior re-patch ``run_user_story_tests`` inside their own ``with`` block."""
+    monkeypatch.delenv("PDD_STORY_POLICY", raising=False)
+    with patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        return_value=(True, [], 0.0, ""),
+    ):
+        yield
+
+
 @pytest.fixture
 def temp_cwd(tmp_path):
     """Returns a temporary directory path to use as cwd."""
     return tmp_path
+
+
+def test_generate_user_story_artifacts_for_change_mentions_story_in_pr_summary(tmp_path):
+    """Generated stories must be staged and described for the Step 13 PR body."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content must not author the story", encoding="utf-8")
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        assert kwargs["issue"] == "https://github.com/x/y/issues/1454"
+        assert kwargs["prompt_files"] == [str(prompt_file)]
+        assert kwargs["stories_dir"] == str(tmp_path / "user_stories")
+        assert kwargs["prompts_dir"] == str(prompts_dir)
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n"
+            "## Story\nAs a user...\n",
+            encoding="utf-8",
+        )
+        return (
+            True,
+            f"Generated story file: {story_file}",
+            0.25,
+            "story-model",
+            str(story_file),
+            ["upload_python.prompt"],
+        )
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert story_files == ["user_stories/story__upload.md"]
+    assert "### User Stories" in summary
+    assert "`user_stories/story__upload.md`" in summary
+    assert "`upload_python.prompt`" in summary
+    assert cost == 0.25
+    assert model == "story-model"
+    assert block is None
+
+
+def test_generate_user_story_artifacts_stages_generated_contract(tmp_path):
+    """Two-file model integration: when generate_user_story also writes the
+    sibling AI contract, the change hook must stage the contract too so it
+    travels with the change PR (not left as an untracked local file)."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content", encoding="utf-8")
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+    contract_file = tmp_path / "user_stories" / "contracts" / "upload.contract.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nAs a user...\n",
+            encoding="utf-8",
+        )
+        contract_file.parent.mkdir(parents=True, exist_ok=True)
+        contract_file.write_text(
+            "<!-- pdd-story-contract derived-from-story=\"../story__upload.md\" -->\n\n"
+            "## Covers\n- AC1: x\n",
+            encoding="utf-8",
+        )
+        return (
+            True,
+            f"Generated story file: {story_file}. Generated contract file: {contract_file}.",
+            0.25,
+            "story-model",
+            str(story_file),
+            ["upload_python.prompt"],
+        )
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    # Both the human story and the generated contract are staged.
+    assert story_files == [
+        "user_stories/story__upload.md",
+        "user_stories/contracts/upload.contract.md",
+    ]
+    assert "`user_stories/contracts/upload.contract.md`" in summary
+    assert "machine-checkable contract" in summary
+    assert block is None
+
+
+def test_generate_user_story_artifacts_skips_runtime_llm_prompts(tmp_path):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "runtime_LLM.prompt").write_text("runtime", encoding="utf-8")
+
+    with patch("pdd.agentic_change_orchestrator.generate_user_story") as mock_generate:
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/runtime_LLM.prompt", "src/code.py"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    assert story_files == []
+    assert summary == "None"
+    assert cost == 0.0
+    assert model == ""
+    assert block is None
+    mock_generate.assert_not_called()
+
+
+def test_generate_user_story_artifacts_is_non_blocking_on_exception(tmp_path):
+    """An unexpected exception in generation must not abort the change workflow.
+
+    Regression for PR #1489 review: story generation runs after the pre-PR gate
+    and before Step 13, so a raised exception (issue resolution, provider code,
+    file I/O) would otherwise abort the run instead of degrading to a warning.
+    """
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_file = prompts_dir / "upload_python.prompt"
+    prompt_file.write_text("Prompt content", encoding="utf-8")
+
+    def boom(**kwargs):
+        raise RuntimeError("provider exploded")
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=boom,
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=False,
+            quiet=True,
+        )
+
+    # No artifacts staged, but the call returns cleanly (no exception raised).
+    assert story_files == []
+    assert "### User Stories" in summary
+    assert "skipped" in summary
+    assert "provider exploded" in summary
+    assert "`upload_python.prompt`" in summary
+    assert cost == 0.0
+    assert model == ""
+    # warn policy: a generation failure leaves the prompt uncovered but never blocks.
+    assert block is None
+
+
+# -----------------------------------------------------------------------------
+# Issue #1454 review (PR #1501): policy controls, reuse, and linked-subset
+# validation for the agentic-change prompt-story workflow.
+# -----------------------------------------------------------------------------
+
+def _make_prompt(tmp_path, name="upload_python.prompt"):
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir(exist_ok=True)
+    prompt_file = prompts_dir / name
+    prompt_file.write_text("Prompt content", encoding="utf-8")
+    return prompt_file
+
+
+def test_resolve_story_policy_default_and_overrides(monkeypatch):
+    monkeypatch.delenv("PDD_STORY_POLICY", raising=False)
+    assert _resolve_story_policy() == "warn"
+    for value, expected in [
+        ("off", "off"), ("OFF", "off"), ("warn", "warn"),
+        ("strict", "strict"), ("STRICT", "strict"), ("bogus", "warn"), ("", "warn"),
+    ]:
+        monkeypatch.setenv("PDD_STORY_POLICY", value)
+        assert _resolve_story_policy() == expected
+
+
+def test_find_linked_stories_matches_by_metadata(tmp_path):
+    prompt_file = _make_prompt(tmp_path)
+    stories_dir = tmp_path / "user_stories"
+    stories_dir.mkdir()
+    (stories_dir / "story__upload.md").write_text(
+        "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+        encoding="utf-8",
+    )
+    other = _make_prompt(tmp_path, "other_python.prompt")
+
+    prompt_to_stories, uncovered = _find_linked_stories_for_prompts(
+        [prompt_file, other], stories_dir
+    )
+    assert prompt_to_stories[prompt_file] == [stories_dir / "story__upload.md"]
+    assert uncovered == [other]
+
+
+def test_story_policy_off_skips_creation_and_checking(tmp_path, monkeypatch):
+    _make_prompt(tmp_path)
+    monkeypatch.setenv("PDD_STORY_POLICY", "off")
+
+    with patch("pdd.agentic_change_orchestrator.generate_user_story") as mock_gen, \
+         patch("pdd.agentic_change_orchestrator.run_user_story_tests") as mock_tests:
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert story_files == []
+    assert "off" in summary
+    assert block is None
+    mock_gen.assert_not_called()
+    mock_tests.assert_not_called()
+
+
+def test_story_reuses_existing_linked_story_without_generating(tmp_path):
+    _make_prompt(tmp_path)
+    stories_dir = tmp_path / "user_stories"
+    stories_dir.mkdir()
+    existing = stories_dir / "story__upload.md"
+    existing.write_text(
+        "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nexisting\n",
+        encoding="utf-8",
+    )
+
+    with patch("pdd.agentic_change_orchestrator.generate_user_story") as mock_gen, \
+         patch(
+             "pdd.agentic_change_orchestrator.run_user_story_tests",
+             return_value=(True, [{"story": str(existing), "passed": True}], 0.0, ""),
+         ) as mock_tests:
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    # Existing coverage is reused -- no new story generated, no duplicate staged.
+    mock_gen.assert_not_called()
+    assert story_files == []
+    assert "reused existing linked story" in summary
+    assert block is None
+    # Validation ran on the reused subset.
+    assert mock_tests.call_args[1]["story_files"] == [existing]
+
+
+def test_story_warn_reports_validation_failure_without_blocking(tmp_path):
+    prompt_file = _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        return_value=(False, [{"story": str(story_file), "passed": False}], 0.0, ""),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert story_files == ["user_stories/story__upload.md"]
+    assert "❌" in summary
+    assert "Warning (non-blocking)" in summary
+    # warn never blocks even when the linked story fails.
+    assert block is None
+
+
+def test_story_strict_blocks_on_failing_validation(tmp_path, monkeypatch):
+    monkeypatch.setenv("PDD_STORY_POLICY", "strict")
+    prompt_file = _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        return_value=(False, [{"story": str(story_file), "passed": False}], 0.0, ""),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert block is not None
+    assert "strict story policy" in block
+    assert "Blocking (strict policy)" in summary
+
+
+def test_story_strict_blocks_when_validation_cannot_run(tmp_path, monkeypatch):
+    # Regression: strict policy must NOT fail open when the validator itself
+    # raises. Without a passing linked-story check, coverage is unproven, so
+    # strict has to block before Step 13 rather than silently proceed.
+    monkeypatch.setenv("PDD_STORY_POLICY", "strict")
+    _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        side_effect=RuntimeError("validator down"),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert block is not None
+    assert "strict story policy" in block
+    assert "validation failed/skipped: validator down" in block
+    assert "Blocking (strict policy)" in summary
+
+
+def test_story_warn_does_not_block_when_validation_cannot_run(tmp_path, monkeypatch):
+    # Counterpart to the strict case: under warn the same validator exception
+    # is reported but never blocks.
+    monkeypatch.setenv("PDD_STORY_POLICY", "warn")
+    _make_prompt(tmp_path)
+    story_file = tmp_path / "user_stories" / "story__upload.md"
+
+    def fake_generate_user_story(**kwargs):
+        story_file.parent.mkdir(parents=True, exist_ok=True)
+        story_file.write_text(
+            "<!-- pdd-story-prompts: upload_python.prompt -->\n\n## Story\nx\n",
+            encoding="utf-8",
+        )
+        return (True, "ok", 0.1, "story-model", str(story_file), ["upload_python.prompt"])
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        side_effect=fake_generate_user_story,
+    ), patch(
+        "pdd.agentic_change_orchestrator.run_user_story_tests",
+        side_effect=RuntimeError("validator down"),
+    ):
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    assert block is None
+    assert "Validation skipped: validator down" in summary
+
+
+def test_story_strict_blocks_when_generation_leaves_prompt_uncovered(tmp_path, monkeypatch):
+    monkeypatch.setenv("PDD_STORY_POLICY", "strict")
+    _make_prompt(tmp_path)
+
+    with patch(
+        "pdd.agentic_change_orchestrator.generate_user_story",
+        return_value=(False, "no issue context", 0.0, "", "", []),
+    ), patch("pdd.agentic_change_orchestrator.run_user_story_tests") as mock_tests:
+        story_files, summary, cost, model, block = _generate_user_story_artifacts_for_change(
+            issue_url="https://github.com/x/y/issues/1454",
+            changed_files=["prompts/upload_python.prompt"],
+            worktree_path=tmp_path,
+            strength=0.2, temperature=0.0, time_budget=0.25,
+            verbose=False, quiet=True,
+        )
+
+    # Nothing got linked, so validation has no subset to run and strict blocks.
+    mock_tests.assert_not_called()
+    assert block is not None
+    assert "no linked story" in block
+
+
+def test_step13_prompt_renders_user_story_summary(tmp_path):
+    """The Step 13 prompt must substitute {user_story_summary}, not leave the
+    literal placeholder.
+
+    Regression for PR #1489 review change #1: the orchestrator sets
+    context["user_story_summary"], so rendering the Step 13 template with the
+    same preprocess + substitution pipeline the orchestrator uses must inject
+    the value into the PR-body section.
+    """
+    from pdd.agentic_common import substitute_template_variables
+    from pdd.load_prompt_template import load_prompt_template
+    from pdd.preprocess import preprocess
+
+    template = load_prompt_template("agentic_change_step13_create_pr_LLM")
+    assert template is not None, "Step 13 template should load"
+    # The template must contain a real substitution input, not only prose
+    # mentioning the <user_story_summary> tag.
+    assert "{user_story_summary}" in template
+
+    summary_value = (
+        "### User Stories\n"
+        "- `user_stories/story__upload.md` — issue-derived story linked to: "
+        "`upload_python.prompt`"
+    )
+    context = {
+        "issue_url": "https://github.com/x/y/issues/1454",
+        "repo_owner": "x",
+        "repo_name": "y",
+        "issue_number": "1454",
+        "issue_title": "t",
+        "worktree_path": str(tmp_path),
+        "base_branch": "main",
+        "files_to_stage": "prompts/upload_python.prompt",
+        "sync_order_script": "",
+        "sync_order_list": "",
+        "clean_restart": "false",
+        "issue_content": "issue body",
+        "step8_output": "summary",
+        "manual_review_lines": "None",
+        "user_story_summary": summary_value,
+    }
+    exclude = list(context.keys())
+    rendered_template = preprocess(
+        template, recursive=True, double_curly_brackets=True, exclude=exclude
+    )
+    rendered = substitute_template_variables(rendered_template, context)
+
+    assert summary_value in rendered
+    assert "user_stories/story__upload.md" in rendered
+    # The substitution input must be consumed, not left as a literal token.
+    assert "{user_story_summary}" not in rendered
+
 
 @pytest.fixture
 def mock_dependencies(temp_cwd):
@@ -2883,6 +3380,274 @@ def test_setup_worktree_branch_checked_out_fails_without_fallback(tmp_path):
     assert worktree_branch == branch_name, f"Worktree should be on {branch_name}, but is on {worktree_branch}"
 
 
+def _init_repo_with_origin(tmp_path):
+    """Create a real git repo whose ``origin`` remote resolves ``origin/main``.
+
+    Returns the working-repo path. ``_resolve_main_ref`` will return a real
+    ``origin/main`` SHA against it (required for the clean-restart fresh-base
+    guarantee)."""
+    origin_repo = tmp_path / "origin_repo"
+    origin_repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=origin_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=origin_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=origin_repo, check=True, capture_output=True)
+    (origin_repo / "README.md").write_text("Initial commit")
+    subprocess.run(["git", "add", "README.md"], cwd=origin_repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=origin_repo, check=True, capture_output=True)
+
+    work_repo = tmp_path / "work_repo"
+    subprocess.run(
+        ["git", "clone", str(origin_repo), str(work_repo)],
+        cwd=tmp_path, check=True, capture_output=True,
+    )
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=work_repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=work_repo, check=True, capture_output=True)
+    return work_repo
+
+
+def test_clean_restart_locked_branch_uses_fallback_worktree(tmp_path, monkeypatch):
+    """Issue #1596: under clean_restart, when ``change/issue-N`` is checked out
+    in another live worktree (the executor's), ``git branch -D`` genuinely
+    fails. We must NOT hard-fail and we must NOT reuse the locked branch's
+    commits: create a fresh unique fallback branch from ``origin/main`` and
+    leave the locked worktree untouched. Uses real git + a real second
+    worktree to truly reproduce the lock."""
+    from pdd.agentic_change_orchestrator import _setup_worktree
+
+    monkeypatch.setenv("JOB_ID", "abc12345xyz")
+    work_repo = _init_repo_with_origin(tmp_path)
+    issue_number = 1596
+    branch_name = f"change/issue-{issue_number}"
+
+    # Create the canonical branch and check it out in a SECOND real worktree,
+    # with a divergent commit that must NOT leak into the fallback worktree.
+    subprocess.run(["git", "branch", branch_name, "origin/main"], cwd=work_repo, check=True, capture_output=True)
+    locked_dir = tmp_path / "locked"
+    subprocess.run(
+        ["git", "worktree", "add", str(locked_dir), branch_name],
+        cwd=work_repo, check=True, capture_output=True,
+    )
+    (locked_dir / "LEAKED.txt").write_text("should not appear in fallback")
+    subprocess.run(["git", "add", "LEAKED.txt"], cwd=locked_dir, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "divergent commit on locked branch"], cwd=locked_dir, check=True, capture_output=True)
+
+    wt, err = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+
+    assert err is None, f"expected no error, got: {err}"
+    assert wt is not None and wt.exists()
+
+    # New worktree is on the JOB_ID-slug fallback branch.
+    head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=wt, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == f"{branch_name}-job-abc12345", f"unexpected fallback branch: {head}"
+
+    # Fallback base is origin/main HEAD — divergent locked commit is absent.
+    origin_main = subprocess.run(
+        ["git", "rev-parse", "origin/main"],
+        cwd=work_repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    fallback_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=wt, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert fallback_base == origin_main, "fallback worktree must be based on origin/main HEAD"
+    assert not (wt / "LEAKED.txt").exists(), "locked branch's divergent commit leaked into fallback"
+
+    # Locked worktree is untouched: still exists, still on the canonical branch.
+    assert locked_dir.exists()
+    locked_head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=locked_dir, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert locked_head == branch_name, "locked worktree must not be touched"
+
+    # Cleanup worktrees to avoid leaking registrations into tmp teardown.
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt)], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "worktree", "remove", "--force", str(locked_dir)], cwd=work_repo, capture_output=True)
+
+
+def test_clean_restart_locked_branch_fallback_survives_same_job_retry(tmp_path, monkeypatch):
+    """Issue #1596 retry safety: the fallback branch name is stable per JOB_ID,
+    so a retry of the same job recomputes the same name. The prior attempt's
+    fallback branch persists after its worktree is removed; the second call
+    must delete-and-recreate it from main rather than failing
+    ``git worktree add -b`` on a name clash."""
+    from pdd.agentic_change_orchestrator import _setup_worktree
+
+    monkeypatch.setenv("JOB_ID", "retry123")
+    work_repo = _init_repo_with_origin(tmp_path)
+    issue_number = 1596
+    branch_name = f"change/issue-{issue_number}"
+
+    # Persistent lock on the canonical branch (the executor's worktree).
+    subprocess.run(["git", "branch", branch_name, "origin/main"], cwd=work_repo, check=True, capture_output=True)
+    locked_dir = tmp_path / "locked"
+    subprocess.run(["git", "worktree", "add", str(locked_dir), branch_name], cwd=work_repo, check=True, capture_output=True)
+
+    # First attempt creates the fallback worktree, then is "removed" (e.g. the
+    # run stopped) — but the fallback BRANCH is left behind locally.
+    wt1, err1 = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+    assert err1 is None and wt1 is not None
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt1)], cwd=work_repo, capture_output=True)
+    fallback = subprocess.run(
+        ["git", "rev-parse", "--verify", f"{branch_name}-job-retry123"],
+        cwd=work_repo, capture_output=True, text=True,
+    )
+    assert fallback.returncode == 0, "fallback branch should persist after worktree removal"
+
+    # Retry of the SAME job: must succeed (delete-and-recreate the stable name).
+    wt2, err2 = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+    assert err2 is None, f"retry must not fail on stable fallback name clash: {err2}"
+    assert wt2 is not None and wt2.exists()
+    head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=wt2, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert head == f"{branch_name}-job-retry123"
+
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt2)], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "worktree", "remove", "--force", str(locked_dir)], cwd=work_repo, capture_output=True)
+
+
+def test_clean_restart_fallback_fetches_own_lease_ref_for_force_with_lease(tmp_path, monkeypatch):
+    """Issue #1596 lease gap: the fallback push uses
+    ``git push --force-with-lease origin {head_branch}``. On a same-job retry
+    in a FRESH clone, ``origin/{fallback}`` already exists on the remote but
+    there is no local ``refs/remotes/origin/{fallback}`` tracking ref →
+    ``--force-with-lease`` is rejected ("stale info"). The fallback block must
+    fetch the FALLBACK branch's own tracking ref so the push has lease info.
+    Logic is shared across the 3 orchestrators; testing change is enough."""
+    from pdd.agentic_change_orchestrator import _setup_worktree
+
+    monkeypatch.setenv("JOB_ID", "stablejob1")
+    work_repo = _init_repo_with_origin(tmp_path)
+    issue_number = 1596
+    branch_name = f"change/issue-{issue_number}"
+    fallback_branch = f"{branch_name}-job-stablejo"  # slug = first 8 alnum
+
+    # Canonical branch locked in a 2nd live worktree, with a divergent commit
+    # that must NOT leak into the fresh-based fallback.
+    subprocess.run(["git", "branch", branch_name, "origin/main"], cwd=work_repo, check=True, capture_output=True)
+    locked_dir = tmp_path / "locked"
+    subprocess.run(["git", "worktree", "add", str(locked_dir), branch_name], cwd=work_repo, check=True, capture_output=True)
+    (locked_dir / "LEAKED.txt").write_text("should not appear in fallback")
+    subprocess.run(["git", "add", "LEAKED.txt"], cwd=locked_dir, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "divergent commit"], cwd=locked_dir, check=True, capture_output=True)
+
+    # First run produces the fallback worktree; push it to origin so the
+    # remote branch exists (the prior container's work).
+    wt1, err1 = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+    assert err1 is None and wt1 is not None
+    wt1_head = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=wt1, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert wt1_head == fallback_branch
+    subprocess.run(
+        ["git", "push", "origin", f"HEAD:{fallback_branch}"],
+        cwd=wt1, check=True, capture_output=True,
+    )
+
+    # Simulate a fresh container/clone: remove the fallback worktree, then drop
+    # the local fallback branch AND its remote-tracking ref. The remote branch
+    # remains on origin (as a real prior push would leave it).
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt1)], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "branch", "-D", fallback_branch], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "branch", "-rD", f"origin/{fallback_branch}"], cwd=work_repo, capture_output=True)
+    # Confirm the tracking ref is gone before the second run.
+    pre = subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/remotes/origin/{fallback_branch}"],
+        cwd=work_repo, capture_output=True, text=True,
+    )
+    assert pre.returncode != 0, "tracking ref must be absent before the retry"
+
+    # Second run (fresh-container retry): the fallback block must fetch the
+    # fallback's own lease ref so a later --force-with-lease push works.
+    wt2, err2 = _setup_worktree(work_repo, issue_number, quiet=True, clean_restart=True)
+    assert err2 is None, f"retry must not fail: {err2}"
+    assert wt2 is not None and wt2.exists()
+
+    # The fallback lease tracking ref now EXISTS (proves the fallback fetch ran).
+    post = subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/remotes/origin/{fallback_branch}"],
+        cwd=work_repo, capture_output=True, text=True,
+    )
+    assert post.returncode == 0, "fallback lease tracking ref must exist after setup"
+
+    # Fresh base: new worktree HEAD == origin/main HEAD, no divergent leak.
+    origin_main = subprocess.run(
+        ["git", "rev-parse", "origin/main"], cwd=work_repo, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    wt2_base = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=wt2, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert wt2_base == origin_main, "fallback worktree must be based on origin/main HEAD"
+    assert not (wt2 / "LEAKED.txt").exists(), "locked branch's divergent commit leaked into fallback"
+
+    subprocess.run(["git", "worktree", "remove", "--force", str(wt2)], cwd=work_repo, capture_output=True)
+    subprocess.run(["git", "worktree", "remove", "--force", str(locked_dir)], cwd=work_repo, capture_output=True)
+
+
+def _render_change_pr_prompt(head_branch):
+    """Render the Step 13 PR prompt the way the orchestrator does, with a
+    minimal context exercising ``head_branch`` and ``base_branch``."""
+    from pdd.load_prompt_template import load_prompt_template
+    from pdd.preprocess import preprocess
+    from pdd.agentic_common import substitute_template_variables
+
+    context = {
+        "issue_number": "1596",
+        "base_branch": "main",
+        "head_branch": head_branch,
+        "clean_restart": "true",
+    }
+    template = load_prompt_template("agentic_change_step13_create_pr_LLM")
+    template = preprocess(template, recursive=True, double_curly_brackets=True, exclude=list(context.keys()))
+    return substitute_template_variables(template, context)
+
+
+def test_step13_prompt_head_branch_non_fallback_preserves_canonical():
+    """No-fallback path: head_branch == canonical name → rendered push/pr
+    commands are byte-identical to the old hardcoded behavior (#1596)."""
+    rendered = _render_change_pr_prompt("change/issue-1596")
+    assert "git push --force-with-lease -u origin change/issue-1596" in rendered
+    assert "git push -u origin change/issue-1596" in rendered
+    assert "gh pr list --head change/issue-1596" in rendered
+    assert "--head change/issue-1596" in rendered
+
+
+def test_step13_prompt_head_branch_fallback_uses_fallback_branch():
+    """Fallback path: head_branch == fallback name → push/pr-head use the
+    fallback branch; no bare canonical branch token remains in those
+    positions (issue links #N may still appear)."""
+    rendered = _render_change_pr_prompt("change/issue-1596-job-deadbeef")
+    assert "git push --force-with-lease -u origin change/issue-1596-job-deadbeef" in rendered
+    assert "gh pr list --head change/issue-1596-job-deadbeef" in rendered
+    assert "--head change/issue-1596-job-deadbeef" in rendered
+    # Bare canonical branch token (boundary-checked) must not survive.
+    assert "origin change/issue-1596\n" not in rendered
+    assert "--head change/issue-1596\n" not in rendered
+    assert "--head change/issue-1596 " not in rendered
+    # Issue links remain.
+    assert "#1596" in rendered
+
+
+def test_step13_prompt_uses_head_branch_for_push_and_pr():
+    """Step 13 prompt must reference {head_branch} (not a hardcoded
+    change/issue-N branch) in push / gh pr commands (#1596)."""
+    prompt = Path("pdd/prompts/agentic_change_step13_create_pr_LLM.prompt").read_text(
+        encoding="utf-8"
+    )
+    assert "git push --force-with-lease -u origin {head_branch}" in prompt
+    assert "git push -u origin {head_branch}" in prompt
+    assert "gh pr list --head {head_branch}" in prompt
+    assert "--head {head_branch}" in prompt
+    # No remaining hardcoded branch token; only issue links / titles may use it.
+    assert "origin change/issue-{issue_number}" not in prompt
+    assert "--head change/issue-{issue_number}" not in prompt
+
+
 # -----------------------------------------------------------------------------
 # Issue #289: Fallback comments + consecutive failure abort + conditional state clearing
 # -----------------------------------------------------------------------------
@@ -3237,14 +4002,48 @@ def test_step9_no_files_marks_failed_not_step_num_minus_1(mock_dependencies, tem
 # =============================================================================
 
 def test_check_existing_pr_returns_url_when_pr_exists():
-    """_check_existing_pr returns the PR URL when an open PR exists."""
+    """_check_existing_pr returns the PR URL when an open PR exists on the
+    canonical head."""
     with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
         mock_sub.return_value.returncode = 0
         mock_sub.return_value.stdout = json.dumps([
-            {"url": "https://github.com/owner/repo/pull/42"}
+            {"url": "https://github.com/owner/repo/pull/42",
+             "headRefName": "change/issue-10"}
         ])
         result = _check_existing_pr("owner", "repo", 10)
     assert result == "https://github.com/owner/repo/pull/42"
+
+
+def test_check_existing_pr_matches_fallback_head():
+    """Issue #1596: a PR opened on a ``change/issue-{N}-job-*`` clean-restart
+    fallback head must be found so a later normal run does not duplicate it.
+    The prefix-search may also return an unrelated ``change/issue-{N}0`` head,
+    which must be rejected by the precise Python filter."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 0
+        # Order the unrelated prefix match FIRST to prove it is skipped, not
+        # returned, before the genuine fallback head.
+        mock_sub.return_value.stdout = json.dumps([
+            {"url": "https://github.com/owner/repo/pull/99",
+             "headRefName": "change/issue-100"},
+            {"url": "https://github.com/owner/repo/pull/43",
+             "headRefName": "change/issue-10-job-deadbeef"},
+        ])
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result == "https://github.com/owner/repo/pull/43"
+
+
+def test_check_existing_pr_rejects_unrelated_prefix_head():
+    """Issue #1596: ``head:change/issue-{N}`` prefix-matches unrelated heads
+    like ``change/issue-{N}0``; those must NOT be treated as an existing PR."""
+    with patch("pdd.agentic_change_orchestrator.subprocess.run") as mock_sub:
+        mock_sub.return_value.returncode = 0
+        mock_sub.return_value.stdout = json.dumps([
+            {"url": "https://github.com/owner/repo/pull/99",
+             "headRefName": "change/issue-100"},
+        ])
+        result = _check_existing_pr("owner", "repo", 10)
+    assert result is None
 
 
 def test_check_existing_pr_returns_none_when_no_pr():
@@ -6760,14 +7559,16 @@ class TestSetupWorktreeCleanRestart:
             f"Expected a clear HEAD-fallback error message; got {err!r}"
         )
 
-    def test_clean_restart_refuses_to_reuse_undeletable_local_branch(
+    def test_clean_restart_hard_fails_when_delete_fails_without_worktree_lock(
         self, tmp_path,
     ):
-        """If the local ``change/issue-N`` branch exists and ``git branch
-        -D`` fails (e.g. it's checked out in another worktree), the
-        default code path reuses that local branch as the worktree base.
-        Under clean_restart that's a Req 15 violation; we abort with a
-        clear pointer to the offending worktree."""
+        """Negative case for the #1596 fallback: ``git branch -D`` fails but
+        ``git worktree list --porcelain`` does NOT prove any worktree holds
+        the branch (the mock returns empty porcelain output). The fallback
+        gate keys off porcelain, not the delete-error stderr text, so we must
+        still hard-fail rather than fabricate a fallback worktree. This guards
+        that a non-worktree-lock delete failure cannot silently base the fresh
+        restart on a reused local branch (Req 15)."""
         from pdd.agentic_change_orchestrator import _setup_worktree
 
         calls, side = self._patch_git(branch_delete_ok=False)

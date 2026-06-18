@@ -1,0 +1,13 @@
+<pdd-dependency>order_api_Python.prompt</pdd-dependency>
+<pdd-dependency>order_components_TypeScriptReact.prompt</pdd-dependency>
+<pdd-reason>Order creation form and workflow.</pdd-reason>
+
+% Goal
+Define the order creation page prompt fixture used by the architecture include validator.
+
+% Requirements
+- The page MUST submit new orders through the order API.
+- The page MUST use shared order components for order item input.
+
+% Deliverable
+- `app/orders/create/page.tsx`

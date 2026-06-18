@@ -18,9 +18,23 @@
 
 % Requirements
   1. **PathValidator class**:
-     - Initialize with project_root Path and optional blacklist_patterns list
+     - Initialize with project_root Path (stored resolved) and optional blacklist_patterns list
      - `validate(path: Union[str, Path]) -> Path`: Resolve and validate path is within project root
-     - Raise `SecurityError` if path escapes project root (directory traversal)
+     - Reduce the input to a single root-relative shape, then block traversal
+       before any filesystem path expression: parse with `Path(path)`; if it is
+       absolute, rewrite it to a root-relative path with `os.path.relpath(
+       os.path.normpath(path), project_root)` (so an absolute path outside the
+       root becomes a `..`-prefixed relative path); otherwise `os.path.normpath`
+       it. Reject (PATH_TRAVERSAL) when the normalized relative path is `..` or
+       starts with `..` + separator. Only then anchor the *guarded* relative path
+       to the trusted root (`project_root / normalized_relative`) and resolve with
+       `resolve(strict=False)`. Rejecting the `..` escape before constructing the
+       filesystem path keeps user input from reaching an uncontrolled path
+       expression (closes the CodeQL py/path-injection sink); absolute paths that
+       lie inside the root remain valid.
+     - After resolving symlinks, re-check containment with
+       `relative_to(project_root)` as defense in depth (a symlink inside the root
+       could still point outside it); raise PATH_TRAVERSAL if it escapes.
      - Raise `SecurityError` if path matches blacklist patterns
      - Check both full path and individual components against blacklist
 

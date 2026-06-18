@@ -1106,6 +1106,29 @@ def _git_add_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> 
     return True
 
 
+def _gitignored_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> Set[str]:
+    """Return pathspecs ignored by Git, best-effort."""
+    if not pathspecs:
+        return set()
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "--", *pathspecs],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except Exception:
+        return set()
+    if getattr(result, "returncode", 1) not in (0, 1):
+        return set()
+    return {
+        line.strip()
+        for line in (getattr(result, "stdout", "") or "").splitlines()
+        if line.strip()
+    }
+
+
 def _stage_heal_changes(healed_modules: Sequence[Any]) -> bool:
     """Stage tracked updates plus explicit new files owned by healed modules.
 
@@ -1521,12 +1544,19 @@ def commit_and_push(
         return False
     if diff.returncode == 0:
         if finalized_modules:
+            expected_paths = [
+                f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+                for basename, language in finalized_modules
+            ]
+            ignored = _gitignored_pathspecs(expected_paths, cwd=_repo_root())
             for basename, language in finalized_modules:
                 expected = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+                if expected in ignored:
+                    continue
                 console.print(
                     f"[red]metadata staging verification failed: missing {expected}[/red]"
                 )
-            return False
+            return bool(ignored) and all(path in ignored for path in expected_paths)
         # Nothing staged.
         return True
 
@@ -1553,9 +1583,15 @@ def commit_and_push(
             return False
         stdout = getattr(names, "stdout", "") or ""
         staged_paths = {line.strip() for line in stdout.splitlines() if line.strip()}
+        expected_paths = [
+            f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+            for basename, language in finalized_modules
+        ]
+        ignored = _gitignored_pathspecs(expected_paths, cwd=_repo_root())
         missing: List[str] = []
-        for basename, language in finalized_modules:
-            expected = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+        for expected in expected_paths:
+            if expected in ignored:
+                continue
             if expected not in staged_paths:
                 missing.append(expected)
         if missing:

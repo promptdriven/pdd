@@ -33,18 +33,27 @@ def test_apply_compression_env_exports_pddrc_defaults(monkeypatch: pytest.Monkey
     monkeypatch.delenv("PDD_CONTEXT_COMPRESSION", raising=False)
     monkeypatch.delenv("PDD_COMPRESS_EXAMPLES", raising=False)
     monkeypatch.delenv("PDD_COMPRESSION_FALLBACK", raising=False)
+    monkeypatch.delenv("PDD_TEST_TOKEN_BUDGET", raising=False)
+    monkeypatch.delenv("PDD_TEST_RANKING_WEIGHTS", raising=False)
+    monkeypatch.delenv("PDD_TEST_DEDUP_THRESHOLD", raising=False)
 
     apply_compression_env(
         {
             "context_compression": "examples",
             "compress_examples": True,
             "compression_fallback": "error",
+            "test_token_budget": 1200,
+            "test_ranking_weights": '{"import_distance": 1.0}',
+            "test_dedup_threshold": 0.7,
         }
     )
 
     assert os.environ["PDD_CONTEXT_COMPRESSION"] == "examples"
     assert os.environ["PDD_COMPRESS_EXAMPLES"] == "1"
     assert os.environ["PDD_COMPRESSION_FALLBACK"] == "error"
+    assert os.environ["PDD_TEST_TOKEN_BUDGET"] == "1200"
+    assert os.environ["PDD_TEST_RANKING_WEIGHTS"] == '{"import_distance": 1.0}'
+    assert os.environ["PDD_TEST_DEDUP_THRESHOLD"] == "0.7"
 
 
 def test_construct_paths_applies_pddrc_compression_to_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -132,10 +141,16 @@ def test_apply_compression_env_off_unsets_context_compression(
     monkeypatch.setenv("PDD_CONTEXT_COMPRESSION", "examples")
     monkeypatch.setenv("PDD_COMPRESS_EXAMPLES", "1")
     monkeypatch.setenv("PDD_COMPRESS_TEST_CONTEXT", "1")
+    monkeypatch.setenv("PDD_TEST_TOKEN_BUDGET", "1200")
+    monkeypatch.setenv("PDD_TEST_RANKING_WEIGHTS", "{}")
+    monkeypatch.setenv("PDD_TEST_DEDUP_THRESHOLD", "0.7")
     apply_compression_env({"context_compression": "off"})
     assert "PDD_CONTEXT_COMPRESSION" not in os.environ
     assert "PDD_COMPRESS_EXAMPLES" not in os.environ
     assert "PDD_COMPRESS_TEST_CONTEXT" not in os.environ
+    assert "PDD_TEST_TOKEN_BUDGET" not in os.environ
+    assert "PDD_TEST_RANKING_WEIGHTS" not in os.environ
+    assert "PDD_TEST_DEDUP_THRESHOLD" not in os.environ
 
 
 def test_effective_compression_config_off_disables_pddrc_legacy_flags(

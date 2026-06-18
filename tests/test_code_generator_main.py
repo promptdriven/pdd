@@ -1926,6 +1926,45 @@ def test_architecture_template_repairs_invalid_interface_type(
     assert saved[0]["interface"]["type"] == "page"
 
 
+def test_architecture_template_schema_accepts_entrypoint_interface():
+    import jsonschema
+    from pdd.code_generator_main import _parse_front_matter
+
+    template_path = pathlib.Path("pdd/templates/architecture/architecture_json.prompt")
+    meta, _ = _parse_front_matter(template_path.read_text(encoding="utf-8"))
+    payload = [
+        {
+            "reason": "Runtime bootstrap",
+            "description": "Application entrypoint loaded by the runtime.",
+            "dependencies": [],
+            "priority": 1,
+            "filename": "src/main_Python.prompt",
+            "filepath": "src/main.py",
+            "interface": {"type": "entrypoint", "entrypoint": {}},
+        }
+    ]
+
+    jsonschema.validate(instance=payload, schema=meta["output_schema"])
+
+
+def test_repair_architecture_interface_types_infers_entrypoint():
+    from pdd.code_generator_main import _repair_architecture_interface_types
+
+    payload = [
+        {
+            "interface": {
+                "type": "object",
+                "entrypoint": {},
+            }
+        }
+    ]
+
+    repaired, changed = _repair_architecture_interface_types(payload)
+
+    assert changed is True
+    assert repaired[0]["interface"]["type"] == "entrypoint"
+
+
 def test_postprocess_uses_temp_input_when_llm_enabled(
     mock_ctx,
     temp_dir_setup,
@@ -3452,6 +3491,25 @@ class TestVerifyArchitectureConformance:
             prompt_name="dashboard_page_TypeScriptReact.prompt",
             arch_path=str(tmp_path / "architecture.json"),
             language="typescript",
+            verbose=False,
+        )
+
+    def test_skips_entrypoint_type_modules(self, tmp_path):
+        """Entrypoint interfaces are runtime-discovered and have no named exports."""
+        arch = [
+            {
+                "filename": "main_Python.prompt",
+                "filepath": "src/main.py",
+                "interface": {"type": "entrypoint", "entrypoint": {}},
+            }
+        ]
+        (tmp_path / "architecture.json").write_text(json.dumps(arch))
+
+        _verify_architecture_conformance(
+            generated_code="print('boot')\n",
+            prompt_name="main_Python.prompt",
+            arch_path=str(tmp_path / "architecture.json"),
+            language="python",
             verbose=False,
         )
 
@@ -5531,6 +5589,37 @@ class TestSyncCompatibilityGates:
         assert excinfo.value.removed_symbols == ["calculate_sha256"]
         assert "- calculate_sha256" in excinfo.value.repair_directive
 
+    def test_public_surface_regression_catches_new_positional_before_varargs(self):
+        """Inserting a defaulted positional parameter in front of an existing
+        ``*args`` rebinds existing positional calls: ``process(h, 2)`` used to
+        put ``2`` in ``*args`` but now binds it to ``retries``. This MUST surface
+        as a signature regression, not be treated as a compatible widening."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "def process(handler, *args):\n"
+            "    return handler\n"
+        )
+        after = (
+            "def process(handler, retries=0, *args):\n"
+            "    return handler\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Add retries handling.",
+            )
+
+        assert excinfo.value.changed_signatures == ["process"]
+
     def test_public_surface_regression_catches_removed_import(self):
         """Removing an ``import`` re-export is a real downstream-breaking
         change — issue #1012's user-cited regression was specifically the
@@ -6317,6 +6406,36 @@ class TestSyncCompatibilityGates:
         assert excinfo.value.removed_symbols == []
         assert excinfo.value.changed_signatures == ["calculate"]
         assert "signature_changed: calculate" in str(excinfo.value)
+
+    def test_public_surface_regression_allows_added_defaulted_kwarg(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        _verify_public_surface_regression(
+            "def calculate(value: int) -> str:\n    return str(value)\n",
+            "def calculate(value: int, *, strict: bool = False) -> str:\n    return str(value)\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_public_surface_regression_catches_added_required_param(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                "def calculate(value: int) -> str:\n    return str(value)\n",
+                "def calculate(value: int, mode: str) -> str:\n    return str(value)\n",
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert excinfo.value.changed_signatures == ["calculate"]
 
     def test_public_surface_regression_allows_scoped_signature_change(self):
         from pdd.code_generator_main import _verify_public_surface_regression
@@ -7644,6 +7763,101 @@ class TestSyncCompatibilityGates:
         )
 
     # -----------------------------------------------------------------
+    # Issue #1612: syntactically invalid generated Python must raise
+    # ArchitectureConformanceError (not PublicSurfaceRegressionError).
+    #
+    # Root cause: _snapshot_public_surface silently returns set() on
+    # SyntaxError, so after = set() while before = {'process_data',
+    # 'validate'}.  _verify_public_surface_regression then raises
+    # PublicSurfaceRegressionError with post_surface_size=0, misrouting
+    # the failure as a phantom symbol-removal regression instead of a
+    # syntax error.  The repair loop then chases phantom removed symbols
+    # rather than the real syntax problem.
+    # -----------------------------------------------------------------
+
+    def test_syntax_error_in_generated_python_raises_arch_conformance_not_surface_regression_issue_1612(
+        self,
+    ):
+        """When generated_code has a Python syntax error,
+        _verify_public_surface_regression must raise ArchitectureConformanceError
+        rather than PublicSurfaceRegressionError.
+
+        Before the fix: _snapshot_public_surface silently returns set() on
+        SyntaxError.  _verify_public_surface_regression sees
+        before={'process_data', 'validate'} and after=set(), raises
+        PublicSurfaceRegressionError with post_surface_size=0 — a misleading
+        phantom-removal report that directs the repair loop away from the real
+        syntax error.
+        """
+        from pdd.code_generator_main import (
+            ArchitectureConformanceError,
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        existing_code = (
+            "def process_data(x):\n"
+            "    return x\n"
+            "\n"
+            "def validate(x):\n"
+            "    return bool(x)\n"
+        )
+        # Syntactically invalid Python: truncated/prose-wrapped LLM output.
+        generated_code = "def process_data(:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError):
+            _verify_public_surface_regression(
+                existing_code,
+                generated_code,
+                "some_module_Python.prompt",
+                "pdd/some_module.py",
+                "python",
+                None,
+            )
+
+    def test_syntax_error_arch_conformance_lists_expected_symbols_and_syntax_directive_issue_1612(
+        self,
+    ):
+        """ArchitectureConformanceError raised for syntax-invalid generated Python
+        must carry the expected public symbols as missing_symbols and must include
+        the word 'syntax' in the repair_directive so the repair loop targets the
+        actual problem rather than phantom removed exports.
+        """
+        from pdd.code_generator_main import (
+            ArchitectureConformanceError,
+            _verify_public_surface_regression,
+        )
+
+        existing_code = (
+            "def process_data(x):\n"
+            "    return x\n"
+            "\n"
+            "def validate(x):\n"
+            "    return bool(x)\n"
+        )
+        generated_code = "def process_data(:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_public_surface_regression(
+                existing_code,
+                generated_code,
+                "some_module_Python.prompt",
+                "pdd/some_module.py",
+                "python",
+                None,
+            )
+
+        # Sorted symbols snapshotted from existing_code.
+        assert excinfo.value.missing_symbols == ["process_data", "validate"]
+        # Repair directive must name the expected symbols so the model knows
+        # what to restore once the syntax is fixed.
+        assert "process_data" in excinfo.value.repair_directive
+        assert "validate" in excinfo.value.repair_directive
+        # Repair directive must mention 'syntax' so the repair loop targets
+        # the syntax error, not phantom removed exports.
+        assert "syntax" in excinfo.value.repair_directive.lower()
+
+    # -----------------------------------------------------------------
     # External review (PR #1015) iter-13 BLOCKING follow-up: an empty
     # generated body MUST trigger the compatibility gates rather than
     # silently truncating the existing file to 0 bytes. The original
@@ -8333,6 +8547,70 @@ class TestPddInterfaceSignatureConformance:
             prompt_content=prompt_content,
         )
 
+    def test_annotation_aliases_do_not_raise_conformance_error(self, tmp_path):
+        """Equivalent Python annotation spellings must not trip drift."""
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        interface = {
+            "type": "module",
+            "module": {
+                "functions": [
+                    {
+                        "name": "update_main",
+                        "signature": (
+                            "(data: Dict[str, Any], names: List[str], "
+                            "tags: Optional[Set[str]] = None)"
+                        ),
+                    }
+                ]
+            },
+        }
+        prompt_content = f"<pdd-interface>{json.dumps(interface)}</pdd-interface>\n"
+        generated_code = (
+            "def update_main("
+            "data: dict[str, Any], "
+            "names: list[str], "
+            "tags: set[str] | None = None"
+            "):\n"
+            "    return data\n"
+        )
+
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_real_type_base_drift_still_raises_conformance_error(self, tmp_path):
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main","signature":"(items: List[str])"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = (
+            "def update_main(items: Dict[str, str]):\n"
+            "    return items\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+
+        assert "update_main.items" in excinfo.value.missing_symbols
+
     def test_command_interface_type_signature_is_checked(self, tmp_path):
         """``type: "command"`` interfaces (used by ``pdd/prompts/commands/*``)
         must participate in the signature check when entries carry a
@@ -8985,30 +9263,23 @@ class TestPublicSurfaceBindingKind:
 
         assert "f" in excinfo.value.changed_signatures
 
-    def test_positional_only_removed_is_detected(self):
-        from pdd.code_generator_main import (
-            PublicSurfaceRegressionError,
-            _verify_public_surface_regression,
-        )
+    def test_positional_only_removed_is_allowed(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
 
-        # Reverse direction: the ``/`` is dropped. While dropping
-        # positional-only is technically a strict broadening of the
-        # callable contract, the snapshot must still register the
-        # change so reviewers can see the surface shift.
+        # Reverse direction: the ``/`` is dropped. This broadens the callable
+        # contract because every old positional-only call form still works and
+        # keyword calls become newly valid.
         before = "def f(x, /, y):\n    return x + y\n"
         after = "def f(x, y):\n    return x + y\n"
 
-        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
-            _verify_public_surface_regression(
-                before,
-                after,
-                "module_Python.prompt",
-                "pdd/module.py",
-                "python",
-                "",
-            )
-
-        assert "f" in excinfo.value.changed_signatures
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
 
     def test_unchanged_positional_only_is_allowed(self):
         # Sanity check: identical posonly markers on both sides must
@@ -9188,15 +9459,10 @@ class TestPublicSurfaceBindingKind:
 
         assert "User" in excinfo.value.changed_signatures
 
-    def test_dataclass_adding_optional_field_is_detected_as_signature_change(self):
-        # Adding an OPTIONAL field (with a default) is still a public
-        # surface change — callers introspecting fields, constructing
-        # positionally, or pickling instances may be affected. The
-        # snapshot diff should fire so reviewers can decide.
-        from pdd.code_generator_main import (
-            PublicSurfaceRegressionError,
-            _verify_public_surface_regression,
-        )
+    def test_dataclass_adding_optional_field_is_compatible(self):
+        # Adding a defaulted dataclass field preserves existing constructor
+        # call forms, so the semantic public-surface gate must allow it.
+        from pdd.code_generator_main import _verify_public_surface_regression
 
         before = (
             "from dataclasses import dataclass\n"
@@ -9212,17 +9478,14 @@ class TestPublicSurfaceBindingKind:
             "    age: int = 0\n"
         )
 
-        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
-            _verify_public_surface_regression(
-                before,
-                after,
-                "module_Python.prompt",
-                "pdd/module.py",
-                "python",
-                "",
-            )
-
-        assert "User" in excinfo.value.changed_signatures
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
 
     def test_dataclass_removing_field_is_detected(self):
         from pdd.code_generator_main import (
@@ -9242,6 +9505,72 @@ class TestPublicSurfaceBindingKind:
             "@dataclass\n"
             "class User:\n"
             "    name: str\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_changing_existing_default_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    retry_count: int = 0\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    retry_count: int = 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_changing_existing_field_type_base_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass, field\n"
+            "from typing import List\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    tags: List[str] = field(default_factory=list)\n"
+        )
+        after = (
+            "from dataclasses import dataclass, field\n"
+            "from typing import Dict\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    tags: Dict[str, str] = field(default_factory=dict)\n"
         )
 
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
@@ -9441,10 +9770,10 @@ class TestPublicSurfaceBindingKind:
 
         assert "User" in excinfo.value.changed_signatures
 
-    def test_dataclass_initvar_field_is_included(self):
+    def test_dataclass_required_initvar_field_is_included(self):
         # ``InitVar`` params are part of the synthesised ``__init__``
         # signature even though they are not stored as instance
-        # attributes. Adding one is a constructor-shape change.
+        # attributes. Adding a required one is a constructor-shape change.
         from pdd.code_generator_main import (
             PublicSurfaceRegressionError,
             _verify_public_surface_regression,
@@ -9461,7 +9790,7 @@ class TestPublicSurfaceBindingKind:
             "@dataclass\n"
             "class User:\n"
             "    name: str\n"
-            "    seed: InitVar[int] = 0\n"
+            "    seed: InitVar[int]\n"
         )
 
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
@@ -9542,9 +9871,10 @@ class TestPublicSurfaceBindingKind:
             "",
         )
 
-    def test_dataclass_init_true_field_is_included(self):
-        # Explicit ``init=True`` (the default) keeps the field IN the
-        # synth: adding one is a real constructor-shape change.
+    def test_dataclass_init_true_required_field_is_included(self):
+        # Explicit ``init=True`` with no default keeps the field IN the
+        # synth as a required parameter: adding one is a real constructor
+        # compatibility break.
         from pdd.code_generator_main import (
             PublicSurfaceRegressionError,
             _verify_public_surface_regression,
@@ -9561,7 +9891,7 @@ class TestPublicSurfaceBindingKind:
             "@dataclass\n"
             "class User:\n"
             "    name: str\n"
-            "    extras: dict = field(init=True, default_factory=dict)\n"
+            "    extras: dict = field(init=True)\n"
         )
 
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
@@ -9576,9 +9906,37 @@ class TestPublicSurfaceBindingKind:
 
         assert "User" in excinfo.value.changed_signatures
 
-    def test_dataclass_field_without_init_kwarg_is_included(self):
-        # ``field(default=...)`` with no ``init`` kwarg defaults to
-        # ``init=True`` at runtime, so the field stays in the synth.
+    def test_dataclass_field_default_factory_is_optional(self):
+        # ``field(default_factory=...)`` with no ``init`` kwarg defaults to
+        # ``init=True`` at runtime, but remains optional for existing callers.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass, field\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    extras: list[str] = field(default_factory=list)\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclass_field_without_default_is_required(self):
+        # ``field()`` with no ``default`` or ``default_factory`` creates a
+        # required init parameter, so adding one must still fail.
         from pdd.code_generator_main import (
             PublicSurfaceRegressionError,
             _verify_public_surface_regression,
@@ -9595,7 +9953,7 @@ class TestPublicSurfaceBindingKind:
             "@dataclass\n"
             "class User:\n"
             "    name: str\n"
-            "    extras: dict = field(default_factory=dict)\n"
+            "    extras: dict = field()\n"
         )
 
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:

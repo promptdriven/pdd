@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from .change import MODIFIED_PROMPT_END, MODIFIED_PROMPT_START, change
+from .checkup_prompt_main import _finding_requires_clarification
 from .json_atomic import atomic_write_json, atomic_write_text
 from .prompt_lint import LintIssue, scan_prompt
 from .server.token_counter import count_tokens
@@ -190,12 +191,15 @@ def _actionable_findings(findings: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     Excludes severity='info' findings and those whose ``source_check`` requires
     external commands (gate, drift, snapshot) or whose ``code`` marks them as
     never prompt-fixable (missing_evidence, drift_readiness, gate_error).
+    Also excludes findings that require user clarification (#1438) — those must
+    go through the interactive repair path, not automated repair.
     """
     return [
         f for f in findings
         if f.get("severity") in ("error", "warn")
         and f.get("source_check") in _PROMPT_FIXABLE_CHECKS
         and f.get("code") not in _NON_FIXABLE_CODES
+        and not f.get("requires_clarification")
     ]
 
 
@@ -208,6 +212,12 @@ def _lint_findings(issues: Sequence[LintIssue]) -> List[Dict[str, Any]]:
             "line": issue.line,
             "message": issue.message,
             "evidence": issue.section,
+            # Reuse the single canonical classifier (checkup_prompt_main) so the
+            # lint-only repair path and the structured report path agree on which
+            # findings require human clarification.
+            "requires_clarification": _finding_requires_clarification(
+                issue.code or "", "lint"
+            ),
         }
         for issue in issues
     ]

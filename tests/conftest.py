@@ -1,6 +1,7 @@
 """Project-level pytest configuration hooks."""
 
 import atexit
+import logging
 import os
 import shutil
 import sys
@@ -165,6 +166,33 @@ def restore_agentic_e2e_fix_orchestrator_mocks():
 
     for attr, original in _E2E_FIX_ORIGINAL_ATTRS.items():
         setattr(orchestrator, attr, original)
+
+
+@pytest.fixture(autouse=True)
+def _restore_logger_levels():
+    """Prevent log-level pollution from leaking across shared xdist workers.
+
+    Quiet/estimate code paths lower process-wide logger levels and never restore
+    them: ``pdd.core.cli``'s quiet branch sets ``logging.getLogger("pdd")`` to
+    ``ERROR`` and ``pdd.llm_invoke.set_quiet_logging`` does the same for the
+    ``pdd.llm_invoke`` and ``litellm`` loggers. Because estimate mode forces
+    quiet, any CLI estimate/quiet test silences INFO records for every later
+    test in the same worker — so ``caplog``-based assertions (e.g.
+    ``test_change_main``, ``test_issue_225``) see an empty ``caplog.text`` and
+    fail order-dependently in the public CI run. Snapshot and restore the levels
+    of the pdd/litellm logger subtrees (and root) around each test so one test's
+    quiet configuration cannot bleed into the next.
+    """
+    names = {"", "pdd", "pdd.llm_invoke", "litellm"}
+    names.update(
+        name
+        for name in list(logging.Logger.manager.loggerDict)
+        if name in ("pdd", "litellm") or name.startswith(("pdd.", "litellm."))
+    )
+    saved = {name: logging.getLogger(name).level for name in names}
+    yield
+    for name, level in saved.items():
+        logging.getLogger(name).setLevel(level)
 
 
 @pytest.fixture(autouse=True)

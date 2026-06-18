@@ -55,6 +55,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
    - If `query=` was also present, try query extraction before applying fallback.
 7. `<include query="...">file</include>` — delegate to `IncludeQueryExtractor.extract()`. Deferred when `recursive=True` (leave tag intact). On import error or exception, return inline error message in brackets (e.g., `[Error: pdd.include_query_extractor not found...]`).
 8. When both `select=` and `query=` present, keep `select=` and discard `query=`; fall back to `query=` only if `select=` fails
+   - If `PDD_CONTEXT_AUDIT_NO_QUERY_FALLBACK=1`, do not run the `query=` fallback after selector failure; leave the original include tag intact so deterministic context audits can report the semantic query as deferred without making an LLM call.
 9. Image includes (.png, .jpg, .jpeg, .gif, .webp, .heic): resize to max 1024px and convert to base64 data URL. GIF first frame converted to static image. HEIC converted to JPEG (requires `pillow_heif`).
 10. `<include-many>` — comma/newline-separated paths; concatenate with newlines. Missing files → `[File not found: path]`. Deferred when `recursive=True`.
 11. `<shell>cmd</shell>` — execute command string in a shell, replace with stdout. Timeout controlled by `PDD_SHELL_TIMEOUT` env var (default 30s). On non-zero exit, insert error message with exit code and combined stdout/stderr. On timeout, insert timeout message. Deferred when `recursive=True`.
@@ -63,6 +64,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 14. Snapshot capture:
    - Thread `snapshot_recorder` through all top-level and child preprocessing calls without changing the default return value.
    - Record deterministic include inputs and content hashes for XML includes, backtick includes, and include-many inputs that are actually resolved.
+   - When recording a resolved include, pass the current recursion depth as `include_depth` (e.g. the size of the `_seen` stack) so attribution-oriented recorders can distinguish top-level includes from nested ones. The recorder accepts and may ignore it; recorders must tolerate this keyword.
    - When snapshot capture is enabled, record shell command, stdout, stderr, exit status, timeout metadata, resolved replacement text, and whether redaction was applied.
    - When snapshot capture is enabled, record web URL, resolved markdown content, source/cache metadata when available, replacement text, and whether redaction was applied.
    - When snapshot capture is enabled, record semantic `query=` include inputs, extracted text, model/cache metadata when available, replacement text, and whether the tag was nondeterministic.
@@ -85,7 +87,7 @@ Preprocesses prompt files for LLMs by resolving XML-like tags (`<pdd>`, `<includ
 % Error Handling
 - Best-effort: on unexpected exceptions, return the partially processed prompt instead of raising — this allows the CLI and callers to continue with whatever was produced before the error
 - Always re-raise circular-include `ValueError` and `RecursionError`
-- When `PDD_QUIET=1` env var is set, suppress Rich panel output (start/complete banners) but not error messages
+- When `PDD_QUIET=1` env var is set, suppress Rich panel output (start/complete banners), include progress messages, missing-include warnings, and selector fallback warnings; keep true error messages visible.
 - Debug mode: when `PDD_PREPROCESS_DEBUG=1`, log detailed processing events to console. When `PDD_PREPROCESS_DEBUG_FILE` is also set, write a debug report to that file path.
 - After processing, scan for risky placeholders remaining outside code fences and log via debug output (no effect on returned prompt):
   - Single-brace variables like `{name}` that weren't doubled (potential PromptTemplate errors)

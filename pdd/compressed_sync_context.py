@@ -252,7 +252,11 @@ def _pack_test_paths(
     test_root = _common_test_root(test_path_list)
     try:
         packer = TestContextPacker(test_root=test_root)
-        result = packer.pack(module_path=str(code_path) if code_path else "", budget_tokens=None)
+        result = packer.pack(
+            module_path=str(code_path) if code_path else "",
+            budget_tokens=None,
+            candidate_files=test_path_list,
+        )
     except Exception:
         return None
     return _redact(result.context_text), _asdict(result.manifest)

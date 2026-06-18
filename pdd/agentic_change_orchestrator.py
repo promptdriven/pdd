@@ -19,6 +19,9 @@ from rich.console import Console
 from rich.markup import escape
 
 from pdd.agentic_common import (
+    branch_checked_out_worktree,
+    clean_restart_fallback_branch,
+    current_worktree_branch,
     run_agentic_task,
     load_workflow_state,
     save_workflow_state,
@@ -52,6 +55,14 @@ from pdd.preprocess import preprocess
 from pdd.architecture_registry import extract_modules
 from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
 from pdd.pre_checkup_gate import run_pre_checkup_gate
+from pdd.user_story_tests import (
+    generate_user_story,
+    run_user_story_tests,
+    discover_story_files,
+    _contract_path_for_story,
+    _parse_story_prompt_metadata,
+    _read_story,
+)
 
 # Initialize console for rich output
 console = Console()
@@ -547,6 +558,7 @@ def _setup_worktree(
                 console.print(f"[yellow]Warning: git fetch failed for {branch_name}: {stderr.strip()}[/yellow]")
 
     # Clean up local branch if it exists
+    fallback_branch: Optional[str] = None
     branch_exists = _branch_exists(cwd, branch_name)
     if branch_exists:
         success, _err = _delete_branch(cwd, branch_name)
@@ -558,11 +570,59 @@ def _setup_worktree(
             # base the fresh restart on whatever the previous run
             # left on the local change/issue-{N} branch, violating
             # the Req 15 base-ref guarantee.
-            return None, (
-                f"Cannot perform clean restart: local branch {branch_name!r} "
-                "could not be deleted (it is likely checked out in another "
-                "worktree). Remove that worktree first, then retry."
+            #
+            # The common cause is a stale worktree registration: prune
+            # and retry the delete first (resolves it without a fallback).
+            subprocess.run(
+                ["git", "worktree", "prune"],
+                cwd=git_root, capture_output=True,
             )
+            success, _err = _delete_branch(cwd, branch_name)
+            if success:
+                branch_exists = False
+            else:
+                # Still locked. Only fall back when the branch is genuinely
+                # checked out in ANOTHER live worktree (issue #1596: the
+                # GitHub App executor's). Use a fresh unique fallback branch
+                # off origin/main so the locked worktree is left untouched.
+                holder = branch_checked_out_worktree(git_root, branch_name)
+                if holder and Path(holder).resolve() != worktree_path.resolve():
+                    fallback_branch = clean_restart_fallback_branch(branch_name)
+                    # The fallback name is stable across retries of the same
+                    # job (JOB_ID-derived), so a prior attempt may have left
+                    # this branch behind after its worktree was removed. Delete
+                    # it (best effort) so we recreate it fresh from main rather
+                    # than failing `git worktree add -b` on a name clash.
+                    _delete_branch(cwd, fallback_branch)
+                    # Fetch the FALLBACK branch's own tracking ref (not the
+                    # canonical one) so Step 13's `git push --force-with-lease
+                    # origin {head_branch}` has lease info. On a same-job retry
+                    # in a fresh clone, origin/{fallback} already exists but the
+                    # local tracking ref does not — without this fetch the push
+                    # is rejected with "stale info". Best effort.
+                    fallback_lease = (
+                        f"+refs/heads/{fallback_branch}:refs/remotes/origin/{fallback_branch}"
+                    )
+                    try:
+                        subprocess.run(
+                            ["git", "fetch", "origin", fallback_lease],
+                            cwd=git_root, capture_output=True, check=True
+                        )
+                    except subprocess.CalledProcessError:
+                        pass
+                    branch_exists = False
+                    if not quiet:
+                        console.print(
+                            f"[bold cyan]Clean restart: branch {branch_name!r} is locked by "
+                            f"worktree {holder} — creating fresh fallback branch "
+                            f"{fallback_branch!r} from main instead.[/bold cyan]"
+                        )
+                else:
+                    return None, (
+                        f"Cannot perform clean restart: local branch {branch_name!r} "
+                        "could not be deleted (it is likely checked out in another "
+                        "worktree). Remove that worktree first, then retry."
+                    )
 
     # Resolve base ref once. Under clean_restart, refuse to silently
     # use the literal "HEAD" fallback (the user's CURRENT branch) —
@@ -598,9 +658,12 @@ def _setup_worktree(
             if not quiet:
                 console.print(f"[blue]Reusing remote branch {branch_name} (preserving prior changes)[/blue]")
         else:
-            # No prior work — create new branch from main
+            # No prior work — create new branch from main. Under a #1596
+            # fallback the canonical branch is locked by another worktree, so
+            # create the unique fallback branch instead.
+            create_branch = fallback_branch or branch_name
             subprocess.run(
-                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref],
+                ["git", "worktree", "add", "-b", create_branch, str(worktree_path), base_ref],
                 cwd=git_root, capture_output=True, check=True
             )
             if clean_restart and not quiet:
@@ -806,6 +869,278 @@ def _prompt_paths_from_changed_file_entries(
             path = Path(normalized)
             prompt_paths.add(path if path.is_absolute() else worktree_path / path)
     return prompt_paths
+
+
+def _story_prompt_files_for_change(
+    changed_files: Sequence[str],
+    worktree_path: Path,
+) -> List[Path]:
+    """Return existing non-runtime prompt files changed by this workflow."""
+    prompt_paths: List[Path] = []
+    seen: Set[str] = set()
+    for prompt_path in _prompt_paths_from_changed_file_entries(changed_files, worktree_path):
+        if prompt_path.name.lower().endswith("_llm.prompt"):
+            continue
+        if not prompt_path.exists() or not prompt_path.is_file():
+            continue
+        key = str(prompt_path.resolve()).lower()
+        if key in seen:
+            continue
+        prompt_paths.append(prompt_path)
+        seen.add(key)
+    return sorted(prompt_paths, key=lambda p: str(p).lower())
+
+
+def _common_prompt_root(prompt_files: Sequence[Path], worktree_path: Path) -> Optional[Path]:
+    """Return a shared prompts directory for metadata, when one is clear."""
+    roots: Set[Path] = set()
+    for prompt_file in prompt_files:
+        resolved = prompt_file.resolve()
+        parts = resolved.parts
+        prompt_indexes = [i for i, part in enumerate(parts) if part == "prompts"]
+        if not prompt_indexes:
+            continue
+        index = prompt_indexes[-1]
+        roots.add(Path(*parts[: index + 1]))
+    if len(roots) == 1:
+        return next(iter(roots))
+    default_root = worktree_path / "prompts"
+    if default_root.exists():
+        return default_root
+    return None
+
+
+def _format_rel(path: Path, root: Path) -> str:
+    """Format a path relative to root when possible."""
+    try:
+        return path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+_VALID_STORY_POLICIES = ("off", "warn", "strict")
+_DEFAULT_STORY_POLICY = "warn"
+
+
+def _resolve_story_policy() -> str:
+    """Resolve the agentic-change user-story policy: ``off | warn | strict``.
+
+    Controlled by ``PDD_STORY_POLICY`` (issue #1454). The prompt-story workflow
+    must be opt-in-safe before any default strict enforcement, so unknown/empty
+    values fall back to the safe default (``warn``): create/reuse + link +
+    validate and REPORT coverage, but never block the change PR. ``off`` skips
+    creation and checking entirely; ``strict`` blocks the PR when a changed
+    prompt still has no passing linked story.
+    """
+    raw = (os.environ.get("PDD_STORY_POLICY") or "").strip().lower()
+    if raw in _VALID_STORY_POLICIES:
+        return raw
+    return _DEFAULT_STORY_POLICY
+
+
+def _find_linked_stories_for_prompts(
+    prompt_files: Sequence[Path],
+    stories_dir: Path,
+) -> Tuple[Dict[Path, List[Path]], List[Path]]:
+    """Map each changed prompt to existing stories that already link it.
+
+    A story "covers" a changed prompt when its ``pdd-story-prompts`` metadata
+    references that prompt (matched by filename). Returns
+    ``(prompt_to_stories, uncovered_prompts)`` so the caller can reuse existing
+    coverage and only GENERATE a new story for prompts that have none — avoiding
+    the duplicate ``story__<slug>_1.md`` coverage #1454 calls out.
+    """
+    prompt_to_stories: Dict[Path, List[Path]] = {p: [] for p in prompt_files}
+    changed_by_name: Dict[str, Path] = {p.name.lower(): p for p in prompt_files}
+    for story_path in discover_story_files(str(stories_dir)):
+        try:
+            refs = _parse_story_prompt_metadata(_read_story(story_path))
+        except OSError:
+            continue
+        for ref in refs:
+            matched = changed_by_name.get(Path(ref.strip()).name.lower())
+            if matched is not None and story_path not in prompt_to_stories[matched]:
+                prompt_to_stories[matched].append(story_path)
+    uncovered = [p for p in prompt_files if not prompt_to_stories[p]]
+    return prompt_to_stories, uncovered
+
+
+def _generate_user_story_artifacts_for_change(
+    *,
+    issue_url: str,
+    changed_files: Sequence[str],
+    worktree_path: Path,
+    strength: float,
+    temperature: float,
+    time_budget: float,
+    verbose: bool,
+    quiet: bool,
+) -> Tuple[List[str], str, float, str, Optional[str]]:
+    """Create/reuse, link, and validate story coverage before Step 13 makes the PR.
+
+    Returns ``(story_files_to_stage, pr_summary, cost, model, block_message)``
+    (issue #1454). The summary is rendered into the PR body so reviewers can see
+    which coverage was reused/created and whether the linked stories pass.
+    ``block_message`` is non-None only under ``strict`` policy when a changed
+    prompt still has no passing linked story; the caller hard-blocks on it.
+    """
+    policy = _resolve_story_policy()
+    if policy == "off":
+        # `off` skips creation and checking entirely (#1454).
+        return (
+            [],
+            "### User Stories\n- Skipped: story policy is `off` (`PDD_STORY_POLICY=off`).",
+            0.0,
+            "",
+            None,
+        )
+
+    prompt_files = _story_prompt_files_for_change(changed_files, worktree_path)
+    if not prompt_files:
+        return [], "None", 0.0, "", None
+
+    stories_dir = worktree_path / "user_stories"
+    prompts_dir = _common_prompt_root(prompt_files, worktree_path)
+
+    total_cost = 0.0
+    model_used = ""
+    files_to_stage: List[str] = []
+    summary_lines: List[str] = ["### User Stories", f"- Policy: `{policy}`"]
+    # Stories whose linked coverage we will validate (reused + newly generated).
+    linked_story_paths: List[Path] = []
+
+    # 1) Reuse existing linked stories; only generate for the rest (#1454).
+    prompt_to_stories, uncovered = _find_linked_stories_for_prompts(
+        prompt_files, stories_dir
+    )
+    reused = sorted(
+        {s for stories in prompt_to_stories.values() for s in stories},
+        key=lambda p: str(p).lower(),
+    )
+    for story_path in reused:
+        linked_story_paths.append(story_path)
+        rel = _format_rel(story_path, worktree_path)
+        summary_lines.append(f"- `{rel}` — reused existing linked story")
+        if not quiet:
+            console.print(f"[green]Reusing existing user story:[/green] {rel}")
+
+    # 2) Generate one issue-derived story for the prompts with no coverage yet.
+    still_uncovered: List[Path] = list(uncovered)
+    if uncovered:
+        uncovered_refs = [_format_rel(p, prompts_dir or worktree_path) for p in uncovered]
+        try:
+            success, message, cost, model, story_file, linked_prompts = generate_user_story(
+                prompt_files=[str(p) for p in uncovered],
+                issue=issue_url,
+                stories_dir=str(stories_dir),
+                prompts_dir=str(prompts_dir) if prompts_dir else None,
+                strength=strength,
+                temperature=temperature,
+                time=time_budget,
+                verbose=verbose,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            # Story generation is best-effort: a failure in issue resolution,
+            # provider code, or file I/O must never abort the change workflow
+            # after the pre-PR gate. Degrade to a PR-body warning instead.
+            success, message, cost, model = False, str(exc), 0.0, ""
+            linked_prompts = []
+        total_cost += cost
+        model_used = model_used or model
+        if success:
+            story_path = Path(story_file)
+            still_uncovered = []
+            linked_story_paths.append(story_path)
+            story_rel = _format_rel(story_path, worktree_path)
+            files_to_stage.append(story_rel)
+            linked = linked_prompts or uncovered_refs
+            line = (
+                f"- `{story_rel}` — issue-derived story linked to: "
+                f"{', '.join(f'`{p}`' for p in linked)}"
+            )
+            # The two-file model writes a sibling AI contract under contracts/;
+            # stage it too so the contract travels with the change PR rather than
+            # landing as an untracked local file.
+            contract_path = _contract_path_for_story(story_path)
+            if contract_path.exists():
+                contract_rel = _format_rel(contract_path, worktree_path)
+                files_to_stage.append(contract_rel)
+                line += f"\n- `{contract_rel}` — generated machine-checkable contract"
+            summary_lines.append(line)
+            if not quiet:
+                console.print(f"[green]Generated user story:[/green] {story_rel}")
+        else:
+            summary_lines.append(
+                f"- Story generation skipped for `{', '.join(uncovered_refs)}`: {message}"
+            )
+            if not quiet:
+                console.print(f"[yellow]User story generation skipped: {message}[/yellow]")
+
+    # 3) Validate ONLY the linked story/prompt subset and report (#1454).
+    failing_stories: List[str] = []
+    validation_error: Optional[str] = None
+    if linked_story_paths:
+        try:
+            passed, results, vcost, vmodel = run_user_story_tests(
+                stories_dir=str(stories_dir),
+                prompts_dir=str(prompts_dir) if prompts_dir else None,
+                story_files=sorted(set(linked_story_paths), key=lambda p: str(p).lower()),
+                strength=strength,
+                temperature=temperature,
+                time=time_budget,
+                verbose=verbose,
+                quiet=quiet,
+            )
+            total_cost += vcost
+            model_used = model_used or vmodel
+            failing_stories = [
+                _format_rel(Path(str(r.get("story"))), worktree_path)
+                for r in results
+                if not r.get("passed")
+            ]
+            if passed:
+                summary_lines.append(
+                    f"- Validation: ✅ all {len(results)} linked story check(s) passed"
+                )
+            else:
+                summary_lines.append(
+                    f"- Validation: ❌ {len(failing_stories)} of {len(results)} "
+                    f"linked story check(s) failed: {', '.join(f'`{s}`' for s in failing_stories)}"
+                )
+        except Exception as exc:  # pylint: disable=broad-except
+            # Validation is best-effort under warn; never abort the workflow.
+            # Under strict, however, an unrunnable validator must NOT fail open:
+            # remember the error so the policy gate below can block on it, since
+            # we cannot prove the linked stories pass.
+            validation_error = str(exc)
+            summary_lines.append(f"- Validation skipped: {exc}")
+            if not quiet:
+                console.print(f"[yellow]Story validation skipped: {exc}[/yellow]")
+
+    # 4) Enforce the policy. `warn` only reports; `strict` blocks when a changed
+    #    prompt still has no passing linked story.
+    block_message: Optional[str] = None
+    problems: List[str] = []
+    if still_uncovered:
+        uncovered_names = [
+            _format_rel(p, prompts_dir or worktree_path) for p in still_uncovered
+        ]
+        problems.append(f"no linked story for: {', '.join(uncovered_names)}")
+    if failing_stories:
+        problems.append(f"failing linked story check(s): {', '.join(failing_stories)}")
+    if validation_error:
+        # A validation that could not run leaves coverage unproven; treat it as a
+        # problem so strict policy blocks (warn only reports it, below).
+        problems.append(f"validation failed/skipped: {validation_error}")
+    if problems:
+        joined = "; ".join(problems)
+        if policy == "strict":
+            block_message = f"strict story policy ({joined})"
+            summary_lines.append(f"- ⛔ Blocking (strict policy): {joined}")
+        else:
+            summary_lines.append(f"- ⚠️ Warning (non-blocking): {joined}")
+
+    return files_to_stage, "\n".join(summary_lines), total_cost, model_used, block_message
 
 
 def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
@@ -1402,21 +1737,33 @@ def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
 def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
     """Check if an open PR already exists for this issue's branch.
 
-    Returns the PR URL if found, None otherwise.
+    Matches the canonical ``change/issue-{N}`` head AND any
+    ``change/issue-{N}-job-*`` clean-restart fallback head (issue #1596), so a
+    later normal run does not open a duplicate PR for a fallback branch.
+    Returns the PR URL if found, else None.
+
+    GitHub's ``head:`` search is a PREFIX match, so ``head:change/issue-{N}``
+    also returns unrelated heads like ``change/issue-{N}0``; the results are
+    filtered precisely in Python.
     """
-    branch = f"change/issue-{issue_number}"
+    canonical = f"change/issue-{issue_number}"
+    fallback_prefix = f"{canonical}-job-"
     try:
         result = subprocess.run(
             ["gh", "pr", "list", "--repo", f"{repo_owner}/{repo_name}",
-             "--search", f"head:{branch}", "--state", "open",
-             "--json", "url", "--limit", "1"],
+             "--search", f"head:{canonical}", "--state", "open",
+             "--json", "url,headRefName", "--limit", "30"],
             capture_output=True, text=True, check=False, timeout=30,
         )
         if result.returncode != 0:
             return None
         data = json.loads(result.stdout)
-        if data and isinstance(data, list) and data[0].get("url"):
-            return data[0]["url"]
+        if data and isinstance(data, list):
+            for pr in data:
+                head = pr.get("headRefName", "")
+                if head == canonical or head.startswith(fallback_prefix):
+                    if pr.get("url"):
+                        return pr["url"]
     except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
         pass
     return None
@@ -2453,6 +2800,56 @@ def run_agentic_change_orchestrator(
         except Exception:  # pylint: disable=broad-except
             pass
 
+    story_files_to_stage, user_story_summary, story_cost, story_model, story_block_message = (
+        _generate_user_story_artifacts_for_change(
+            issue_url=issue_url,
+            changed_files=changed_files,
+            worktree_path=gate_worktree,
+            strength=0.2,
+            temperature=0.0,
+            time_budget=0.25,
+            verbose=verbose,
+            quiet=quiet,
+        )
+    )
+    total_cost += story_cost
+    if story_model:
+        model_used = model_used or story_model
+    for story_file in story_files_to_stage:
+        if story_file not in changed_files:
+            changed_files.append(story_file)
+    if story_files_to_stage:
+        existing_to_stage = [
+            f.strip()
+            for f in str(context.get("files_to_stage", "") or "").split(",")
+            if f.strip()
+        ]
+        merged_to_stage = existing_to_stage[:]
+        for story_file in story_files_to_stage:
+            if story_file not in merged_to_stage:
+                merged_to_stage.append(story_file)
+        context["files_to_stage"] = ", ".join(merged_to_stage)
+    context["user_story_summary"] = user_story_summary
+    state["total_cost"] = total_cost
+
+    # Issue #1454: under PDD_STORY_POLICY=strict, block before Step 13 when a
+    # changed prompt still has no passing linked story. The default policy
+    # (`warn`) only reports coverage in the PR body; `off` skips entirely. This
+    # block must run only for `strict` — _generate_user_story_artifacts_for_change
+    # returns a non-None message exclusively in that case.
+    if story_block_message:
+        state["step_outputs"]["12.6"] = f"FAILED: {story_block_message}"
+        save_workflow_state(
+            cwd, issue_number, "change", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+            dedupe=effective_clean_restart,
+        )
+        return (
+            False,
+            f"Stopped at step 12.6: {story_block_message}",
+            total_cost, model_used, changed_files,
+        )
+
     # Identify test files for affected modules (#377 Bug B)
     impacted_tests: List[str] = []
     test_dir_name = pddrc_context.get("test_dir", "tests/").rstrip("/")
@@ -2504,6 +2901,12 @@ def run_agentic_change_orchestrator(
         git_root_for_pr_base = _get_git_root(current_work_dir) or current_work_dir
         context["base_branch"] = _normalize_pr_base_branch(
             _resolve_main_ref_name(git_root_for_pr_base)
+        )
+        # Thread the worktree's ACTUAL head branch so a #1596 clean-restart
+        # fallback branch is pushed/PR'd, not the (locked) canonical name.
+        # Defaults to the canonical name → byte-identical when no fallback.
+        context["head_branch"] = (
+            current_worktree_branch(current_work_dir) or f"change/issue-{issue_number}"
         )
         if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
         s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")

@@ -173,12 +173,19 @@ class TestContextPacker:
         module_path: str,
         failing_tests: Sequence[str] | None = None,
         budget_tokens: int | None = None,
+        candidate_files: Sequence[str] | None = None,
+        slice_failing_tests: bool = False,
     ) -> TestPackingResult:
         """Rank and pack candidate test files under the token budget.
 
         Failing tests are packed unconditionally before budget accounting.
         Non-failing candidates are scored, sorted, and greedily packed until
         the budget is exhausted, deduplicating near-duplicate coverage.
+        When ``candidate_files`` is provided, only those explicit files are
+        ranked; callers that pass resolved test paths must not be widened to a
+        sibling directory scan.
+        ``slice_failing_tests`` asks fix-loop callers to send only the failing
+        tests and fixtures even when the full failing file would fit.
         """
         budget = self.budget_tokens if budget_tokens is None else budget_tokens
         manifest = TestPackingManifest(budget_tokens=budget)
@@ -188,7 +195,7 @@ class TestContextPacker:
             return TestPackingResult(context_text="", manifest=manifest, token_count=0)
 
         failing_ids = self._collect_failing_tests(failing_tests, manifest)
-        candidates = self._discover_test_files()
+        candidates = self._candidate_test_files(candidate_files)
         if not candidates:
             manifest.unavailability_reason = "no test files found"
             return TestPackingResult(context_text="", manifest=manifest, token_count=0)
@@ -207,7 +214,7 @@ class TestContextPacker:
             if content is None:
                 continue
             tokens = _count_tokens(content)
-            if tokens > (budget - used):
+            if slice_failing_tests or tokens > (budget - used):
                 # Oversized failing-test file: slice to only the failing
                 # functions and their fixtures rather than the whole file.
                 sliced = self._slice_failing(content, file, names)
@@ -269,6 +276,24 @@ class TestContextPacker:
         context_text = self._render(blocks)
         return TestPackingResult(context_text=context_text, manifest=manifest, token_count=used)
 
+    def _candidate_test_files(self, candidate_files: Sequence[str] | None) -> List[str]:
+        if candidate_files is None:
+            return self._discover_test_files()
+        seen: Set[str] = set()
+        files: List[str] = []
+        for candidate in candidate_files:
+            if not candidate:
+                continue
+            path = Path(candidate)
+            if not path.is_file():
+                continue
+            key = str(path.resolve())
+            if key in seen:
+                continue
+            seen.add(key)
+            files.append(str(path))
+        return files
+
     # ---------------------------------------------------------- failing tests
     def _collect_failing_tests(
         self, failing_tests: Sequence[str] | None, manifest: TestPackingManifest
@@ -308,7 +333,6 @@ class TestContextPacker:
                     continue
                 if isinstance(data, dict):
                     return [key for key, value in data.items() if value]
-        manifest.unavailability_reason = "no .pytest_cache failure history"
         return []
 
     def _cache_search_roots(self) -> List[Path]:
@@ -363,6 +387,18 @@ class TestContextPacker:
             sliced, _ = PytestSlicer(content, file_path=file).slice(list(names))
             return sliced
         except SlicerError as exc:
+            message = f"pytest slice failed for {file}: {exc}"
+            try:
+                from .compression_reporting import (
+                    CompressionFallbackError,
+                    record_compression_fallback,
+                )
+
+                record_compression_fallback(message)
+                if os.environ.get("PDD_COMPRESSION_FALLBACK", "full").lower() == "error":
+                    raise CompressionFallbackError(message) from exc
+            except ImportError:
+                pass
             logger.warning("Could not slice %s (%s); using full file", file, exc)
             return None
 

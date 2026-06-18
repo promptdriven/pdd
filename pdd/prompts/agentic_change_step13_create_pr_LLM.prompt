@@ -11,7 +11,7 @@ You are working on step 13 of 13 in an agentic change workflow. This is the fina
 - Issue Number: {issue_number}
 - Issue Title: {issue_title}
 - Worktree Path: {worktree_path}
-- Branch Name: change/issue-{issue_number}
+- Branch Name: {head_branch}
 - Base Branch: {base_branch}
 - Files Changed: {files_to_stage}
 - Sync Order Script: {sync_order_script}
@@ -36,6 +36,17 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
 {manual_review_lines}
 </manual_review_lines>
 
+% User Story Coverage (from issue-derived story generation)
+
+The orchestrator generated an issue-derived user story for the existing,
+non-runtime prompts changed by this workflow and staged it for this PR. The
+summary below is the exact PR-body section to render. If the value is the
+literal ``None``, no story was generated and the section must be omitted.
+
+<user_story_summary>
+{user_story_summary}
+</user_story_summary>
+
 % Your Task
 
 1. **Stage all changes**
@@ -53,18 +64,18 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
    If `clean_restart` is `true`, the remote branch may have divergent history from the
    stopped run. Use `--force-with-lease` to overwrite it safely:
    ```bash
-   git push --force-with-lease -u origin change/issue-{issue_number}
+   git push --force-with-lease -u origin {head_branch}
    ```
    Otherwise use a standard push:
    ```bash
-   git push -u origin change/issue-{issue_number}
+   git push -u origin {head_branch}
    ```
 
 4. **Create pull request**
 
    If `clean_restart` is `true`, an old PR for this branch may still be open. Check first:
    ```bash
-   gh pr list --head change/issue-{issue_number} --state open --json number,url
+   gh pr list --head {head_branch} --state open --json number,url
    ```
    - If an open PR is found, update it in place (the branch was already force-pushed):
      ```bash
@@ -73,13 +84,14 @@ The orchestrator collected every ``MANUAL_REVIEW: <path> — <reason>`` line emi
      Record that PR's number and URL as the result; skip `gh pr create`.
    - If no open PR exists, create one:
      ```bash
-     gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head change/issue-{issue_number}
+     gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head {head_branch}
      ```
 
    Whether creating or editing, the PR must:
    - Reference the original issue
    - Summarize the prompt changes made
    - List files modified
+   - Mention generated user-story artifacts when `<user_story_summary>` is not `None`
    - Include next steps for reviewer
 
 5. **Link PR to issue**
@@ -92,7 +104,7 @@ Push the branch (use `--force-with-lease` if `clean_restart` is `true`), then cr
 update the PR following the logic in step 4 above:
 
 ```bash
-gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head change/issue-{issue_number}
+gh pr create --title "feat: [description] (#{issue_number})" --body "..." --base {base_branch} --head {head_branch}
 # OR, if an open PR already exists under clean restart:
 gh pr edit <number> --title "feat: [description] (#{issue_number})" --body "..."
 ```
@@ -118,6 +130,11 @@ Closes #{issue_number}
 
 ### Documentation Updated
 - `README.md` - [brief description]
+
+Render the contents of ``<user_story_summary>`` here. If the value is the
+literal ``None``, omit this section entirely. Otherwise include it verbatim as a
+PR-body section so reviewers can see which issue-derived user story was generated
+and which prompt metadata it links to.
 
 ## ⚠️ Manual Review Required
 
@@ -159,7 +176,7 @@ Render the contents of ``<manual_review_lines>`` here. If the value is the liter
 [PR #{{pr_number}}]({{pr_url}})
 
 ### Summary
-- Branch: `change/issue-{issue_number}`
+- Branch: `{head_branch}`
 - Files changed: {{N}}
 - Ready for review
 

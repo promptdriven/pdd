@@ -257,7 +257,6 @@ def _regenerate_code(
         str(prompt_path.relative_to(project_root)),
         "--output",
         str(output_rel),
-        "--force",
     ]
     if model:
         cmd.extend(["--model", model])

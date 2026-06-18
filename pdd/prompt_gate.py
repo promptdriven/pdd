@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -204,6 +205,9 @@ def maybe_run_workflow_prompt_gate(
     no_prompt_checkup: bool,
     project_root: Path,
     quiet: bool = False,
+    interactive: bool = False,
+    apply: bool = False,
+    dry_run: bool = False,
 ) -> tuple[bool, int]:
     """Shared hook for generate/change workflows that touch ``.prompt`` files."""
     prompt_paths = [
@@ -214,11 +218,59 @@ def maybe_run_workflow_prompt_gate(
     if not prompt_paths:
         return True, 0
 
+    if apply and not interactive:
+        raise click.UsageError("--apply requires --interactive.")
+
     gate_mode = resolve_prompt_gate_mode(
         cli_prompt_checkup=cli_prompt_checkup,
         no_prompt_checkup=no_prompt_checkup,
         project_root=project_root,
     )
+    strict = gate_mode == "strict"
+
+    if interactive:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            raise click.UsageError(
+                "--interactive requires a TTY (stdin and stdout must be a terminal)."
+            )
+        from .checkup_interactive_main import run_interactive_checkup  # pylint: disable=import-outside-toplevel
+
+        for prompt_path in prompt_paths:
+            try:
+                run_interactive_checkup(
+                    str(prompt_path),
+                    apply=apply,
+                    dry_run=dry_run,
+                    project_root=project_root,
+                    strict=strict,
+                    quiet=quiet,
+                    explicit_interactive=True,
+                )
+            except click.exceptions.Exit as exc:
+                click.echo(
+                    f"Interactive checkup stopped for {prompt_path.name} "
+                    f"(exit {exc.exit_code}). "
+                    "Check the output above for details.",
+                    err=True,
+                )
+                return False, exc.exit_code
+        if strict:
+            should_continue, exit_code = run_automatic_prompt_gate(
+                prompt_paths,
+                mode=gate_mode,
+                project_root=project_root,
+                quiet=quiet,
+                strict=True,
+            )
+            if not should_continue:
+                click.echo(
+                    "Unresolved strict prompt checkup failures remain after "
+                    "interactive repair; blocking downstream steps.",
+                    err=True,
+                )
+                return False, exit_code
+        return True, 0
+
     return run_automatic_prompt_gate(
         prompt_paths,
         mode=gate_mode,

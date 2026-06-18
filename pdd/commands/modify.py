@@ -222,6 +222,20 @@ def split(
     default=False,
     help="Disable automatic prompt checkup for this run.",
 )
+@click.option(
+    "--interactive",
+    "interactive",
+    is_flag=True,
+    default=False,
+    help="With --prompt-checkup: run interactive per-finding repair on changed prompts.",
+)
+@click.option(
+    "--apply",
+    "apply",
+    is_flag=True,
+    default=False,
+    help="With --interactive: write approved low-risk repairs to the prompt files.",
+)
 @click.pass_context
 @track_cost
 def change(
@@ -237,6 +251,8 @@ def change(
     clean_restart: bool,
     prompt_checkup: Optional[str],
     no_prompt_checkup: bool,
+    interactive: bool,
+    apply: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Modify an input prompt file based on a change prompt or issue.
@@ -250,6 +266,8 @@ def change(
     ctx.ensure_object(dict)
     ctx.obj["prompt_checkup"] = prompt_checkup
     ctx.obj["no_prompt_checkup"] = no_prompt_checkup
+    ctx.obj["interactive"] = interactive
+    ctx.obj["apply"] = apply
 
     if clean_restart and manual:
         raise click.UsageError(
@@ -384,6 +402,8 @@ def change(
                 no_prompt_checkup=no_prompt_checkup,
                 project_root=resolve_prompt_gate_project_root(changed_files or []),
                 quiet=quiet,
+                interactive=interactive,
+                apply=apply,
             )
             if not should_continue:
                 raise click.exceptions.Exit(gate_exit)

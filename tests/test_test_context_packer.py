@@ -275,6 +275,7 @@ def test_manifest_records_budget_and_usage(project):
     assert isinstance(result.manifest, TestPackingManifest)
     assert result.manifest.budget_tokens == 1234
     assert result.manifest.used_tokens == result.token_count
+    assert result.manifest.unavailability_reason is None
     assert all(isinstance(e, SelectedTestEntry) for e in result.manifest.selected)
     assert result.manifest.selected[0].token_count > 0
 

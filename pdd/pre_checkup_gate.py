@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import glob
 import hashlib
 import json
 import os
@@ -180,63 +181,67 @@ def _docs_only(changed_files: Sequence[str]) -> bool:
     )
 
 
-def _load_architecture(worktree: Path) -> List[Dict[str, Any]]:
-    path = worktree / "architecture.json"
-    if not path.exists():
-        return []
+def _arch_entries(
+    arch_path: Path,
+    cache: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> List[Dict[str, Any]]:
+    """Module entries from a specific architecture.json — the repo root's OR a
+    foreign/nested one — tolerating both the bare-list and ``{"modules": [...]}``
+    shapes and returning ``[]`` for a missing or unparseable file. ``cache`` (keyed
+    by path) avoids re-parsing the same architecture.json within one gate run."""
+    key = str(arch_path)
+    if cache is not None and key in cache:
+        return cache[key]
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data: Any = json.loads(arch_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError):
-        return []
+        data = None
     if isinstance(data, dict):
         modules = data.get("modules", [])
-        return modules if isinstance(modules, list) else []
-    return data if isinstance(data, list) else []
+        entries = modules if isinstance(modules, list) else []
+    elif isinstance(data, list):
+        entries = data
+    else:
+        entries = []
+    if cache is not None:
+        cache[key] = entries
+    return entries
 
 
-def _touched_architecture_json_error(
-    worktree: Path, changed_files: Sequence[str]
-) -> Optional[str]:
-    """Hard-block reason if the PR itself touched ``architecture.json`` and it no
-    longer parses, else ``None``.
+def _load_architecture(worktree: Path) -> List[Dict[str, Any]]:
+    return _arch_entries(worktree / "architecture.json")
 
-    ``_load_architecture`` deliberately swallows a parse error (returns ``[]``)
-    so the gate never crashes on a repo with a malformed arch file — but that
-    means a PR that *breaks* ``architecture.json`` would silently no-op the
-    drift phase and pass the gate, handing checkup a broken central config the
-    gate depends on. So validate it HERE, but only when the PR touched it and it
-    exists: a pre-existing/absent breakage is not this PR's doing (blocking on
-    that would be the false-block-on-infra pattern we avoid). Scope matches
-    ``_load_architecture`` — repo-root ``architecture.json`` only.
+
+def _architecture_json_shape_error(path: Path, label: str) -> Optional[str]:
+    """Shape-validation reason for ONE architecture.json (``label`` names it in the
+    message), or ``None`` if it parses into a usable module graph / does not exist.
+
+    ``_load_architecture``/``_arch_entries`` deliberately swallow a parse error
+    (returning ``[]``) so the gate never crashes on a malformed arch file — but that
+    means a file a PR/heal *breaks* would silently no-op the module graph and pass.
+    So validate the shape HERE.
     """
-    if not any(_norm(f) == "architecture.json" for f in changed_files):
-        return None
-    path = worktree / "architecture.json"
     if not path.exists():
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        return (
-            "architecture.json (changed by this PR) is not valid JSON: "
-            f"{_scrub(exc)}"
-        )
-    # Valid JSON is not enough: the shape must be one _load_architecture can
-    # extract a module graph from — a top-level list, or a dict with a "modules"
-    # list. A scalar ("oops") or a dict without a modules list parses fine but
-    # yields an EMPTY graph silently, so drift-sync and downstream checks run
-    # against no modules at all and the gate passes vacuously. An empty list /
-    # `{"modules": []}` is a legitimate "no modules" state and does NOT block.
+        return f"{label} (changed by this PR) is not valid JSON: {_scrub(exc)}"
+    # Valid JSON is not enough: the shape must be one _arch_entries can extract a
+    # module graph from — a top-level list, or a dict with a "modules" list. A scalar
+    # ("oops") or a dict without a modules list parses fine but yields an EMPTY graph
+    # silently, so drift-sync and downstream checks run against no modules at all and
+    # the gate passes vacuously. An empty list / `{"modules": []}` is a legitimate "no
+    # modules" state and does NOT block.
     if not (
         isinstance(data, list)
         or (isinstance(data, dict) and isinstance(data.get("modules"), list))
     ):
         return (
-            "architecture.json (changed by this PR) is valid JSON but not a "
-            "recognized architecture shape (expected a list of modules, or a "
-            'dict with a "modules" list); got '
-            f"{type(data).__name__} — the gate would silently treat the module "
-            "graph as empty"
+            f"{label} (changed by this PR) is valid JSON but not a recognized "
+            "architecture shape (expected a list of modules, or a dict with a "
+            f'"modules" list); got {type(data).__name__} — the gate would silently '
+            "treat the module graph as empty"
         )
     # The container is recognized, but each entry must be a usable module mapping
     # — a dict with a non-empty STRING `filename` or `filepath`. Malformed entries
@@ -247,8 +252,7 @@ def _touched_architecture_json_error(
     # STRUCTURAL terminus: the gate validates that entries are well-formed enough
     # to derive a module graph, but does NOT verify the referenced files exist or
     # match a language — that is architecture_sync's full-schema job, not a smoke
-    # gate's. (All 270 real entries satisfy this; [] / {"modules": []} is a
-    # legitimate empty state and does not block.)
+    # gate's. ([] / {"modules": []} is a legitimate empty state and does not block.)
     entries = data if isinstance(data, list) else data.get("modules", [])
 
     def _usable_entry(e: Any) -> bool:
@@ -263,10 +267,38 @@ def _touched_architecture_json_error(
     bad = sum(1 for e in entries if not _usable_entry(e))
     if bad:
         return (
-            "architecture.json (changed by this PR) has malformed module "
-            f"entries ({bad} of {len(entries)} are not dicts with a "
-            "filename/filepath) — the gate cannot derive a module graph from it"
+            f"{label} (changed by this PR) has malformed module entries "
+            f"({bad} of {len(entries)} are not dicts with a filename/filepath) — "
+            "the gate cannot derive a module graph from it"
         )
+    return None
+
+
+def _touched_architecture_json_error(
+    worktree: Path, changed_files: Sequence[str]
+) -> Optional[str]:
+    """Hard-block reason if the PR (or the heal/sync phase) touched ANY
+    ``architecture.json`` — the repo-root one OR a nested/foreign one — and it no
+    longer parses into a usable module graph, else ``None``.
+
+    Validate only files in ``changed_files`` (the PR diff PLUS the paths drift-sync
+    reported mutating via ``synced_paths``): a pre-existing/absent breakage in a file
+    this PR never touched is not its doing and MUST NOT block (the false-block-on-infra
+    pattern we avoid). Foreign arch files are in scope because drift-sync now writes
+    them — a sync that corrupts a nested ``extensions/app/architecture.json`` must be
+    caught, mirroring the guarantee already held for the root file.
+    """
+    seen: Set[str] = set()
+    for raw in changed_files:
+        rel = _norm(raw)
+        if rel != "architecture.json" and not rel.endswith("/architecture.json"):
+            continue
+        if rel in seen:
+            continue
+        seen.add(rel)
+        error = _architecture_json_shape_error(worktree / rel, rel)
+        if error:
+            return error
     return None
 
 
@@ -277,6 +309,47 @@ def _prompt_path_for_filename(worktree: Path, filename: str) -> Optional[Path]:
             return candidate
     matches = list(worktree.glob(f"**/prompts/{filename}"))
     return matches[0] if matches else None
+
+
+def _prompt_sync_scope(
+    worktree: Path, prompt_path: Path, fallback_filename: str
+) -> Tuple[Path, str]:
+    try:
+        rel_parts = prompt_path.relative_to(worktree).parts
+    except ValueError:
+        return prompt_path.parent, fallback_filename
+    prompts_indexes = [index for index, part in enumerate(rel_parts) if part == "prompts"]
+    if not prompts_indexes:
+        return prompt_path.parent, fallback_filename
+    prompts_index = prompts_indexes[-1]
+    prompts_dir = worktree.joinpath(*rel_parts[: prompts_index + 1])
+    rel_filename = Path(*rel_parts[prompts_index + 1 :]).as_posix()
+    return prompts_dir, rel_filename or fallback_filename
+
+
+def _architecture_path_for_prompts_dir(worktree: Path, prompts_dir: Path) -> Path:
+    """Find the nearest ancestor architecture.json for a prompts directory.
+
+    Standard repos keep prompts under pdd/prompts or prompts/ with the owning
+    architecture.json at the repo root. Nested consumers can keep prompts below
+    another package directory, where the owning architecture.json may be one or
+    more parents above the prompts directory.
+    """
+    root_arch = worktree / "architecture.json"
+    try:
+        root = worktree.resolve()
+        current = prompts_dir.resolve().parent
+        current.relative_to(root)
+    except (OSError, ValueError):
+        return root_arch
+
+    while True:
+        candidate = current / "architecture.json"
+        if candidate.is_file():
+            return candidate
+        if current == root:
+            return root_arch
+        current = current.parent
 
 
 def _prompt_filename_from_changed(rel: str) -> Optional[str]:
@@ -299,29 +372,193 @@ def _architecture_entry_maps_file(entry: Dict[str, Any], rel: str) -> bool:
     return rel in {filepath, f"pdd/prompts/{filename}", f"prompts/{filename}"}
 
 
+def _entry_repo_code_paths(worktree: Path, arch_dir: Path, filepath: Any) -> Set[str]:
+    """Repo-relative spellings of an architecture entry's ``filepath``.
+
+    A ``filepath`` is recorded relative to its architecture.json's own directory
+    (the root architecture.json sits at the repo root, so its entries are already
+    repo-relative; a foreign architecture.json under ``extensions/<app>/`` records
+    paths relative to that directory). Some consumers store repo-relative paths even
+    in a foreign architecture.json, so BOTH interpretations are accepted."""
+    if not isinstance(filepath, str) or not filepath:
+        return set()
+    fp = _norm(filepath)
+    out: Set[str] = set()
+    for base in (arch_dir, worktree):
+        rel = _rel_within(base / fp, worktree)
+        if rel:
+            out.add(rel)
+    return out
+
+
+def _resolve_entry_code_path(worktree: Path, arch_dir: Path, filepath: Any) -> Optional[Path]:
+    """On-disk code Path for an architecture entry, honoring both the arch-dir-
+    relative and repo-relative ``filepath`` conventions. Returns the first candidate
+    that exists, else ``None`` — never a bogus path that would mis-attribute heal
+    output to a file that is not there."""
+    if not isinstance(filepath, str) or not filepath:
+        return None
+    fp = _norm(filepath)
+    for base in (arch_dir, worktree):
+        candidate = base / fp
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _resolve_prompt_under_arch(
+    arch_dir: Path, filename: Any, code_path: Optional[Path] = None
+) -> Optional[Path]:
+    """Locate a prompt named (architecture-relative) ``filename`` under its owning
+    architecture's directory. Prompts live under ``<arch_dir>/prompts/`` (foreign
+    consumers) or ``<arch_dir>/pdd/prompts/`` (a vendored-pdd layout); ``filename``
+    may itself contain sub-directories (e.g. ``src/config_Python.prompt``). When
+    ``code_path`` is given, a prompts dir COLOCATED with the code is preferred, so an
+    ambiguous basename present in several nested prompts dirs resolves to the one next
+    to its own module rather than a lexicographic pick."""
+    fn = _norm(filename) if isinstance(filename, str) else ""
+    if not fn:
+        return None
+    # Prefer the prompts dir COLOCATED with the changed code: walk from the code
+    # file's directory UP to the architecture dir, so code at src/b/foo.py binds to
+    # src/b/prompts/<fn> even when a same-named prompt ALSO sits at the top-level
+    # <arch_dir>/prompts/. The walk's final step is <arch_dir> itself, so it also
+    # covers the direct-under-arch layout (e.g. <arch_dir>/prompts/<subpath>) — hence
+    # it runs BEFORE the bare direct check below, not after.
+    if code_path is not None:
+        try:
+            stop = arch_dir.resolve()
+            current = code_path.resolve().parent
+            current.relative_to(stop)
+            while True:
+                for sub in ("prompts", "pdd/prompts"):
+                    candidate = current / sub / fn
+                    if candidate.is_file():
+                        return candidate
+                if current == stop:
+                    break
+                current = current.parent
+        except (OSError, ValueError):
+            pass
+    # Direct under the architecture's directory: taken when there is no code hint, or
+    # the colocated walk found nothing.
+    for sub in ("prompts", "pdd/prompts"):
+        candidate = arch_dir / sub / fn
+        if candidate.is_file():
+            return candidate
+    # Fallback: a prompts dir NESTED below the architecture's directory (e.g.
+    # extensions/app/src/prompts/) — the same arrangement the prompt-change path
+    # already handles via _prompt_sync_scope's last-"prompts"-component scoping.
+    # Bounded to the arch subtree; take the shallowest match for determinism.
+    # `glob.escape` the data-controlled filename so an architecture `filename` with
+    # glob metacharacters (e.g. "*.prompt") matches LITERALLY and never selects an
+    # arbitrary prompt — only the "prompts" path segment is a real glob.
+    matches = sorted(
+        (p for p in arch_dir.glob(f"**/prompts/{glob.escape(fn)}") if p.is_file()),
+        key=lambda p: len(p.relative_to(arch_dir).parts),
+    )
+    return matches[0] if matches else None
+
+
+def _code_path_for_prompt(
+    worktree: Path,
+    prompt_path: Path,
+    arch_cache: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Optional[Path]:
+    """The code module a prompt generates, resolved through the prompt's OWNING
+    architecture.json (nearest ancestor of its prompts dir) so a foreign prompt is
+    paired with its foreign code module rather than a same-named root module."""
+    prompts_dir, rel_filename = _prompt_sync_scope(worktree, prompt_path, prompt_path.name)
+    arch_path = _architecture_path_for_prompts_dir(worktree, prompts_dir)
+    for entry in _arch_entries(arch_path, arch_cache):
+        if not isinstance(entry, dict):
+            continue
+        if _norm(entry.get("filename", "")) == rel_filename:
+            return _resolve_entry_code_path(worktree, arch_path.parent, entry.get("filepath"))
+    return None
+
+
+def _nearest_foreign_architecture(worktree: Path, rel: str) -> Optional[Path]:
+    """Nearest-ancestor architecture.json above a changed file, EXCLUDING the repo
+    root (whose entries the caller already searched). ``None`` when the only owner up
+    the tree is the root architecture.json."""
+    try:
+        root = worktree.resolve()
+        current = (worktree / rel).resolve().parent
+        current.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    while current != root:
+        candidate = current / "architecture.json"
+        if candidate.is_file():
+            return candidate
+        current = current.parent
+    return None
+
+
+def _touched_prompt_for_foreign_code(
+    worktree: Path,
+    rel: str,
+    arch_cache: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+) -> Optional[Tuple[Path, Optional[Path]]]:
+    """Map a changed code file owned only by a FOREIGN architecture.json back to its
+    prompt, for modules the repo-root architecture.json does not list. Returns
+    ``(prompt_path, code_path)`` or ``None``."""
+    arch_path = _nearest_foreign_architecture(worktree, rel)
+    if arch_path is None:
+        return None
+    arch_dir = arch_path.parent
+    for entry in _arch_entries(arch_path, arch_cache):
+        if not isinstance(entry, dict):
+            continue
+        if rel not in _entry_repo_code_paths(worktree, arch_dir, entry.get("filepath")):
+            continue
+        filename = entry.get("filename")
+        if not isinstance(filename, str) or not filename.endswith(".prompt"):
+            continue
+        prompt_path = _resolve_prompt_under_arch(arch_dir, filename, worktree / rel)
+        if prompt_path is not None:
+            return prompt_path, (worktree / rel)
+    return None
+
+
 def _touched_prompt_files(
     worktree: Path,
     changed_files: Sequence[str],
     architecture: Sequence[Dict[str, Any]],
 ) -> Dict[str, Tuple[Path, Optional[Path]]]:
+    # Keyed by each touched prompt's repo-relative PATH, never its basename: two
+    # prompts that share a basename across different prompts dirs (e.g.
+    # extensions/a/prompts and extensions/b/prompts) are distinct modules and must
+    # both be synced — a basename key collapsed them into one and silently dropped
+    # the other.
     touched: Dict[str, Tuple[Path, Optional[Path]]] = {}
+    arch_cache: Dict[str, List[Dict[str, Any]]] = {}
     for raw in changed_files:
         rel = _norm(raw)
         prompt_filename = _prompt_filename_from_changed(rel)
         if prompt_filename:
-            prompt_path = _prompt_path_for_filename(worktree, prompt_filename)
+            # Resolve to the ACTUAL changed path when it exists. Re-deriving the path
+            # from the basename (_prompt_path_for_filename) probes pdd/prompts and
+            # prompts/ FIRST, so a foreign prompt whose basename also exists at the
+            # repo root was mis-resolved to the root copy and synced against the wrong
+            # architecture.json. The literal path preserves the prompt's true identity.
+            literal = worktree / rel
+            prompt_path = (
+                literal
+                if literal.is_file()
+                else _prompt_path_for_filename(worktree, prompt_filename)
+            )
             if prompt_path is not None:
-                code_path: Optional[Path] = None
-                for entry in architecture:
-                    if not isinstance(entry, dict):
-                        continue
-                    if _norm(entry.get("filename", "")) == prompt_filename:
-                        filepath = entry.get("filepath")
-                        if isinstance(filepath, str) and filepath:
-                            code_path = worktree / filepath
-                        break
-                touched[prompt_filename] = (prompt_path, code_path)
+                key = _rel_within(prompt_path, worktree) or rel
+                touched[key] = (
+                    prompt_path,
+                    _code_path_for_prompt(worktree, prompt_path, arch_cache),
+                )
             continue
+        # A changed code/doc file: map it back to its owning prompt via the root
+        # architecture first (the common case)...
+        mapped = False
         for entry in architecture:
             if _architecture_entry_maps_file(entry, rel):
                 filename = entry.get("filename")
@@ -332,7 +569,18 @@ def _touched_prompt_files(
                     continue
                 filepath = entry.get("filepath")
                 code_path = worktree / filepath if isinstance(filepath, str) and filepath else None
-                touched[filename] = (prompt_path, code_path)
+                key = _rel_within(prompt_path, worktree) or filename
+                touched[key] = (prompt_path, code_path)
+                mapped = True
+        # ...then fall back to the nearest-ancestor FOREIGN architecture.json, so a
+        # module owned only by extensions/<app>/architecture.json is not invisible to
+        # drift sync.
+        if not mapped:
+            foreign = _touched_prompt_for_foreign_code(worktree, rel, arch_cache)
+            if foreign is not None:
+                prompt_path, code_path = foreign
+                key = _rel_within(prompt_path, worktree) or rel
+                touched[key] = (prompt_path, code_path)
     return touched
 
 
@@ -357,7 +605,6 @@ def _run_drift_sync(
 ) -> _CheckOutcome:
     architecture = _load_architecture(worktree)
     prompt_pairs = _touched_prompt_files(worktree, changed_files, architecture)
-    only_files = set(prompt_pairs.keys())
     messages: List[str] = []
     failures: List[str] = []
     warnings: List[str] = []
@@ -388,38 +635,61 @@ def _run_drift_sync(
             if rel_code:
                 basename_to_code[basename] = rel_code
 
-    arch_path = worktree / "architecture.json"
-    if only_files:
-        arch_sig_before = _file_content_sig(arch_path)
+    if prompt_pairs:
+        arch_paths_before: Dict[Path, Optional[str]] = {}
         try:
-            result = sync_all_prompts_to_architecture(
-                prompts_dir=worktree / "pdd" / "prompts",
-                architecture_path=worktree / "architecture.json",
-                dry_run=False,
-                only_files=only_files,
-            )
-            if not result.get("success", False):
-                errors = "; ".join(result.get("errors", []) or ["unknown architecture sync error"])
+            prompts_by_dir: Dict[Path, Set[str]] = {}
+            for filename, (prompt_path, _code_path) in prompt_pairs.items():
+                prompts_dir, rel_filename = _prompt_sync_scope(worktree, prompt_path, filename)
+                prompts_by_dir.setdefault(prompts_dir, set()).add(rel_filename)
+
+            sync_errors: List[str] = []
+            for prompts_dir, filenames in prompts_by_dir.items():
+                ap = _architecture_path_for_prompts_dir(worktree, prompts_dir)
+                if ap not in arch_paths_before:
+                    arch_paths_before[ap] = _file_content_sig(ap)
+
+                result = sync_all_prompts_to_architecture(
+                    prompts_dir=prompts_dir,
+                    architecture_path=ap,
+                    dry_run=False,
+                    only_files=filenames,
+                )
+                if not result.get("success", False):
+                    errors = "; ".join(
+                        result.get("errors", []) or ["unknown architecture sync error"]
+                    )
+                    dir_label = _rel_within(prompts_dir, worktree) or str(prompts_dir)
+                    sync_errors.append(f"{dir_label}:{sorted(filenames)}: {errors}")
+            if sync_errors:
                 target = failures if strict else warnings
-                target.append(f"architecture-sync failed for {sorted(only_files)}: {errors}")
+                target.append("architecture-sync failed for " + " | ".join(sync_errors))
         except Exception as exc:
             target = failures if strict else warnings
-            target.append(f"architecture-sync raised for {sorted(only_files)}: {_scrub(exc)}")
+            target.append(
+                f"architecture-sync raised for {sorted(prompt_pairs.keys())}: {_scrub(exc)}"
+            )
         # Revalidate architecture.json ONLY if sync actually rewrote it. Adding it
         # unconditionally would block a PR on a PRE-EXISTING broken architecture.json
         # that the PR never touched and sync left unchanged — a false-block on infra
         # not of this PR's doing. (A sync that *writes* a broken file is still
         # caught, because then the content changed.)
-        if _file_content_sig(arch_path) != arch_sig_before:
-            synced_paths.append("architecture.json")
+        for ap, sig_before in arch_paths_before.items():
+            if _file_content_sig(ap) != sig_before:
+                rel = _rel_within(ap, worktree)
+                if rel:
+                    synced_paths.append(rel)
 
     for filename, (prompt_path, code_path) in prompt_pairs.items():
         try:
+            prompts_dir, _ = _prompt_sync_scope(worktree, prompt_path, filename)
+            ap = _architecture_path_for_prompts_dir(worktree, prompts_dir)
+
             result = run_metadata_sync(
                 prompt_path,
                 code_path if code_path and code_path.exists() else None,
                 repo_root=worktree,
-                architecture_path=worktree / "architecture.json",
+                architecture_path=ap,
             )
             if not getattr(result, "ok", False):
                 stage = getattr(result, "failing_stage", None) or "unknown"
@@ -434,6 +704,18 @@ def _run_drift_sync(
             env.setdefault("PDD_FORCE_LOCAL", "1")
             parsed_cost = 0.0
             with _pushd(worktree):
+                # KNOWN LIMITATION (foreign modules): the heal/verify stage is keyed
+                # by basename. detect_drift resolves a module's code/example paths from
+                # its basename via .pddrc context (not the prompts_dir resolved above),
+                # so a foreign module is detected correctly only when a .pddrc context
+                # maps it (which real consumers configure); without one its update-drift
+                # may be missed. For the same reason `modules`, basename_to_code, and
+                # basename_to_resolver collapse two foreign modules that SHARE a basename
+                # across different prompts dirs into one heal context. Architecture-sync
+                # and metadata-sync above are path-scoped and already handle both
+                # correctly; only this heal stage is basename-bound. Closing it needs
+                # per-path drift identity threaded through sync_determine_operation's
+                # decision — out of scope for the architecture-targeting fix.
                 try:
                     prompt_drifts, example_drifts = detect_drift(
                         modules=list(modules),
@@ -525,7 +807,7 @@ def _run_drift_sync(
                 (failures if strict else warnings).append(
                     f"residual non-update drift: {residual}"
                 )
-    elif only_files:
+    elif prompt_pairs:
         warnings.append("no module names resolved for touched prompt files")
 
     if warnings:
@@ -539,7 +821,6 @@ def _run_drift_sync(
     return _CheckOutcome(
         ok=not failures, messages=messages, cost=cost, synced_paths=synced_paths
     )
-
 
 def _module_name_for_python_path(path: Path, worktree: Path) -> Optional[str]:
     try:
