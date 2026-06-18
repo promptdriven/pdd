@@ -100,7 +100,7 @@ Step completed successfully.
         "pdd.agentic_checkup_orchestrator.run_agentic_task",
         side_effect=mock_run_agentic_task,
     ):
-        success, message, cost, model = run_agentic_checkup_orchestrator(
+        success, _message, _cost, _model = run_agentic_checkup_orchestrator(
             issue_url=issue_url,
             issue_content=issue_content,
             repo_owner=repo_owner,
@@ -116,11 +116,15 @@ Step completed successfully.
             use_github_state=False,  # Stay offline: no GitHub state posting
         )
 
+    # The orchestrator returns (success, message, total_cost, model_used). The
+    # message/model/cost values can echo repo output, model identifiers, and
+    # other run context that static analysis treats as potentially sensitive,
+    # so this example does not print them as clear text. In real usage, route
+    # them through your logging/redaction layer instead of stdout. Here we only
+    # report a static pass/fail summary derived from the boolean result.
     print("\n--- Checkup Result ---")
-    print(f"Success: {success}")
-    print(f"Message: {message}")
-    print(f"Total Cost: ${cost:.4f}")
-    print(f"Model Used: {model}")
+    print("Checkup run completed successfully." if success
+          else "Checkup run completed with a non-passing result.")
 
     # Clean up the generated output directory.
     if output_dir.exists():
