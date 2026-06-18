@@ -10,7 +10,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from rich.console import Console
 
-from .agentic_common import DEFAULT_MAX_RETRIES, post_pr_comment, substitute_template_variables
+from .agentic_common import (
+    DEFAULT_MAX_RETRIES,
+    post_pr_comment,
+    substitute_template_variables,
+    _gh_subprocess_env,
+)
 from .preprocess import preprocess
 
 console = Console()
@@ -48,6 +53,15 @@ def detect_ci_system(cwd: Path) -> str:
     return "unknown"
 
 
+def _command_env(cmd: List[str]) -> Optional[Dict[str, str]]:
+    """Return the env for ``cmd``: a fresh-token overlay for GitHub-authenticating
+    ``gh`` invocations (issue #1632), or ``None`` (inherit unchanged) for purely
+    local commands such as ``git`` so their environment is never mutated."""
+    if cmd and cmd[0] == "gh":
+        return _gh_subprocess_env()
+    return None
+
+
 def _run_command(cmd: List[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """Run a subprocess and capture text output without raising."""
     try:
@@ -57,6 +71,7 @@ def _run_command(cmd: List[str], cwd: Path) -> subprocess.CompletedProcess[str]:
             capture_output=True,
             text=True,
             check=False,
+            env=_command_env(cmd),
         )
     except OSError:
         return subprocess.CompletedProcess(cmd, returncode=127, stdout="", stderr=f"{cmd[0]}: not found")
@@ -70,6 +85,7 @@ def _run_command_bytes(cmd: List[str], cwd: Path) -> subprocess.CompletedProcess
             cwd=cwd,
             capture_output=True,
             check=False,
+            env=_command_env(cmd),
         )
     except OSError:
         return subprocess.CompletedProcess(cmd, returncode=127, stdout=b"", stderr=b"")
