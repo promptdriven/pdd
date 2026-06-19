@@ -3,13 +3,15 @@ One-session sync: run example, crash-fix, verify, test, and fix steps
 in a single agentic session instead of separate sessions per step.
 """
 
+import ast
 import logging
 import os
+import re
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from rich.console import Console
 from rich import print as rprint
@@ -63,6 +65,350 @@ _STEP_TO_PHASE = {
 # observably distinct from the natural exhaustion path (tests can
 # ``monkeypatch.setattr`` to raise the cap without forcing this cap to follow).
 _MAX_TEST_CHURN_ATTEMPTS = 2
+
+# Marker emitted to stdout when the churn gate accepts a large but
+# coverage-preserving rewrite on exhaustion (see
+# ``_accept_churn_rewrite_on_exhaustion``). Parseable by the cloud runner the
+# same way ``PDD_PHASE:`` markers are.
+_TEST_CHURN_ACCEPTED_MARKER = "PDD_TEST_CHURN_ACCEPTED"
+
+# --- Coverage measurement for the accept-on-exhaustion churn gate (#2208) ---
+# Textual churn (difflib line ratio) over-fires on a legitimate large test
+# rewrite: when a prompt/code change is substantial the regenerated test is
+# ~100% different yet correct. The repair-directive retry cannot reduce genuine
+# churn, so the gate hard-fails an already-successful agentic result. To
+# auto-recover we accept the rewrite on exhaustion ONLY when it preserves
+# coverage — measured by counting test cases and assertions per language.
+_JS_TEST_EXTS = {".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"}
+# Test-case keywords must start at a statement boundary so a method call like
+# ``client.test(`` is NOT counted, but modifier chains (``it.skip``,
+# ``test.concurrent.each``) are. Assertions may be globals (``expect(``) or
+# method forms (``chai.expect(``, ``assert.equal(``)).
+_JS_TEST_CASE_RE = re.compile(r"(?<![.\w])(?:it|test)(?:\.\w+)*\s*\(")
+_JS_ASSERTION_RE = re.compile(r"\b(?:expect|assert)(?:\.\w+)*\s*\(")
+
+
+def _count_test_units(text: str, output_path: str) -> Optional[Tuple[int, int]]:
+    """Return ``(test_case_count, assertion_count)`` for a measurable language.
+
+    Returns ``None`` when the file is one we cannot reliably measure — anything
+    other than Python or TS/JS, or Python source that does not parse — so the
+    caller stays on the strict churn gate rather than guessing at coverage.
+    Comments and string/docstring literals are excluded so a rewrite cannot pad
+    its count with commented-out or quoted ``assert``/``expect`` text.
+    """
+    suffix = Path(output_path).suffix.lower()
+    if suffix == ".py":
+        return _count_python_test_units(text or "")
+    if suffix in _JS_TEST_EXTS:
+        return _count_js_test_units(text or "")
+    return None
+
+
+def _count_python_test_units(text: str) -> Optional[Tuple[int, int]]:
+    """Count Python ``test*`` functions + assertions via the AST.
+
+    The AST ignores comments and string/docstring literals natively. Returns
+    ``None`` for source that does not parse, so a syntactically broken rewrite
+    is never auto-accepted.
+    """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError):
+        # SyntaxError = not valid Python; ValueError = e.g. embedded null bytes.
+        # Either way the source is unmeasurable -> stay on the strict gate.
+        return None
+    cases = 0
+    assertions = 0
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name.startswith("test"):
+                cases += 1
+        elif isinstance(node, ast.Assert):
+            assertions += 1
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            attr = node.func.attr
+            if attr.startswith("assert") or attr == "raises":
+                assertions += 1
+    return (cases, assertions)
+
+
+# Characters after which a ``/`` begins a regex literal (expression position)
+# rather than division. When ambiguous we err toward division (keep as code) —
+# a wrong guess only mis-counts symmetrically and can never cause a false
+# accept on its own. ``<`` and ``>`` are deliberately EXCLUDED: in TSX a ``/``
+# that follows ``<`` is a JSX closing tag (``</Provider>``), not a regex, and a
+# real regex literal essentially never follows a ``<``/``>`` comparison in test
+# code — including them made ``_strip_js_noncode`` treat the slash in
+# ``</tag>`` as a regex opener and strip the rest of the line, silently
+# dropping any assertions written after the closing tag on the same line
+# (a common compact-React-test shape, e.g.
+# ``render(<Provider><Widget /></Provider>); expect(a); expect(b);``).
+_REGEX_PREV_CHARS = frozenset("(,=:[!&|?{;}+-*%^~")
+
+
+def _strip_js_noncode(text: str) -> str:
+    """Replace JS/TS comments, string/regex literals, and template *text* with
+    spaces in a single pass, while KEEPING executable code.
+
+    A hand scanner (not chained regexes) is required so that: a ``//`` inside a
+    string (e.g. a ``http://`` URL) is not mistaken for a comment; a quote inside
+    a comment is not mistaken for a string; a regex literal like ``/expect(/``
+    cannot pad the assertion count; JSX tag slashes — both the closing-tag
+    ``</Provider>`` and the self-closing ``<Widget />`` / ``<Widget count={n} />``
+    forms — are treated as code rather than regex openers, so assertions written
+    after a tag on the SAME line (a common compact-React-test shape) are NOT
+    swallowed; and an executable ``${ expect(x) }`` interpolation inside a
+    template literal is still counted (its interior is stripped recursively as
+    code). Residual: a brace inside a string inside a template interpolation can
+    mis-delimit the interpolation — a third-order case tolerated because
+    measurement is symmetric and downstream verification is the backstop.
+    """
+    out: List[str] = []
+    i, n = 0, len(text)
+    prev_sig = ""  # last significant (non-space) code char, for regex detection
+    while i < n:
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":  # line comment
+            i += 2
+            while i < n and text[i] != "\n":
+                i += 1
+            out.append(" ")
+        elif c == "/" and nxt == "*":  # block comment
+            i += 2
+            while i < n and not (text[i] == "*" and text[i + 1 : i + 2] == "/"):
+                i += 1
+            i += 2
+            out.append(" ")
+        elif c == "/" and nxt == ">":  # JSX self-closing tag '/>': keep as code
+            # ``<Widget />`` / ``<Widget count={n} />`` — the char before the
+            # ``/`` (e.g. ``}`` from a ``{expr}`` attribute) can be in
+            # ``_REGEX_PREV_CHARS``, so guard on the following ``>`` to stop the
+            # self-closing slash from being misread as a regex opener and
+            # swallowing any same-line assertions after the tag.
+            out.append(c)
+            prev_sig = c
+            i += 1
+        elif c == "/" and prev_sig in _REGEX_PREV_CHARS:  # regex literal
+            i += 1
+            while i < n and text[i] not in ("/", "\n"):
+                i += 2 if text[i] == "\\" else 1
+            if i < n and text[i] == "/":
+                i += 1
+            out.append(" ")
+        elif c in "'\"":  # string literal (single line)
+            quote = c
+            i += 1
+            while i < n and text[i] != quote and text[i] != "\n":
+                i += 2 if text[i] == "\\" else 1
+            if i < n and text[i] == quote:
+                i += 1
+            out.append(" ")
+        elif c == "`":  # template literal: strip text, keep ${...} as code
+            i += 1
+            while i < n and text[i] != "`":
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == "$" and text[i + 1 : i + 2] == "{":
+                    i += 2
+                    start = i
+                    depth = 1
+                    while i < n and depth > 0:
+                        if text[i] == "{":
+                            depth += 1
+                        elif text[i] == "}":
+                            depth -= 1
+                            if depth == 0:
+                                break
+                        i += 1
+                    out.append(" ")
+                    out.append(_strip_js_noncode(text[start:i]))
+                    out.append(" ")
+                    if i < n and text[i] == "}":
+                        i += 1
+                else:
+                    i += 1
+            if i < n and text[i] == "`":
+                i += 1
+            out.append(" ")
+        else:
+            out.append(c)
+            if not c.isspace():
+                prev_sig = c
+            i += 1
+    return "".join(out)
+
+
+def _count_js_test_units(text: str) -> Tuple[int, int]:
+    """Count TS/JS test cases (``it``/``test``) + assertions (``expect``/
+    ``assert``) after removing comments and string/template literals."""
+    stripped = _strip_js_noncode(text)
+    return (
+        len(_JS_TEST_CASE_RE.findall(stripped)),
+        len(_JS_ASSERTION_RE.findall(stripped)),
+    )
+
+
+def _candidate_preserves_coverage(
+    pre_text: str, candidate_text: Optional[str], output_path: str
+) -> bool:
+    """True when ``candidate_text`` is a safe, coverage-preserving rewrite.
+
+    Accept only when, for a measurable language, the candidate keeps at least as
+    many test cases AND assertions as the pre-session file and carries at least
+    one real assertion. A deleted candidate (``None``), an unmeasurable language,
+    or an assertion-free rewrite is never accepted, so deletions, unknown
+    formats, and vacuous rewrites keep the strict churn gate.
+    """
+    if candidate_text is None:
+        return False
+    pre_counts = _count_test_units(pre_text, output_path)
+    post_counts = _count_test_units(candidate_text, output_path)
+    if pre_counts is None or post_counts is None:
+        return False
+    pre_cases, pre_asserts = pre_counts
+    post_cases, post_asserts = post_counts
+    return (
+        post_cases >= pre_cases
+        and post_asserts >= pre_asserts
+        and post_asserts >= 1
+    )
+
+
+def _same_path(a: Path, b: Path) -> bool:
+    """Best-effort same-file check tolerant of missing files (mirrors the sweep)."""
+    try:
+        return a.samefile(b)
+    except OSError:
+        try:
+            return a.resolve() == b.resolve()
+        except OSError:
+            return False
+
+
+def _safe_read_text(path: Path) -> Optional[str]:
+    """Read ``path`` as UTF-8, returning ``None`` if it is missing/unreadable."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+
+def _safe_write_text(path: Path, content: str) -> bool:
+    """UTF-8 write, creating parents. Returns True on success, False on
+    ``OSError`` so callers can detect (and refuse to claim) a failed reapply."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return True
+    except OSError:
+        return False
+
+
+def _accept_churn_rewrite_on_exhaustion(
+    *,
+    code_path: Path,
+    test_path: Optional[Path],
+    canonical_existed: bool,
+    existing_code_content: Optional[str],
+    existing_test_content: Optional[str],
+    pre_test_contents: Dict[Path, str],
+    candidate_code: Optional[str],
+    candidate_tests: Dict[Path, Optional[str]],
+    quiet: bool,
+) -> bool:
+    """Decide + apply accept-on-exhaustion for one-session test churn (#2208).
+
+    When constrained recovery cannot drop textual churn below threshold, accept
+    the agent's rewrite instead of hard-failing IFF every guarded pre-existing
+    test file (canonical + alt-path) is a coverage-preserving rewrite
+    (``_candidate_preserves_coverage``). On accept, the agent's candidate bytes
+    — reverted by the caller's restore — are reapplied to disk and the
+    ``PDD_TEST_CHURN_ACCEPTED`` marker is emitted. Returns False otherwise,
+    leaving the restored pre-session files in place so the caller hard-fails as
+    before. Operators can force the strict gate with
+    ``PDD_DISABLE_TEST_CHURN_AUTOACCEPT``.
+    """
+    if _env_flag_enabled("PDD_DISABLE_TEST_CHURN_AUTOACCEPT"):
+        return False
+
+    # Accepting reapplies the agent's CODE alongside the accepted tests. If the
+    # code file is unreadable/deleted (candidate_code is None) we cannot
+    # faithfully restore the agent's state, so refuse rather than report success
+    # with stale code bytes — important for non-Python outputs where the
+    # public-surface gate is skipped.
+    if candidate_code is None:
+        return False
+
+    # Build (output_path, pre_text, candidate_text) for every guarded file.
+    protected: List[Tuple[str, str, Optional[str]]] = []
+    if canonical_existed and test_path is not None and existing_test_content:
+        protected.append(
+            (str(test_path), existing_test_content, candidate_tests.get(test_path))
+        )
+    for snap_path, prior in pre_test_contents.items():
+        if test_path is not None and _same_path(snap_path, test_path):
+            continue  # canonical handled above
+        protected.append((str(snap_path), prior, candidate_tests.get(snap_path)))
+
+    # Require at least one file with real pre-session coverage, and that EVERY
+    # such file is coverage-preserving. Empty/whitespace baselines carry no
+    # coverage and are skipped.
+    evaluated = False
+    for output_path, pre_text, candidate_text in protected:
+        if not pre_text or not pre_text.strip():
+            continue
+        evaluated = True
+        if not _candidate_preserves_coverage(pre_text, candidate_text, output_path):
+            return False
+    if not evaluated:
+        return False
+
+    # Reapply the agent's candidate bytes the caller's restore reverted. If ANY
+    # write fails, refuse the acceptance (return False) so the caller hard-fails
+    # honestly rather than reporting success with stale pre-session bytes on
+    # disk — and do not emit the accepted marker.
+    write_ok = _safe_write_text(code_path, candidate_code)
+    reapplied: List[Path] = []
+    for path_obj, content in candidate_tests.items():
+        if content is not None:
+            write_ok = _safe_write_text(path_obj, content) and write_ok
+            reapplied.append(path_obj)
+    if not write_ok:
+        # Roll back any partial reapply so the hard-fail path keeps its contract
+        # — pre-session bytes on disk — rather than leaving a half-applied mix of
+        # candidate and restored files. Best-effort, mirrors the caller's restore.
+        if existing_code_content is not None:
+            _safe_write_text(code_path, existing_code_content)
+        if (
+            canonical_existed
+            and test_path is not None
+            and existing_test_content is not None
+        ):
+            _safe_write_text(test_path, existing_test_content)
+        for snap_path, prior in pre_test_contents.items():
+            _safe_write_text(snap_path, prior)
+        logger.warning(
+            "Test-churn auto-accept aborted: could not reapply candidate bytes; "
+            "rolled back to pre-session state and fell back to the strict gate."
+        )
+        return False
+
+    accepted_label = (
+        str(test_path)
+        if test_path is not None
+        else (", ".join(str(p) for p in reapplied) or "<alt-path>")
+    )
+    print(f"{_TEST_CHURN_ACCEPTED_MARKER}: {accepted_label}", flush=True)
+    if not quiet:
+        rprint(
+            "[yellow]⚠ Test churn: accepted a large but coverage-preserving "
+            "test rewrite after constrained recovery could not reduce churn; "
+            "downstream verification is the pass/fail backstop.[/yellow]"
+        )
+    return True
 
 
 def _read_new_progress(progress_file: Path, skip_count: int) -> List[str]:
@@ -773,6 +1119,19 @@ def run_one_session_sync(
                 churn_gate_passed = True
                 break
             except TestChurnError as churn_err:
+                # Capture the agent's candidate bytes BEFORE the restore below
+                # reverts them, so accept-on-exhaustion (#2208) can reapply a
+                # coverage-preserving rewrite instead of hard-failing on textual
+                # churn alone. A deleted file reads back as None and is never
+                # accepted. Keyed by Path; canonical first, then every alt-path
+                # snapshot the gate guards.
+                churn_candidate_code = _safe_read_text(code_path)
+                churn_candidate_tests: Dict[Path, Optional[str]] = {}
+                if canonical_existed and test_path is not None:
+                    churn_candidate_tests[test_path] = _safe_read_text(test_path)
+                for snap_path in pre_test_contents:
+                    if snap_path not in churn_candidate_tests:
+                        churn_candidate_tests[snap_path] = _safe_read_text(snap_path)
                 # Restore the pre-session code file BEFORE the retry/break
                 # decision. The agentic session rewrites both code and test
                 # in-place; rejecting only the test would leave the code
@@ -826,20 +1185,40 @@ def run_one_session_sync(
                 last_churn_exc = churn_err
                 churn_gate_passed = False
                 churn_attempts_used += 1
-                # Stop early when the retry produced the identical churn
-                # signature (no progress is being made) — mirrors the
-                # orchestration helper's short-circuit.
-                if (
+                # Exhaustion is reached either when the retry produced the
+                # identical churn signature (no progress — mirrors the
+                # orchestration helper's short-circuit) or when the tighter
+                # ``_MAX_TEST_CHURN_ATTEMPTS`` cap is hit (#1015 iter-1,
+                # Important 2; surface repair uses a separate counter so the
+                # two gates cannot eat each other's budget).
+                identical_signature = (
                     last_churn_signature is not None
                     and signature == last_churn_signature
-                ):
-                    break
+                )
                 last_churn_signature = signature
-                # Test-churn keeps its tighter ``_MAX_TEST_CHURN_ATTEMPTS`` cap
-                # (#1015 iter-1, Important 2). Surface repair uses a separate
-                # counter so a single surface failure cannot eat the churn
-                # budget and vice versa.
-                if churn_attempts_used >= max_churn_attempts_for_churn:
+                if (
+                    identical_signature
+                    or churn_attempts_used >= max_churn_attempts_for_churn
+                ):
+                    # Constrained recovery cannot reduce genuine churn. Before
+                    # hard-failing, accept the rewrite IFF it preserves coverage
+                    # (#2208): a legitimate large rewrite driven by a real
+                    # prompt/code change should not be vetoed by textual churn.
+                    # Otherwise fall through to the structured hard-failure block
+                    # after the loop. (One-session only — `sync_orchestration`'s
+                    # parallel churn loop intentionally keeps the strict gate.)
+                    if _accept_churn_rewrite_on_exhaustion(
+                        code_path=code_path,
+                        test_path=test_path,
+                        canonical_existed=canonical_existed,
+                        existing_code_content=existing_code_content,
+                        existing_test_content=existing_test_content,
+                        pre_test_contents=pre_test_contents,
+                        candidate_code=churn_candidate_code,
+                        candidate_tests=churn_candidate_tests,
+                        quiet=quiet,
+                    ):
+                        churn_gate_passed = True
                     break
                 # Record the directive for the next attempt's instruction
                 # rewrite (loop-local source of truth) AND set the env var

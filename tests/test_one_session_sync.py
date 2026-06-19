@@ -2916,3 +2916,601 @@ class TestOneSessionRollback:
         assert (
             pdd_files["test"].read_text(encoding="utf-8") == canonical_tests
         )
+
+
+# ---------------------------------------------------------------------------
+# _count_test_units (coverage metric used by the accept-on-exhaustion gate)
+# ---------------------------------------------------------------------------
+
+class TestCountTestUnits:
+    """Unit tests for the per-language test-case / assertion counter."""
+
+    def test_python_counts_cases_and_assertions(self):
+        from pdd.one_session_sync import _count_test_units
+
+        text = (
+            "def test_a():\n"
+            "    assert old(1) == 1\n"
+            "    assert old(1) is not None\n"
+            "def test_b(self):\n"
+            "    self.assertEqual(1, 1)\n"
+        )
+        # 2 test cases; 3 assertions (2 bare `assert` + 1 `.assertEqual(`).
+        assert _count_test_units(text, "tests/test_foo.py") == (2, 3)
+
+    def test_typescriptreact_counts_cases_and_assertions(self):
+        from pdd.one_session_sync import _count_test_units
+
+        text = (
+            "it('renders sync button', () => {\n"
+            "  expect(screen.getByText('Sync from Luma CSV')).toBeInTheDocument();\n"
+            "});\n"
+            "test('imports rows', () => {\n"
+            "  expect(rows).toHaveLength(2);\n"
+            "  expect(rows[0].email).toBe('a@b.com');\n"
+            "});\n"
+        )
+        # 2 cases (it + test); 3 assertions (3x expect()).
+        assert _count_test_units(text, "src/foo.test.tsx") == (2, 3)
+
+    def test_unmeasurable_language_returns_none(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # We cannot reliably measure Go test files -> stay on the strict gate.
+        assert _count_test_units("func TestFoo(t *testing.T) {}", "foo_test.go") is None
+
+    def test_python_ignores_commented_and_quoted_assertions(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # `assert` in a comment and inside a docstring must NOT be counted, so a
+        # rewrite cannot pad its assertion count with non-executable text.
+        text = (
+            "def test_a():\n"
+            '    """asserts the thing and calls expect()"""\n'
+            "    # assert old(1) == 1\n"
+            "    helper()\n"
+        )
+        assert _count_test_units(text, "tests/test_foo.py") == (1, 0)
+
+    def test_python_unparseable_returns_none(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # A syntactically broken candidate is unmeasurable -> never accepted.
+        assert _count_test_units("def test_a(:\n    assert", "tests/test_foo.py") is None
+
+    def test_js_ignores_method_calls_and_counts_chained_modifiers(self):
+        from pdd.one_session_sync import _count_test_units
+
+        text = (
+            "client.test(payload);\n"  # NOT a test case (method call)
+            "it('a', () => { expect(x).toBe(1); });\n"
+            "test.concurrent.each([1, 2])('b', () => { expect(y).toBe(2); });\n"
+        )
+        # 2 cases (it + test.concurrent.each, not client.test); 2 assertions.
+        assert _count_test_units(text, "src/foo.test.ts") == (2, 2)
+
+    def test_js_ignores_commented_and_quoted_occurrences(self):
+        from pdd.one_session_sync import _count_test_units
+
+        text = (
+            "it('keeps coverage', () => {\n"
+            "  // expect(removed).toBe(1)\n"
+            "  const label = 'expect(this) is a string, not an assertion';\n"
+            "  expect(real).toBe(2);\n"
+            "});\n"
+        )
+        # 1 case; only the real expect() counts (comment + string excluded).
+        assert _count_test_units(text, "src/foo.test.tsx") == (1, 1)
+
+    def test_js_url_in_string_does_not_swallow_following_assertions(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # A `//` inside a string literal must NOT be treated as a line comment
+        # (single-pass scan) — otherwise the trailing real expect() calls would
+        # be swallowed, undercounting the baseline and enabling a false accept.
+        text = "const u = 'http://x'; expect(a).toBe(1); expect(b).toBe(2);\n"
+        assert _count_test_units(text, "src/foo.test.ts") == (0, 2)
+
+    def test_js_counts_executable_expect_inside_template_interpolation(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # An executable expect() inside a `${...}` interpolation must be counted
+        # (it is real code), so dropping it cannot masquerade as coverage-
+        # preserving by hiding behind the template literal.
+        text = "expect(a).toBe(1); const m = `x ${expect(b).toString()} y`;\n"
+        assert _count_test_units(text, "src/foo.test.ts") == (0, 2)
+
+    def test_js_regex_literal_does_not_pad_assertion_count(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # `expect(` inside a regex literal is not an assertion and must not pad
+        # the count (which could otherwise mask a dropped real assertion).
+        text = "expect(a).toBe(1); const r = /expect(foo)/; const s = a / b;\n"
+        assert _count_test_units(text, "src/foo.test.ts") == (0, 1)
+
+    def test_tsx_closing_tag_does_not_swallow_same_line_assertions(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # A JSX closing tag (`</Provider>`) must NOT be treated as a regex
+        # opener — otherwise the scanner strips the rest of the line and the
+        # assertions written after the tag on the SAME line disappear from the
+        # count. This is the compact-React shape that produced a false accept
+        # (baseline undercounted to 0 assertions). Both real assertions count.
+        text = (
+            'it("renders", () => {\n'
+            "  render(<Provider><Widget /></Provider>); expect(a).toBe(1); expect(b).toBe(2);\n"
+            "});\n"
+        )
+        assert _count_test_units(text, "tests/widget.test.tsx") == (1, 2)
+
+    def test_tsx_self_closing_tag_with_expr_attr_keeps_assertions(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # `<Widget count={n} />` ends in `}` (a regex-opener char) followed by
+        # ` />`; the self-closing slash must be kept as code so the trailing
+        # assertions are still counted.
+        text = 'it("a", () => { render(<Widget count={n} />); expect(x); expect(y); });\n'
+        assert _count_test_units(text, "tests/widget.test.tsx") == (1, 2)
+
+    def test_tsx_dropping_assertions_after_closing_tag_is_rejected(self):
+        from pdd.one_session_sync import _candidate_preserves_coverage
+
+        # Regression at the decision level: a candidate that drops real
+        # assertions written after a JSX closing tag on the same line must be
+        # REJECTED. Before the JSX-aware fix the baseline undercounted its
+        # assertions to 0, so this exact shrink was silently auto-accepted.
+        pre = (
+            'it("x", () => {\n'
+            "  render(<Provider><Widget /></Provider>); expect(a).toBe(1); expect(b).toBe(2);\n"
+            "});\n"
+        )
+        dropped = 'it("x", () => { expect(a).toBe(1); });\n'
+        assert _candidate_preserves_coverage(pre, dropped, "tests/widget.test.tsx") is False
+        # A genuine coverage-preserving rewrite of the same shape is accepted.
+        kept = (
+            'it("x", () => {\n'
+            "  render(<Provider><Widget /></Provider>); expect(a).toBe(1); expect(b).toBe(2); expect(c).toBe(3);\n"
+            "});\n"
+        )
+        assert _candidate_preserves_coverage(pre, kept, "tests/widget.test.tsx") is True
+
+
+# ---------------------------------------------------------------------------
+# Accept-on-exhaustion: a large but coverage-preserving test rewrite should
+# be accepted instead of hard-failing on textual churn alone (#2208).
+# ---------------------------------------------------------------------------
+
+class TestTestChurnAcceptOnExhaustion:
+    """One-session sync must auto-recover from a legitimate large test rewrite.
+
+    When constrained recovery cannot reduce textual churn but the rewrite
+    preserves coverage (no dropped test cases / assertions, carries real
+    assertions, deletes nothing), the sync should accept it and continue
+    rather than vetoing an already-successful agentic result on a textual
+    heuristic. Downstream `pdd verify` / CI remains the pass/fail backstop.
+    """
+
+    _ORIGINAL = (
+        "def test_a():\n    assert old(1) == 1\n"
+        "def test_b():\n    assert old(2) == 2\n"
+        "def test_c():\n    assert old(3) == 3\n"
+    )
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_accepts_nonshrinking_rewrite_with_assertions(
+        self, mock_build, mock_task, tmp_path, monkeypatch, capsys
+    ):
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+        monkeypatch.delenv("PDD_DISABLE_TEST_CHURN_AUTOACCEPT", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        # 100% rewrite (churn ~1.0) that PRESERVES coverage: same number of
+        # test cases, MORE assertions, all real.
+        rewritten = (
+            "def test_luma_alpha():\n    assert sync(1) == 1\n    assert sync(1) is not None\n"
+            "def test_luma_beta():\n    assert sync(2) == 2\n"
+            "def test_luma_gamma():\n    assert sync(3) == 3\n"
+        )
+        pdd_files["test"].write_text(self._ORIGINAL, encoding="utf-8")
+
+        def rewrite(*args, **kwargs):
+            pdd_files["test"].write_text(rewritten, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite
+
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        # Accepted on exhaustion instead of raising TestChurnError.
+        assert result["success"] is True
+        # The agent's rewrite is KEPT on disk (not restored to the original).
+        assert pdd_files["test"].read_text(encoding="utf-8") == rewritten
+        # A parseable marker is emitted so the cloud/user can see the override.
+        assert "PDD_TEST_CHURN_ACCEPTED" in capsys.readouterr().out
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_rejects_rewrite_that_drops_test_cases(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """Fewer test cases must STILL hard-fail even if the file grew longer
+        (this is the #1015 coverage-destruction case a line-count floor misses).
+        """
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        pdd_files = _make_pdd_files(tmp_path)
+        # 3 cases -> 1 case, but padded LONGER than the original.
+        shrunk = (
+            "def test_only():\n"
+            + "    # padding line to inflate the line count\n" * 12
+            + "    assert sync(1) == 1\n"
+        )
+        pdd_files["test"].write_text(self._ORIGINAL, encoding="utf-8")
+
+        def rewrite(*args, **kwargs):
+            pdd_files["test"].write_text(shrunk, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite
+
+        with pytest.raises(TestChurnError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+        # Strict gate held: original coverage restored.
+        assert pdd_files["test"].read_text(encoding="utf-8") == self._ORIGINAL
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_rejects_rewrite_that_guts_assertions(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """Same test-case count but fewer/zero assertions must STILL hard-fail."""
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        pdd_files = _make_pdd_files(tmp_path)
+        gutted = (
+            "def test_x():\n    pass\n"
+            "def test_y():\n    do_something()\n"
+            "def test_z():\n    helper()\n"
+        )  # 3 cases, 0 assertions
+        pdd_files["test"].write_text(self._ORIGINAL, encoding="utf-8")
+
+        def rewrite(*args, **kwargs):
+            pdd_files["test"].write_text(gutted, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite
+
+        with pytest.raises(TestChurnError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+        assert pdd_files["test"].read_text(encoding="utf-8") == self._ORIGINAL
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_rejects_test_file_deletion(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """A deleted test file is maximal coverage loss -> never auto-accepted."""
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        pdd_files = _make_pdd_files(tmp_path)
+        pdd_files["test"].write_text(self._ORIGINAL, encoding="utf-8")
+
+        def delete(*args, **kwargs):
+            if pdd_files["test"].exists():
+                pdd_files["test"].unlink()
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = delete
+
+        with pytest.raises(TestChurnError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+        assert pdd_files["test"].read_text(encoding="utf-8") == self._ORIGINAL
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_autoaccept_can_be_disabled_via_env(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """Operators can force the strict gate with PDD_DISABLE_TEST_CHURN_AUTOACCEPT."""
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.setenv("PDD_DISABLE_TEST_CHURN_AUTOACCEPT", "1")
+        pdd_files = _make_pdd_files(tmp_path)
+        rewritten = (
+            "def test_luma_alpha():\n    assert sync(1) == 1\n    assert sync(1) is not None\n"
+            "def test_luma_beta():\n    assert sync(2) == 2\n"
+            "def test_luma_gamma():\n    assert sync(3) == 3\n"
+        )
+        pdd_files["test"].write_text(self._ORIGINAL, encoding="utf-8")
+
+        def rewrite(*args, **kwargs):
+            pdd_files["test"].write_text(rewritten, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite
+
+        with pytest.raises(TestChurnError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+        assert pdd_files["test"].read_text(encoding="utf-8") == self._ORIGINAL
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_accepts_coverage_preserving_alt_path_rewrite(
+        self, mock_build, mock_task, tmp_path, monkeypatch, capsys
+    ):
+        """The accept gate covers alt-path test files, not just the canonical:
+        a coverage-preserving rewrite of a pre-existing `src/widget_test.py`
+        (canonical untouched) must be accepted and kept on disk."""
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_DISABLE_TEST_CHURN_AUTOACCEPT", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        canonical = "def test_keep():\n    assert keep()\n"
+        pdd_files["test"].write_text(canonical, encoding="utf-8")
+
+        alt_path = tmp_path / "src" / "widget_test.py"
+        alt_path.parent.mkdir(parents=True, exist_ok=True)
+        alt_original = "".join(
+            f"def test_alt_{i}():\n    assert alt({i})\n" for i in range(5)
+        )
+        alt_rewritten = "".join(
+            f"def test_renamed_{i}():\n    assert refreshed({i})\n" for i in range(5)
+        )
+        alt_path.write_text(alt_original, encoding="utf-8")
+
+        def rewrite_alt(*args, **kwargs):
+            # Canonical left untouched; alt-path fully rewritten but coverage
+            # preserving (5 cases / 5 assertions either way).
+            alt_path.write_text(alt_rewritten, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite_alt
+
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert result["success"] is True
+        # Alt-path rewrite kept; canonical untouched.
+        assert alt_path.read_text(encoding="utf-8") == alt_rewritten
+        assert pdd_files["test"].read_text(encoding="utf-8") == canonical
+        assert "PDD_TEST_CHURN_ACCEPTED" in capsys.readouterr().out
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_accepts_coverage_preserving_tsx_rewrite(
+        self, mock_build, mock_task, tmp_path, monkeypatch, capsys
+    ):
+        """Cross-language: a 100%-churn but coverage-preserving rewrite of a
+        TypeScriptReact test is accepted end-to-end (the reported #2163 shape)."""
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_DISABLE_TEST_CHURN_AUTOACCEPT", raising=False)
+
+        prompt_file = tmp_path / "prompts" / "widget_typescriptreact.prompt"
+        prompt_file.parent.mkdir(parents=True, exist_ok=True)
+        prompt_file.write_text("Widget spec with a Sync-from-Luma button.")
+        code_file = tmp_path / "src" / "widget.tsx"
+        code_file.parent.mkdir(parents=True, exist_ok=True)
+        code_file.write_text("export const Widget = () => <div/>;\n")
+        (tmp_path / "examples").mkdir(parents=True, exist_ok=True)
+        test_file = tmp_path / "src" / "widget.test.tsx"
+        pdd_files = {
+            "prompt": prompt_file,
+            "code": code_file,
+            "example": tmp_path / "examples" / "widget_example.tsx",
+            "test": test_file,
+        }
+        original = (
+            "it('a', () => { expect(old(1)).toBe(1); });\n"
+            "it('b', () => { expect(old(2)).toBe(2); });\n"
+            "it('c', () => { expect(old(3)).toBe(3); });\n"
+        )
+        rewritten = (
+            "it('luma alpha', () => { expect(sync(1)).toBe(1); expect(sync(1)).not.toBeNull(); });\n"
+            "it('luma beta', () => { expect(sync(2)).toBe(2); });\n"
+            "it('luma gamma', () => { expect(sync(3)).toBe(3); });\n"
+        )
+        test_file.write_text(original, encoding="utf-8")
+
+        def rewrite(*args, **kwargs):
+            test_file.write_text(rewritten, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite
+
+        result = run_one_session_sync(
+            basename="widget",
+            language="typescriptreact",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert result["success"] is True
+        assert test_file.read_text(encoding="utf-8") == rewritten
+        assert "PDD_TEST_CHURN_ACCEPTED" in capsys.readouterr().out
+
+    @patch("pdd.one_session_sync._safe_write_text", return_value=False)
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_reapply_write_failure_falls_back_to_strict_gate(
+        self, mock_build, mock_task, mock_write, tmp_path, monkeypatch, capsys
+    ):
+        """If reapplying the accepted candidate fails on disk, we must NOT claim
+        success with stale pre-session bytes: hard-fail and emit no marker."""
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_DISABLE_TEST_CHURN_AUTOACCEPT", raising=False)
+        pdd_files = _make_pdd_files(tmp_path)
+        rewritten = (
+            "def test_luma_alpha():\n    assert sync(1) == 1\n    assert sync(1) is not None\n"
+            "def test_luma_beta():\n    assert sync(2) == 2\n"
+            "def test_luma_gamma():\n    assert sync(3) == 3\n"
+        )
+        pdd_files["test"].write_text(self._ORIGINAL, encoding="utf-8")
+
+        def rewrite(*args, **kwargs):
+            pdd_files["test"].write_text(rewritten, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite
+
+        with pytest.raises(TestChurnError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+        # The reapply was actually attempted (guards against a vacuous pass),
+        # the restore (direct write, not via _safe_write_text) left the original
+        # on disk, and no false-accept marker was emitted.
+        assert mock_write.called
+        assert pdd_files["test"].read_text(encoding="utf-8") == self._ORIGINAL
+        assert "PDD_TEST_CHURN_ACCEPTED" not in capsys.readouterr().out
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_partial_reapply_failure_falls_back_to_strict_gate(
+        self, mock_build, mock_task, tmp_path, monkeypatch, capsys
+    ):
+        """If an EARLIER reapply write succeeds but a LATER one fails, acceptance
+        must still be refused (no false success / marker)."""
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_DISABLE_TEST_CHURN_AUTOACCEPT", raising=False)
+        pdd_files = _make_pdd_files(tmp_path)
+        rewritten = (
+            "def test_luma_alpha():\n    assert sync(1) == 1\n    assert sync(1) is not None\n"
+            "def test_luma_beta():\n    assert sync(2) == 2\n"
+            "def test_luma_gamma():\n    assert sync(3) == 3\n"
+        )
+        pdd_files["test"].write_text(self._ORIGINAL, encoding="utf-8")
+
+        def rewrite(*args, **kwargs):
+            pdd_files["test"].write_text(rewritten, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite
+
+        # First reapply write (code) succeeds; every later write (test +
+        # rollback) fails. A function (not a fixed list) avoids exhausting the
+        # side_effect when the rollback issues extra writes.
+        first = iter([True])
+
+        def write_once_then_fail(*args, **kwargs):
+            return next(first, False)
+
+        with patch(
+            "pdd.one_session_sync._safe_write_text", side_effect=write_once_then_fail
+        ):
+            with pytest.raises(TestChurnError):
+                run_one_session_sync(
+                    basename="my_module",
+                    language="python",
+                    pdd_files=pdd_files,
+                    project_root=tmp_path,
+                )
+        assert "PDD_TEST_CHURN_ACCEPTED" not in capsys.readouterr().out
+
+    def test_accept_helper_refuses_when_candidate_code_unreadable(self, tmp_path):
+        """Accept must refuse (return False) when the agent's code is
+        unreadable/deleted, so success is never reported with stale code."""
+        from pdd.one_session_sync import _accept_churn_rewrite_on_exhaustion
+
+        test_path = tmp_path / "tests" / "test_x.py"
+        test_path.parent.mkdir(parents=True, exist_ok=True)
+        pre = "def test_a():\n    assert old()\n"
+        candidate = "def test_b():\n    assert new()\n    assert new2()\n"
+        test_path.write_text(candidate, encoding="utf-8")
+        code_path = tmp_path / "src" / "x.py"
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Coverage IS preserved, but candidate_code=None must still veto.
+        accepted = _accept_churn_rewrite_on_exhaustion(
+            code_path=code_path,
+            test_path=test_path,
+            canonical_existed=True,
+            existing_code_content="def f():\n    return 1\n",
+            existing_test_content=pre,
+            pre_test_contents={},
+            candidate_code=None,
+            candidate_tests={test_path: candidate},
+            quiet=True,
+        )
+        assert accepted is False
+
+    def test_accept_helper_rolls_back_partial_reapply_to_pre_session(self, tmp_path):
+        """On a partial reapply failure the helper must restore pre-session bytes
+        (code + tests), not leave a half-applied candidate/restored mix."""
+        import pdd.one_session_sync as oss
+
+        test_path = tmp_path / "tests" / "test_x.py"
+        test_path.parent.mkdir(parents=True, exist_ok=True)
+        pre_test = "def test_a():\n    assert old()\n"
+        cand_test = "def test_b():\n    assert new()\n    assert new2()\n"
+        test_path.write_text(cand_test, encoding="utf-8")
+        code_path = tmp_path / "src" / "x.py"
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+        pre_code = "def f():\n    return 1\n"
+        cand_code = "def f():\n    return 2\n"
+
+        calls = []
+
+        def fake_write(path, content):
+            calls.append((path, content))
+            # Code candidate write succeeds; the test candidate write fails.
+            return not (path == test_path and content == cand_test)
+
+        with patch.object(oss, "_safe_write_text", side_effect=fake_write):
+            accepted = oss._accept_churn_rewrite_on_exhaustion(
+                code_path=code_path,
+                test_path=test_path,
+                canonical_existed=True,
+                existing_code_content=pre_code,
+                existing_test_content=pre_test,
+                pre_test_contents={},
+                candidate_code=cand_code,
+                candidate_tests={test_path: cand_test},
+                quiet=True,
+            )
+
+        assert accepted is False
+        # Rollback restored pre-session code AND test bytes.
+        assert (code_path, pre_code) in calls
+        assert (test_path, pre_test) in calls
