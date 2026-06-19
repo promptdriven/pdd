@@ -4684,3 +4684,43 @@ def test_branch_diff_to_resolver_chain_for_nested_module(tmp_path):
     cwd, target = _resolve_module_cwd_and_target(keys[0], tmp_path)
     assert cwd == nested
     assert target == "src/worker_app"
+
+
+def test_build_targeted_dep_graph_preserves_nested_edges(tmp_path):
+    # #1675: full keys don't match nested arch entries directly (edges dropped);
+    # _build_targeted_dep_graph matches via the relative target and remaps edges
+    # back to full keys so nested dependency ordering is preserved.
+    from pdd.agentic_sync import _build_targeted_dep_graph
+    from pdd.agentic_sync_runner import build_dep_graph_from_architecture_data
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+    (nested / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+
+    architecture = [
+        {
+            "filename": "src/worker_app_python.prompt",
+            "filepath": "src/worker_app.py",
+            "dependencies": ["src/config_python.prompt"],
+        },
+        {"filename": "src/config_python.prompt", "filepath": "src/config.py", "dependencies": []},
+    ]
+    modules = [
+        "extensions/github_pdd_app/src/worker_app",
+        "extensions/github_pdd_app/src/config",
+    ]
+
+    # Without remapping, full keys do not match the nested entries -> no edges.
+    naive = build_dep_graph_from_architecture_data(architecture, modules)
+    assert naive.graph["extensions/github_pdd_app/src/worker_app"] == []
+
+    # With the targeted builder, the edge is preserved and remapped to full keys.
+    graph, _warnings = _build_targeted_dep_graph(
+        architecture, modules, tmp_path, "architecture.json"
+    )
+    assert graph["extensions/github_pdd_app/src/worker_app"] == [
+        "extensions/github_pdd_app/src/config"
+    ]
+    assert graph["extensions/github_pdd_app/src/config"] == []

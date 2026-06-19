@@ -1657,6 +1657,51 @@ def _resolve_module_cwd_and_target(
     return project_root, basename
 
 
+def _build_targeted_dep_graph(
+    architecture: Any,
+    modules: List[str],
+    project_root: Path,
+    source_name: str,
+) -> Tuple[Dict[str, List[str]], List[str]]:
+    """Build the targeted-sync dependency graph keyed by full module keys (#1675).
+
+    ``modules`` are full repo-root-relative scheduler keys, but a nested
+    module's architecture entry is keyed relative to its own ``architecture.json``
+    (e.g. ``src/worker_app``). Match each key by its owning-project-relative
+    target (:func:`_resolve_module_cwd_and_target`), build the graph over those
+    targets, then remap nodes and edges back to the full keys so dependency
+    ordering survives. For bare/root-layout keys the relative target equals the
+    key, so this is an identity transform.
+
+    Returns ``(graph, warnings)``.
+    """
+    key_to_target: Dict[str, str] = {}
+    for bn in modules:
+        try:
+            _, rel_target = _resolve_module_cwd_and_target(bn, project_root)
+        except AmbiguousModuleOwnerError:
+            rel_target = bn  # surfaced later as a dry-run validation failure
+        key_to_target[bn] = rel_target
+
+    target_to_key: Dict[str, str] = {}
+    for bn in modules:
+        target_to_key.setdefault(key_to_target[bn], bn)
+
+    result = build_dep_graph_from_architecture_data(
+        architecture,
+        [key_to_target[bn] for bn in modules],
+        source_name=source_name,
+    )
+    graph = {
+        bn: [
+            target_to_key.get(dep, dep)
+            for dep in result.graph.get(key_to_target[bn], [])
+        ]
+        for bn in modules
+    }
+    return graph, list(result.warnings)
+
+
 def _run_single_dry_run(
     basename: str, cwd: Path, quiet: bool = False
 ) -> Tuple[bool, str]:
@@ -2433,16 +2478,17 @@ def run_agentic_sync(
                 project_root, deps_corrections, architecture, quiet
             )
 
-    # 11. Build dependency graph
+    # 11. Build dependency graph (#1675): modules_to_sync are full
+    # repo-root-relative keys, but nested architecture entries are keyed relative
+    # to their own architecture.json, so match each key by its owning-project-
+    # relative target and remap edges back to full keys. Identity for bare/root
+    # keys.
     if architecture is not None:
-        dep_graph_result = build_dep_graph_from_architecture_data(
-            architecture,
-            modules_to_sync,
-            source_name=str(arch_path),
+        dep_graph, dep_warnings = _build_targeted_dep_graph(
+            architecture, modules_to_sync, project_root, str(arch_path)
         )
-        dep_graph = dep_graph_result.graph
-        if dep_graph_result.warnings and not quiet:
-            for w in dep_graph_result.warnings:
+        if dep_warnings and not quiet:
+            for w in dep_warnings:
                 console.print(f"[yellow]Warning: {w}[/yellow]")
         if not quiet and verbose:
             for w in collect_architecture_include_validation_warnings(project_root):
