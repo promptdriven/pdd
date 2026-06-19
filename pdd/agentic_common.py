@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import dataclasses
 import functools
+import errno
 import hashlib
+import importlib.resources
 import logging
 import os
 import signal
@@ -18,20 +21,255 @@ import random
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union
 from dataclasses import dataclass
+from enum import Enum
 
 from rich.console import Console
+
+from pdd.routing_policy import (
+    RoutingConfig,
+    RoutingPolicy,
+    RoutingRecord,
+    emit_routing_record,
+    escalate,
+    resolve_model_for_tier,
+    select_config,
+)
 
 _steer_logger = logging.getLogger(__name__ + ".steer")
 
 AgenticUsage = Optional[Dict[str, List[Dict[str, Any]]]]
 ClaudePolicy = Dict[str, Any]
+UsageSource = str
+_HARNESS_CAPABILITIES_CACHE: Optional[Dict[str, Any]] = None
+TaskClass = Literal["single_file", "multi_file", "repo_scale", "high_isolation"]
 _FILESYSTEM_POLICY_KEYS: Tuple[str, str] = ("writableRoots", "readOnlyRoots")
+
+
+class EffortCapability(str, Enum):
+    FULL = "full"
+    CLAMPED = "clamped"
+    CONFIG_ONLY = "config_only"
+    INTERACTIVE_ONLY = "interactive_only"
+    UNSUPPORTED = "unsupported"
+
+
+_EFFORT_CAPABILITY: Dict[str, EffortCapability] = {
+    "openai": EffortCapability.FULL,
+    "anthropic": EffortCapability.CLAMPED,
+    "google": EffortCapability.UNSUPPORTED,
+    "opencode": EffortCapability.UNSUPPORTED,
+}
 
 
 class AgenticUnsupportedSemanticsError(ValueError):
     """Raised when a requested agentic policy cannot be enforced by PDD."""
+
+
+def _normalize_token_buckets(provider: str, raw_usage: Any) -> Dict[str, int]:
+    """Normalize provider-specific token usage into common buckets."""
+    buckets = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+    }
+    if not isinstance(raw_usage, dict):
+        return buckets
+
+    # AgenticTaskResult.usage wraps Claude transcript rows as {"claude": [ {...}, ... ]}.
+    # Collapse that shape into a single summed dict before bucket mapping so the
+    # normalized buckets are non-zero for the structured Claude result.
+    claude_rows = raw_usage.get("claude")
+    if isinstance(claude_rows, list):
+        summed: Dict[str, int] = {}
+        for row in claude_rows:
+            if not isinstance(row, dict):
+                continue
+            for key, value in row.items():
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    continue
+                summed[key] = summed.get(key, 0) + int(value)
+        raw_usage = summed
+
+    def _int_value(*keys: str) -> int:
+        cur: Any = raw_usage
+        for key in keys:
+            if not isinstance(cur, dict):
+                return 0
+            cur = cur.get(key)
+        try:
+            return int(cur or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    provider = provider.lower()
+    if provider == "anthropic":
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        # Raw provider envelopes use cache_read_input_tokens; the structured
+        # Claude transcript rows use cached_input_tokens — accept either.
+        buckets["cache_read_tokens"] = _int_value("cache_read_input_tokens") or _int_value("cached_input_tokens")
+        buckets["cache_write_tokens"] = _int_value("cache_creation_input_tokens")
+    elif provider == "openai":
+        usage = raw_usage.get("total_token_usage") if isinstance(raw_usage.get("total_token_usage"), dict) else raw_usage
+        raw_usage = usage
+        buckets["input_tokens"] = _int_value("input_tokens")
+        buckets["output_tokens"] = _int_value("output_tokens")
+        buckets["cache_read_tokens"] = _int_value("cached_input_tokens")
+        buckets["reasoning_tokens"] = _int_value("reasoning_tokens")
+    elif provider == "google":
+        tokens = raw_usage.get("tokens") if isinstance(raw_usage.get("tokens"), dict) else raw_usage
+        raw_usage = tokens
+        buckets["input_tokens"] = _int_value("prompt")
+        buckets["output_tokens"] = _int_value("candidates")
+        buckets["cache_read_tokens"] = _int_value("cached")
+        buckets["reasoning_tokens"] = _int_value("thoughts")
+    elif provider == "opencode":
+        buckets["input_tokens"] = _int_value("input")
+        buckets["output_tokens"] = _int_value("output")
+        buckets["cache_read_tokens"] = _int_value("cache", "read")
+        buckets["cache_write_tokens"] = _int_value("cache", "write")
+    return buckets
+
+
+def _meets_usage_contract(result: "AgenticTaskResult") -> bool:
+    """Return True when a result has comparable cost for routing."""
+    return (
+        getattr(result, "usage_source", "") != "unavailable"
+        and getattr(result, "cost_usd", 0.0) > 0.0
+    )
+
+
+def _load_harness_capabilities() -> Dict[str, Any]:
+    """Load static agentic harness capability metadata."""
+    global _HARNESS_CAPABILITIES_CACHE
+    if _HARNESS_CAPABILITIES_CACHE is not None:
+        return _HARNESS_CAPABILITIES_CACHE
+
+    candidate_paths: List[Path] = []
+    try:
+        candidate_paths.append(Path.home() / ".pdd" / "agentic_harness_capabilities.json")
+    except Exception:
+        pass
+    project_root = os.getenv("PDD_PATH") or os.getenv("PROJECT_ROOT")
+    if project_root:
+        candidate_paths.append(Path(project_root) / ".pdd" / "agentic_harness_capabilities.json")
+    candidate_paths.append(Path.cwd() / ".pdd" / "agentic_harness_capabilities.json")
+
+    data: Any = None
+    for path in candidate_paths:
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+    if data is None:
+        try:
+            with importlib.resources.files("pdd.data").joinpath("agentic_harness_capabilities.json").open(
+                "r", encoding="utf-8"
+            ) as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+    if isinstance(data, dict) and isinstance(data.get("harnesses"), dict):
+        _HARNESS_CAPABILITIES_CACHE = data["harnesses"]
+    else:
+        _HARNESS_CAPABILITIES_CACHE = {}
+    return _HARNESS_CAPABILITIES_CACHE
+
+
+def _provider_harness_id(provider: str) -> str:
+    if provider == "anthropic":
+        return "claude_code"
+    if provider == "openai":
+        return "codex"
+    if provider == "opencode":
+        return "opencode"
+    if provider == "google":
+        try:
+            return "agy" if _get_google_cli_name() == "agy" else "gemini_cli"
+        except Exception:
+            return "gemini_cli"
+    return provider
+
+
+_PROVIDER_CLI_VERSION_CACHE: Dict[str, str] = {}
+
+
+def _provider_cli_binary_name(provider: str) -> Optional[str]:
+    """Map an agentic provider to the CLI binary name used to probe its version."""
+    if provider == "anthropic":
+        return "claude"
+    if provider == "openai":
+        return "codex"
+    if provider == "opencode":
+        return "opencode"
+    if provider == "google":
+        try:
+            return _get_google_cli_name()
+        except Exception:
+            return None
+    return None
+
+
+def _get_provider_cli_version(provider: str) -> str:
+    """Best-effort CLI version string for a provider (cached).
+
+    Pins the harness CLI version into every run record (issue #1593). Resolves
+    the provider's binary via the shared discovery helper and reads the first
+    line of ``<bin> --version``. Returns "" when the CLI is absent or the probe
+    fails, so callers can record an empty (not fabricated) version.
+    """
+    if provider in _PROVIDER_CLI_VERSION_CACHE:
+        return _PROVIDER_CLI_VERSION_CACHE[provider]
+    version = ""
+    name = _provider_cli_binary_name(provider)
+    binary = _find_cli_binary(name) if name else None
+    if binary:
+        try:
+            result = subprocess.run(
+                [binary, "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            for line in (result.stdout or "").splitlines():
+                line = line.strip()
+                if line:
+                    version = line
+                    break
+        except (subprocess.SubprocessError, OSError):
+            version = ""
+    _PROVIDER_CLI_VERSION_CACHE[provider] = version
+    return version
+
+
+def _publish_agentic_model_provenance(
+    *,
+    resolved_model: str,
+    model_selection_outcome: str,
+) -> None:
+    """Best-effort: publish agentic model provenance for track_cost."""
+    try:
+        import click
+        ctx = click.get_current_context(silent=True)
+    except Exception:
+        ctx = None
+    if ctx is None:
+        return
+    try:
+        if ctx.obj is None:
+            ctx.obj = {}
+        if isinstance(ctx.obj, dict):
+            ctx.obj["resolved_model"] = resolved_model
+            ctx.obj["model_selection_outcome"] = model_selection_outcome
+    except Exception:
+        pass
 
 
 def get_agentic_capabilities() -> Dict[str, Any]:
@@ -233,7 +471,7 @@ def _record_resolution_error(
     """Record or re-raise path resolution failures."""
     if errors is None:
         raise exc
-    if isinstance(exc, RuntimeError):
+    if isinstance(exc, RuntimeError) or getattr(exc, "errno", None) == errno.ELOOP:
         errors.append(f"{path}: symlink loop while resolving {context}: {exc}")
     else:
         errors.append(f"{path}: {exc}")
@@ -263,7 +501,19 @@ def _resolve_policy_path(
         path = cwd / path
     try:
         if path.name in ("", os.pardir):
+            try:
+                path.resolve(strict=True)
+            except OSError as exc:
+                if getattr(exc, "errno", None) == errno.ELOOP:
+                    _record_resolution_error(errors, path, f"policy root {raw_path}", exc)
+                    return None
             return path.resolve(strict=False)
+        try:
+            path.parent.resolve(strict=True)
+        except OSError as exc:
+            if getattr(exc, "errno", None) == errno.ELOOP:
+                _record_resolution_error(errors, path.parent, f"policy root {raw_path}", exc)
+                return None
         return path.parent.resolve(strict=False) / path.name
     except (RuntimeError, OSError) as exc:
         _record_resolution_error(errors, path, f"policy root {raw_path}", exc)
@@ -358,6 +608,15 @@ def _resolve_symlink_target_path(
     target_path = Path(raw_target)
     if not target_path.is_absolute():
         target_path = link_path.parent / target_path
+    try:
+        target_path.resolve(strict=True)
+    except RuntimeError as exc:
+        errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
+        return None
+    except OSError as exc:
+        if getattr(exc, "errno", None) == errno.ELOOP:
+            errors.append(f"{link_path}: symlink loop while resolving {raw_target}: {exc}")
+            return None
     try:
         return target_path.resolve(strict=False)
     except RuntimeError as exc:
@@ -901,12 +1160,22 @@ class AgenticTaskResult(tuple):
         usage: AgenticUsage = None,
         *,
         changed_files: Optional[List[str]] = None,
+        usage_source: str = "unavailable",
+        estimate_method: str = "unavailable",
+        cli_version: str = "",
+        model_id: Optional[str] = None,
+        cumulative_cost_usd: Optional[float] = None,
     ) -> "AgenticTaskResult":
         result = tuple.__new__(
             cls,
             (success, output_text, cost_usd, provider, usage),
         )
         result._changed_files = list(changed_files or [])
+        result._usage_source = usage_source
+        result._estimate_method = estimate_method
+        result._cli_version = cli_version
+        result._model_id = model_id
+        result._cumulative_cost_usd = cost_usd if cumulative_cost_usd is None else cumulative_cost_usd
         return result
 
     def __iter__(self):
@@ -936,6 +1205,30 @@ class AgenticTaskResult(tuple):
     def changed_files(self) -> List[str]:
         return list(getattr(self, "_changed_files", []))
 
+    @property
+    def usage_source(self) -> str:
+        return str(getattr(self, "_usage_source", "unavailable"))
+
+    @property
+    def estimate_method(self) -> str:
+        return str(getattr(self, "_estimate_method", "unavailable"))
+
+    @property
+    def cli_version(self) -> str:
+        return str(getattr(self, "_cli_version", ""))
+
+    @property
+    def model_id(self) -> Optional[str]:
+        return getattr(self, "_model_id", None)
+
+    @property
+    def cumulative_cost_usd(self) -> float:
+        return float(getattr(self, "_cumulative_cost_usd", self.cost_usd))
+
+    def meets_usage_contract(self) -> bool:
+        """True when this result has comparable cost/usage for E[pass]-λ·cost routing."""
+        return _meets_usage_contract(self)
+
     def to_dict(self) -> Dict[str, Any]:
         """Return a JSON-serializable mapping shape for structured consumers."""
         return {
@@ -945,6 +1238,13 @@ class AgenticTaskResult(tuple):
             "provider": self.provider,
             "usage": self.usage,
             "changed_files": self.changed_files,
+            "usage_source": self.usage_source,
+            "estimate_method": self.estimate_method,
+            "cli_version": self.cli_version,
+            "model_id": self.model_id,
+            "cumulative_cost_usd": self.cumulative_cost_usd,
+            "usage_comparable": self.meets_usage_contract(),
+            "token_buckets": _normalize_token_buckets(self.provider, self.usage),
         }
 
 
@@ -958,8 +1258,10 @@ class _ProviderRunResult(tuple):
         cost_usd: float,
         model: Optional[str],
         usage: AgenticUsage = None,
+        requested_effort: Optional[str] = None,
+        effective_effort: Optional[str] = None,
     ) -> "_ProviderRunResult":
-        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage))
+        return tuple.__new__(cls, (success, output_text, cost_usd, model, usage, requested_effort, effective_effort))
 
     def __iter__(self):
         return (tuple.__getitem__(self, i) for i in range(4))
@@ -967,6 +1269,14 @@ class _ProviderRunResult(tuple):
     @property
     def usage(self) -> AgenticUsage:
         return tuple.__getitem__(self, 4)
+
+    @property
+    def requested_effort(self) -> Optional[str]:
+        return tuple.__getitem__(self, 5)
+
+    @property
+    def effective_effort(self) -> Optional[str]:
+        return tuple.__getitem__(self, 6)
 
 
 @dataclass
@@ -1382,6 +1692,45 @@ def get_agent_provider_preference() -> List[str]:
                 result.append(p)
         return result
     return list(_DEFAULT_PROVIDER_PREFERENCE)
+
+
+TASK_CLASS_SINGLE_FILE: str = "single_file"
+TASK_CLASS_MULTI_FILE: str = "multi_file"
+TASK_CLASS_REPO_SCALE: str = "repo_scale"
+TASK_CLASS_HIGH_ISOLATION: str = "high_isolation"
+
+
+def select_harness_for_task(task_class: str, candidates: List[str]) -> List[str]:
+    """Return candidates reordered for a coarse agentic task class."""
+    if task_class == TASK_CLASS_SINGLE_FILE:
+        return list(candidates)
+
+    if task_class == TASK_CLASS_MULTI_FILE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_REPO_SCALE:
+        preferred = ("anthropic", "opencode")
+    elif task_class == TASK_CLASS_HIGH_ISOLATION:
+        preferred = ("opencode", "anthropic")
+    else:
+        return list(candidates)
+
+    ordered = [provider for provider in preferred if provider in candidates]
+    if task_class == TASK_CLASS_REPO_SCALE:
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered and provider not in {"google", "openai"}
+        )
+        ordered.extend(
+            provider
+            for provider in candidates
+            if provider not in ordered
+        )
+        return ordered
+
+    ordered.extend(provider for provider in candidates if provider not in ordered)
+    return ordered
+
 
 # CLI command mapping for each provider
 CLI_COMMANDS: Dict[str, str] = {
@@ -2289,6 +2638,201 @@ def _get_provider_model(provider: str) -> Optional[str]:
     return value.strip() or None
 
 
+def _routing_effort_to_reasoning_time(effort: str) -> float:
+    """Map routing effort labels to the existing reasoning_time scale."""
+    if effort == "high":
+        return 0.85
+    if effort == "medium":
+        return 0.5
+    return 0.15
+
+
+def _apply_routing_model_env(
+    provider: str,
+    config: Optional[RoutingConfig],
+    originals: Dict[str, Optional[str]],
+) -> None:
+    """Temporarily set the provider model env var for a routed config."""
+    if config is None:
+        return
+    env_var = _PROVIDER_MODEL_ENV.get(provider)
+    if not env_var:
+        return
+    if env_var not in originals:
+        originals[env_var] = os.environ.get(env_var)
+    model = resolve_model_for_tier(config.model_tier)
+    if model:
+        os.environ[env_var] = model
+
+
+def _restore_routing_model_env(originals: Dict[str, Optional[str]]) -> None:
+    """Restore model env vars changed for routing."""
+    for key, value in originals.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _emit_routing_outcome(
+    record: Optional[RoutingRecord],
+    *,
+    cwd: Path,
+    success: bool,
+    cost_usd: float,
+    latency_seconds: float,
+) -> None:
+    """Update and emit one routing record, ignoring no-policy calls."""
+    if record is None:
+        return
+    record.cost_usd = cost_usd
+    record.latency_seconds = latency_seconds
+    record.verifier_result = "pass" if success else "fail"
+    emit_routing_record(record, log_dir=cwd / ".pdd" / "agentic-logs")
+
+
+def _run_agentic_task_with_routing_config(
+    *,
+    config: RoutingConfig,
+    instruction: str,
+    cwd: Path,
+    verbose: bool,
+    quiet: bool,
+    label: str,
+    timeout: Optional[float],
+    retry_delay: float,
+    deadline: Optional[float],
+    use_playwright: bool,
+    steers: Optional[List[SteerEntry]],
+    claude_policy: Optional[ClaudePolicy],
+) -> AgenticTaskResult:
+    """Run one routed escalation config without re-entering policy selection."""
+    originals: Dict[str, Optional[str]] = {"PDD_AGENTIC_PROVIDER": os.environ.get("PDD_AGENTIC_PROVIDER")}
+    os.environ["PDD_AGENTIC_PROVIDER"] = config.harness
+    _apply_routing_model_env(config.harness, config, originals)
+    try:
+        return run_agentic_task(
+            instruction,
+            cwd,
+            verbose=verbose,
+            quiet=quiet,
+            label=label,
+            timeout=timeout,
+            max_retries=max(1, int(config.repeat_runs)),
+            retry_delay=retry_delay,
+            deadline=deadline,
+            use_playwright=use_playwright,
+            reasoning_time=_routing_effort_to_reasoning_time(str(config.thinking_effort)),
+            steers=steers,
+            claude_policy=claude_policy,
+            routing_policy=None,
+            task_class=None,
+        )
+    finally:
+        _restore_routing_model_env(originals)
+
+
+def _run_feasible_routing_fallback(
+    *,
+    attempted_harnesses: set[str],
+    base_record: RoutingRecord,
+    instruction: str,
+    cwd: Path,
+    verbose: bool,
+    quiet: bool,
+    label: str,
+    timeout: Optional[float],
+    retry_delay: float,
+    deadline: Optional[float],
+    use_playwright: bool,
+    steers: Optional[List[SteerEntry]],
+    claude_policy: Optional[ClaudePolicy],
+) -> Optional[AgenticTaskResult]:
+    """Run the standard provider cascade over still-untried feasible providers.
+
+    Issue #1431: when routing escalation only ever pinned harnesses that are
+    not installed/authenticated, installed providers may never have been
+    tried. This runs the normal provider cascade (``routing_policy=None``)
+    restricted to the available providers we have not attempted yet, so a
+    feasible provider still gets a chance instead of the task failing with
+    "No agent providers are available". Returns ``None`` when there is no
+    untried feasible provider to fall back to.
+    """
+    available = get_available_agents()
+    untried = [
+        provider
+        for provider in get_agent_provider_preference()
+        if provider in available and provider not in attempted_harnesses
+    ]
+    if not untried:
+        return None
+
+    fallback_record = dataclasses.replace(
+        base_record,
+        fallback_reason=f"cascade_fallback_to_feasible_provider:{','.join(untried)}",
+        cost_usd=0.0,
+        latency_seconds=0.0,
+        verifier_result=None,
+    )
+
+    originals: Dict[str, Optional[str]] = {
+        "PDD_AGENTIC_PROVIDER": os.environ.get("PDD_AGENTIC_PROVIDER")
+    }
+    os.environ["PDD_AGENTIC_PROVIDER"] = ",".join(untried)
+    fallback_start = time.time()
+    try:
+        result = run_agentic_task(
+            instruction,
+            cwd,
+            verbose=verbose,
+            quiet=quiet,
+            label=label,
+            timeout=timeout,
+            retry_delay=retry_delay,
+            deadline=deadline,
+            use_playwright=use_playwright,
+            steers=steers,
+            claude_policy=claude_policy,
+            routing_policy=None,
+            task_class=None,
+        )
+    finally:
+        _restore_routing_model_env(originals)
+
+    fallback_record.cost_usd = result.cost_usd
+    fallback_record.latency_seconds = time.time() - fallback_start
+    fallback_record.verifier_result = "pass" if result.success else "fail"
+    emit_routing_record(fallback_record, log_dir=cwd / ".pdd" / "agentic-logs")
+    return result
+
+
+def _resolve_effort_for_provider_log(
+    provider: str,
+    reasoning_time: Optional[float],
+    env: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    """Return (requested_effort, effective_effort) for audit logging."""
+    env = env or os.environ
+    if reasoning_time is not None:
+        from .reasoning import time_to_effort_level
+        requested = time_to_effort_level(reasoning_time)
+    else:
+        requested = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
+        if requested not in {"low", "medium", "high"}:
+            requested = None
+    if provider == "openai":
+        codex_effort = (env.get("CODEX_REASONING_EFFORT") or "").strip().lower()
+        if codex_effort in {"low", "medium", "high", "xhigh"}:
+            return requested, codex_effort
+        return requested, requested
+    if provider == "anthropic":
+        claude_effort = (env.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip().lower()
+        if claude_effort in {"low", "medium", "high", "xhigh", "max"}:
+            return requested or claude_effort, claude_effort
+        return requested, requested
+    return requested, None
+
+
 def _log_agentic_interaction(
     label: str,
     prompt: str,
@@ -2302,6 +2846,8 @@ def _log_agentic_interaction(
     model: Optional[str] = None,
     false_positive: bool = False,
     include_bodies: bool = True,
+    requested_effort: Optional[str] = None,
+    effective_effort: Optional[str] = None,
 ) -> Optional[_PddOwnedLogWrite]:
     """
     Append one record per provider attempt to ``.pdd/agentic-logs/session_*.jsonl``.
@@ -2361,6 +2907,8 @@ def _log_agentic_interaction(
             "duration_seconds": round(duration, 2),
             "prompt_length": len(prompt),
             "response_length": len(response),
+            "requested_effort": requested_effort,
+            "effective_effort": effective_effort,
         }
         if include_bodies:
             entry["prompt"] = prompt
@@ -4092,6 +4640,8 @@ def run_agentic_task(
     reasoning_time: Optional[float] = None,
     steers: Optional[List[SteerEntry]] = None,
     claude_policy: Optional[ClaudePolicy] = None,
+    routing_policy: Optional[RoutingPolicy] = None,
+    task_class: Optional[str] = None,
 ) -> AgenticTaskResult:
     """
     Runs an agentic task using available providers in preference order.
@@ -4115,6 +4665,13 @@ def run_agentic_task(
         claude_policy: Optional validated Claude CLI policy contract. When
             present, Anthropic runs must enforce these tool/session/output
             semantics instead of PDD's broad default permission mode.
+        routing_policy: Optional static routing policy. When supplied, PDD
+            selects an initial agentic config by task class and may escalate
+            bounded configs after verifier/provider failure.
+        task_class: Optional coarse task class. Reorders already-available
+            providers (harness selection) and, when ``routing_policy`` is
+            supplied, also keys the routing-policy lookup. ``None`` preserves
+            the existing provider cascade.
 
     Returns:
         AgenticTaskResult(success, output_text, cost_usd, provider_used, usage).
@@ -4129,6 +4686,10 @@ def run_agentic_task(
         if claude_policy is not None
         else None
     )
+
+    routing_model_env_originals: Dict[str, Optional[str]] = {}
+    routing_record: Optional[RoutingRecord] = None
+    routing_config: Optional[RoutingConfig] = None
 
     # get_agent_provider_preference() must be called first: for
     # PDD_AGENTIC_PROVIDER=antigravity it sets PDD_GOOGLE_CLI=agy as a side
@@ -4145,16 +4706,49 @@ def run_agentic_task(
                 "agent is available to enforce the requested policy"
             )
         candidates = ["anthropic"]
+    elif task_class is not None:
+        candidates = select_harness_for_task(task_class, candidates)
+
+    if routing_policy is not None:
+        routing_config, routing_record = select_config(
+            routing_policy,
+            task_class,
+            budget_remaining=None,
+            deadline=deadline,
+        )
+        if routing_config is not None:
+            if routing_config.harness in candidates:
+                candidates = [routing_config.harness]
+                max_retries = max(1, int(routing_config.repeat_runs))
+                reasoning_time = _routing_effort_to_reasoning_time(str(routing_config.thinking_effort))
+                _apply_routing_model_env(
+                    routing_config.harness,
+                    routing_config,
+                    routing_model_env_originals,
+                )
+            elif routing_record is not None:
+                routing_record.fallback_reason = (
+                    f"selected_harness_unavailable:{routing_config.harness}"
+                )
 
     if not candidates:
         msg = "No agent providers are available (check CLI installation and API keys)"
         if not quiet:
             console.print(f"[bold red]{msg}[/bold red]")
+        _emit_routing_outcome(
+            routing_record,
+            cwd=cwd,
+            success=False,
+            cost_usd=0.0,
+            latency_seconds=0.0,
+        )
+        _restore_routing_model_env(routing_model_env_originals)
         return AgenticTaskResult(False, msg, 0.0, "", None)
 
     effective_timeout = timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
     effective_deadline = deadline if deadline is not None else get_job_deadline()
     task_start_time = time.time()
+    cumulative_cost_usd = 0.0
     # Issue #902: Cap total time across all providers to prevent 150min burn
     aggregate_deadline = task_start_time + (2 * effective_timeout)
 
@@ -4214,6 +4808,8 @@ def run_agentic_task(
                 )
 
         provider_errors: List[str] = []
+        harness_capabilities = _load_harness_capabilities()
+        total_cost = 0.0
 
         for provider in candidates:
             if verbose:
@@ -4274,6 +4870,8 @@ def run_agentic_task(
                 success = bool(provider_result[0])
                 output = str(provider_result[1])
                 cost = float(provider_result[2])
+                cumulative_cost_usd += cost
+                total_cost += cost
                 actual_model = provider_result[3]
                 usage = provider_result[4] if len(provider_result) > 4 else None
                 last_output = output
@@ -4281,6 +4879,32 @@ def run_agentic_task(
                 # fall back to the requested model from env vars when the JSON
                 # didn't surface one (e.g. early-error returns).
                 effective_model = actual_model or _get_provider_model(provider)
+                harness_id = _provider_harness_id(provider)
+                capability = harness_capabilities.get(harness_id, {})
+                identity_observable = bool(capability.get("identity_observable", True))
+                model_id = str(effective_model or "") if identity_observable else ""
+                cli_version = _get_provider_cli_version(provider)
+                if usage:
+                    usage_source = "provider_reported" if cost > 0 else "pricing_table_estimate"
+                    estimate_method = "provider_usage"
+                elif cost > 0:
+                    usage_source = "pricing_table_estimate"
+                    estimate_method = "token_estimation"
+                else:
+                    usage_source = "unavailable"
+                    estimate_method = "unavailable"
+                if capability.get("routing_class") == "opaque":
+                    model_selection_outcome = "unconfirmed"
+                elif provider == "anthropic" and not os.environ.get("CLAUDE_MODEL"):
+                    model_selection_outcome = "fixed_by_config"
+                elif provider != candidates[0]:
+                    model_selection_outcome = "fallback"
+                else:
+                    model_selection_outcome = "direct"
+                requested_effort, effective_effort = _resolve_effort_for_provider_log(
+                    provider,
+                    reasoning_time,
+                )
 
                 # False Positive Detection
                 # Issue #249: Empty output should ALWAYS be detected as false positive,
@@ -4342,6 +4966,8 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 false_positive=True,
+                                requested_effort=requested_effort,
+                                effective_effort=effective_effort,
                             ),
                             pdd_owned_log_signatures,
                             filesystem_snapshot,
@@ -4407,6 +5033,15 @@ def run_agentic_task(
                                 cwd=cwd,
                                 model=effective_model,
                                 include_bodies=verbose,
+                                requested_effort=requested_effort,
+                                effective_effort=effective_effort,
+                            )
+                            _emit_routing_outcome(
+                                routing_record,
+                                cwd=cwd,
+                                success=False,
+                                cost_usd=total_cost,
+                                latency_seconds=time.time() - task_start_time,
                             )
                             return AgenticTaskResult(
                                 False,
@@ -4415,6 +5050,11 @@ def run_agentic_task(
                                 provider,
                                 usage,
                                 changed_files=changed_files,
+                                usage_source=usage_source,
+                                estimate_method=estimate_method,
+                                model_id=model_id,
+                                cli_version=cli_version,
+                                cumulative_cost_usd=cumulative_cost_usd,
                             )
 
                         # Issue #1376: always emit a summary record so the audit
@@ -4433,6 +5073,19 @@ def run_agentic_task(
                             cwd=cwd,
                             model=effective_model,
                             include_bodies=verbose,
+                            requested_effort=requested_effort,
+                            effective_effort=effective_effort,
+                        )
+                        _emit_routing_outcome(
+                            routing_record,
+                            cwd=cwd,
+                            success=True,
+                            cost_usd=total_cost,
+                            latency_seconds=time.time() - task_start_time,
+                        )
+                        _publish_agentic_model_provenance(
+                            resolved_model=model_id,
+                            model_selection_outcome=model_selection_outcome,
                         )
                         return AgenticTaskResult(
                             True,
@@ -4441,6 +5094,11 @@ def run_agentic_task(
                             provider,
                             usage,
                             changed_files=changed_files,
+                            usage_source=usage_source,
+                            estimate_method=estimate_method,
+                            model_id=model_id,
+                            cli_version=cli_version,
+                            cumulative_cost_usd=cumulative_cost_usd,
                         )
 
                 # Issue #902: Skip retries for permanent errors (auth, parameters)
@@ -4461,6 +5119,8 @@ def run_agentic_task(
                             duration=time.time() - task_start_time,
                             cwd=cwd,
                             model=effective_model,
+                            requested_effort=requested_effort,
+                            effective_effort=effective_effort,
                         ),
                         pdd_owned_log_signatures,
                         filesystem_snapshot,
@@ -4547,20 +5207,123 @@ def run_agentic_task(
                     duration=time.time() - task_start_time,
                     cwd=cwd,
                     model=effective_model,
+                    requested_effort=requested_effort if 'requested_effort' in locals() else None,
+                    effective_effort=effective_effort if 'effective_effort' in locals() else None,
                 )
             # If deadline was exhausted, don't try other providers either
             if deadline_exhausted or time.time() > aggregate_deadline:
                 break
 
-        return AgenticTaskResult(
+        failure_cost = total_cost if routing_policy is not None else 0.0
+        failure_result = AgenticTaskResult(
             False,
             f"All agent providers failed: {'; '.join(provider_errors)}",
-            0.0,
+            failure_cost,
             "",
             None,
+            cumulative_cost_usd=cumulative_cost_usd,
         )
 
+        _emit_routing_outcome(
+            routing_record,
+            cwd=cwd,
+            success=False,
+            cost_usd=total_cost,
+            latency_seconds=time.time() - task_start_time,
+        )
+
+        if routing_policy is not None and routing_record is not None:
+            current_record = routing_record
+            last_result = failure_result
+            # Providers already exercised by this task (the initial routed/
+            # cascade attempt above). Used so the feasibility fallback only
+            # tries providers that have not had a chance yet.
+            attempted_harnesses: set[str] = set(candidates)
+            while True:
+                next_config, next_record = escalate(
+                    routing_policy,
+                    current_record,
+                    verifier_result="fail",
+                    budget_remaining=None,
+                    deadline=effective_deadline,
+                )
+                if (
+                    next_config is None
+                    or next_record.fallback_reason is not None
+                    or next_record.escalation_step <= current_record.escalation_step
+                ):
+                    emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
+                    break
+
+                # Issue #1431: routing escalation must stay feasibility-aware.
+                # Pinning PDD_AGENTIC_PROVIDER to a harness that is not
+                # installed/authenticated collapses the nested provider cascade
+                # to "No agent providers are available", so the ladder would
+                # keep emitting infeasible configs and never try a provider
+                # that could actually succeed. Skip the infeasible config,
+                # record it with an explicit fallback reason (not a failed
+                # provider attempt), and keep climbing the ladder.
+                if next_config.harness not in get_available_agents():
+                    next_record.fallback_reason = (
+                        f"infeasible_harness_unavailable:{next_config.harness}"
+                    )
+                    emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
+                    current_record = next_record
+                    continue
+
+                escalated_start = time.time()
+                last_result = _run_agentic_task_with_routing_config(
+                    config=next_config,
+                    instruction=instruction,
+                    cwd=cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    label=label,
+                    timeout=timeout,
+                    retry_delay=retry_delay,
+                    deadline=deadline,
+                    use_playwright=use_playwright,
+                    steers=steers,
+                    claude_policy=claude_policy,
+                )
+                attempted_harnesses.add(next_config.harness)
+                next_record.cost_usd = last_result.cost_usd
+                next_record.latency_seconds = time.time() - escalated_start
+                next_record.verifier_result = "pass" if last_result.success else "fail"
+                emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
+                if last_result.success:
+                    return last_result
+                current_record = next_record
+
+            # Issue #1431: the ladder is exhausted (or only ever offered
+            # infeasible harnesses) and we still do not have a success. If
+            # installed providers were never tried because routing only pinned
+            # unavailable harnesses, fall back to the standard provider cascade
+            # over those untried providers so a feasible one still gets a shot.
+            if not last_result.success:
+                fallback_result = _run_feasible_routing_fallback(
+                    attempted_harnesses=attempted_harnesses,
+                    base_record=current_record,
+                    instruction=instruction,
+                    cwd=cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    label=label,
+                    timeout=timeout,
+                    retry_delay=retry_delay,
+                    deadline=deadline,
+                    use_playwright=use_playwright,
+                    steers=steers,
+                    claude_policy=claude_policy,
+                )
+                if fallback_result is not None:
+                    last_result = fallback_result
+            return last_result
+
+        return failure_result
+
     finally:
+        _restore_routing_model_env(routing_model_env_originals)
         # Cleanup prompt file
         if prompt_path.exists():
             try:
@@ -5865,12 +6628,9 @@ def _run_with_provider(
     # Construct Command using discovered cli_path (Issue #234 fix)
     if provider == "anthropic":
         if _claude_code_interactive_enabled(env):
-            if reasoning_effort and not quiet:
-                console.print(
-                    f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but PDD's "
-                    "Claude Code interactive bridge does not map it to a CLI flag; "
-                    "applies to llm_invoke steps only, not this subprocess.[/dim]"
-                )
+            if reasoning_effort:
+                env = dict(env)
+                env["CLAUDE_CODE_EFFORT_LEVEL"] = reasoning_effort
             return _run_claude_interactive_with_mcp(
                 cli_path=cli_path,
                 prompt_path=prompt_path,
@@ -5909,17 +6669,8 @@ def _run_with_provider(
         claude_model = env.get("CLAUDE_MODEL")
         if claude_model:
             cmd.extend(["--model", claude_model])
-        if reasoning_effort and not quiet:
-            # Always surface outside --quiet mode — silently dropping the user's
-            # reasoning signal is a support-ticket generator. The Claude Code CLI
-            # has no --reasoning-effort flag today, so clarify that the effort
-            # applies to LiteLLM-invoked steps (analysis/verification) but not
-            # to this code-writing subprocess.
-            console.print(
-                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Claude Code CLI "
-                "has no reasoning-effort flag; applies to llm_invoke steps only, "
-                "not this subprocess.[/dim]"
-            )
+        if reasoning_effort:
+            cmd.extend(["--effort", reasoning_effort])
     elif provider == "google":
         resolved_bin = _get_google_cli_name(env)
         if resolved_bin == "agy":
@@ -6047,6 +6798,12 @@ def _run_with_provider(
         variant_name = (env.get("OPENCODE_VARIANT") or "").strip()
         if variant_name:
             cmd.extend(["--variant", variant_name])
+        elif reasoning_effort and not quiet:
+            console.print(
+                f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but OpenCode "
+                "does not expose a generic CLI effort flag; configure an "
+                "OPENCODE_VARIANT for provider-specific reasoning settings.[/dim]"
+            )
         # The OpenCode CLI requires a positional ``message`` argument for
         # ``opencode run`` (https://opencode.ai/docs/cli/) — earlier revisions
         # passed only ``--`` and piped the prompt body on stdin, which the CLI

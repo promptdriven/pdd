@@ -2,6 +2,7 @@
 # Added optional debugging prints in _select_model_candidates
 
 import copy
+import csv
 import getpass
 import os
 import pandas as pd
@@ -15,7 +16,7 @@ import sys
 import traceback
 import urllib.request
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from litellm.caching.caching import Cache  # Fix for LiteLLM v1.75.5+
 
@@ -470,7 +471,7 @@ import json
 # from rich import print as rprint # Replaced with logger
 from dotenv import load_dotenv
 from pathlib import Path
-from typing import Optional, Dict, List, Any, Type, Union, Tuple
+from typing import Optional, Dict, List, Any, Type, Union, Tuple, Callable
 from pydantic import BaseModel, ValidationError
 import openai  # Import openai for exception handling as LiteLLM maps to its types
 import warnings
@@ -3094,10 +3095,96 @@ def _vertex_location_value(model_info: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_DEEPSWE_MANIFEST_CACHE: Optional[Dict[str, Any]] = None
+
+
+def _load_deepswe_manifest() -> Dict[str, Any]:
+    """Load DeepSWE manifest metadata keyed by model and aliases."""
+    global _DEEPSWE_MANIFEST_CACHE
+    if _DEEPSWE_MANIFEST_CACHE is not None:
+        return _DEEPSWE_MANIFEST_CACHE
+
+    candidate_paths: List[Path] = []
+    try:
+        candidate_paths.append(Path.home() / ".pdd" / "deepswe_manifest.json")
+    except Exception:
+        pass
+    project_root = os.getenv("PDD_PATH") or os.getenv("PROJECT_ROOT")
+    if project_root:
+        candidate_paths.append(Path(project_root) / ".pdd" / "deepswe_manifest.json")
+    candidate_paths.append(Path.cwd() / ".pdd" / "deepswe_manifest.json")
+
+    data: Any = None
+    for path in candidate_paths:
+        try:
+            if path.is_file():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                break
+        except Exception:
+            continue
+    if data is None:
+        try:
+            with importlib.resources.files("pdd.data").joinpath("deepswe_manifest.json").open(
+                "r", encoding="utf-8"
+            ) as f:
+                data = json.load(f)
+        except Exception:
+            data = None
+
+    by_model: Dict[str, Any] = {}
+    entries = data.get("entries", data if isinstance(data, list) else []) if isinstance(data, (dict, list)) else []
+    if isinstance(entries, dict):
+        entries = list(entries.values())
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            keys = []
+            for key_name in ("model", "model_name", "catalog_model", "canonical_model"):
+                value = entry.get(key_name)
+                if isinstance(value, str) and value.strip():
+                    keys.append(value.strip())
+            aliases = entry.get("aliases")
+            if isinstance(aliases, list):
+                keys.extend(str(alias).strip() for alias in aliases if str(alias).strip())
+            raw_model_name = entry.get("raw_model_name")
+            if isinstance(raw_model_name, str) and raw_model_name.strip():
+                parts = raw_model_name.split()
+                keys.append(parts[0])
+            for key in keys:
+                by_model.setdefault(key, entry)
+
+    _DEEPSWE_MANIFEST_CACHE = by_model
+    return by_model
+
+
+def _manifest_effort(raw_model_name: Any) -> Optional[str]:
+    if not isinstance(raw_model_name, str):
+        return None
+    parts = raw_model_name.split()
+    if len(parts) < 2:
+        return None
+    effort = parts[-1].strip().lower()
+    return effort if effort in {"minimal", "low", "medium", "high", "xhigh", "max"} else None
+
+
+def _manifest_is_stale(retrieved_at: str) -> bool:
+    try:
+        max_age = int(os.getenv("PDD_DEEPSWE_MAX_AGE_DAYS", "30"))
+    except ValueError:
+        max_age = 30
+    try:
+        retrieved = date.fromisoformat(str(retrieved_at)[:10])
+    except Exception:
+        return False
+    return (date.today() - retrieved).days > max_age
+
+
 def _select_model_candidates(
     strength: float,
     base_model_name: str,
-    model_df: pd.DataFrame
+    model_df: pd.DataFrame,
+    manifest_by_model: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Selects and sorts candidate models based on strength and availability."""
 
@@ -3263,6 +3350,19 @@ def _select_model_candidates(
     if not candidates:
          # This should ideally not happen if available_df was not empty
          raise RuntimeError("Model selection resulted in an empty candidate list.")
+
+    manifest_by_model = manifest_by_model or {}
+    for candidate in candidates:
+        entry = manifest_by_model.get(str(candidate.get("model", ""))) or {}
+        candidate["target_effort_level"] = _manifest_effort(entry.get("raw_model_name"))
+        candidate["deepswe_manifest_date"] = str(entry.get("retrieved_at") or "")
+
+    if candidates:
+        first = candidates[0]
+        manifest_date = str(first.get("deepswe_manifest_date") or "")
+        if manifest_date and _manifest_is_stale(manifest_date):
+            first["model_rank_source"] = f"deepswe:stale:{manifest_date}"
+            logger.warning("DeepSWE manifest metadata for selected model is stale: %s", manifest_date)
 
     # --- DEBUGGING PRINT ---
     if os.getenv("PDD_DEBUG_SELECTOR"): # Add env var check for debug prints
@@ -3988,6 +4088,222 @@ def _has_invalid_python_code(obj: Any, field_name: str = "") -> bool:
 
 # --- Main Function ---
 
+# =============================================================================
+# Per-task config routing (issue #1584)
+# -----------------------------------------------------------------------------
+# A static lookup table (pdd/data/task_routing.csv) maps a PDD task class to the
+# best (model, temperature, effort, shots) configuration measured offline. The
+# router scores each candidate row as ``pass_rate - lambda * avg_cost_usd`` and
+# the multi-shot loop samples N candidates with verifier-backed selection. The
+# entire feature is gated behind PDD_ENABLE_TASK_ROUTING=1; when the flag is
+# unset, llm_invoke behaves exactly as before and these helpers are never hit.
+# =============================================================================
+
+import contextvars
+
+# Module-level cache for the routing table. None = not yet loaded.
+_TASK_ROUTING_TABLE: Optional[List[Dict[str, str]]] = None
+
+# Carries the router's exact-model selection into the recursive single-shot
+# calls made by _run_multishot, so llm_invoke's public signature stays in sync
+# with llm_invoke_python.prompt (no internal-only parameter). Default None.
+_ROUTER_MODEL_OVERRIDE: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar(
+    "pdd_router_model_override", default=None
+)
+
+# Effort level -> llm_invoke's 0-1 ``time`` scale.
+_EFFORT_TO_TIME: Dict[str, float] = {
+    "low": 0.1,
+    "medium": 0.3,
+    "high": 0.5,
+    "xhigh": 0.75,
+    "max": 1.0,
+}
+
+
+def _effort_to_time(effort: Optional[str]) -> Optional[float]:
+    """Map a routing-table effort level to llm_invoke's 0-1 ``time`` scale.
+
+    Returns None for unknown/empty values so the caller keeps its own ``time``.
+    """
+    if effort is None:
+        return None
+    return _EFFORT_TO_TIME.get(str(effort).strip().lower())
+
+
+def _resolve_task_routing_csv() -> Optional[Path]:
+    """Resolve task_routing.csv via the same priority chain as llm_model.csv.
+
+    Order: user ``~/.pdd/`` -> project ``.pdd/`` (PDD_PATH then CWD) -> None
+    (the caller then falls back to the packaged ``pdd/data/`` copy).
+    """
+    user_csv = user_pdd_dir / "task_routing.csv"
+    if user_csv.is_file():
+        return user_csv
+    if PROJECT_ROOT_FROM_ENV:
+        env_csv = project_csv_from_env.parent / "task_routing.csv"
+        if env_csv.is_file():
+            return env_csv
+    cwd_csv = project_csv_from_cwd.parent / "task_routing.csv"
+    if cwd_csv.is_file():
+        return cwd_csv
+    return None
+
+
+def _load_task_routing_table(force_reload: bool = False) -> List[Dict[str, str]]:
+    """Load and cache the per-task routing table.
+
+    Returns a list of row dicts (possibly empty). Never raises: on a missing
+    file, unreadable CSV, or parse error it debug-logs and returns ``[]`` so the
+    router transparently falls through to the strength-interpolation baseline.
+    """
+    global _TASK_ROUTING_TABLE
+    if _TASK_ROUTING_TABLE is not None and not force_reload:
+        return _TASK_ROUTING_TABLE
+    rows: List[Dict[str, str]] = []
+    try:
+        csv_path = _resolve_task_routing_csv()
+        if csv_path is not None:
+            text = csv_path.read_text()
+        else:
+            text = importlib.resources.files('pdd').joinpath(
+                'data/task_routing.csv'
+            ).read_text()
+        import io
+        for row in csv.DictReader(io.StringIO(text)):
+            rows.append(dict(row))
+    except Exception as e:  # noqa: BLE001 - never break generation on routing
+        logger.debug(f"Task routing table unavailable, using baseline: {e}")
+        rows = []
+    _TASK_ROUTING_TABLE = rows
+    return rows
+
+
+def _select_task_route(task_class: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Pick the best routing row for ``task_class`` by ``pass_rate - lambda*cost``.
+
+    ``lambda`` comes from PDD_ROUTER_LAMBDA (default 1.0; invalid -> 1.0). Ties
+    break on lowest ``avg_cost_usd``. Returns a normalized override dict with any
+    of ``model``/``temperature``/``shots``/``effort`` present, or None when no
+    row matches (cold start) or on any evaluation error (baseline fallthrough).
+    """
+    if task_class is None:
+        return None
+    try:
+        lam_raw = os.environ.get("PDD_ROUTER_LAMBDA", "")
+        try:
+            lam = float(lam_raw) if str(lam_raw).strip() != "" else 1.0
+        except (TypeError, ValueError):
+            lam = 1.0
+        target = str(task_class).strip()
+        matching = [
+            r for r in _load_task_routing_table()
+            if str(r.get("task_class", "")).strip() == target
+        ]
+        if not matching:
+            return None
+        best: Optional[Dict[str, str]] = None
+        best_score: Optional[float] = None
+        best_cost: Optional[float] = None
+        for r in matching:
+            pass_rate = float(str(r.get("pass_rate", "")).strip() or 0.0)
+            avg_cost = float(str(r.get("avg_cost_usd", "")).strip() or 0.0)
+            score = pass_rate - lam * avg_cost
+            # Tolerant tie detection: float subtraction makes nominally-equal
+            # scores (e.g. 0.8-0.2 vs 0.7-0.1) differ in the last bit.
+            tie = best_score is not None and abs(score - best_score) <= 1e-9
+            if (
+                best_score is None
+                or (score > best_score and not tie)
+                or (tie and avg_cost < best_cost)
+            ):
+                best, best_score, best_cost = r, score, avg_cost
+        if best is None:
+            return None
+        override: Dict[str, Any] = {}
+        model = str(best.get("model", "")).strip()
+        if model:
+            override["model"] = model
+        temp_raw = str(best.get("temperature", "")).strip()
+        if temp_raw != "":
+            override["temperature"] = float(temp_raw)
+        shots_raw = str(best.get("shots", "")).strip()
+        if shots_raw != "":
+            override["shots"] = int(float(shots_raw))
+        effort = str(best.get("effort", "")).strip()
+        if effort:
+            override["effort"] = effort
+        return override
+    except Exception as e:  # noqa: BLE001 - never break generation on routing
+        logger.debug(f"Task routing evaluation failed, using baseline: {e}")
+        return None
+
+
+def _run_multishot(
+    *,
+    shots: int,
+    verifier: Optional[Callable[[str], bool]],
+    model_override: Optional[str],
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """Run llm_invoke up to ``shots`` times and select a winning candidate.
+
+    Each attempt is a standard single-shot invocation (``shots=1``,
+    ``task_class=None``) so all per-call guards apply unchanged. Selection: the
+    first candidate accepted by ``verifier`` wins; otherwise self-consistency
+    returns the mode of the result strings (ties broken by first occurrence).
+    Costs are summed across every attempt.
+    """
+    results: List[Dict[str, Any]] = []
+    total_cost = 0.0
+    for _ in range(shots):
+        token = _ROUTER_MODEL_OVERRIDE.set(model_override)
+        try:
+            attempt = llm_invoke(
+                shots=1,
+                verifier=None,
+                task_class=None,
+                **kwargs,
+            )
+        finally:
+            _ROUTER_MODEL_OVERRIDE.reset(token)
+        if not isinstance(attempt, dict):
+            continue
+        results.append(attempt)
+        try:
+            total_cost += float(attempt.get("cost", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            pass
+        if verifier is not None:
+            try:
+                if verifier(attempt.get("result")):
+                    winner = dict(attempt)
+                    winner["cost"] = total_cost
+                    return winner
+            except Exception as e:  # noqa: BLE001 - a bad verifier must not crash
+                logger.debug(f"Verifier raised on a candidate: {e}")
+    if not results:
+        raise RuntimeError("Multi-shot generation produced no candidates.")
+
+    def _key(r: Dict[str, Any]) -> str:
+        res = r.get("result")
+        return res if isinstance(res, str) else repr(res)
+
+    counts: Dict[str, int] = {}
+    order: List[str] = []
+    for r in results:
+        k = _key(r)
+        if k not in counts:
+            counts[k] = 0
+            order.append(k)
+        counts[k] += 1
+    # Highest count wins; among ties the earliest-seen result string wins.
+    best_key = max(order, key=lambda k: (counts[k], -order.index(k)))
+    winner = next(dict(r) for r in results if _key(r) == best_key)
+    winner["cost"] = total_cost
+    return winner
+
+
 def llm_invoke(
     prompt: Optional[str] = None,
     input_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
@@ -4004,6 +4320,9 @@ def llm_invoke(
     grounding_overrides: Optional[Dict[str, List[str]]] = None,
     source_prompt: Optional[str] = None,
     estimate_only: Optional[bool] = None,
+    shots: int = 1,
+    verifier: Optional[Callable[[str], bool]] = None,
+    task_class: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Runs a prompt with given input using LiteLLM, handling model selection,
@@ -4023,6 +4342,17 @@ def llm_invoke(
         messages: Pre-formatted list of messages (or list of lists for batch). If provided, ignores prompt and input_json.
         use_cloud: None=auto-detect (cloud if enabled, local if PDD_FORCE_LOCAL=1), True=force cloud, False=force local.
         estimate_only: If true, count the request and raise EstimateOnlyResult before provider calls.
+        shots: Number of candidate generations (default 1). When shots > 1 and
+            PDD_ENABLE_TASK_ROUTING=1, the multi-shot loop runs min(shots, 5)
+            generations. Mutually exclusive with use_batch_mode=True. Has no
+            effect when PDD_ENABLE_TASK_ROUTING is unset.
+        verifier: Optional callable (str) -> bool applied to each candidate. The
+            first candidate it accepts is returned immediately; otherwise the
+            mode (self-consistency) result is returned. None -> mode selection.
+        task_class: Optional PDD command name ("generate", "fix", "optimize",
+            "explain") used by the per-task router to look up the best
+            (model, temperature, effort, shots) row from task_routing.csv. Only
+            active when PDD_ENABLE_TASK_ROUTING=1; None skips the router.
 
     Returns:
         Dictionary containing 'result', 'cost', 'model_name', 'thinking_output'.
@@ -4080,6 +4410,62 @@ def llm_invoke(
             "Estimate mode supports one concrete llm_invoke call only; batch mode "
             "or list-of-message batches are outside this dry-run cost contract."
         )
+
+    # --- Per-task config router + multi-shot (issue #1584) ---
+    # Gated entirely behind PDD_ENABLE_TASK_ROUTING=1. When unset, shots/verifier/
+    # task_class have no effect and the function behaves exactly as before.
+    # The router's exact-model choice for THIS call arrives either from a matched
+    # route below or, inside a multi-shot recursion, via _ROUTER_MODEL_OVERRIDE.
+    model_override: Optional[str] = _ROUTER_MODEL_OVERRIDE.get()
+    if _env_truthy("PDD_ENABLE_TASK_ROUTING"):
+        if use_batch_mode and isinstance(shots, int) and shots > 1:
+            raise ValueError(
+                "Multi-shot generation (shots > 1) is mutually exclusive with "
+                "use_batch_mode=True."
+            )
+        # Apply the static router's overrides before model resolution.
+        route = _select_task_route(task_class)
+        if route:
+            if route.get("model"):
+                model_override = route["model"]
+            if "temperature" in route:
+                temperature = route["temperature"]
+            if "shots" in route:
+                shots = route["shots"]
+            routed_time = _effort_to_time(route.get("effort"))
+            if routed_time is not None:
+                time = routed_time
+        # Clamp and normalize the effective shot count (silent clamp; no raise).
+        try:
+            shots = int(shots)
+        except (TypeError, ValueError):
+            shots = 1
+        shots = max(1, min(shots, 5))
+        # Multi-shot: run the single-invocation flow N times, then select.
+        if shots > 1:
+            return _run_multishot(
+                shots=shots,
+                verifier=verifier,
+                model_override=model_override,
+                prompt=prompt,
+                input_json=input_json,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+                output_pydantic=output_pydantic,
+                output_schema=output_schema,
+                time=time,
+                use_batch_mode=use_batch_mode,
+                messages=messages,
+                language=language,
+                use_cloud=use_cloud,
+                grounding_overrides=grounding_overrides,
+                source_prompt=source_prompt,
+                estimate_only=estimate_only,
+            )
+    else:
+        # Guard inactive: shots/verifier/task_class are inert.
+        shots = 1
 
     resolved_grounding_overrides = resolve_grounding_overrides_for_invoke(
         grounding_overrides, source_prompt
@@ -4192,6 +4578,33 @@ def llm_invoke(
         """Append a model attempt and publish to Click context."""
         attempted_models.append(model_label)
         _publish_attempted_models()
+
+    def _publish_model_provenance(
+        *,
+        resolved_model: str = "",
+        outcome: str = "",
+        deepswe_manifest_date: str = "",
+    ) -> None:
+        """Best-effort: publish selected-model provenance for track_cost."""
+        try:
+            import click as _click
+            click_ctx = _click.get_current_context(silent=True)
+        except Exception:
+            click_ctx = None
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                if resolved_model:
+                    click_ctx.obj["resolved_model"] = str(resolved_model)
+                if outcome:
+                    click_ctx.obj["model_selection_outcome"] = str(outcome)
+                if deepswe_manifest_date:
+                    click_ctx.obj["deepswe_manifest_date"] = str(deepswe_manifest_date)
+        except Exception:
+            pass
 
     if use_cloud and not estimate_mode:
         from rich.console import Console
@@ -4321,7 +4734,41 @@ def llm_invoke(
                     _effective_default_model,
                     LLM_MODEL_CSV_PATH if LLM_MODEL_CSV_PATH else "package default",
                 )
-        candidate_models = _select_model_candidates(strength, _effective_default_model, model_df)
+        manifest_by_model = _load_deepswe_manifest()
+        # Router exact-model override (issue #1584): bypass the strength
+        # cascade and select the routed model directly when it exists.
+        if model_override:
+            _effective_default_model = model_override
+        candidate_models = _select_model_candidates(
+            strength,
+            _effective_default_model,
+            model_df,
+            manifest_by_model=manifest_by_model,
+        )
+        if model_override:
+            _exact = [
+                c for c in candidate_models
+                if str(c.get("model")) == str(model_override)
+            ]
+            if _exact:
+                candidate_models = _exact
+            else:
+                logger.debug(
+                    f"Router model {model_override!r} not in candidate set; "
+                    "falling back to the strength cascade."
+                )
+        try:
+            import click as _click_for_provenance
+            _ctx_for_provenance = _click_for_provenance.get_current_context(silent=True)
+            if _ctx_for_provenance is not None:
+                if _ctx_for_provenance.obj is None:
+                    _ctx_for_provenance.obj = {}
+                if isinstance(_ctx_for_provenance.obj, dict):
+                    _ctx_for_provenance.obj["requested_model"] = str(candidate_models[0].get("model", "")) if candidate_models else ""
+                    _ctx_for_provenance.obj["strength_used"] = str(strength)
+                    _ctx_for_provenance.obj["target_effort_level"] = candidate_models[0].get("target_effort_level") if candidate_models else None
+        except Exception:
+            pass
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
         _emit_llm_attribution(
@@ -5077,6 +5524,11 @@ def llm_invoke(
                             finish_reason=finish_reason,
                             call_type="responses",
                         )
+                        _publish_model_provenance(
+                            resolved_model=str(model_name_litellm),
+                            outcome="direct" if len(attempted_models) <= 1 else "fallback",
+                            deepswe_manifest_date=str(model_info.get("deepswe_manifest_date") or ""),
+                        )
                         return _with_local_grounding({
                             'result': final_result,
                             'cost': total_cost,
@@ -5744,6 +6196,11 @@ def llm_invoke(
                     output_tokens=_LAST_CALLBACK_DATA.get("output_tokens", 0),
                     finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
                     call_type=call_type_for_attribution,
+                )
+                _publish_model_provenance(
+                    resolved_model=str(model_name_litellm),
+                    outcome="direct" if len(attempted_models) <= 1 else "fallback",
+                    deepswe_manifest_date=str(model_info.get("deepswe_manifest_date") or ""),
                 )
                 return _with_local_grounding({
                     'result': final_result,
