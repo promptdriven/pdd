@@ -12,37 +12,30 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = ({ currentView, onViewChange }) => {
   const navButtonClasses = (view: View) => `
     px-3 py-2 rounded-md text-sm font-medium transition-colors
-    ${currentView === view
-      ? 'bg-brand-cyan text-brand-navy'
+    ${currentView === view 
+      ? 'bg-blue-600 text-white' 
       : 'text-gray-300 hover:bg-gray-700 hover:text-white'
     }
-    focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-brand-cyan
+    focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-blue-500
   `;
 
   return (
     <header className="bg-gray-900/80 backdrop-blur-sm sticky top-0 z-10 py-4 mb-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between">
-          <a
-            href="https://promptdriven.ai"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-3 flex-1 min-w-0 group"
-          >
-            <img
-              src="/logo.svg"
-              alt="PromptDriven.ai logo"
-              className="h-11 w-11 flex-shrink-0"
-            />
-            <div className="flex items-baseline gap-2.5 min-w-0">
-              <h1 className="font-sans font-semibold tracking-[0.01em] text-brand-sleet text-3xl sm:text-4xl group-hover:text-white transition-colors">
-                PromptDriven.ai
-              </h1>
-              <span className="font-mono font-medium uppercase tracking-[0.12em] text-brand-cyan text-[0.65rem] sm:text-xs">
-                Prompt Driven Development
-              </span>
-            </div>
-          </a>
+          <div className="flex-1">
+             <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">
+                Prompt Driven Development IDE
+            </h1>
+            <a 
+              href="https://promptdriven.ai" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="mt-1 text-base text-blue-400 hover:underline"
+            >
+              Regenerate, don't patch
+            </a>
+          </div>
           <nav className="flex items-center space-x-2 flex-shrink-0">
             <Tooltip content="View prompt dependency graph">
               <button onClick={() => onViewChange('dependencies')} className={navButtonClasses('dependencies')}>
