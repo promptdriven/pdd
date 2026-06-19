@@ -65,6 +65,8 @@ For non-interactive bounded prompt repair after a failed prompt source-set check
 
 For the deterministic prompt source-set quality gate and its `pdd.prompt_source_set_report.v1` JSON schema (including the per-finding `requires_clarification` / `clarification_reason` clarification signal), see [docs/checkup_prompt_quality_gate.md](docs/checkup_prompt_quality_gate.md).
 
+For the agentic CLI routing policy (task-class-keyed static config table and bounded escalation ladder for `run_agentic_task`), see [docs/routing_policy.md](docs/routing_policy.md).
+
 ## Installation
 
 ### Prerequisites for macOS
@@ -747,7 +749,7 @@ These options can be used with any command:
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
 - `--compress-examples`: Automatically apply `mode="interface"` to example includes (legacy; prefer `--context-compression examples`).
-- `--compress-test-context`: Compress test includes to failing tests only (legacy; prefer `--context-compression test`).
+- `--compress-test-context`: Rank and select tests under a configurable token budget (`PDD_TEST_TOKEN_BUDGET`, default 2 000 tokens) using import-graph distance, symbol overlap, failure recency, and file recency. Failing tests (from `PDD_FAILING_TESTS` or `.pytest_cache`) are always included first. A `TestPackingManifest` explaining selected and omitted tests is emitted in the run telemetry (legacy: prefer `--context-compression test`).
 - `--context-compression {off,test,examples,contracts,all}`: Set context compression for this CLI invocation (default: `off`). Must appear **before** the subcommand (e.g. `pdd --context-compression test generate ...`). `sync` and `fix` also accept the same flags after their subcommand.
 - `--compression-fallback {full,error}`: When compression or slicing fails, use full content (`full`, default) or abort (`error`). Global placement is the same as `--context-compression`.
 
@@ -894,6 +896,12 @@ The generated CSV file includes the following columns:
 - input_files: A list of input files involved in the operation
 - output_files: A list of output files generated or modified by the operation
 - attempted_models: Semicolon-delimited audit log of every model PDD attempted for the command, across all LLM calls the command made (e.g. `generate` runs code-generation followed by postprocess code extraction — both contribute). When PDD's default model fails and the run falls back to another provider (for example Vertex AI → DeepSeek), each attempted model appears here so users can see the full fallback history rather than only the final successful model. The `model` column above names the model that actually produced the command's output; `attempted_models` is the complete record of what was tried. For commands that catch a substep failure and recover with a different model, the list may contain entries that came AFTER the model named in `model` — those represent attempts that were tried but didn't produce the final output. For a single-attempt successful command this column contains just the successful model. Semicolons inside model names are sanitized to preserve the delimiter. **Ordering:** sequential (single-thread) command paths produce a list in wall-clock attempt order; concurrent paths (e.g. `auto-deps --concurrency > 1`, which fans summarization across worker threads) sort their per-file contributions by file-submission index — a deterministic alternative to wall-clock ordering, which would otherwise depend on thread-scheduler timing.
+- requested_model: The model name that was explicitly requested for this command (e.g. the value of `PDD_MODEL_DEFAULT` or the model argument), before provider resolution or fallback.
+- resolved_model: The actual model identity as observed after resolution, where observable. For agentic CLIs that do not expose their selected model, this field is empty.
+- model_selection_outcome: How the final model was determined. One of `direct` (the requested model was used without fallback), `fallback` (a fallback model was substituted), `fixed_by_config` (model is fixed by user config and cannot be controlled by PDD), or `unconfirmed` (model identity could not be observed).
+- strength_used: The strength value (0.0–1.0) passed to the LLM invocation for this command.
+- cli_version: The installed PDD version at the time the command ran (from `importlib.metadata`).
+- deepswe_manifest_date: The `retrieved_at` date of the DeepSWE manifest used for model ranking during this command. Empty if no manifest was loaded.
 
 This comprehensive output allows for detailed tracking of not only the cost and type of operations but also the specific files involved in each PDD command execution.
 
@@ -968,7 +976,7 @@ Options:
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
 - `--compress-examples`: Automatically apply `mode="interface"` to example files in the `<include>` graph for this sync operation.
-- `--compress-test-context`: Use AST-based slicing to include only failing tests and fixtures in the fix/test context.
+- `--compress-test-context`: Rank and select test files under `PDD_TEST_TOKEN_BUDGET` (default 2 000 tokens) for this sync operation. Failing tests are packed first; remaining candidates are ranked by import distance, symbol overlap, and recency. Emits a `TestPackingManifest` in telemetry.
 - `--context-compression {off,test,examples,contracts,all}`: Set a global compression mode for this sync operation (default: `off`). `test` and `examples` mirror the legacy flags; `contracts` extracts contract rules and metadata from prompts and documentation; `all` enables all compression modes.
 - `--compression-fallback {full,error}`: Strategy for when a file cannot be compressed (default: `full`).
 - `--durable`: Issue-sync only. Run each module in an isolated git worktree under `.pdd/worktrees/sync-issue-<N>-<module>/` and checkpoint successful module output to a dedicated durable branch worktree under `.pdd/worktrees/durable-issue-<N>/`. Default issue-sync behavior (shared parallel worktree) is unchanged unless this flag is passed.
@@ -3477,6 +3485,9 @@ PDD automatically detects the appropriate context based on:
 - `context_compression`: Compression mode string controlling which file types are compressed in sync context packages. Accepted values: `"test"` (compress test files), `"examples"` (compress example files), `"contracts"` (compress prompt/contract files), `"all"` (all of the above). Set to `"off"` to disable all compression and clear all compression env keys, overriding `compressed_context` and the sub-settings below. Maps to the `PDD_CONTEXT_COMPRESSION` environment variable.
 - `compress_examples`: Whether to include examples in compressed context packages (default: `false`). When `true`, example files are compressed and included in phase packages passed to generation and repair steps. Maps to the `PDD_COMPRESS_EXAMPLES` environment variable.
 - `compress_test_context`: Whether to compress test context in compressed phase packages (default: `false`). When `true`, existing test files are compressed and included in phase packages. Maps to the `PDD_COMPRESS_TEST_CONTEXT` environment variable.
+- `test_token_budget`: Token cap for ranked test context selection in this context (default: `2000`). Maps to the `PDD_TEST_TOKEN_BUDGET` environment variable.
+- `test_ranking_weights`: JSON object overriding the four `TestContextPacker` ranking weights for this context. Maps to `PDD_TEST_RANKING_WEIGHTS`.
+- `test_dedup_threshold`: Jaccard similarity threshold for near-duplicate test file deduplication (default: `0.8`). Maps to `PDD_TEST_DEDUP_THRESHOLD`.
 - `compression_fallback`: Fallback behavior when compressed context is unavailable or compression fails (default: `"full"`). The value `"full"` falls back to the full (uncompressed) context. Maps to the `PDD_COMPRESSION_FALLBACK` environment variable.
 
 **Path Behavior**:
@@ -3522,6 +3533,7 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_AGENTIC_PROVIDER`**: Comma-separated provider preference for agentic workflows. Supported tokens are `anthropic`, `google`, `openai`, `opencode`, and `antigravity` (for example, `PDD_AGENTIC_PROVIDER=opencode,anthropic`). `antigravity` is an alias for the Google provider that additionally pins binary selection to `agy` — equivalent to `PDD_AGENTIC_PROVIDER=google` plus `PDD_GOOGLE_CLI=agy`, and overrides any prior `PDD_GOOGLE_CLI=gemini` rollback setting.
 - **`PDD_CLAUDE_CODE_MODE`**: Set to `interactive` to make the Anthropic agentic provider use interactive Claude Code through a temporary MCP reply tool instead of `claude -p`. This is an opt-in workaround for environments where `claude -p` uses a separate Agent SDK credit pool; when unset, PDD keeps the existing `claude -p - --output-format json` behavior.
 - **`PDD_GOOGLE_CLI`**: Selects the Google-provider binary. Values: `agy` (Antigravity CLI), `gemini` (legacy Gemini CLI as rollback), or `auto` (default — prefer `agy` when installed and credentialed, but use legacy `gemini` when both binaries are installed and the only Google auth signal is `~/.gemini/oauth_creds.json`). Used by both availability detection and command construction so they cannot disagree.
+- **`PDD_ROUTING_POLICY`**: Path to a YAML file that overrides the built-in agentic routing policy used by `run_agentic_task`. When set, `routing_policy.load_policy()` loads task-class rows from this file and merges them with the built-in defaults; absent keys fall back to defaults. Unset by default. See [docs/routing_policy.md](docs/routing_policy.md) for the schema.
 - **`PDD_USER_FEEDBACK`**: Inject user feedback from GitHub issue comments into agentic task instructions. Set by the GitHub App executor to pass feedback from previous execution attempts. No default.
 - **`PDD_STEER_JSON`**: JSON list of mid-run user steers (`comment_id`, `author`, `body`). Cloud runners pass pending issue comments before GitHub comment polling; orchestrators drain at step boundaries and inject `## Steered user input (mid-run)` into the next agentic step.
 - **`PDD_WORKFLOW_STATE`**: Hidden GitHub comment marker used to persist and resume agentic workflow state across machines. Users normally do not set this directly; delete the state comment only when intentionally forcing a clean restart.
@@ -3538,6 +3550,9 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
 - **`PDD_TEST_OUTPUT_PATH`**: Default path for the unit test file.
 - **`PDD_TEST_COVERAGE_TARGET`**: Default target coverage percentage.
+- **`PDD_TEST_TOKEN_BUDGET`**: Token cap for ranked test context selection (default: `2000`). Set to `0` to disable test context entirely. Used by `TestContextPacker` when `--context-compression test` is active.
+- **`PDD_TEST_RANKING_WEIGHTS`**: JSON string overriding the four ranking weights used by `TestContextPacker`. Default: `{"import_distance":0.4,"symbol_overlap":0.3,"failure_recency":0.2,"file_recency":0.1}`.
+- **`PDD_TEST_DEDUP_THRESHOLD`**: Jaccard similarity threshold (0–1) above which two candidate test files are treated as near-duplicates; only the higher-scoring one is retained (default: `0.8`).
 - **`PDD_PREPROCESS_OUTPUT_PATH`**: Default path for the `preprocess` command.
 - **`PDD_FIX_TEST_OUTPUT_PATH`**: Default path for the fixed unit test files in the `fix` command.
 - **`PDD_FIX_CODE_OUTPUT_PATH`**: Default path for the fixed code files in the `fix` command.
