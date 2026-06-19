@@ -2959,6 +2959,11 @@ def _run_agentic_checkup_orchestrator_inner(
         #       describing build/test/verify results from the OLD SHA
         #       would otherwise be silently replayed against new code
         #       (codex round-1 blocker #1).
+        #   (e) pr_test_scope — full and targeted runs have different Step 5
+        #       and Step 7 semantics. Reusing a full-scope cache in a later
+        #       targeted final-gate run can re-block out-of-scope baseline
+        #       criticals that targeted mode is supposed to treat as
+        #       informational (issue #1574 staging reproduction).
         # Any mismatch carries stale step outputs and a stale
         # `.pdd/worktrees/checkup-pr-A` path into a verification of PR B,
         # silently running all subsequent steps against the wrong code.
@@ -3011,6 +3016,12 @@ def _run_agentic_checkup_orchestrator_inner(
                     f"pr_head_sha "
                     f"(cached={cached_pr_head_sha[:8] or '<empty>'}, "
                     f"current={current_pr_head_sha[:8] or '<empty>'})"
+                )
+            cached_pr_test_scope = str(state.get("pr_test_scope") or "full")
+            if cached_pr_test_scope != pr_test_scope:
+                identity_mismatch_reasons.append(
+                    f"pr_test_scope "
+                    f"(cached={cached_pr_test_scope}, current={pr_test_scope})"
                 )
         if identity_mismatch_reasons:
             if not quiet:
@@ -3214,6 +3225,7 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_owner=pr_owner,
             pr_repo=pr_repo,
             pr_head_sha=current_pr_head_sha if pr_mode else None,
+            pr_test_scope=pr_test_scope if pr_mode else None,
             step_comments=sorted(step_comments_set),
         )
         for _steer_key in STEER_STATE_KEYS:
@@ -5504,6 +5516,7 @@ def _build_state(
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
     pr_head_sha: Optional[str] = None,
+    pr_test_scope: Optional[str] = None,
     step_comments: Optional[List[int]] = None,
 ) -> Dict:
     """Build a serialisable state dict for persistence.
@@ -5521,6 +5534,10 @@ def _build_state(
     checkup_orchestrator`` invalidates the cache when this differs from
     the fresh remote head SHA so a maintainer push to the PR branch
     cannot leave stale build/test/verify outputs in place.
+
+    ``pr_test_scope`` records whether the PR run used full or targeted
+    checkup semantics. Scope is part of the cache identity because Step 5
+    test selection and Step 7 critical-blocking rules differ by scope.
     """
     return {
         "workflow": "checkup",
@@ -5540,5 +5557,6 @@ def _build_state(
         "pr_owner": pr_owner,
         "pr_repo": pr_repo,
         "pr_head_sha": pr_head_sha,
+        "pr_test_scope": pr_test_scope,
         "step_comments": list(step_comments) if step_comments else [],
     }
