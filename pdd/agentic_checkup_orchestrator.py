@@ -904,17 +904,67 @@ def _normalise_step7_path(value: Any) -> str:
 
 
 def _step7_nonblocking_reason(issue: Dict[str, Any]) -> str:
-    """Return Step 7's structured reason for treating a critical as non-blocking."""
+    """Return Step 7's *explicit* non-blocking reason for a critical, if any.
+
+    Only reason fields whose key explicitly declares a non-blocking intent are
+    honored. A generic ``reason`` field is ordinary explanatory text that the
+    verifier attaches to most findings (including PR-introduced criticals), so
+    it must NOT be treated as a non-blocking signal — doing so would let an
+    in-scope PR critical (e.g. ``scope: "pr-diff"`` with
+    ``reason: "introduced token leak"``) bypass the gate (issue #1574 review).
+    """
     for key in (
         "non_blocking_reason",
         "out_of_scope_reason",
         "scope_reason",
-        "reason",
     ):
         value = issue.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _step7_finding_in_pr_diff(
+    issue: Dict[str, Any], changed_files: List[str]
+) -> bool:
+    """Return True when the finding's file overlaps the PR diff.
+
+    Ground-truth signal: the verifier's own ``changed_files`` list. A critical
+    whose ``file`` equals, contains, or sits under a changed file is PR-scoped
+    and must block regardless of any ``blocking: false`` flag — a self-reported
+    non-blocking flag cannot be trusted to wave through a PR-introduced critical
+    (issue #1574 review). The ``file`` comparison counts exact matches and
+    directory-prefix containment in either direction.
+
+    The ``module`` label is matched only on an EXACT changed-path hit, never by
+    directory-prefix containment. A module is a coarse package/area name, not a
+    precise diff locator: a changed file that merely lives *under* the module
+    directory (e.g. ``frontend/README.md`` for ``module: "frontend"``) must not
+    override an explicit out-of-scope tag and re-block a pre-existing baseline
+    critical the PR neither introduced nor can fix (issue #1574 review
+    follow-up).
+    """
+    changed = [
+        _normalise_step7_path(path)
+        for path in (changed_files or [])
+        if _normalise_step7_path(path)
+    ]
+    if not changed:
+        return False
+    file_cand = _normalise_step7_path(issue.get("file"))
+    module_cand = _normalise_step7_path(issue.get("module"))
+    for changed_file in changed:
+        if file_cand:
+            if file_cand == changed_file:
+                return True
+            if changed_file.startswith(file_cand + "/") or file_cand.startswith(
+                changed_file + "/"
+            ):
+                return True
+        # Coarse module label: exact path match only, no prefix containment.
+        if module_cand and module_cand == changed_file:
+            return True
+    return False
 
 
 def _step7_unfixed_critical_blocks_targeted_pr(
@@ -923,16 +973,33 @@ def _step7_unfixed_critical_blocks_targeted_pr(
     changed_files: List[str],
     payload_message: str,
 ) -> bool:
-    """Decide whether an unfixed critical Step 7 finding blocks targeted PR mode."""
-    del changed_files, payload_message
-    reason = _step7_nonblocking_reason(issue)
-    blocking = issue.get("blocking")
-    if blocking is False and reason:
-        return False
+    """Decide whether an unfixed critical blocks a **targeted** PR run.
 
-    in_scope = issue.get("in_scope")
-    if in_scope is False and reason:
-        return False
+    This carveout exists only for targeted PR verification (issue #1574): a
+    targeted run tests the PR diff, not the whole suite, so it can surface a
+    pre-existing, project-wide baseline critical that the PR neither introduced
+    nor can fix. Full PR mode is the comprehensive gate and does NOT use this
+    helper — there every unfixed critical blocks.
+
+    An unfixed critical blocks by default. It is waved through only when it
+    carries a **positive out-of-scope signal**:
+
+    * a non-blocking ``scope``/``verification_scope``/``pr_scope`` value
+      (``out-of-scope``, ``baseline``, ``project-wide`` …), or
+    * ``in_scope: false``, or
+    * an explicitly non-blocking ``*_reason`` field (a generic ``reason`` is
+      not a signal).
+
+    A bare ``blocking: false`` is NOT sufficient on its own (issue #1574
+    review): it is a self-reported severity/blocking downgrade, not a claim
+    about PR scope, so trusting it alone would fail **open** on a real
+    PR-introduced critical the verifier merely tagged non-blocking.
+
+    Regardless of any signal, the gate fails **closed** when the finding is
+    PR-scoped: its ``scope`` is a PR/in-scope value, or its file overlaps
+    ``changed_files`` (see ``_step7_finding_in_pr_diff``).
+    """
+    del payload_message
 
     scope = str(
         issue.get("scope")
@@ -940,6 +1007,27 @@ def _step7_unfixed_critical_blocks_targeted_pr(
         or issue.get("pr_scope")
         or ""
     ).strip().lower().replace("_", "-")
+
+    # Fail closed: a PR-scoped critical always blocks, regardless of any
+    # non-blocking flag — either the verifier tagged it with a PR/in-scope
+    # ``scope`` value, or its file overlaps the PR diff.
+    pr_in_scope_scopes = {
+        "pr",
+        "pr-diff",
+        "pr-scope",
+        "changed-file",
+        "changed-files",
+        "in-scope",
+        "blocking",
+    }
+    if scope in pr_in_scope_scopes:
+        return True
+    if _step7_finding_in_pr_diff(issue, changed_files):
+        return True
+
+    # Out-of-PR-scope critical: a positive out-of-scope signal waves it through.
+    # ``blocking: false`` is intentionally NOT in this set — it is corroboration
+    # only, never authoritative on its own.
     explicit_nonblocking_scopes = {
         "out-of-scope",
         "outside-pr",
@@ -952,11 +1040,14 @@ def _step7_unfixed_critical_blocks_targeted_pr(
         "repository",
         "global",
     }
-    if scope in explicit_nonblocking_scopes and reason:
+    if issue.get("in_scope") is False:
         return False
-    if scope in {"pr", "pr-diff", "changed-file", "changed-files", "in-scope", "blocking"}:
-        return True
+    if scope in explicit_nonblocking_scopes:
+        return False
+    if _step7_nonblocking_reason(issue):
+        return False
 
+    # Default: an unfixed critical with no out-of-scope signal blocks.
     return True
 
 
@@ -988,9 +1079,11 @@ def _step7_passed(
       ``True``; with no issue (#1292) the alignment gate is dropped and the
       verdict rests on code findings alone (review the PR on its own merits);
     * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
-      In targeted PR mode, unfixed critical findings outside the PR diff are
-      informational because the full-suite truth comes from the GitHub checks
-      gate.
+      In **targeted** PR mode only, an unfixed critical carrying a positive
+      out-of-scope signal (non-blocking ``scope``, ``in_scope: false``, or an
+      explicit non-blocking ``*_reason``) and not touching the PR diff is
+      informational (issue #1574). Full PR mode is the comprehensive gate: every
+      unfixed critical blocks.
 
     Fails closed: if no JSON object can be extracted, returns
     ``(False, "Step 7 verdict JSON could not be parsed: ...")`` so the
@@ -2866,6 +2959,11 @@ def _run_agentic_checkup_orchestrator_inner(
         #       describing build/test/verify results from the OLD SHA
         #       would otherwise be silently replayed against new code
         #       (codex round-1 blocker #1).
+        #   (e) pr_test_scope — full and targeted runs have different Step 5
+        #       and Step 7 semantics. Reusing a full-scope cache in a later
+        #       targeted final-gate run can re-block out-of-scope baseline
+        #       criticals that targeted mode is supposed to treat as
+        #       informational (issue #1574 staging reproduction).
         # Any mismatch carries stale step outputs and a stale
         # `.pdd/worktrees/checkup-pr-A` path into a verification of PR B,
         # silently running all subsequent steps against the wrong code.
@@ -2918,6 +3016,12 @@ def _run_agentic_checkup_orchestrator_inner(
                     f"pr_head_sha "
                     f"(cached={cached_pr_head_sha[:8] or '<empty>'}, "
                     f"current={current_pr_head_sha[:8] or '<empty>'})"
+                )
+            cached_pr_test_scope = str(state.get("pr_test_scope") or "full")
+            if cached_pr_test_scope != pr_test_scope:
+                identity_mismatch_reasons.append(
+                    f"pr_test_scope "
+                    f"(cached={cached_pr_test_scope}, current={pr_test_scope})"
                 )
         if identity_mismatch_reasons:
             if not quiet:
@@ -3121,6 +3225,7 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_owner=pr_owner,
             pr_repo=pr_repo,
             pr_head_sha=current_pr_head_sha if pr_mode else None,
+            pr_test_scope=pr_test_scope if pr_mode else None,
             step_comments=sorted(step_comments_set),
         )
         for _steer_key in STEER_STATE_KEYS:
@@ -5411,6 +5516,7 @@ def _build_state(
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
     pr_head_sha: Optional[str] = None,
+    pr_test_scope: Optional[str] = None,
     step_comments: Optional[List[int]] = None,
 ) -> Dict:
     """Build a serialisable state dict for persistence.
@@ -5428,6 +5534,10 @@ def _build_state(
     checkup_orchestrator`` invalidates the cache when this differs from
     the fresh remote head SHA so a maintainer push to the PR branch
     cannot leave stale build/test/verify outputs in place.
+
+    ``pr_test_scope`` records whether the PR run used full or targeted
+    checkup semantics. Scope is part of the cache identity because Step 5
+    test selection and Step 7 critical-blocking rules differ by scope.
     """
     return {
         "workflow": "checkup",
@@ -5447,5 +5557,6 @@ def _build_state(
         "pr_owner": pr_owner,
         "pr_repo": pr_repo,
         "pr_head_sha": pr_head_sha,
+        "pr_test_scope": pr_test_scope,
         "step_comments": list(step_comments) if step_comments else [],
     }

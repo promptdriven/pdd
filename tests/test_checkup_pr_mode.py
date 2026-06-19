@@ -1150,6 +1150,120 @@ class TestStateIdentityPrHeadSha:
         )
         assert s["pr_head_sha"] == "deadbeef"
 
+    def test_build_state_records_pr_test_scope(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _build_state
+
+        s = _build_state(
+            issue_number=42, issue_url="u", last_completed_step=3,
+            step_outputs={}, total_cost=0.0, model_used="m", github_comment_id=None,
+            mode="pr", pr_number=99, pr_owner="acme", pr_repo="thing",
+            pr_head_sha="deadbeef", pr_test_scope="targeted",
+        )
+        assert s["pr_test_scope"] == "targeted"
+
+    def test_resume_discards_cache_when_pr_test_scope_changes(
+        self, tmp_path: Path
+    ) -> None:
+        """Cached full-scope PR outputs must not feed a targeted rerun.
+
+        The PR head may be unchanged while the operator switches from
+        ``--test-scope full``/local evidence to ``--test-scope targeted`` with
+        GitHub checks as the full-suite source. Step 5 selection and Step 7's
+        out-of-scope critical carveout differ by scope, so the cached full
+        outputs must be discarded even when PR identity and SHA match.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        saved_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": "aaaaaaaa",
+            "pr_test_scope": "full",
+            "last_completed_step": 5,
+            "worktree_path": str(tmp_path / "wt"),
+            "step_outputs": {
+                "1": "cached-full-1",
+                "2": "cached-full-2",
+                "3": "cached-full-3",
+                "4": "cached-full-4",
+                "5": "cached-full-5",
+            },
+            "total_cost": 0.0,
+            "model_used": "fake",
+            "fix_verify_iteration": 0,
+            "previous_fixes": "",
+        }
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        executed_steps: list = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            executed_steps.append(step_num)
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(saved_state, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "aaaaaaaa",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "No changes to push."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa",
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+                test_scope="targeted",
+            )
+
+        assert success is True, msg
+        assert 1 in executed_steps, (
+            f"Step 1 must re-run when PR test scope changes; ran: {executed_steps}"
+        )
+        assert 5 in executed_steps, (
+            f"Step 5 must re-run when PR test scope changes; ran: {executed_steps}"
+        )
+
     def test_resume_discards_cache_when_pr_head_sha_advanced(
         self, tmp_path: Path
     ) -> None:
@@ -2489,6 +2603,78 @@ class TestStep7PassedHelper:
         out = _step7_output(success=True, issue_aligned=True)
         passed, _reason = _step7_passed(out, pr_mode=True)
         assert passed is True
+
+    # --- issue #1574: targeted-PR out-of-scope / non-blocking criticals -------
+
+    def test_targeted_pr_out_of_scope_critical_flags_only_does_not_block(self) -> None:
+        # A pre-existing, out-of-scope, non-blocking critical carrying ONLY the
+        # structured flags (no free-text *_reason) must not fail a targeted PR.
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "frontend",
+                 "description": "TS18003: frontend/src/ missing (pre-existing).",
+                 "scope": "out-of-scope", "blocking": False},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
+        assert passed is True, reason
+
+    def test_targeted_pr_blocking_false_flag_alone_still_blocks(self) -> None:
+        # A bare ``blocking: false`` is a self-reported severity downgrade, not
+        # an out-of-scope claim, so it must NOT wave through an unfixed critical
+        # on its own (#1574 review, fail-closed).
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "app",
+                 "description": "pre-existing build break", "blocking": False},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
+        assert passed is False
+        assert "unfixed critical" in reason
+
+    def test_targeted_pr_in_scope_blocking_critical_still_blocks(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "auth",
+                 "description": "PR introduces token leak", "scope": "pr-diff",
+                 "blocking": True},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="targeted")
+        assert passed is False
+        assert "unfixed critical" in reason
+
+    def test_full_scope_out_of_scope_critical_still_blocks(self) -> None:
+        # Full PR mode is the comprehensive gate: the #1574 carveout is scoped to
+        # targeted runs, so even an explicitly out-of-scope / ``blocking: false``
+        # critical blocks under a full-suite attempt.
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False, "module": "frontend",
+                 "description": "build break", "scope": "out-of-scope",
+                 "blocking": False},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True, pr_test_scope="full")
+        assert passed is False
+        assert "unfixed critical" in reason
 
 
 def _run_orch_with_fake_step7(
