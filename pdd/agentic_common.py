@@ -7391,8 +7391,14 @@ def _extract_step_report(text: Optional[str]) -> Optional[str]:
     return matches[-1].strip()
 
 
-# Public alias for orchestrator callers; same semantics as ``_extract_step_report``.
-extract_step_report = _extract_step_report
+def extract_step_report(text: Optional[str]) -> Optional[str]:
+    """Public wrapper for orchestrator callers; same semantics as ``_extract_step_report``.
+
+    A real ``def`` (not an ``extract_step_report = _extract_step_report`` alias) so
+    the ``<pdd-interface>`` / architecture.json conformance verifier — which resolves
+    declared symbols only via ``FunctionDef`` nodes — sees the declared public symbol.
+    """
+    return _extract_step_report(text)
 
 
 def normalize_step_comments_state(raw: Any) -> Set[int]:
