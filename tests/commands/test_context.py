@@ -594,3 +594,146 @@ def test_default_model_honors_pdd_model_default_env(runner, prompt_with_include,
     monkeypatch.setattr(ca_module, "get_context_limit", lambda model: 1000)
     result = runner.invoke(context, [str(prompt_with_include), "--json"], obj={})
     assert json.loads(result.output)["model"] == "claude-sonnet-4-6"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #1634: _color_enabled precedence unit tests (EPIC #1540, workstream 4) #
+# --------------------------------------------------------------------------- #
+
+from unittest.mock import MagicMock as _MagicMock
+
+
+def _color_enabled_fn():
+    """Return the real _color_enabled function from pdd.commands.context."""
+    return cx_module._color_enabled
+
+
+def test_color_enabled_explicit_true_wins_over_no_color_env(monkeypatch):
+    """An explicit preference=True overrides NO_COLOR env — local flag always wins."""
+    monkeypatch.setenv("NO_COLOR", "1")
+    stream = _MagicMock()
+    stream.isatty.return_value = False
+    assert _color_enabled_fn()(True, stream) is True
+
+
+def test_color_enabled_explicit_false_wins_over_isatty_true(monkeypatch):
+    """An explicit preference=False overrides a TTY stream — local flag always wins."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    stream = _MagicMock()
+    stream.isatty.return_value = True
+    assert _color_enabled_fn()(False, stream) is False
+
+
+def test_color_enabled_no_color_env_disables_auto_detect(monkeypatch):
+    """When preference is None and NO_COLOR is set (any value), auto-detect returns False."""
+    monkeypatch.setenv("NO_COLOR", "")  # empty string still triggers the spec
+    stream = _MagicMock()
+    stream.isatty.return_value = True  # would otherwise return True
+    assert _color_enabled_fn()(None, stream) is False
+
+
+def test_color_enabled_isatty_true_enables_auto_detect(monkeypatch):
+    """When preference is None and NO_COLOR absent, a TTY stream yields True."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    stream = _MagicMock()
+    stream.isatty.return_value = True
+    assert _color_enabled_fn()(None, stream) is True
+
+
+def test_color_enabled_isatty_false_disables_auto_detect(monkeypatch):
+    """When preference is None and NO_COLOR absent, a non-TTY stream yields False."""
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    stream = _MagicMock()
+    stream.isatty.return_value = False
+    assert _color_enabled_fn()(None, stream) is False
+
+
+# --------------------------------------------------------------------------- #
+# Issue #1634: pdd context local flag overrides global; JSON byte-stability    #
+# --------------------------------------------------------------------------- #
+
+
+def test_context_local_no_color_overrides_global_color(runner, prompt_with_include, patched_tokens):
+    """Precedence: command-local --no-color wins over global ctx.obj['color']=True.
+
+    Passing color=True in ctx.obj simulates the effect of ``pdd --color context …``.
+    The command-local ``--no-color`` flag must then suppress color (no ANSI in output).
+    """
+    # Run with local --no-color while the global obj says color=True.
+    result = runner.invoke(
+        context,
+        [str(prompt_with_include), "--no-color"],
+        obj={"color": True},
+    )
+    assert result.exit_code == 0, result.output
+    # No ANSI escape sequences in the output.
+    assert "\x1b[" not in result.output
+
+
+def test_context_local_color_overrides_global_no_color(runner, prompt_with_include, patched_tokens):
+    """Precedence: command-local --color wins over global ctx.obj['color']=False.
+
+    The local --color flag forces color even when the global preference is off.
+    We cannot assert on ANSI sequences in CliRunner output (which is not a TTY),
+    but we can assert the command completes successfully and that the output
+    contains the expected usage-box content (not a color-failure artifact).
+    """
+    result = runner.invoke(
+        context,
+        [str(prompt_with_include), "--color"],
+        obj={"color": False},
+    )
+    assert result.exit_code == 0, result.output
+    # The usage box content must be present regardless of the color path taken.
+    assert "Context Usage" in result.output
+
+
+def test_context_json_stays_plain_under_color_flag(runner, prompt_with_include, patched_tokens):
+    """JSON output must be byte-stable and ANSI-free even with --color (EPIC #1540).
+
+    Machine-readable output (used by CI pipelines / agents) must never be
+    colored, regardless of the CLI color flag.
+    """
+    result = runner.invoke(
+        context,
+        [str(prompt_with_include), "--json", "--color"],
+        obj={},
+    )
+    assert result.exit_code == 0, result.output
+    # Must parse as valid JSON (no ANSI contamination).
+    payload = json.loads(result.output)
+    assert "total_tokens" in payload
+    # No ANSI escape sequences in the raw output.
+    assert "\x1b[" not in result.output
+
+
+def test_context_json_stays_plain_under_no_color_flag(runner, prompt_with_include, patched_tokens):
+    """JSON output is unaffected by --no-color (already plain) — byte-stable contract."""
+    result = runner.invoke(
+        context,
+        [str(prompt_with_include), "--json", "--no-color"],
+        obj={},
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert "total_tokens" in payload
+    assert "\x1b[" not in result.output
+
+
+def test_table_flag_required_for_table_view(runner, prompt_with_include, patched_tokens):
+    """CH1 (negative guard): the raw attribution table ('% of total') must NOT appear
+    in the default output — only ``--table`` unlocks it.
+
+    The default invocation must show the usage box and *not* the table header, while
+    passing ``--table`` makes the header appear. This guards both sides of the
+    mutually-exclusive output modes in a single focused test.
+    """
+    # Default: usage box — no raw attribution table header.
+    result = runner.invoke(context, [str(prompt_with_include)], obj={})
+    assert result.exit_code == 0, result.output
+    assert "% of total" not in result.output
+
+    # With --table: raw attribution table is shown.
+    result_table = runner.invoke(context, [str(prompt_with_include), "--table"], obj={})
+    assert result_table.exit_code == 0, result_table.output
+    assert "% of total" in result_table.output
