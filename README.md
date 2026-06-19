@@ -739,6 +739,7 @@ These options can be used with any command:
 - `--temperature FLOAT`: Set the temperature of the AI model (default is 0.0).
 - `--verbose`: Increase output verbosity for more detailed information. Includes token count and context window usage for each LLM call.
 - `--quiet`: Decrease output verbosity for minimal information.
+- `--color / --no-color`: Force or disable colored output across **all** commands. Default is auto: color is on when writing to a TTY and off when piped or when `NO_COLOR` is set. `--no-color` disables color everywhere; `--color` forces it on even through a pipe (e.g. `pdd --color sync | less -R`). The flag sets `NO_COLOR`/`FORCE_COLOR` for the run, so every console PDD builds inherits the choice. For `pdd context`, which has its own `--color/--no-color`, precedence is: the command's own flag wins, otherwise the global flag, otherwise auto-detect.
 - `--output-cost PATH_TO_CSV_FILE`: Enable cost tracking and output a CSV file with usage details.
 - `--estimate`, `--dry-run-cost`: Preview the LLM token and rough cost estimate for `pdd generate` without calling a provider, writing command outputs, or appending cost CSV rows.
 - `--estimate-json`: Emit the estimate result as machine-readable JSON instead of the human-readable table.
@@ -1002,15 +1003,17 @@ pdd --force sync --durable --no-resume \
 The dedicated durable-branch worktree path is keyed on the issue number (`.pdd/worktrees/durable-issue-<N>/`), not the branch name. A given issue's first durable run claims that path for whichever branch it picked (default `sync/issue-<N>` or an explicit `--durable-branch`). To switch a later run for the **same issue** to a different durable branch, remove the existing worktree first (`git worktree remove .pdd/worktrees/durable-issue-<N>`) before re-invoking with the new `--durable-branch`. Different issue numbers do not collide.
 
 **Real-time Progress Animation**:
-The sync command provides live visual feedback showing:
-- Current operation being executed (auto-deps, generate, example, crash, verify, test, fix, update)
+The sync command provides live visual feedback modeled on the real execution pipeline — **Entry → Inspect → Plan → Execute → Output** — rendered at a fixed height so the display never jumps as it advances:
+- An execute-step strip that spells out the full command names being run (`auto-deps`, `generate`, `example`, `verify`, `test`, `fix`, `update`), marking each step as it completes. The strip adapts to the terminal width: full names at wide widths, tighter separators as it narrows, and a rotating marquee at very narrow widths.
 - File status indicators with color coding:
   - Green: File exists and up-to-date
   - Yellow: File being processed
   - Red: File has errors or missing
   - Blue: File analysis in progress
 - Running cost totals and time elapsed
-- Progress through the workflow steps
+- Progress through the pipeline stages
+
+Color in the animation (and all other CLI output) follows the global `--color / --no-color` preference and `NO_COLOR`; see [Global Options](#global-options).
 
 **Language Detection**:
 The sync command automatically detects the programming language by scanning for existing development prompt files for the requested basename. In classic layouts this is typically `{basename}_{language}.prompt`; in architecture-driven layouts it can also resolve nested prompt paths whose filenames mirror the target output path. For example:

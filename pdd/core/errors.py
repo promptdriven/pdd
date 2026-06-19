@@ -3,7 +3,7 @@ Error handling logic for PDD CLI.
 """
 import os
 import traceback
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 import click
 from rich.console import Console
 from rich.markup import MarkupError, escape
@@ -17,16 +17,88 @@ except ImportError:
         return None
 
 # --- Initialize Rich Console ---
-# Define a custom theme for consistent styling
-custom_theme = Theme({
-    "info": "cyan",
-    "warning": "yellow",
-    "error": "bold red",
-    "success": "green",
-    "path": "dim blue",
-    "command": "bold magenta",
-})
+# Brand color is the single source of truth (EPIC #1540, workstream 1). The
+# shared console renders every semantic role from the central palette in
+# ``pdd.cli_theme`` so the enhanced color system is the *default* across the
+# whole CLI — every existing ``[command]``/``[success]``/``[error]`` markup now
+# resolves to the brand palette instead of an ad-hoc per-module theme. The role
+# names below are a superset of the historical ones (``info``/``warning``/
+# ``error``/``success``/``path``/``command``), so existing call sites keep
+# working unchanged.
+from ..cli_theme import SEMANTIC_STYLES, apply_global_color_preference
+
+custom_theme = Theme(SEMANTIC_STYLES)
 console = Console(theme=custom_theme)
+
+
+def _set_console_color(con: Console, enabled: bool) -> None:
+    """Force or disable color on an already-constructed Rich console.
+
+    Color is cosmetic, so any failure poking Rich internals is swallowed rather
+    than allowed to break a command.
+    """
+    try:
+        if enabled:
+            con.no_color = False
+            con._force_terminal = True  # render color even when piped / non-TTY
+            if getattr(con, "_color_system", None) is None:
+                from rich.color import ColorSystem
+                truecolor = os.environ.get("COLORTERM", "").strip().lower() in (
+                    "truecolor",
+                    "24bit",
+                )
+                con._color_system = (
+                    ColorSystem.TRUECOLOR if truecolor else ColorSystem.EIGHT_BIT
+                )
+        else:
+            con.no_color = True
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+
+def apply_color_preference(preference: Optional[bool]) -> Callable[[], None]:
+    """Apply the global ``--color`` / ``--no-color`` preference for this run.
+
+    ``preference`` is ``True`` (force color even when piped), ``False`` (disable
+    color everywhere), or ``None`` (auto: color on a TTY, off when piped or when
+    ``NO_COLOR`` is set — the default, so omitting the flag changes nothing).
+
+    The choice is wired two ways so it reaches every surface:
+
+    * The ``NO_COLOR`` / ``FORCE_COLOR`` environment variables are set for
+      non-Rich surfaces and subprocesses that honor the conventional flags.
+    * ``pdd.cli_theme`` translates the active preference into Rich constructor
+      arguments and maintains a registry of Rich consoles, so consoles created
+      before and after this callback are updated consistently.
+
+    Returns a cleanup callback that restores the pre-invocation environment and
+    Rich console state. That keeps ``--color`` / ``--no-color`` scoped to a
+    single CLI invocation even when tests, servers, or other callers run the CLI
+    repeatedly in one Python process.
+    """
+    if preference is None:
+        return lambda: None
+
+    saved_env = {key: os.environ.get(key) for key in ("NO_COLOR", "FORCE_COLOR")}
+
+    if preference:
+        os.environ.pop("NO_COLOR", None)
+        os.environ["FORCE_COLOR"] = "1"
+    else:
+        os.environ.pop("FORCE_COLOR", None)
+        os.environ["NO_COLOR"] = "1"
+
+    restore_consoles = apply_global_color_preference(preference)
+
+    def restore() -> None:
+        for key, value in saved_env.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+        restore_consoles()
+
+    return restore
 
 # Buffer to collect errors for optional core dumps
 _core_dump_errors: List[Dict[str, Any]] = []
