@@ -1895,6 +1895,134 @@ def _apply_architecture_corrections(
     return architecture
 
 
+# Issue #1664: keep the module-identification LLM prompt under the provider
+# input limit. 1,048,576 is the documented provider input-char limit
+# (issue #1664: max_chars: 1048576); the provider counts ≈ len(prompt) with
+# negligible wrapper overhead, so no arbitrary margin is subtracted — a smaller
+# cap would falsely trim/fail valid 1.0–1.048M-char prompts. Compact
+# architecture + filter machine-noise comments, then a hard size guard that
+# surfaces the REAL input_too_large failure instead of collapsing to "no
+# modules to sync".
+_IDENTIFY_MODULES_MAX_CHARS = 1_048_576
+
+# The agentic_sync_identify_modules_LLM prompt uses architecture entries ONLY
+# for origin-matching (Task 1) and dependency validation (Task 2); everything
+# else (notably the ~5KB/entry `interface`) is dropped from the prompt copy.
+_IDENTIFY_MODULES_ARCH_FIELDS = ("filename", "filepath", "origin", "dependencies")
+
+# Structural anchors for machine-generated comments that add prompt size but no
+# module-identification signal. Matched on the STRIPPED body via startswith.
+# Conservative on purpose: NOT filtered by author or fuzzy keywords, because a
+# bot comment can still carry useful FILES_MODIFIED / dev-unit output.
+_LOW_SIGNAL_COMMENT_PREFIXES = (
+    "🚀 **Job Queued!**",
+    "## PDD Agentic Sync Progress",
+    "## PDD Agentic Sync - Error",
+    "<!-- PDD_WORKFLOW_STATE:",
+)
+
+
+def _compact_architecture_for_identification(
+    architecture: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
+    """Return an architecture copy carrying only identify-modules signal fields.
+
+    Keeps only ``_IDENTIFY_MODULES_ARCH_FIELDS`` (filename/filepath/origin/
+    dependencies) per entry and drops the heavy ``interface``/``description``/
+    ``reason`` text that dominates prompt size (issue #1664). Order is
+    preserved, non-dict entries are skipped, and the input is never mutated.
+    Falsy input (None/empty) is returned as-is.
+    """
+    if not architecture:
+        return architecture
+    compact: List[Dict[str, Any]] = []
+    for entry in architecture:
+        if not isinstance(entry, dict):
+            continue
+        slim = {k: entry[k] for k in _IDENTIFY_MODULES_ARCH_FIELDS if k in entry}
+        if slim:
+            compact.append(slim)
+    return compact
+
+
+def _is_low_signal_comment(body: str) -> bool:
+    """True if a comment body is empty or a known machine-noise template.
+
+    Matches ``_LOW_SIGNAL_COMMENT_PREFIXES`` on the stripped body so a leading
+    blank line cannot hide the anchor (issue #1664).
+    """
+    stripped = (body or "").strip()
+    if not stripped:
+        return True
+    return any(stripped.startswith(prefix) for prefix in _LOW_SIGNAL_COMMENT_PREFIXES)
+
+
+def _filter_low_signal_comments(
+    comments: Optional[List[Dict[str, Any]]],
+) -> Optional[List[Dict[str, Any]]]:
+    """Drop machine-noise comments while keeping human/bot signal (issue #1664).
+
+    Falsy or non-list input is returned as-is (never iterate a dict's keys).
+    Non-dict entries are kept untouched.
+    """
+    if not comments or not isinstance(comments, list):
+        return comments
+    return [
+        c
+        for c in comments
+        if not (isinstance(c, dict) and _is_low_signal_comment(c.get("body", "")))
+    ]
+
+
+def _build_identify_issue_content(
+    title: str,
+    body: str,
+    comments: Optional[List[Dict[str, Any]]],
+) -> str:
+    """Build the identify-modules issue text from a title/body/comment set.
+
+    Extracted so the same string can be rebuilt with different comment sets by
+    the size guard (issue #1664). Does NOT escape format braces — callers do.
+    """
+    content = f"Title: {title}\n\nDescription:\n{body}\n"
+    if comments and isinstance(comments, list):
+        content += "\nComments:\n"
+        for comment in comments:
+            if isinstance(comment, dict):
+                c_user = comment.get("user", {}).get("login", "unknown")
+                c_body = comment.get("body", "")
+                content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
+    return content
+
+
+def _truncate_head_tail(text: str, max_len: int) -> str:
+    """Truncate ``text`` to ``<= max_len`` chars, keeping the head and tail.
+
+    Short text is returned unchanged. Otherwise a centred marker reports how
+    many chars were dropped; the head+marker+tail total never exceeds
+    ``max_len`` (issue #1664).
+    """
+    if len(text) <= max_len:
+        return text
+    # Reserve room for the marker, then split the remaining budget head/tail.
+    # The marker length depends on the dropped count, so size it first using a
+    # conservative estimate and recompute the kept window from the final marker.
+    overhead = len("\n...[truncated 0000000000 chars]...\n")
+    keep = max(0, max_len - overhead)
+    head_len = keep // 2
+    tail_len = keep - head_len
+    dropped = len(text) - (head_len + tail_len)
+    marker = f"\n...[truncated {dropped} chars]...\n"
+    result = text[:head_len] + marker + (text[-tail_len:] if tail_len else "")
+    # Marker width can grow the result past max_len for large dropped counts;
+    # trim the head to guarantee the contract holds.
+    if len(result) > max_len:
+        excess = len(result) - max_len
+        head_len = max(0, head_len - excess)
+        result = text[:head_len] + marker + (text[-tail_len:] if tail_len else "")
+    return result
+
+
 def run_agentic_sync(
     issue_url: str,
     *,
@@ -1988,17 +2116,13 @@ def run_agentic_sync(
                 if verbose:
                     console.print("[yellow]Warning: Failed to parse comments JSON[/yellow]")
 
-    # 5. Build issue content
-    issue_content = f"Title: {title}\n\nDescription:\n{body}\n"
-    if comments_data and isinstance(comments_data, list):
-        issue_content += "\nComments:\n"
-        for comment in comments_data:
-            if isinstance(comment, dict):
-                c_user = comment.get("user", {}).get("login", "unknown")
-                c_body = comment.get("body", "")
-                issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
-
-    issue_content = _escape_format_braces(issue_content)
+    # 5. Build issue content. Drop machine-noise comments (issue #1664) before
+    # building the string so they never count toward the identify-modules
+    # prompt size budget; signal-bearing comments (FILES_MODIFIED, etc.) stay.
+    filtered_comments = _filter_low_signal_comments(comments_data)
+    issue_content = _escape_format_braces(
+        _build_identify_issue_content(title, body, filtered_comments)
+    )
 
     # 6. Find project root and load architecture.json
     project_root = _find_project_root(Path.cwd())
@@ -2040,15 +2164,67 @@ def run_agentic_sync(
         if not prompt_template:
             return False, "Failed to load agentic_sync_identify_modules_LLM prompt template", 0.0, ""
 
-        arch_json_str = json.dumps(architecture, indent=2) if architecture else "No architecture.json available."
+        # Issue #1664: compact the architecture for the PROMPT COPY ONLY. The
+        # full ``architecture`` object is left untouched for downstream use
+        # (dependency corrections, graph build); only this prompt rendering
+        # drops the ~5KB/entry interface text that blows the input limit.
+        compact_arch = _compact_architecture_for_identification(architecture)
+        arch_json_str = (
+            json.dumps(compact_arch, indent=2)
+            if compact_arch
+            else "No architecture.json available."
+        )
         # Escape braces in dynamic content to prevent .format() from interpreting
         # code references like {uid} as template placeholders
         safe_arch_json = arch_json_str.replace("{", "{{").replace("}", "}}")
-        prompt = prompt_template.format(
-            issue_content=issue_content,
-            architecture_json=safe_arch_json,
-            issue_number=issue_number,
-        )
+
+        def _render(issue_text: str) -> str:
+            return prompt_template.format(
+                issue_content=issue_text,
+                architecture_json=safe_arch_json,
+                issue_number=issue_number,
+            )
+
+        # Size guard (issue #1664): the rendered prompt must stay under the
+        # provider input limit. Trim levers in order of least signal lost:
+        # 1) drop comments entirely, then 2) truncate the issue body. If even a
+        # body-less prompt is over budget the architecture itself is too large
+        # to fit, so surface a REAL input_too_large failure rather than letting
+        # an over-limit call collapse to "no modules to sync".
+        prompt = _render(issue_content)
+        if len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
+            prompt = _render(
+                _escape_format_braces(_build_identify_issue_content(title, body, None))
+            )
+        if len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
+            base_len = len(
+                _render(
+                    _escape_format_braces(_build_identify_issue_content(title, "", None))
+                )
+            )
+            body_budget = _IDENTIFY_MODULES_MAX_CHARS - base_len
+            if body_budget > 0:
+                # The body is brace-escaped (each `{`/`}` doubled) before
+                # rendering, so the worst case is len(escaped(t)) == 2*len(t).
+                # Truncate the RAW body to half the budget so the escaped body
+                # still fits within body_budget even when it is all braces.
+                prompt = _render(
+                    _escape_format_braces(
+                        _build_identify_issue_content(
+                            title, _truncate_head_tail(body, max(0, body_budget // 2)), None
+                        )
+                    )
+                )
+        if len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
+            msg = (
+                "LLM failed to identify modules: input_too_large: identify-modules "
+                f"prompt is {len(prompt)} chars, over the "
+                f"{_IDENTIFY_MODULES_MAX_CHARS}-char budget even after compaction; "
+                "reduce architecture.json scope or split the sync."
+            )
+            if use_github_state:
+                _post_error_comment(owner, repo, issue_number, msg)
+            return False, msg, 0.0, ""
 
         if not quiet:
             console.print("[bold]Identifying modules to sync via LLM...[/bold]")

@@ -21,11 +21,17 @@ from pdd.agentic_sync import (
     _architecture_module_basenames,
     _architecture_sync_modules,
     _augment_architecture_from_pr_branch,
+    _build_identify_issue_content,
     _build_scoped_global_dep_graph,
     _branch_diff_is_runtime_llm_only,
+    _compact_architecture_for_identification,
     _detect_modules_from_branch_diff,
     _filter_already_synced,
+    _filter_low_signal_comments,
     _find_project_root,
+    _is_low_signal_comment,
+    _truncate_head_tail,
+    _IDENTIFY_MODULES_MAX_CHARS,
     _is_catchall_match,
     _is_github_issue_url,
     _is_runtime_llm_template,
@@ -4398,3 +4404,435 @@ def test_augment_architecture_from_pr_branch_dict_format_merges_modules(tmp_path
         "Dict-format PR architecture modules should be merged, "
         "but isinstance(pr_arch, list) check at agentic_sync.py:167 silently drops them"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1664: keep the identify-modules LLM prompt under the provider input
+# limit (compact architecture + filter machine-noise comments + size guard).
+# ---------------------------------------------------------------------------
+
+
+def _big_interface_entry(filename: str, *, dep: str = "") -> Dict[str, Any]:
+    """An architecture entry whose `interface`/`description`/`reason` dominate."""
+    return {
+        "filename": filename,
+        "filepath": f"pdd/{filename}",
+        "origin": "code",
+        "dependencies": [dep] if dep else [],
+        # The fields that must NOT survive compaction. ~5KB of interface text
+        # is exactly what blows the identify-modules prompt past the limit.
+        "interface": "INTERFACE_TEXT " * 400,
+        "description": "DESCRIPTION_TEXT " * 100,
+        "reason": "REASON_TEXT " * 50,
+    }
+
+
+class TestCompactArchitectureForIdentification:
+    def test_drops_heavy_fields_keeps_signal_fields(self):
+        arch = [_big_interface_entry("foo_Python.prompt", dep="bar_Python.prompt")]
+        compact = _compact_architecture_for_identification(arch)
+
+        assert compact == [
+            {
+                "filename": "foo_Python.prompt",
+                "filepath": "pdd/foo_Python.prompt",
+                "origin": "code",
+                "dependencies": ["bar_Python.prompt"],
+            }
+        ]
+        # Heavy fields are gone.
+        assert "interface" not in compact[0]
+        assert "description" not in compact[0]
+        assert "reason" not in compact[0]
+
+    def test_preserves_entry_order(self):
+        arch = [
+            _big_interface_entry("a_Python.prompt"),
+            _big_interface_entry("b_Python.prompt"),
+            _big_interface_entry("c_Python.prompt"),
+        ]
+        compact = _compact_architecture_for_identification(arch)
+        assert [e["filename"] for e in compact] == [
+            "a_Python.prompt",
+            "b_Python.prompt",
+            "c_Python.prompt",
+        ]
+
+    def test_does_not_mutate_input(self):
+        arch = [_big_interface_entry("foo_Python.prompt")]
+        _compact_architecture_for_identification(arch)
+        # Original still carries its heavy fields.
+        assert "interface" in arch[0]
+
+    def test_none_and_empty_returned_as_is(self):
+        assert _compact_architecture_for_identification(None) is None
+        empty: List[Dict[str, Any]] = []
+        assert _compact_architecture_for_identification(empty) == []
+
+    def test_skips_non_dict_entries(self):
+        arch = [_big_interface_entry("foo_Python.prompt"), "not-a-dict", 42]
+        compact = _compact_architecture_for_identification(arch)
+        assert len(compact) == 1
+        assert compact[0]["filename"] == "foo_Python.prompt"
+
+
+class TestFilterLowSignalComments:
+    def test_drops_job_queued_comment(self):
+        comments = [{"body": "🚀 **Job Queued!**\n\nYour sync is queued."}]
+        assert _filter_low_signal_comments(comments) == []
+
+    def test_drops_progress_and_error_and_state_comments(self):
+        comments = [
+            {"body": "## PDD Agentic Sync Progress\n\n- step 1"},
+            {"body": "## PDD Agentic Sync - Error\n\n```\nboom\n```"},
+            {"body": "<!-- PDD_WORKFLOW_STATE: {\"x\": 1} -->\nstuff"},
+        ]
+        assert _filter_low_signal_comments(comments) == []
+
+    def test_keeps_human_comment_with_files_modified_signal(self):
+        keep = {"body": "Here is the result:\nFILES_MODIFIED: prompts/foo_Python.prompt"}
+        comments = [
+            {"body": "🚀 **Job Queued!**"},
+            keep,
+        ]
+        result = _filter_low_signal_comments(comments)
+        assert result == [keep]
+
+    def test_drops_empty_and_whitespace_body(self):
+        comments = [{"body": ""}, {"body": "   \n  "}, {"body": "real signal"}]
+        result = _filter_low_signal_comments(comments)
+        assert result == [{"body": "real signal"}]
+
+    def test_none_returned_as_is(self):
+        assert _filter_low_signal_comments(None) is None
+
+    def test_is_low_signal_comment_predicate(self):
+        assert _is_low_signal_comment("") is True
+        assert _is_low_signal_comment("   ") is True
+        assert _is_low_signal_comment("🚀 **Job Queued!** now") is True
+        assert _is_low_signal_comment("## PDD Agentic Sync Progress\nx") is True
+        assert _is_low_signal_comment("normal human comment") is False
+        # A leading blank line must not hide the anchor.
+        assert _is_low_signal_comment("\n\n## PDD Agentic Sync - Error") is True
+
+
+class TestBuildIdentifyIssueContent:
+    def test_includes_title_body_and_comment_block(self):
+        out = _build_identify_issue_content(
+            "My Title",
+            "Body text",
+            [{"user": {"login": "alice"}, "body": "a comment"}],
+        )
+        assert "Title: My Title" in out
+        assert "Body text" in out
+        assert "Comments:" in out
+        assert "Comment by alice" in out
+        assert "a comment" in out
+
+    def test_no_comments_omits_comment_section(self):
+        out = _build_identify_issue_content("T", "B", None)
+        assert "Title: T" in out
+        assert "Comments:" not in out
+
+
+class TestTruncateHeadTail:
+    def test_short_text_unchanged(self):
+        assert _truncate_head_tail("hello", 100) == "hello"
+
+    def test_long_text_truncated_within_budget(self):
+        text = "x" * 5000
+        out = _truncate_head_tail(text, 1000)
+        assert len(out) <= 1000
+        assert "truncated" in out
+        # Head and tail of the original survive.
+        assert out.startswith("x")
+        assert out.endswith("x")
+
+
+def _identify_fallback_patches(method):
+    """Stack the mocks needed to force + observe the LLM identify-modules call.
+
+    The patches are applied so the wrapped test receives them as positional
+    args in THIS order (after ``self`` and after any extra ``@patch`` decorators
+    stacked above ``@_identify_fallback_patches``):
+    mock_gh_cli, mock_gh_cmd, mock_load_arch, mock_find_root, mock_branch_diff,
+    mock_runtime_only, mock_load_prompt, mock_agentic_task.
+    """
+    # Applied programmatically, the FIRST patch() call binds innermost and so
+    # becomes the FIRST positional arg. Apply in documented arg order.
+    method = patch("pdd.agentic_sync._check_gh_cli", return_value=True)(method)
+    method = patch("pdd.agentic_sync._run_gh_command")(method)
+    method = patch("pdd.agentic_sync._load_architecture_json")(method)
+    method = patch(
+        "pdd.agentic_sync._find_project_root", return_value=Path("/tmp/proj")
+    )(method)
+    method = patch(
+        "pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[]
+    )(method)
+    method = patch(
+        "pdd.agentic_sync._branch_diff_is_runtime_llm_only", return_value=False
+    )(method)
+    method = patch(
+        "pdd.agentic_sync.load_prompt_template",
+        return_value=(
+            "ISSUE:\n{issue_content}\nARCH:\n{architecture_json}\nNUM:{issue_number}"
+        ),
+    )(method)
+    method = patch("pdd.agentic_sync.run_agentic_task")(method)
+    return method
+
+
+class TestIdentifyModulesPromptSize:
+    """Integration: force the LLM fallback and inspect the rendered prompt."""
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @_identify_fallback_patches
+    def test_normal_arch_prompt_excludes_interface_and_is_under_budget(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_find_root,
+        mock_branch_diff,
+        mock_runtime_only,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_build_graph,
+        mock_dry_run,
+        mock_filter_synced,
+        mock_runner_cls,
+    ):
+        issue_data = {"title": "Fix foo", "body": "do it", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [
+                _big_interface_entry("foo_Python.prompt"),
+                _big_interface_entry("bar_Python.prompt"),
+            ],
+            Path("/tmp/architecture.json"),
+        )
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.0,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
+
+        run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
+
+        mock_agentic_task.assert_called_once()
+        prompt = mock_agentic_task.call_args.kwargs["instruction"]
+        assert "INTERFACE_TEXT" not in prompt
+        assert "DESCRIPTION_TEXT" not in prompt
+        assert "REASON_TEXT" not in prompt
+        # origin/dependency fields the LLM actually needs are still present.
+        assert "foo_Python.prompt" in prompt
+        assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
+
+    @_identify_fallback_patches
+    def test_pathological_arch_hard_fails_with_input_too_large(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_find_root,
+        mock_branch_diff,
+        mock_runtime_only,
+        mock_load_prompt,
+        mock_agentic_task,
+    ):
+        issue_data = {"title": "Fix foo", "body": "do it", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        # Even compacted, the architecture alone blows the budget: each entry's
+        # filename/filepath is itself enormous so dropping interface won't help.
+        huge = "Z" * 50_000
+        pathological = [
+            {
+                "filename": f"{huge}_{i}_Python.prompt",
+                "filepath": f"pdd/{huge}_{i}",
+                "origin": "code",
+                "dependencies": [],
+            }
+            for i in range(40)
+        ]
+        mock_load_arch.return_value = (
+            pathological,
+            Path("/tmp/architecture.json"),
+        )
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True, use_github_state=False
+        )
+
+        assert success is False
+        assert "input_too_large" in msg
+        assert "no modules to sync" not in msg.lower()
+        assert cost == pytest.approx(0.0)
+        mock_agentic_task.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @_identify_fallback_patches
+    def test_huge_comments_are_trimmed_to_fit_budget(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_find_root,
+        mock_branch_diff,
+        mock_runtime_only,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_build_graph,
+        mock_dry_run,
+        mock_filter_synced,
+        mock_runner_cls,
+    ):
+        # Small architecture, but comments alone exceed the budget so the size
+        # guard must drop/trim them while still calling the LLM.
+        huge_comment_body = "C" * (_IDENTIFY_MODULES_MAX_CHARS + 50_000)
+        issue_data = {
+            "title": "UNIQUE_TITLE_TOKEN",
+            "body": "small body",
+            "comments_url": "https://api.github.com/repos/owner/repo/issues/1/comments",
+        }
+        comments_json = json.dumps(
+            [{"user": {"login": "bot"}, "body": huge_comment_body}]
+        )
+        mock_gh_cmd.side_effect = [
+            (True, json.dumps(issue_data)),
+            (True, comments_json),
+        ]
+        mock_load_arch.return_value = (
+            [{"filename": "foo_Python.prompt", "filepath": "pdd/foo", "origin": "code", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.0,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
+
+        run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
+
+        mock_agentic_task.assert_called_once()
+        prompt = mock_agentic_task.call_args.kwargs["instruction"]
+        assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
+        # The title (signal) survives even though comments were trimmed.
+        assert "UNIQUE_TITLE_TOKEN" in prompt
+        # The giant comment body did not make it through verbatim.
+        assert huge_comment_body not in prompt
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @_identify_fallback_patches
+    def test_brace_heavy_body_is_truncated_but_still_calls_llm(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_find_root,
+        mock_branch_diff,
+        mock_runtime_only,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_build_graph,
+        mock_dry_run,
+        mock_filter_synced,
+        mock_runner_cls,
+    ):
+        # Small architecture, NO comments, but a LARGE brace-heavy body. Each
+        # `{`/`}` doubles under _escape_format_braces, so the escaped body is
+        # ~2x raw — the rendered prompt blows the budget and the body-truncation
+        # lever (raw body trimmed to budget // 2) must keep it under the limit
+        # while still calling the LLM. Regression for the brace-escaping bound.
+        brace_heavy_body = "{}" * _IDENTIFY_MODULES_MAX_CHARS  # ~2.1M raw chars
+        issue_data = {
+            "title": "TRUNCATE_TITLE_TOKEN",
+            "body": brace_heavy_body,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_Python.prompt", "filepath": "pdd/foo", "origin": "code", "dependencies": []}],
+            Path("/tmp/architecture.json"),
+        )
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.0,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
+
+        run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
+
+        mock_agentic_task.assert_called_once()
+        prompt = mock_agentic_task.call_args.kwargs["instruction"]
+        # Body was truncated enough that the brace-escaped prompt still fits.
+        assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
+        # The title (signal) survives the body truncation.
+        assert "TRUNCATE_TITLE_TOKEN" in prompt
+
+    @patch("pdd.agentic_sync._post_error_comment")
+    @_identify_fallback_patches
+    def test_hard_fail_posts_error_comment_when_github_state(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_find_root,
+        mock_branch_diff,
+        mock_runtime_only,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_post_error,
+    ):
+        issue_data = {"title": "Fix foo", "body": "do it", "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        # Compacted architecture alone exceeds the budget (see pathological test).
+        huge = "Z" * 50_000
+        pathological = [
+            {
+                "filename": f"{huge}_{i}_Python.prompt",
+                "filepath": f"pdd/{huge}_{i}",
+                "origin": "code",
+                "dependencies": [],
+            }
+            for i in range(40)
+        ]
+        mock_load_arch.return_value = (pathological, Path("/tmp/architecture.json"))
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True, use_github_state=True
+        )
+
+        assert success is False
+        assert "input_too_large" in msg
+        mock_agentic_task.assert_not_called()
+        mock_post_error.assert_called_once()
+        # The posted comment carries the real oversize reason.
+        posted_msg = mock_post_error.call_args.args[3]
+        assert "input_too_large" in posted_msg
