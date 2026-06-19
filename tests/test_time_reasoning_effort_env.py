@@ -125,7 +125,10 @@ def test_cli_env_survives_to_downstream_same_process():
         tmpdir = Path(os.environ["_TEST_TMPDIR"])
         prompt_file = tmpdir / "prompt.txt"
         prompt_file.write_text("hi")
-        with patch("pdd.agentic_common._subprocess_run", side_effect=fake_subprocess_run):
+        # Issue #1646: openai routes through _subprocess_run_spooled; share the
+        # same fake so the captured argv (and the in-RAM parse path) still work.
+        with patch("pdd.agentic_common._subprocess_run", side_effect=fake_subprocess_run), \
+             patch("pdd.agentic_common._subprocess_run_spooled", side_effect=fake_subprocess_run):
             with patch("pdd.agentic_common._find_cli_binary", return_value="/bin/codex"):
                 _run_with_provider(
                     "openai", prompt_file, tmpdir,

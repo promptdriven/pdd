@@ -144,3 +144,129 @@ def test_roles_render_ansi_on_a_truecolor_console():
     console.print("[command]pdd[/command] [tag]<include>[/tag] [success]ok[/success]")
     out = console.file.getvalue()
     assert "\x1b[" in out  # ANSI escape sequence emitted
+
+
+# ---------------------------------------------------------------------------
+# Issue #1634: brand palette locking for additional semantic roles
+# (EPIC #1540 — workstream 1)
+# ---------------------------------------------------------------------------
+
+def test_warning_role_resolves_to_diff_yellow():
+    """warning state maps to Diff-Yellow from the brand palette (not a generic yellow)."""
+    assert cli_theme.DIFF_YELLOW in cli_theme.SEMANTIC_STYLES["warning"]
+
+
+def test_danger_role_resolves_to_break_red():
+    """danger role uses Break-Red — the brand error / failure color."""
+    assert cli_theme.BREAK_RED in cli_theme.SEMANTIC_STYLES["danger"]
+
+
+def test_label_role_resolves_to_lumen_purple():
+    """label (Accent-1 family, same as tag) is Lumen-Purple."""
+    assert cli_theme.LUMEN_PURPLE in cli_theme.SEMANTIC_STYLES["label"]
+
+
+def test_accent_role_resolves_to_prompt_magenta():
+    """accent (Accent-2 / CTA) is Prompt-Magenta — used sparingly."""
+    assert cli_theme.PROMPT_MAGENTA in cli_theme.SEMANTIC_STYLES["accent"]
+
+
+def test_version_role_resolves_to_build_green_700():
+    """version uses the Build-Green-700 tint, distinct from the success base green."""
+    assert cli_theme.BUILD_GREEN_700 in cli_theme.SEMANTIC_STYLES["version"]
+
+
+# ---------------------------------------------------------------------------
+# Reload safety of the Console.__init__ color-preference patch.
+#
+# cli_theme monkey-patches rich.console.Console.__init__ so every console
+# constructed after import is registered with the global color preference.
+# importlib.reload() re-executes the module in the same namespace, so the patch
+# must recognise an already-patched __init__ and reuse the genuine initializer
+# instead of wrapping its own wrapper (which previously recursed to RecursionError).
+# ---------------------------------------------------------------------------
+
+def test_reload_does_not_recurse_and_preserves_color_preference():
+    """Reloading cli_theme stays idempotent and keeps the color preference working."""
+    import importlib
+
+    from rich.console import Console
+
+    # Two reloads in a row would re-wrap the already-patched initializer and blow
+    # the stack if the patch were not reload-safe.
+    importlib.reload(cli_theme)
+    importlib.reload(cli_theme)
+
+    # A console built after reload still honors a later --color preference.
+    forced = cli_theme.get_console(file=StringIO(), width=80)
+    restore = cli_theme.apply_global_color_preference(True)
+    try:
+        assert forced.no_color is False
+        assert forced._force_terminal is True
+        forced.print("[command]pdd[/command]")
+        assert "\x1b[" in forced.file.getvalue()
+    finally:
+        restore()
+
+    # ...and a later --no-color preference disables color on a fresh console.
+    plain = cli_theme.get_console(file=StringIO(), width=80)
+    restore = cli_theme.apply_global_color_preference(False)
+    try:
+        assert plain.no_color is True
+    finally:
+        restore()
+
+
+def test_reloaded_init_uses_genuine_console_initializer():
+    """After reload, the patched __init__ delegates to the real Rich initializer.
+
+    Guards against the reload bug where the wrapper captured the already-patched
+    __init__ as its "original" and recursed when constructing a Console.
+    """
+    import importlib
+
+    from rich.console import Console
+
+    importlib.reload(cli_theme)
+
+    # Constructing a Console must not recurse, and the genuine initializer must
+    # still produce a fully-functional console.
+    console = Console(file=StringIO(), force_terminal=True, color_system="truecolor", width=80)
+    console.print("[bold]ok[/bold]")
+    assert "\x1b[" in console.file.getvalue()
+
+
+def test_reload_preserves_registry_for_preexisting_consoles():
+    """A console registered before reload still tracks the global color preference.
+
+    The console registry (WeakSet + active preference) is anchored on the stable
+    ``Console`` class, not on module globals, so ``importlib.reload(cli_theme)`` —
+    which resets module globals — must not drop already-registered consoles.
+    Regression for the bug where a console created before reload stopped honoring
+    later ``apply_global_color_preference(...)`` calls.
+    """
+    import importlib
+
+    from rich.console import Console
+
+    # Built (and registered) before the reload.
+    preexisting = Console(file=StringIO(), width=80)
+    assert preexisting in cli_theme._registered_consoles
+
+    importlib.reload(cli_theme)
+
+    # Still tracked after the reload through the class-anchored registry.
+    assert preexisting in cli_theme._registered_consoles
+
+    restore = cli_theme.apply_global_color_preference(False)
+    try:
+        assert preexisting.no_color is True
+    finally:
+        restore()
+
+    restore = cli_theme.apply_global_color_preference(True)
+    try:
+        assert preexisting.no_color is False
+        assert preexisting._force_terminal is True
+    finally:
+        restore()

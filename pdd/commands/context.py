@@ -365,7 +365,15 @@ def context(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         # does not second-guess us: click strips ANSI on a non-TTY by default,
         # which would drop color from a forced ``--color`` run, and would keep
         # it on a TTY even when we chose to suppress it.
-        use_color = _color_enabled(color, sys.stdout)
+        #
+        # Precedence: this command's own ``--color/--no-color`` wins; otherwise
+        # inherit the global ``pdd --color/--no-color`` preference (ctx.obj);
+        # otherwise auto-detect. This keeps ``pdd --color context …`` consistent
+        # with the rest of the CLI even through a pipe.
+        color_pref = color
+        if color_pref is None and isinstance(ctx.obj, dict):
+            color_pref = ctx.obj.get("color")
+        use_color = _color_enabled(color_pref, sys.stdout)
         paint = _make_painter(use_color)
         if table_output:
             rendered = _render_table(audit, paint)

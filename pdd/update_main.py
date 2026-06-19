@@ -148,13 +148,11 @@ def _is_pddignored(filepath: str, pddignore_root: str, patterns: List[str]) -> b
                 return True
     return False
 
-custom_theme = Theme({
-    "info": "cyan",
-    "warning": "yellow",
-    "error": "bold red",
-    "success": "green",
-    "path": "dim blue",
-})
+# Use the central brand palette (EPIC #1540) so ``pdd update`` shares the same
+# enhanced color system as the rest of the CLI rather than a local ad-hoc theme.
+from .cli_theme import SEMANTIC_STYLES
+
+custom_theme = Theme(SEMANTIC_STYLES)
 console = Console(theme=custom_theme)
 
 def _extract_template_vars(concrete_path: str, template: str) -> Optional[Dict[str, str]]:

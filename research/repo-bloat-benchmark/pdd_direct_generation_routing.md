@@ -1,8 +1,8 @@
 # PDD Direct-Generation Routing Design
 
-**Issue:** [#1584](https://github.com/promptdriven/pdd/issues/1584)  
+**Issue:** [#1584](https://github.com/promptdriven/pdd/issues/1584)
 **Parent:** [#1431](https://github.com/promptdriven/pdd/issues/1431), epic PR
-[#1582](https://github.com/promptdriven/pdd/pull/1582)  
+[#1582](https://github.com/promptdriven/pdd/pull/1582)
 **Scope:** route native `llm_invoke` configuration by task class.
 
 ## Goal

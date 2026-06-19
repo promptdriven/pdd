@@ -267,6 +267,10 @@ yarn.lock
 !.pdd/meta/summarize_directory_python.json
 !.pdd/meta/sync_determine_operation_python.json
 !.pdd/meta/sync_tui_python.json
+# Design-refresh (PR #1561) dev units: track their fingerprints so the auto-heal
+# drift detector sees committed metadata for the modules this PR changed.
+!.pdd/meta/cli_theme_python.json
+!.pdd/meta/sync_animation_python.json
 .pdd/meta/*_run.json
 # Issue #1006 follow-up: these two modules' tests pass quickly but
 # `pdd sync` runs >20 minutes on them in CI, hitting the auto-heal
@@ -277,6 +281,13 @@ yarn.lock
 !.pdd/meta/ci_drift_heal_python_run.json
 !.pdd/meta/agentic_change_orchestrator_python_run.json
 !.pdd/meta/metadata_sync_python_run.json
+# Design-refresh (PR #1561): commit run-reports for the modules this PR changed so
+# the drift detector's workflow-complete gate is satisfied (no run_report → forced
+# crash/"needs validation" op) without a paid cloud sync to regenerate them.
+!.pdd/meta/cli_theme_python_run.json
+!.pdd/meta/construct_paths_python_run.json
+!.pdd/meta/sync_animation_python_run.json
+!.pdd/meta/update_main_python_run.json
 Makefile.test-staging
 
 # Large model weights (HuggingFace clones)

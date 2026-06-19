@@ -345,12 +345,21 @@ def mock_shutil_which():
 
 @pytest.fixture
 def mock_subprocess():
-    with patch('pdd.agentic_common._subprocess_run') as mock:
+    # Issue #1646: the openai provider now routes through
+    # ``_subprocess_run_spooled``. Patch it too, sharing the same mock so a
+    # configured ``return_value`` (a plain CompletedProcess-like MagicMock)
+    # flows through and ``_run_with_provider`` takes the in-RAM branch
+    # (result_is_spooled is False).
+    with patch('pdd.agentic_common._subprocess_run') as mock, \
+         patch('pdd.agentic_common._subprocess_run_spooled') as mock_spooled:
+        mock_spooled.side_effect = mock
         yield mock
 
 @pytest.fixture
 def mock_subprocess_run():
-    with patch("pdd.agentic_common._subprocess_run") as mock:
+    with patch("pdd.agentic_common._subprocess_run") as mock, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_spooled:
+        mock_spooled.side_effect = mock
         yield mock
 
 @pytest.fixture
@@ -7451,6 +7460,111 @@ def test_post_step_comment_posts_to_github(tmp_path):
         assert "owner/repo" in cmd
 
 
+def test_post_step_comment_recoverable_mode_posts_degraded_detail(tmp_path):
+    """Recoverable fallback comments must read as degraded, not fatal."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=8,
+            total_steps=12,
+            description="Test strategy",
+            output="All agent providers failed: strategy timed out",
+            cwd=tmp_path,
+            failure_mode="recoverable",
+            failure_detail="Test strategy failed; using fallback/default planning.",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** DEGRADED - workflow continuing" in body
+        assert "FAILED - workflow aborting" not in body
+        assert "Test strategy failed; using fallback/default planning." in body
+
+
+def test_post_step_comment_fatal_mode_posts_aborting_detail(tmp_path):
+    """Fatal fallback comments must make the workflow abort explicit."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=3,
+            total_steps=12,
+            description="Triage",
+            output="All agent providers failed: third consecutive failure",
+            cwd=tmp_path,
+            failure_mode="fatal",
+            failure_detail="Stopping after 3 consecutive provider failures.",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** FAILED - workflow aborting" in body
+        assert "Stopping after 3 consecutive provider failures." in body
+
+
+@pytest.mark.parametrize("failure_mode", [None, "unexpected"])
+def test_post_step_comment_unknown_mode_keeps_legacy_failed_body(tmp_path, failure_mode):
+    """Missing or unknown modes keep the legacy fallback wording."""
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=4,
+            total_steps=12,
+            description="Research",
+            output="Provider unavailable",
+            cwd=tmp_path,
+            failure_mode=failure_mode,
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert "**Status:** FAILED\n" in body
+        assert "workflow continuing" not in body
+        assert "workflow aborting" not in body
+        assert "Automated fallback comment - agent did not execute" in body
+
+
+def test_post_step_comment_fallback_modes_redact_and_truncate(tmp_path):
+    """New fallback modes use the same redaction/truncation path as legacy comments."""
+    secret = "ghp_" + "A" * 36
+    long_tail_marker = "x" * 1500
+    with patch("shutil.which", return_value="/usr/bin/gh"), \
+         patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        result = post_step_comment(
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=289,
+            step_num=8,
+            total_steps=12,
+            description="Test strategy",
+            output=f"Provider failed {secret} {long_tail_marker}",
+            cwd=tmp_path,
+            failure_mode="recoverable",
+        )
+
+        assert result is True
+        body = mock_run.call_args.args[0][mock_run.call_args.args[0].index("--body") + 1]
+        assert secret not in body
+        assert "[REDACTED_GITHUB_TOKEN]" in body
+        assert "[truncated]" in body
+
+
 def test_post_step_comment_skips_github_when_disabled(tmp_path):
     """PDD_NO_GITHUB_STATE suppresses visible step comments too."""
     with patch.dict(os.environ, {"PDD_NO_GITHUB_STATE": "1"}), \
@@ -7833,7 +7947,10 @@ def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -7865,7 +7982,11 @@ def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
         clear=False,
     ), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai now routes through the spooled runner; share the
+        # mock so the configured CompletedProcess flows through the in-RAM path.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=json.dumps({
@@ -7917,7 +8038,10 @@ def test_codex_nonzero_prefers_jsonl_stdout_error_over_stdin_notice(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout=stdout,
@@ -7953,7 +8077,10 @@ def test_codex_nonzero_prefers_terminal_failure_over_intermediate_error(tmp_path
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout=stdout,
@@ -7988,7 +8115,10 @@ def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -8025,7 +8155,10 @@ def test_issue557_session_end_usage_for_cost(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -8067,7 +8200,10 @@ def test_issue557_single_line_json_no_ndjson(tmp_path):
 
     with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
-         patch("pdd.agentic_common._subprocess_run") as mock_run:
+         patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled:
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=single_json,
@@ -8176,7 +8312,10 @@ def test_issue557_full_chain_modern_codex_false_positive(tmp_path):
          patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
          patch("time.sleep"):  # Skip retry delays
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -8227,7 +8366,10 @@ def test_codex_turn_completed_usage_parsed_for_cost(tmp_path):
          patch("pdd.agentic_common.get_available_agents", return_value=["openai"]), \
          patch("pdd.agentic_common.get_agent_provider_preference", return_value=["openai"]), \
          patch("pdd.agentic_common._subprocess_run") as mock_run, \
+         patch("pdd.agentic_common._subprocess_run_spooled") as mock_run_spooled, \
          patch("time.sleep"):
+        # Issue #1646: openai routes through the spooled runner.
+        mock_run_spooled.side_effect = mock_run
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout=ndjson_output,
@@ -12752,3 +12894,385 @@ class TestDuplicateStateCommentHandling:
         assert "1003" in warning_text, (
             f"Expected stale id 1003 named in warning; got: {warning_text!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1646: Codex JSONL output is spooled to disk so the parent process
+# never holds the full NDJSON transcript in RAM (3-4x decoded-str copies that
+# could SIGKILL the parent on large runs). These tests drive a real
+# fake-codex script through the OpenAI provider path.
+# ---------------------------------------------------------------------------
+
+import textwrap
+
+
+def _write_fake_codex(
+    tmp_path: Path,
+    *,
+    body_lines: str,
+    exit_code: int = 0,
+    consume_stdin: bool = True,
+) -> Path:
+    """Write an executable fake `codex` CLI that emits NDJSON on stdout.
+
+    ``body_lines`` is python source (run with locals available) that prints the
+    NDJSON event lines. The script optionally drains stdin first so the prompt
+    body the provider pipes in does not cause a broken pipe.
+    """
+    drain = "import sys; _ = sys.stdin.read()\n" if consume_stdin else ""
+    script = "#!/usr/bin/env python3\n" + drain + textwrap.dedent(body_lines)
+    if exit_code:
+        script += f"\nimport sys as _sys; _sys.exit({exit_code})\n"
+    fake = tmp_path / "fake_codex.py"
+    fake.write_text(script)
+    fake.chmod(0o755)
+    return fake
+
+
+def _prompt_file(tmp_path: Path) -> Path:
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("Do the work described here.")
+    return prompt
+
+
+def test_openai_codex_jsonl_spooled_parses_large_transcript(tmp_path, mock_env):
+    """A long Codex NDJSON transcript is parsed correctly via the spooled path.
+
+    Also proves the spooled path (not the in-RAM ``_subprocess_run``) is used:
+    we patch ``_subprocess_run`` to blow up if the openai branch ever calls it.
+    """
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        import json
+        # K large tool_output events, then the real agent_message + usage.
+        big = "x" * 4096
+        for i in range(2000):
+            print(json.dumps({"type": "item.completed",
+                              "item": {"type": "tool_output", "text": big}}))
+        print(json.dumps({"type": "item.completed",
+                          "item": {"type": "agent_message", "text": "Final answer."}}))
+        print(json.dumps({"type": "turn.completed",
+                          "model": "gpt-5",
+                          "usage": {"input_tokens": 1000000,
+                                    "output_tokens": 1000000,
+                                    "cached_input_tokens": 0}}))
+        ''',
+    )
+
+    prompt = _prompt_file(tmp_path)
+    with patch(
+        "pdd.agentic_common._subprocess_run",
+        side_effect=AssertionError(
+            "openai provider must use the spooled subprocess path, not _subprocess_run"
+        ),
+    ):
+        success, text, cost, actual_model = _run_with_provider(
+            "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+        )
+
+    assert success is True, text
+    assert text == "Final answer."
+    assert actual_model == "gpt-5"
+    # 1M input + 1M output at $1.50/$6.00 per M -> 7.50
+    assert abs(cost - 7.50) < 0.0001
+
+
+def test_openai_codex_spooled_error_extracted(tmp_path, mock_env):
+    """A terminal turn.failed event on a nonzero exit surfaces its message."""
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        import json
+        print(json.dumps({"type": "turn.failed",
+                          "error": {"message": "boom"}}))
+        ''',
+        exit_code=1,
+    )
+    prompt = _prompt_file(tmp_path)
+    success, text, _cost, _model = _run_with_provider(
+        "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+    )
+    assert success is False
+    assert "boom" in text
+
+
+def test_openai_codex_spooled_blank_stdout(tmp_path, mock_env):
+    """Exit 0 with empty stdout is handled (no crash, returns failure/empty)."""
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        pass
+        ''',
+    )
+    prompt = _prompt_file(tmp_path)
+    success, _text, cost, _model = _run_with_provider(
+        "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+    )
+    assert success is False
+    assert cost == 0.0
+
+
+def test_openai_codex_spooled_skips_oversize_line(tmp_path, mock_env):
+    """A single >16 MiB NDJSON line is skipped without decode; real events parse.
+
+    Issue #1646 FIX 2: a pathological multi-MB tool_output line must not be
+    decoded/json.loads'd (heap spike). The oversize line is dropped by
+    ``_iter_spooled_lines`` while the (tiny) agent_message + turn.completed that
+    follow it are still parsed normally.
+    """
+    fake = _write_fake_codex(
+        tmp_path,
+        body_lines='''
+        import json
+        # One oversize tool_output event (>16 MiB) the parser must skip.
+        print(json.dumps({"type": "item.completed",
+                          "item": {"type": "tool_output", "text": "x" * (17 * 1024 * 1024)}}))
+        print(json.dumps({"type": "item.completed",
+                          "item": {"type": "agent_message", "text": "Done."}}))
+        print(json.dumps({"type": "turn.completed", "model": "gpt-5",
+                          "usage": {"input_tokens": 10, "output_tokens": 10,
+                                    "cached_input_tokens": 0}}))
+        ''',
+    )
+    prompt = _prompt_file(tmp_path)
+    success, text, _cost, actual_model = _run_with_provider(
+        "openai", prompt, tmp_path, quiet=True, cli_path=str(fake)
+    )
+    assert success is True, text
+    assert text == "Done."
+    assert actual_model == "gpt-5"
+
+
+def test_iter_spooled_lines_drops_oversize_and_resumes():
+    """Issue #1646 (FM2): a line larger than the cap is drained and dropped
+    WITHOUT being decoded, and iteration resumes at the next line. The blob here
+    deliberately contains the words ``error``/``failed`` — size, not content,
+    decides, so a huge tool-output log can no longer force a full decode.
+    """
+    from pdd.agentic_common import _iter_spooled_lines, _AGENT_MAX_JSONL_LINE_BYTES
+
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+    before = b'{"type":"item.completed","item":{"type":"agent_message","text":"first"}}\n'
+    blob = b'{"type":"tool_output","text":"error failed ' + b"x" * (cap + 4096) + b'"}\n'
+    after = b'{"type":"turn.completed","model":"gpt-5","usage":{}}\n'
+
+    out = list(_iter_spooled_lines(io.BytesIO(before + blob + after)))
+
+    assert out == [before.decode("utf-8"), after.decode("utf-8")]
+    assert all("tool_output" not in line for line in out)  # oversize blob dropped
+
+
+def test_iter_spooled_lines_bounds_per_line_read():
+    """Issue #1646 (FM1): the reader never pulls more than the cap into memory in
+    a single read, even for one line several times the cap — so a pathological
+    multi-MB NDJSON line cannot cause an unbounded parent allocation.
+    """
+    from pdd.agentic_common import _iter_spooled_lines, _AGENT_MAX_JSONL_LINE_BYTES
+
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+
+    class _TrackingBytesIO(io.BytesIO):
+        def __init__(self, data):
+            super().__init__(data)
+            self.max_read = 0
+
+        def readline(self, size=-1):
+            data = super().readline(size)
+            self.max_read = max(self.max_read, len(data))
+            return data
+
+    huge = b'{"type":"tool_output","text":"' + b"x" * (cap + (1 << 20)) + b'"}\n'
+    real = b'{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'
+
+    spool = _TrackingBytesIO(huge + real)
+    out = list(_iter_spooled_lines(spool))
+
+    assert out == [real.decode("utf-8")]     # huge line dropped, real one kept
+    assert spool.max_read <= cap             # never read more than the cap at once
+
+
+def test_iter_spooled_lines_keeps_oversize_retained_event():
+    """Issue #1646 (review): an oversize line whose event TYPE is one a consumer
+    retains (here a pathologically large agent_message) is read in full and
+    yielded — never silently dropped — so the actual answer can't be lost. A
+    same-size tool-output blob (different type) is still dropped.
+    """
+    from pdd.agentic_common import _iter_spooled_lines, _AGENT_MAX_JSONL_LINE_BYTES
+
+    cap = _AGENT_MAX_JSONL_LINE_BYTES
+    big_answer = "A" * (cap + 4096)
+    retained = (
+        '{"type":"item.completed","item":{"type":"agent_message","text":"'
+        + big_answer + '"}}\n'
+    ).encode()
+    blob = (
+        '{"type":"item.completed","item":{"type":"tool_output","text":"'
+        + ("x" * (cap + 4096)) + '"}}\n'
+    ).encode()
+
+    out = list(_iter_spooled_lines(io.BytesIO(retained + blob)))
+
+    assert len(out) == 1                 # retained kept, blob dropped
+    assert '"type":"agent_message"' in out[0]
+    assert big_answer in out[0]          # full payload preserved, not truncated
+
+
+def test_iter_spooled_lines_drops_retained_event_over_ceiling(monkeypatch):
+    """Issue #1646 (review): even a retained-type line is bounded — one beyond
+    the hard ceiling is dropped (not buffered without limit), and iteration
+    resumes at the next line.
+    """
+    import pdd.agentic_common as ac
+
+    monkeypatch.setattr(ac, "_AGENT_MAX_JSONL_LINE_BYTES", 1024)
+    monkeypatch.setattr(ac, "_AGENT_MAX_RETAINED_LINE_BYTES", 4096)
+
+    over_ceiling = (
+        '{"type":"agent_message","text":"' + ("A" * 8192) + '"}\n'
+    ).encode()
+    after = b'{"type":"turn.completed","model":"gpt-5"}\n'
+
+    out = list(ac._iter_spooled_lines(io.BytesIO(over_ceiling + after)))
+
+    assert out == [after.decode("utf-8")]   # over-ceiling retained line dropped
+
+
+def test_agent_spool_dir_unset_returns_none(monkeypatch):
+    """Issue #1646: unset env var -> system default temp (None), no warning."""
+    import pdd.agentic_common as ac
+
+    monkeypatch.delenv("PDD_AGENT_SPOOL_DIR", raising=False)
+    assert ac._agent_spool_dir() is None
+
+
+def test_agent_spool_dir_returns_writable_path(monkeypatch, tmp_path):
+    """Issue #1646: a set, writable directory is used as the spool dir."""
+    import pdd.agentic_common as ac
+
+    monkeypatch.setenv("PDD_AGENT_SPOOL_DIR", str(tmp_path))
+    assert ac._agent_spool_dir() == str(tmp_path)
+
+
+def test_agent_spool_dir_warns_once_on_unusable_path(monkeypatch, capsys, tmp_path):
+    """Issue #1646: a set-but-unusable path warns (once) instead of silently
+    falling back, so operators know disk spooling isn't actually active.
+    """
+    import pdd.agentic_common as ac
+
+    monkeypatch.setattr(ac, "_AGENT_SPOOL_DIR_WARNED", False)
+    monkeypatch.setenv("PDD_AGENT_SPOOL_DIR", str(tmp_path / "nope"))
+
+    assert ac._agent_spool_dir() is None
+    first = capsys.readouterr().out
+    assert "PDD_AGENT_SPOOL_DIR" in first
+
+    # Second call stays silent (one-shot).
+    assert ac._agent_spool_dir() is None
+    assert "PDD_AGENT_SPOOL_DIR" not in capsys.readouterr().out
+
+
+# Driver that runs _run_with_provider against a fake codex in a FRESH
+# interpreter and reports peak RSS. Running in its own process keeps the
+# measurement free of pytest's heap. argv: repo_root, fake_cli, prompt, cwd.
+_RSS_DRIVER = r"""
+import json
+import os
+import resource
+import sys
+from pathlib import Path
+
+repo, fake, prompt, cwd = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+sys.path.insert(0, repo)
+
+# Keep env minimal/deterministic (no provider creds leaking in).
+for k in list(os.environ):
+    if "TOKEN" in k or "API_KEY" in k:
+        os.environ.pop(k, None)
+
+from pdd.agentic_common import _run_with_provider
+
+success, text, cost, model = _run_with_provider(
+    "openai", Path(prompt), Path(cwd), quiet=True, cli_path=fake
+)
+peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+# darwin reports ru_maxrss in bytes, linux in kilobytes.
+peak_bytes = peak if sys.platform == "darwin" else peak * 1024
+print(json.dumps({"success": success, "text": text[:64],
+                  "cost": cost, "peak_bytes": peak_bytes}))
+"""
+
+
+def _fake_codex_n_lines(tmp_path: Path, n_lines: int) -> Path:
+    """A fake codex emitting ``n_lines`` large tool_output events + a result."""
+    return _write_fake_codex(
+        tmp_path,
+        body_lines=f'''
+        import json
+        big = "x" * 4096
+        for i in range({n_lines}):
+            print(json.dumps({{"type": "item.completed",
+                              "item": {{"type": "tool_output", "text": big}}}}))
+        print(json.dumps({{"type": "item.completed",
+                          "item": {{"type": "agent_message", "text": "Done."}}}}))
+        print(json.dumps({{"type": "turn.completed", "model": "gpt-5",
+                          "usage": {{"input_tokens": 10, "output_tokens": 10,
+                                    "cached_input_tokens": 0}}}}))
+        ''',
+    )
+
+
+def _run_rss_driver(tmp_path, n_lines: int) -> dict:
+    """Run the RSS driver subprocess against a fake codex with ``n_lines`` events."""
+    work = tmp_path / f"work_{n_lines}"
+    work.mkdir()
+    fake = _fake_codex_n_lines(work, n_lines)
+    prompt = _prompt_file(work)
+    driver = work / "rss_driver.py"
+    driver.write_text(_RSS_DRIVER)
+    repo_root = str(Path(__file__).resolve().parent.parent)
+    proc = subprocess.run(
+        [sys.executable, str(driver), repo_root, str(fake), str(prompt), str(work)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert proc.returncode == 0, (
+        f"driver crashed (rc={proc.returncode}, n_lines={n_lines}); "
+        f"stdout={proc.stdout!r} stderr={proc.stderr[-2000:]!r}"
+    )
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+@pytest.mark.slow
+def test_openai_codex_spool_caps_peak_rss(tmp_path):
+    """#1646 reproduction: a >=128 MiB Codex transcript must NOT blow up parent RSS.
+
+    The pre-fix in-RAM path (`capture_output=True, text=True` + `.strip()` +
+    `.splitlines()`) peaks at ~3-4x the transcript size, which crossed cloud
+    RSS limits and SIGKILLed the parent. The spooled path keeps peak ~constant
+    regardless of transcript size.
+
+    We run the SAME workload twice in fresh interpreters — a tiny transcript
+    (calibrates the module-import baseline) and a >=128 MiB transcript — and
+    assert the large run's peak RSS is only marginally above the tiny run's.
+    On the old path the large run would be hundreds of MiB higher; the spooled
+    path keeps the delta tiny because only bounded snippets are decoded.
+    """
+    # ~128 MiB of NDJSON for the large run: 32768 lines * 4096-byte payload.
+    small = _run_rss_driver(tmp_path, n_lines=4)
+    large = _run_rss_driver(tmp_path, n_lines=32768)
+
+    assert small["success"] is True and small["text"] == "Done.", small
+    assert large["success"] is True and large["text"] == "Done.", large
+
+    small_mib = small["peak_bytes"] / (1024 * 1024)
+    large_mib = large["peak_bytes"] / (1024 * 1024)
+    delta_mib = large_mib - small_mib
+    # The old in-RAM path would add ~384-512 MiB for a 128 MiB transcript. The
+    # spooled path adds essentially nothing; 96 MiB is a generous ceiling that
+    # the old path blows past while the fix clears it with wide margin.
+    assert delta_mib < 96, (
+        f"128 MiB transcript inflated peak RSS by {delta_mib:.1f} MiB "
+        f"(small={small_mib:.1f}, large={large_mib:.1f}); spool not bounding heap"
+    )
