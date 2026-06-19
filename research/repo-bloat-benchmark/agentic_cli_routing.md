@@ -1,8 +1,8 @@
 # Agentic CLI Routing Design
 
-**Issue:** [#1585](https://github.com/promptdriven/pdd/issues/1585)  
+**Issue:** [#1585](https://github.com/promptdriven/pdd/issues/1585)
 **Parent:** [#1431](https://github.com/promptdriven/pdd/issues/1431), epic PR
-[#1582](https://github.com/promptdriven/pdd/pull/1582)  
+[#1582](https://github.com/promptdriven/pdd/pull/1582)
 **Scope:** route external agentic CLI harness configuration by task class.
 
 ## Goal
