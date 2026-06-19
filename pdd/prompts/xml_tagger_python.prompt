@@ -1,3 +1,30 @@
+<pdd-reason>Adds XML structure tags to prompt content.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "xml_tagger",
+        "signature": "(raw_prompt: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME) -> Tuple[str, float, str]",
+        "returns": "Tuple[str, float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      },
+      {
+        "name": "main",
+        "signature": "()",
+        "returns": "None",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write a Python function, "xml_tagger", that will enhance a given LLM prompt by adding XML tags to improve its structure and readability. Additionally, the function should print the intermediate result after the XML conversion step to provide visibility into the process.
 
 <include>context/python_preamble.prompt</include>
@@ -39,7 +66,7 @@
         3a. Pass the following string parameters to the prompt during invoke:
             - 'xml_generated_analysis'
         3b. If verbose is True, pretty print a message letting the user know it is running and how many tokens are in the prompt and the cost.
-        3c. The Pydantic output will have the key 'xml_tagged' that contains the extracted tagged prompt.
+        3c. Guard the structured result before reading its fields: if the llm_invoke result is not an `XMLOutput` instance (e.g. `None`, a raw string, or a raw `dict` left by llm_invoke's cloud validation-failure fallback), do not access `.xml_tagged` — instead raise a typed ValueError, using a positive `isinstance(result, XMLOutput)` check (NOT a `None`/`str` blacklist) so any non-`XMLOutput` shape is caught (issue #1612). Otherwise the `XMLOutput` Pydantic output will have the key 'xml_tagged' that contains the extracted tagged prompt.
     Step 4. If verbose is True, pretty print the extracted tagged prompt using the rich Markdown function. Also print the number of tokens in the result and the cost.
     Step 5. Calculate the total cost by summing the costs from both runs.
     Step 6. Return the 'xml_tagged' string using 'get', the 'total_cost' and 'model_name'.

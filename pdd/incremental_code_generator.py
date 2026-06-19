@@ -62,10 +62,10 @@ def incremental_code_generator(
     if not 0 <= strength <= 1 or not 0 <= temperature <= 2 or not 0 <= time <= 1:
         raise ValueError("Strength and time must be between 0 and 1. Temperature must be between 0 and 2.")
 
-    try:
-        total_cost = 0.0
-        model_name = ""
+    total_cost = 0.0
+    model_name = ""
 
+    try:
         # Step 1: Load and preprocess the diff_analyzer_LLM prompt template
         diff_analyzer_template = load_prompt_template("diff_analyzer_LLM")
         if preprocess_prompt:
@@ -97,6 +97,14 @@ def incremental_code_generator(
         diff_result: DiffAnalysis = diff_response['result']
         total_cost += diff_response['cost']
         model_name = diff_response['model_name'] # Initial model name
+
+        # Guard against malformed structured output (None, raw string, or any
+        # non-DiffAnalysis shape returned by the cache-bypass / truncation path).
+        # Fall back to full regeneration instead of crashing pdd sync.
+        if not isinstance(diff_result, DiffAnalysis):
+            if verbose:
+                console.print("[yellow]Diff analyzer returned a malformed result. Recommending full regeneration.[/yellow]")
+            return None, False, total_cost, model_name
 
         if verbose:
             console.print("[bold green]Diff Analyzer Results:[/bold green]")
@@ -149,6 +157,13 @@ def incremental_code_generator(
             total_cost += patch_response['cost']
             model_name = patch_response['model_name'] # Update model_name to patcher's model
 
+            # Guard against malformed structured output (None, raw string, or any
+            # non-CodePatchResult shape). Fall back to full regeneration.
+            if not isinstance(patch_result, CodePatchResult):
+                if verbose:
+                    console.print("[yellow]Code patcher returned a malformed result. Recommending full regeneration.[/yellow]")
+                return None, False, total_cost, model_name
+
             if verbose:
                 console.print("[bold green]Code Patcher Results:[/bold green]")
                 console.print(Markdown(f"**Analysis:**\n{patch_result.analysis}"))
@@ -166,10 +181,12 @@ def incremental_code_generator(
             return patch_result.patched_code, True, total_cost, model_name
 
     except Exception as e:
-        # This will now catch errors from LLM calls or other unexpected runtime issues,
-        # not the initial input validation ValueErrors.
+        # This catches errors from LLM calls or other unexpected runtime issues
+        # (not the initial input validation ValueErrors). Rather than crashing
+        # pdd sync, fall back to full regeneration by returning the documented
+        # (None, False, total_cost, model_name) tuple.
         console.print(f"[bold red]Error in incremental_code_generator: {str(e)}[/bold red]")
-        raise RuntimeError(f"Failed to process incremental code generation: {str(e)}")
+        return None, False, total_cost, model_name
 
 if __name__ == "__main__":
     # Example usage for testing purposes

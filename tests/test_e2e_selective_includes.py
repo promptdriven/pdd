@@ -27,6 +27,7 @@ import pytest
 from click.testing import CliRunner
 
 from pdd.content_selector import ContentSelector, SelectorError
+from pdd.insert_includes import InsertIncludesOutput
 
 
 # ---------------------------------------------------------------------------
@@ -897,7 +898,7 @@ class TestInsertIncludesUpdateBlocks:
             llm_call_count["count"] += 1
             # This should NOT be called for insert_includes since only updates
             return {
-                "result": MagicMock(output_prompt="should not be used"),
+                "result": InsertIncludesOutput(output_prompt="should not be used"),
                 "cost": 0.001,
                 "model_name": "mock",
             }
@@ -943,7 +944,7 @@ class TestInsertIncludesUpdateBlocks:
             if "actual_dependencies_to_insert" in input_json:
                 captured_deps.append(input_json["actual_dependencies_to_insert"])
             return {
-                "result": MagicMock(output_prompt=input_prompt + "\n" + new_directives),
+                "result": InsertIncludesOutput(output_prompt=input_prompt + "\n" + new_directives),
                 "cost": 0.001,
                 "model_name": "mock",
             }
@@ -994,7 +995,7 @@ class TestInsertIncludesUpdateBlocks:
             if "actual_prompt_to_update" in input_json:
                 captured_prompts.append(input_json["actual_prompt_to_update"])
             return {
-                "result": MagicMock(output_prompt="final output"),
+                "result": InsertIncludesOutput(output_prompt="final output"),
                 "cost": 0.001,
                 "model_name": "mock",
             }
@@ -1888,8 +1889,7 @@ class TestAutoDepsThenPreprocessPipeline:
             # Simulate what the LLM does: insert the dependency block into the prompt
             output = actual_prompt.rstrip() + "\n\n" + deps.replace("<new>", "").replace("</new>", "").strip() + "\n"
 
-            result_obj = MagicMock()
-            result_obj.output_prompt = output
+            result_obj = InsertIncludesOutput(output_prompt=output)
             return {"result": result_obj, "cost": 0.001, "model_name": "mock"}
 
         with patch("pdd.insert_includes.auto_include", side_effect=mock_auto_include):
