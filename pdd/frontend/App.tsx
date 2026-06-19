@@ -828,7 +828,7 @@ const App: React.FC = () => {
 
   return (
     <ErrorBoundary>
-    <div className="min-h-screen bg-surface-950">
+    <div className="min-h-screen app-bg">
       {/* Modern responsive header - Restructured with branding left, workflows center, status right */}
       <header className="glass sticky top-0 z-40 border-b border-surface-700/50">
         <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12">
@@ -860,13 +860,13 @@ const App: React.FC = () => {
 
             {/* CENTER: Main workflow buttons with gold border */}
             <div className="flex-1 flex justify-center">
-              <div className="flex gap-1 sm:gap-1.5 p-1.5 rounded-xl border-2 border-[#FDCE49]/60 bg-surface-800/40 max-w-fit overflow-x-auto scrollbar-hide">
+              <div className="flex gap-1 sm:gap-1.5 p-1.5 rounded-xl border-2 border-[#18c07a]/60 bg-surface-800/40 glow-white max-w-fit overflow-x-auto scrollbar-hide">
                 <button
                   onClick={() => setView('devunits')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'devunits'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
-                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                      ? 'bg-[#00d8ff]/20 text-[#00d8ff] border border-[#00d8ff]/50 shadow-lg glow-white'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(0, 216, 255,0.3)]'
                   }`}
                 >
                   <Squares2X2Icon className="hidden sm:inline w-4 h-4 mr-1.5" />Dev Units
@@ -875,8 +875,8 @@ const App: React.FC = () => {
                   onClick={() => setView('bug')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'bug'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
-                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                      ? 'bg-[#00d8ff]/20 text-[#00d8ff] border border-[#00d8ff]/50 shadow-lg glow-white'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(0, 216, 255,0.3)]'
                   }`}
                 >
                   <BugAntIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Bug
@@ -885,8 +885,8 @@ const App: React.FC = () => {
                   onClick={() => setView('fix')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'fix'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
-                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                      ? 'bg-[#00d8ff]/20 text-[#00d8ff] border border-[#00d8ff]/50 shadow-lg glow-white'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(0, 216, 255,0.3)]'
                   }`}
                 >
                   <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -897,8 +897,8 @@ const App: React.FC = () => {
                   onClick={() => setView('change')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'change'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
-                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                      ? 'bg-[#00d8ff]/20 text-[#00d8ff] border border-[#00d8ff]/50 shadow-lg glow-white'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(0, 216, 255,0.3)]'
                   }`}
                 >
                   <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -909,8 +909,8 @@ const App: React.FC = () => {
                   onClick={() => setView('settings')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'settings'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
-                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
+                      ? 'bg-[#00d8ff]/20 text-[#00d8ff] border border-[#00d8ff]/50 shadow-lg glow-white'
+                      : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(0, 216, 255,0.3)]'
                   }`}
                 >
                   <Cog6ToothIcon className="hidden sm:inline w-4 h-4 mr-1.5" />Settings
@@ -965,9 +965,9 @@ const App: React.FC = () => {
               <div className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded-full transition-colors ${
                 serverConnected
                   ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                  : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                  : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
               }`}>
-                <span className={`w-2 h-2 rounded-full ${serverConnected ? 'bg-green-400 animate-pulse-slow' : 'bg-yellow-400 animate-pulse'}`} />
+                <span className={`w-2 h-2 rounded-full ${serverConnected ? 'bg-green-400 animate-pulse-slow' : 'bg-cyan-400 animate-pulse'}`} />
                 <span className="hidden sm:inline">{serverConnected ? 'Connected' : 'Offline'}</span>
               </div>
 
@@ -1057,7 +1057,7 @@ const App: React.FC = () => {
               <div className="px-4 py-3 border-t border-surface-700/50 bg-surface-800/30">
                 <button
                   onClick={() => setShowRemotePanel(false)}
-                  className="w-full px-4 py-2 bg-[#DFA84A] hover:bg-[#FDCE49] text-surface-900 rounded-lg text-sm font-medium transition-colors"
+                  className="w-full px-4 py-2 bg-[#00d8ff]/20 hover:bg-[#00d8ff]/30 text-[#00d8ff] border border-[#00d8ff]/40 rounded-lg text-sm font-medium transition-colors"
                 >
                   Done
                 </button>
@@ -1153,8 +1153,8 @@ const App: React.FC = () => {
           {view === 'devunits' && (
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#FDCE49]/20 flex items-center justify-center">
-                  <Squares2X2Icon className="w-5 h-5 text-[#FDCE49]" />
+                <div className="w-10 h-10 rounded-xl bg-[#18c07a]/20 flex items-center justify-center">
+                  <Squares2X2Icon className="w-5 h-5 text-[#18c07a]" />
                 </div>
                 <div>
                   <h2 className="text-lg sm:text-xl font-semibold text-white">Dev Units</h2>
@@ -1167,7 +1167,7 @@ const App: React.FC = () => {
                   onClick={() => setDevUnitsSubView('graph')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
                     devUnitsSubView === 'graph'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-md'
+                      ? 'bg-[#00d8ff]/20 text-[#00d8ff] border border-[#00d8ff]/50 shadow-md glow-white'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
                   }`}
                 >
@@ -1177,7 +1177,7 @@ const App: React.FC = () => {
                   onClick={() => setDevUnitsSubView('list')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
                     devUnitsSubView === 'list'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-md'
+                      ? 'bg-[#00d8ff]/20 text-[#00d8ff] border border-[#00d8ff]/50 shadow-md glow-white'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
                   }`}
                 >
@@ -1258,17 +1258,17 @@ const App: React.FC = () => {
       ) : (
       <main className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 py-4 sm:py-6 pb-16 sm:pb-20">
         {!serverConnected && (
-          <div className="mb-4 sm:mb-6 p-3 sm:p-4 glass-light rounded-xl border border-yellow-500/20 animate-fade-in">
+          <div className="mb-4 sm:mb-6 p-3 sm:p-4 glass-light rounded-xl border border-cyan-500/20 animate-fade-in">
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 rounded-lg bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
-                <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-8 h-8 rounded-lg bg-cyan-500/20 flex items-center justify-center flex-shrink-0">
+                <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
               <div>
-                <p className="text-yellow-300 text-sm sm:text-base font-medium">Server not connected</p>
-                <p className="text-yellow-200/70 text-xs sm:text-sm mt-1">
-                  Run <code className="bg-surface-800/80 px-1.5 py-0.5 rounded font-mono text-yellow-300">pdd connect</code> in your terminal to enable command execution.
+                <p className="text-cyan-300 text-sm sm:text-base font-medium">Server not connected</p>
+                <p className="text-cyan-200/70 text-xs sm:text-sm mt-1">
+                  Run <code className="bg-surface-800/80 px-1.5 py-0.5 rounded font-mono text-cyan-300">pdd connect</code> in your terminal to enable command execution.
                 </p>
               </div>
             </div>
@@ -1352,7 +1352,7 @@ const App: React.FC = () => {
                 {/* Prerequisites card */}
                 <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                   <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     Prerequisites
@@ -1465,7 +1465,7 @@ const App: React.FC = () => {
                       mt-4 w-full px-4 py-2.5 sm:py-3 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 text-sm sm:text-base
                       ${isExecuting || !serverConnected || !fixPrUrl.trim()
                         ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40'}
+                        : 'bg-gradient-to-r from-blue-500 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40'}
                     `}
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1478,7 +1478,7 @@ const App: React.FC = () => {
                 {/* Prerequisites card */}
                 <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                   <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     Prerequisites
@@ -1601,7 +1601,7 @@ const App: React.FC = () => {
                 {/* Prerequisites card */}
                 <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                   <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     Prerequisites

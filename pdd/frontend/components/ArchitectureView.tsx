@@ -1141,7 +1141,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                 className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                   isGeneratingFromIssue
                     ? 'bg-surface-600 text-surface-400 cursor-not-allowed'
-                    : 'bg-accent-600 hover:bg-accent-500 text-white'
+                    : 'bg-accent-500 hover:bg-accent-500 text-white'
                 }`}
                 disabled={!serverConnected || isGeneratingFromIssue || !issueUrl.trim()}
               >
@@ -1195,7 +1195,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
           </div>
 
           {!serverConnected && (
-            <p className="text-yellow-400 text-xs mt-4">
+            <p className="text-cyan-400 text-xs mt-4">
               Connect to server to enable architecture generation
             </p>
           )}
@@ -1282,7 +1282,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                     className={`w-full px-4 py-2.5 rounded-xl font-medium transition-all duration-200 flex items-center justify-center gap-2 ${
                       remainingModulesCount === 0
                         ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-blue-600 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-500/25'
+                        : 'bg-gradient-to-r from-blue-500 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-500/25'
                     }`}
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1476,7 +1476,7 @@ const ArchitectureView: React.FC<ArchitectureViewProps> = ({
                   <button
                     onClick={() => handleGeneratePrompts()}
                     disabled={isGeneratingPrompts}
-                    className="mt-6 w-full px-4 py-3 bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white rounded-xl font-medium transition-all duration-200 shadow-lg shadow-accent-500/25 hover:shadow-accent-500/40 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="mt-6 w-full px-4 py-3 bg-gradient-to-r from-accent-500 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white rounded-xl font-medium transition-all duration-200 shadow-lg shadow-accent-500/25 hover:shadow-accent-500/40 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {isGeneratingPrompts ? 'Generating Prompts...' : 'Generate All Prompts'}
                   </button>

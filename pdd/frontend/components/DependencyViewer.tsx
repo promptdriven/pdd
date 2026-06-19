@@ -128,10 +128,10 @@ const getCategoryColors = (category: 'frontend' | 'backend' | 'shared') => {
   switch (category) {
     case 'frontend':
       return {
-        bg: 'bg-orange-500/20',
-        border: 'border-orange-500/50',
-        hover: 'hover:border-orange-400',
-        text: 'text-orange-300',
+        bg: 'bg-sky-500/20',
+        border: 'border-sky-500/50',
+        hover: 'hover:border-sky-400',
+        text: 'text-sky-300',
       };
     case 'backend':
       return {
@@ -892,7 +892,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
               if (node.type === 'groupNode') return '#8b5cf6';
               const data = node.data as ModuleNodeData;
               if (data.hasPrompt) return '#10b981';
-              if (data.colors?.bg?.includes('orange')) return '#f97316';
+              if (data.colors?.bg?.includes('orange')) return '#00d8ff';
               if (data.colors?.bg?.includes('blue')) return '#3b82f6';
               return '#22c55e';
             }}
@@ -930,7 +930,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded bg-orange-500/40 border border-orange-500/50" />
+                  <div className="w-3 h-3 rounded bg-sky-500/40 border border-sky-500/50" />
                   <span className="text-xs text-surface-300">Frontend</span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -952,7 +952,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
                 <div className="flex items-center gap-2 pt-1 border-t border-surface-700/50 mt-1">
                   <div className="flex gap-0.5">
                     <div className="w-3 h-3 rounded-full bg-green-500 flex items-center justify-center text-[7px] font-bold text-white">C</div>
-                    <div className="w-3 h-3 rounded-full bg-yellow-500 flex items-center justify-center text-[7px] font-bold text-white">T</div>
+                    <div className="w-3 h-3 rounded-full bg-cyan-500 flex items-center justify-center text-[7px] font-bold text-white">T</div>
                     <div className="w-3 h-3 rounded-full bg-blue-500 flex items-center justify-center text-[7px] font-bold text-white">E</div>
                   </div>
                   <span className="text-xs text-surface-300">Code/Test/Example</span>
@@ -1001,7 +1001,7 @@ const DependencyViewer: React.FC<DependencyViewerProps> = ({
                 {editMode && (
                   <div className="pt-1 border-t border-surface-700/50 mt-1">
                     <p className="text-[10px] text-surface-400 leading-relaxed">
-                      <span className="text-orange-400">Edit mode:</span> Right-click edge to delete, or click + Delete/Backspace
+                      <span className="text-sky-400">Edit mode:</span> Right-click edge to delete, or click + Delete/Backspace
                     </p>
                   </div>
                 )}

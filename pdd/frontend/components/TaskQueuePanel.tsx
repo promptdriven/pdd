@@ -292,7 +292,7 @@ const TaskQueuePanel: React.FC<TaskQueuePanelProps> = ({
 
             {/* Paused indicator */}
             {isQueueRunning && isPaused && (
-              <span className="px-2 py-0.5 text-xs font-medium bg-yellow-500/20 text-yellow-400 rounded-full">
+              <span className="px-2 py-0.5 text-xs font-medium bg-cyan-500/20 text-cyan-400 rounded-full">
                 Paused
               </span>
             )}

@@ -103,7 +103,7 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
                 </div>
                 <div className="flex items-center gap-2 text-xs mt-1">
                   <span className={hasCode ? 'text-green-400' : 'text-surface-500'}>{hasCode ? '✓' : '✗'} Code</span>
-                  <span className={hasTest ? 'text-yellow-400' : 'text-surface-500'}>{hasTest ? '✓' : '✗'} Test</span>
+                  <span className={hasTest ? 'text-cyan-400' : 'text-surface-500'}>{hasTest ? '✓' : '✗'} Test</span>
                   <span className={hasExample ? 'text-blue-400' : 'text-surface-500'}>{hasExample ? '✓' : '✗'} Example</span>
                 </div>
               </div>
@@ -137,7 +137,7 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
           {editMode && (
             <button
               onClick={handleEditClick}
-              className="absolute -top-2 -left-2 w-6 h-6 bg-accent-600 hover:bg-accent-500 rounded-full flex items-center justify-center shadow-lg z-20 opacity-0 group-hover:opacity-100 transition-opacity"
+              className="absolute -top-2 -left-2 w-6 h-6 bg-accent-500 hover:bg-accent-500 rounded-full flex items-center justify-center shadow-lg z-20 opacity-0 group-hover:opacity-100 transition-opacity"
               title="Edit module"
             >
               <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -150,7 +150,7 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
           {hasPrompt && onRunSync && !editMode && (
             <button
               onClick={handleSyncClick}
-              className="absolute -top-2 -right-2 w-6 h-6 bg-gradient-to-br from-[#FDCE49] to-[#DFA84A] hover:from-[#FFD966] hover:to-[#FDCE49] rounded-full flex items-center justify-center shadow-lg z-20 transition-all hover:scale-110"
+              className="absolute -top-2 -right-2 w-6 h-6 bg-gradient-to-br from-[#18c07a] to-[#00d8ff] hover:from-[#5ce3ff] hover:to-[#18c07a] rounded-full flex items-center justify-center shadow-lg z-20 transition-all hover:scale-110"
               title="Run pdd sync (prompt → code)"
             >
               <svg className="w-3 h-3 text-surface-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -178,7 +178,7 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
                 C
               </div>
               <div
-                className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold ${hasTest ? 'bg-yellow-500 text-white' : 'bg-surface-700 text-surface-500'}`}
+                className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[8px] font-bold ${hasTest ? 'bg-cyan-500 text-white' : 'bg-surface-700 text-surface-500'}`}
                 title={hasTest ? 'Test exists' : 'No test file'}
               >
                 T

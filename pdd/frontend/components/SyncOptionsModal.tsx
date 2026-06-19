@@ -83,7 +83,7 @@ const SyncOptionsModal: React.FC<SyncOptionsModalProps> = ({
         {/* Header */}
         <div className="px-5 py-4 border-b border-surface-700/50">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#FDCE49] to-[#DFA84A] flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#18c07a] to-[#00d8ff] flex items-center justify-center">
               <svg className="w-5 h-5 text-surface-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
@@ -131,7 +131,7 @@ const SyncOptionsModal: React.FC<SyncOptionsModalProps> = ({
           <button
             type="button"
             onClick={handleConfirm}
-            className="w-full sm:w-auto px-4 py-2 rounded-xl text-sm font-medium bg-gradient-to-r from-[#FDCE49] to-[#DFA84A] hover:from-[#FFD966] hover:to-[#FDCE49] text-surface-900 shadow-lg transition-all flex items-center justify-center gap-2"
+            className="w-full sm:w-auto px-4 py-2 rounded-xl text-sm font-medium bg-gradient-to-r from-[#18c07a] to-[#00d8ff] hover:from-[#5ce3ff] hover:to-[#18c07a] text-surface-900 shadow-lg transition-all flex items-center justify-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />

@@ -46,20 +46,23 @@
               },
               // PDD brand colors
               pdd: {
-                gold: '#FDCE49',
-                goldActive: '#DFA84A',
-                goldHover: '#FFD966',
+                gold: '#18c07a',
+                goldActive: '#ff2aa6',
+                goldHover: '#ff5cc0',
               },
-              // Shared PromptDriven brand palette (matches the Sizzle site)
+              // PromptDriven Brand Guidelines v1.4 §3 — official palette
               brand: {
-                cyan: '#00d8ff',
-                navy: '#0a0a23',
-                graphite: '#1a1b26',
-                magenta: '#ff2aa6',
-                purple: '#8c47ff',
-                green: '#18c07a',
-                sleet: '#f5f7fa',
-                mute: '#5b6378',
+                cyan: '#00d8ff',     // Electric-Cyan · Primary
+                navy: '#0a0a23',     // Deep-Navy · Ink/Fill
+                purple: '#8c47ff',   // Lumen-Purple · Accent 1
+                magenta: '#ff2aa6',  // Prompt-Magenta · Accent 2
+                sleet: '#f5f7fa',    // Light-Sleet · Surface-Light
+                graphite: '#1a1b26', // Graphite-900 · Surface-Dark
+                green: '#18c07a',    // Build-Green · Success
+                green700: '#0fa86a', // Build-Green-700 · Success tint
+                yellow: '#fbbb35',   // Diff-Yellow · Warning
+                red: '#f34842',      // Break-Red · Error
+                mute: '#5b6378',     // neutral (UI only, not a brand pigment)
               },
             },
             fontFamily: {
@@ -165,8 +168,8 @@
         50% { opacity: 0.5; }
       }
       @keyframes glowPulse {
-        0%, 100% { box-shadow: 0 0 5px rgba(253, 206, 73, 0.3); }
-        50% { box-shadow: 0 0 20px rgba(253, 206, 73, 0.6); }
+        0%, 100% { box-shadow: 0 0 5px rgba(0, 216, 255, 0.3); }
+        50% { box-shadow: 0 0 20px rgba(0, 216, 255, 0.6); }
       }
 
       .animate-fade-in { animation: fadeIn 0.3s ease-out; }
@@ -201,6 +204,21 @@
         outline: none;
         box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
       }
+
+      /* App background — Deep-Navy base with brand Electric-Cyan + Lumen-Purple light-blue glows */
+      .app-bg {
+        background-color: #0a0a23;
+        background-image:
+          radial-gradient(55rem 38rem at 12% -8%, rgba(0, 216, 255, 0.16), transparent 60%),
+          radial-gradient(48rem 34rem at 100% -6%, rgba(140, 71, 255, 0.13), transparent 55%),
+          radial-gradient(46rem 32rem at 50% 118%, rgba(0, 216, 255, 0.10), transparent 60%);
+        background-attachment: fixed;
+      }
+
+      /* White glow shadows */
+      .glow-white { box-shadow: 0 0 16px rgba(255, 255, 255, 0.16); }
+      .glow-white-strong { box-shadow: 0 0 24px rgba(255, 255, 255, 0.30); }
+      .glass, .glass-light { box-shadow: 0 0 18px rgba(255, 255, 255, 0.08); }
 
       /* Card hover effect */
       .card-hover {
@@ -302,7 +320,7 @@
 
       /* ReactFlow edge selection styles */
       .react-flow__edge.selected .react-flow__edge-path {
-        stroke: #f97316 !important;
+        stroke: #00d8ff !important;
         stroke-width: 3px !important;
       }
       .react-flow__edge:hover .react-flow__edge-path {
@@ -310,7 +328,7 @@
         stroke-width: 2.5px !important;
       }
       .react-flow__edge.selected:hover .react-flow__edge-path {
-        stroke: #fb923c !important;
+        stroke: #5ce3ff !important;
         stroke-width: 3px !important;
       }
 
@@ -405,7 +423,7 @@
 }
 </script>
 </head>
-  <body class="bg-surface-950 text-gray-200">
+  <body class="app-bg text-gray-200">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
   </body>

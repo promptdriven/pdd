@@ -200,8 +200,8 @@ const PromptEditor: React.FC<PromptEditorProps> = ({ promptPath, onSave, onCance
           <span className="font-mono">{promptPath}</span>
         </div>
         {hasChanges && (
-          <span className="text-yellow-400 text-sm flex items-center gap-1">
-            <span className="w-2 h-2 bg-yellow-400 rounded-full"></span>
+          <span className="text-cyan-400 text-sm flex items-center gap-1">
+            <span className="w-2 h-2 bg-cyan-400 rounded-full"></span>
             Unsaved changes
           </span>
         )}
@@ -241,7 +241,7 @@ const PromptEditor: React.FC<PromptEditorProps> = ({ promptPath, onSave, onCance
             disabled={!hasChanges || saving}
             className={`px-4 py-1.5 text-sm rounded flex items-center gap-2 transition-colors ${
               hasChanges && !saving
-                ? 'bg-blue-600 text-white hover:bg-blue-500'
+                ? 'bg-blue-500 text-white hover:bg-blue-500'
                 : 'bg-gray-700 text-gray-500 cursor-not-allowed'
             }`}
           >

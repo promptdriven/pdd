@@ -81,7 +81,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, onSelect, filter, depth, dire
     <div>
       <div
         className={`flex items-center py-1 px-2 cursor-pointer rounded transition-colors ${
-          isDirectory ? 'hover:bg-surface-700' : 'hover:bg-accent-600/20'
+          isDirectory ? 'hover:bg-surface-700' : 'hover:bg-accent-500/20'
         }`}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={handleClick}
@@ -102,7 +102,7 @@ const TreeNode: React.FC<TreeNodeProps> = ({ node, onSelect, filter, depth, dire
         {directoryMode && isDirectory && (
           <button
             onClick={handleSelectDirectory}
-            className="ml-2 px-2 py-0.5 text-xs bg-accent-600/20 hover:bg-accent-600/40 text-accent-400 rounded transition-colors"
+            className="ml-2 px-2 py-0.5 text-xs bg-accent-500/20 hover:bg-accent-500/40 text-accent-400 rounded transition-colors"
           >
             Select
           </button>

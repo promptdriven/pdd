@@ -76,7 +76,7 @@ class UnionFind {
 const BATCH_COLORS = [
   '#8B5CF6', // Purple
   '#06B6D4', // Cyan
-  '#F59E0B', // Amber
+  '#00d8ff', // Amber
   '#10B981', // Emerald
   '#EC4899', // Pink
   '#6366F1', // Indigo

@@ -151,12 +151,12 @@ const SyncFromPromptModal: React.FC<SyncFromPromptModalProps> = ({
 
               {/* Sync Errors */}
               {result.errors && result.errors.length > 0 && (
-                <div className="bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-4">
-                  <h4 className="text-sm font-medium text-yellow-300 mb-2">Sync Warnings:</h4>
-                  <ul className="text-sm text-yellow-200/80 space-y-1">
+                <div className="bg-cyan-500/10 border border-cyan-500/30 rounded-lg p-4">
+                  <h4 className="text-sm font-medium text-cyan-300 mb-2">Sync Warnings:</h4>
+                  <ul className="text-sm text-cyan-200/80 space-y-1">
                     {result.errors.map((err, i) => (
                       <li key={i} className="flex items-start gap-2">
-                        <span className="text-yellow-400 flex-shrink-0">•</span>
+                        <span className="text-cyan-400 flex-shrink-0">•</span>
                         <span>{err}</span>
                       </li>
                     ))}
@@ -203,7 +203,7 @@ const SyncFromPromptModal: React.FC<SyncFromPromptModalProps> = ({
               <button
                 onClick={onSync}
                 disabled={isSyncing}
-                className="px-4 py-2 bg-accent-600 hover:bg-accent-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="px-4 py-2 bg-accent-500 hover:bg-accent-500 text-white rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {isSyncing && (
                   <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">

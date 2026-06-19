@@ -344,7 +344,7 @@ const ModuleEditModal: React.FC<ModuleEditModalProps> = ({
             <button
               onClick={handleSave}
               disabled={errors.length > 0}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-accent-600 text-white hover:bg-accent-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-accent-500 text-white hover:bg-accent-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               Save Changes
             </button>

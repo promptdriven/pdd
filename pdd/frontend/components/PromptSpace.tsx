@@ -429,7 +429,7 @@ const CommandOptionsModal: React.FC<{
             )}
             <button
               type="submit"
-              className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25 transition-all flex items-center justify-center gap-2"
+              className="w-full sm:w-auto px-4 py-2.5 rounded-xl text-sm font-medium bg-gradient-to-r from-accent-500 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25 transition-all flex items-center justify-center gap-2"
             >
               <span>{command.icon}</span>
               <span>Run {command.shortDescription}</span>
@@ -1274,8 +1274,8 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
           </button>
 
           {hasChanges && (
-            <span className="text-yellow-400 text-xs sm:text-sm flex items-center gap-1.5 px-2 py-1 rounded-full bg-yellow-500/10 border border-yellow-500/20">
-              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-yellow-400 rounded-full animate-pulse"></span>
+            <span className="text-cyan-400 text-xs sm:text-sm flex items-center gap-1.5 px-2 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20">
+              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-cyan-400 rounded-full animate-pulse"></span>
               <span className="hidden xs:inline">Unsaved</span>
             </span>
           )}
@@ -1329,7 +1329,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
             disabled={!hasChanges || saving || viewMode === 'processed'}
             className={`px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm rounded-lg flex items-center gap-1.5 sm:gap-2 transition-all duration-200 ${
               hasChanges && !saving && viewMode === 'raw'
-                ? 'bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25'
+                ? 'bg-gradient-to-r from-accent-500 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25'
                 : 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
             }`}
             title={viewMode === 'processed' ? 'Switch to Raw view to save changes' : undefined}
@@ -1354,8 +1354,8 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
       {embedded && (
         <div className="flex items-center justify-end gap-2 sm:gap-3 px-3 sm:px-4 py-2 border-b border-surface-700/50 bg-surface-900/50">
           {hasChanges && (
-            <span className="text-yellow-400 text-xs sm:text-sm flex items-center gap-1.5 px-2 py-1 rounded-full bg-yellow-500/10 border border-yellow-500/20">
-              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-yellow-400 rounded-full animate-pulse"></span>
+            <span className="text-cyan-400 text-xs sm:text-sm flex items-center gap-1.5 px-2 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20">
+              <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 bg-cyan-400 rounded-full animate-pulse"></span>
               <span className="hidden xs:inline">Unsaved</span>
             </span>
           )}
@@ -1408,7 +1408,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
             disabled={!hasChanges || saving || viewMode === 'processed'}
             className={`px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm rounded-lg flex items-center gap-1.5 sm:gap-2 transition-all duration-200 ${
               hasChanges && !saving && viewMode === 'raw'
-                ? 'bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25'
+                ? 'bg-gradient-to-r from-accent-500 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white shadow-lg shadow-accent-500/25'
                 : 'bg-surface-700/50 text-surface-500 cursor-not-allowed'
             }`}
             title={viewMode === 'processed' ? 'Switch to Raw view to save changes' : undefined}
@@ -1527,7 +1527,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                       <span className="text-base">{cmd.icon}</span>
                       <span className="flex-1">{cmd.shortDescription}</span>
                       {hasMissingFiles && (
-                        <span className="w-5 h-5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs flex items-center justify-center">!</span>
+                        <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 text-xs flex items-center justify-center">!</span>
                       )}
                     </button>
                   );
@@ -1554,7 +1554,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                       <span className="text-base">{cmd.icon}</span>
                       <span className="flex-1">{cmd.shortDescription}</span>
                       {hasMissingFiles && (
-                        <span className="w-5 h-5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs flex items-center justify-center">!</span>
+                        <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 text-xs flex items-center justify-center">!</span>
                       )}
                     </button>
                   );
@@ -1580,7 +1580,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                     <span className="text-base">{cmd.icon}</span>
                     <span className="flex-1">{cmd.shortDescription}</span>
                     {hasMissingFiles && (
-                      <span className="w-5 h-5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs flex items-center justify-center">!</span>
+                      <span className="w-5 h-5 rounded-full bg-cyan-500/20 text-cyan-400 text-xs flex items-center justify-center">!</span>
                     )}
                   </button>
                 );
@@ -1625,7 +1625,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                           <span className="text-surface-500 text-xs">{cmd.icon}</span>
                           <span className="flex-1 text-xs">{cmd.shortDescription}</span>
                           {hasMissingFiles && (
-                            <span className="w-4 h-4 rounded-full bg-yellow-500/20 text-yellow-400 text-[10px] flex items-center justify-center">!</span>
+                            <span className="w-4 h-4 rounded-full bg-cyan-500/20 text-cyan-400 text-[10px] flex items-center justify-center">!</span>
                           )}
                         </button>
                       );
@@ -1715,7 +1715,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
               <div className="px-3 sm:px-4 py-2 bg-surface-800/30 border-b border-surface-700/50 text-xs sm:text-sm text-surface-400 font-mono flex items-center gap-2 overflow-hidden">
                 <span className="truncate flex-1">{prompt.prompt}</span>
                 {viewMode === 'processed' && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-xs bg-yellow-500/15 text-yellow-300 border border-yellow-500/30 flex-shrink-0">Read Only</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] sm:text-xs bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 flex-shrink-0">Read Only</span>
                 )}
                 {/* Analyze Include button */}
                 <button
@@ -1738,7 +1738,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                   onClick={() => setGuidanceSidebarOpen(!guidanceSidebarOpen)}
                   className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 flex-shrink-0 ${
                     guidanceSidebarOpen
-                      ? 'bg-accent-600 text-white'
+                      ? 'bg-accent-500 text-white'
                       : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
                   }`}
                   title={guidanceSidebarOpen ? 'Hide prompting guide' : 'Show prompting guide'}
@@ -1823,7 +1823,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                                   <span className="text-lg relative">
                                     {cmd.icon}
                                     {hasMissingFiles && (
-                                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-yellow-500/80"></span>
+                                      <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-cyan-500/80"></span>
                                     )}
                                   </span>
                                   <span className="text-[10px] leading-tight text-center">{cmd.shortDescription}</span>
@@ -1892,7 +1892,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                           onClick={() => { if (!isExecuting) handleCommandClick(CommandType.TEST); }}
                           disabled={isExecuting}
                           className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-[10px] font-medium transition-all duration-200 ${
-                            isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-yellow-300 hover:bg-yellow-500/20 hover:text-white'
+                            isExecuting ? 'text-surface-500 cursor-not-allowed' : 'text-cyan-300 hover:bg-cyan-500/20 hover:text-white'
                           }`}
                           title="Generate test from prompt + code"
                         >
@@ -1913,13 +1913,13 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                             <svg className={`w-3 h-3 text-surface-400 transition-transform ${testCollapsed ? '-rotate-90' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                             </svg>
-                            <svg className="w-4 h-4 text-yellow-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className="w-4 h-4 text-cyan-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
                             </svg>
                             <span className="text-xs text-surface-400 font-mono truncate" title={prompt.test || ''}>
                               {prompt.test?.split('/').pop() || 'Test'}
                             </span>
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/20 text-yellow-300 flex-shrink-0">Read Only</span>
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-cyan-500/20 text-cyan-300 flex-shrink-0">Read Only</span>
                           </div>
                           <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
                             <button onClick={() => loadTestContent()} disabled={testLoading} className="p-1.5 text-surface-400 hover:text-white hover:bg-surface-700 rounded transition-colors" title="Reload">
@@ -1937,7 +1937,7 @@ const PromptSpace: React.FC<PromptSpaceProps> = ({
                         {!testCollapsed && (
                           testLoading ? (
                             <div className="flex-1 flex items-center justify-center py-8">
-                              <svg className="animate-spin h-5 w-5 text-yellow-400" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                              <svg className="animate-spin h-5 w-5 text-cyan-400" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
                             </div>
                           ) : testError ? (
                             <div className="flex-1 flex items-center justify-center py-4">

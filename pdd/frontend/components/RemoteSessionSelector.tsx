@@ -100,14 +100,14 @@ const RemoteSessionSelector: React.FC<RemoteSessionSelectorProps> = ({
               className={`flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium ${
                 selectedSession.status === 'active'
                   ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                  : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20'
+                  : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
               }`}
             >
               <span
                 className={`w-1.5 h-1.5 rounded-full ${
                   selectedSession.status === 'active'
                     ? 'bg-green-400'
-                    : 'bg-yellow-400 animate-pulse'
+                    : 'bg-cyan-400 animate-pulse'
                 }`}
               />
               {selectedSession.status === 'active' ? 'Active' : 'Offline'}
@@ -131,14 +131,14 @@ const RemoteSessionSelector: React.FC<RemoteSessionSelectorProps> = ({
 
       {/* Stale session warning banner */}
       {selectedSession && selectedSession.status === 'stale' && (
-        <div className="mt-2 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
+        <div className="mt-2 p-2 bg-cyan-500/10 border border-cyan-500/20 rounded-lg">
           <div className="flex items-start gap-2">
-            <svg className="w-4 h-4 text-yellow-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 text-cyan-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
             </svg>
             <div>
-              <p className="text-xs font-medium text-yellow-400">Session Offline</p>
-              <p className="text-xs text-yellow-200/70 mt-0.5">
+              <p className="text-xs font-medium text-cyan-400">Session Offline</p>
+              <p className="text-xs text-cyan-200/70 mt-0.5">
                 This session has not sent a heartbeat recently. The remote machine may not be running.
                 Commands submitted may not be executed.
               </p>

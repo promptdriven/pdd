@@ -57,7 +57,7 @@ const TaskQueueControls: React.FC<TaskQueueControlsProps> = ({
             className={`
               px-3 py-1 text-xs font-medium rounded-md transition-colors
               ${executionMode === 'auto'
-                ? 'bg-accent-600 text-white'
+                ? 'bg-accent-500 text-white'
                 : 'text-surface-400 hover:text-white'
               }
             `}
@@ -69,7 +69,7 @@ const TaskQueueControls: React.FC<TaskQueueControlsProps> = ({
             className={`
               px-3 py-1 text-xs font-medium rounded-md transition-colors
               ${executionMode === 'manual'
-                ? 'bg-accent-600 text-white'
+                ? 'bg-accent-500 text-white'
                 : 'text-surface-400 hover:text-white'
               }
             `}
@@ -93,7 +93,7 @@ const TaskQueueControls: React.FC<TaskQueueControlsProps> = ({
       {hasAnyTasks && progress.total > 0 && (
         <div className="h-1.5 bg-surface-700 rounded-full overflow-hidden">
           <div
-            className="h-full bg-gradient-to-r from-accent-600 to-green-500 rounded-full transition-all duration-300"
+            className="h-full bg-gradient-to-r from-accent-500 to-green-500 rounded-full transition-all duration-300"
             style={{ width: `${(progress.completed / progress.total) * 100}%` }}
           />
         </div>
@@ -107,7 +107,7 @@ const TaskQueueControls: React.FC<TaskQueueControlsProps> = ({
             {!isQueueRunning && hasPendingTasks && (
               <button
                 onClick={onStartQueue}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-accent-600 text-white hover:bg-accent-500 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-accent-500 text-white hover:bg-accent-500 rounded-lg transition-colors"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
@@ -119,7 +119,7 @@ const TaskQueueControls: React.FC<TaskQueueControlsProps> = ({
             {isQueueRunning && !isPaused && (
               <button
                 onClick={onPauseQueue}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-yellow-600 text-white hover:bg-yellow-500 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-cyan-600 text-white hover:bg-cyan-500 rounded-lg transition-colors"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -130,7 +130,7 @@ const TaskQueueControls: React.FC<TaskQueueControlsProps> = ({
             {isQueueRunning && isPaused && (
               <button
                 onClick={onResumeQueue}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-accent-600 text-white hover:bg-accent-500 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-accent-500 text-white hover:bg-accent-500 rounded-lg transition-colors"
               >
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
@@ -146,7 +146,7 @@ const TaskQueueControls: React.FC<TaskQueueControlsProps> = ({
         {executionMode === 'manual' && hasPendingTasks && progress.running === 0 && (
           <button
             onClick={onRunNextTask}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-accent-600 text-white hover:bg-accent-500 rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-accent-500 text-white hover:bg-accent-500 rounded-lg transition-colors"
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />

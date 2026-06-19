@@ -186,7 +186,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
                       <div className="flex items-center gap-2 text-[10px] text-surface-400 flex-shrink-0">
                         <span className="text-green-400">{formatCost(model.input_cost)}</span>
                         <span>{formatTokens(model.context_limit)} ctx</span>
-                        <span className="text-yellow-400">ELO {model.elo}</span>
+                        <span className="text-cyan-400">ELO {model.elo}</span>
                       </div>
                     </div>
                     {model.max_thinking_tokens > 0 && (

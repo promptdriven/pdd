@@ -13,7 +13,7 @@ const Header: React.FC<HeaderProps> = ({ currentView, onViewChange }) => {
   const navButtonClasses = (view: View) => `
     px-3 py-2 rounded-md text-sm font-medium transition-colors
     ${currentView === view 
-      ? 'bg-blue-600 text-white' 
+      ? 'bg-blue-500 text-white' 
       : 'text-gray-300 hover:bg-gray-700 hover:text-white'
     }
     focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900 focus:ring-blue-500
