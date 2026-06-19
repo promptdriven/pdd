@@ -48,6 +48,7 @@ from pdd.llm_invoke import llm_invoke
 from pdd.get_language import get_language
 from pdd.template_expander import expand_template
 from pdd.architecture_registry import extract_modules
+from pdd.sync_order import extract_module_from_include
 
 # Constants - Use functions for dynamic path resolution
 def get_pdd_dir():
@@ -84,7 +85,36 @@ LOCKS_DIR = get_locks_dir()
 # Export constants for other modules
 __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision',
            'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
-           '_check_example_success_history']
+           '_check_example_success_history', 'AmbiguousModuleError']
+
+
+class AmbiguousModuleError(ValueError):
+    """Raised when a bare module basename maps to more than one architecture module.
+
+    Issue #1677: short basenames such as ``page`` (common in Next.js projects where
+    many files are named ``page.tsx``/``layout.tsx``) are not a stable module
+    identity. When such a name matches multiple ``architecture.json`` entries that
+    resolve to *different* output files, ``pdd sync`` must fail before generating
+    files instead of silently picking one (first-match-wins) or falling back to a
+    ``.pddrc`` default path like ``frontend/src/page.tsx``.
+
+    Subclasses :class:`ValueError` so that existing best-effort callers of
+    :func:`get_pdd_file_paths` (operation logging, drift heal, evidence/checkup
+    gates) degrade gracefully via their broad ``except`` clauses, while sync
+    *generation* paths explicitly re-raise it to fail fast.
+    """
+
+    def __init__(self, basename: str, language: str, choices: List[str]):
+        self.basename = basename
+        self.language = language
+        self.choices = list(choices)
+        choice_lines = "\n".join(f"  - {c}" for c in self.choices)
+        super().__init__(
+            f"Ambiguous module '{basename}' for language {language}: it maps to "
+            f"{len(self.choices)} different files in architecture.json:\n{choice_lines}\n"
+            f"Re-run with a path-qualified module name (e.g. the prompt's directory "
+            f"path, like 'app/login/{basename}') so PDD writes to the intended file."
+        )
 
 
 def _safe_basename(basename: str) -> str:
@@ -544,6 +574,77 @@ def _get_filepath_from_architecture(
         return None, None
 
 
+def _architecture_module_choices(
+    architecture_path: Path,
+    basename: str,
+    language: str,
+) -> List[str]:
+    """Return the distinct canonical output files a BARE basename maps to.
+
+    Issue #1677: used to detect ambiguity before resolving/generating. A return
+    value with two or more entries means ``basename`` is ambiguous for ``language``
+    (it would otherwise be resolved by silent first-match-wins or a ``.pddrc``
+    default). Path-qualified basenames (containing ``/``) are already disambiguated
+    by their directory, so this returns ``[]`` for them.
+
+    Matching is by prompt FILENAME leaf (``<basename>_<language>.prompt``, case
+    insensitive) — exactly how :func:`_get_filepath_from_architecture` resolves a
+    bare basename — NEVER by the filepath stem. The filename is compared by its leaf
+    segment so directory-qualified architecture filenames (e.g.
+    ``app/login/page_TypeScriptReact.prompt``, produced by
+    ``normalize_architecture_filenames``) are matched too. This is deliberate: a
+    different module whose code file merely happens to be named ``page.tsx`` (e.g. a
+    ``home`` route with ``filepath`` ``src/home/page.tsx`` and filename
+    ``home_*.prompt``) must not be treated as a match for ``page``, otherwise a
+    uniquely-named module would be falsely reported as ambiguous. The
+    language-specific filename also means a module that exists in two languages
+    (``foo.py`` + ``foo.ts``) is not flagged for a single-language query.
+
+    A single ``architecture.json`` lists every filepath relative to one root, so the
+    distinct targets are simply the deduplicated matched filepaths — two filepaths
+    that differ at all (e.g. ``src/page.tsx`` vs ``frontend/src/page.tsx``) are
+    genuinely different modules and remain distinct. (The agentic *combined*
+    multi-architecture view resolves filepaths against each source architecture's
+    directory before comparing; see ``agentic_sync._architecture_outputs_by_basename``.)
+    """
+    if "/" in basename:
+        return []
+
+    try:
+        with open(architecture_path, "r", encoding="utf-8") as handle:
+            modules = extract_modules(json.load(handle))
+    except (FileNotFoundError, json.JSONDecodeError, TypeError, OSError):
+        return []
+
+    if not modules:
+        return []
+
+    target_filename = f"{basename}_{language}.prompt".lower()
+    lang_ext = get_extension(language).lower()
+    distinct: set = set()
+    for module in modules:
+        if not isinstance(module, dict):
+            continue
+        filepath = str(module.get("filepath") or "").strip()
+        if not filepath:
+            continue
+        filename = module.get("filename", "") or ""
+        if filename.endswith("_LLM.prompt"):
+            continue
+        leaf = Path(filename).name
+        if leaf.lower() == target_filename:
+            distinct.add(Path(filepath).as_posix())
+        elif not extract_module_from_include(leaf):
+            # Non-prompt architecture filename (e.g. `GitHubAppCTA.tsx`): the module
+            # is identified by its filepath stem instead. Gate on the language
+            # extension so a same-stem file in another language is not conflated.
+            suffix = Path(filepath).suffix.lstrip(".").lower()
+            if Path(filepath).stem == basename and lang_ext and suffix == lang_ext:
+                distinct.add(Path(filepath).as_posix())
+
+    return sorted(distinct)
+
+
 @dataclass
 class Fingerprint:
     """Represents the last known good state of a PDD unit."""
@@ -927,6 +1028,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
 
         # Issue #225: Check architecture.json for filepath FIRST
         arch_path = _find_architecture_json(prompts_root_anchor)
+
+        # Issue #1677: fail fast on an ambiguous BARE basename BEFORE resolving a
+        # prompt or falling back to a .pddrc default path. A short name such as
+        # `page` (common in Next.js, where many files are `page.tsx`) that maps to
+        # more than one architecture module must not be resolved by silent
+        # first-match-wins or written to a generic `<generate_output_path>/page.tsx`.
+        if arch_path:
+            ambiguous_choices = _architecture_module_choices(arch_path, basename, language)
+            if len(ambiguous_choices) > 1:
+                raise AmbiguousModuleError(basename, language, ambiguous_choices)
 
         # Issue #1169: Use _find_prompt_file for authoritative prompt resolution.
         # This handles case-insensitive matching, nested subdirectories, and
@@ -1395,6 +1506,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
 
+    except AmbiguousModuleError:
+        # Issue #1677: ambiguity is a hard, actionable error — never let the broad
+        # fallback below swallow it into a (wrong) default path.
+        raise
     except Exception as e:
         # Fallback to simple naming if construct_paths fails
         extension = get_extension(language)
@@ -2166,6 +2281,10 @@ def _perform_sync_analysis(
         _initial_paths = get_pdd_file_paths(
             basename, language, prompts_dir, context_override=context_override
         )
+    except AmbiguousModuleError:
+        # Issue #1677: propagate ambiguity so sync fails fast instead of silently
+        # analyzing with empty paths and generating to the wrong module.
+        raise
     except Exception:
         _initial_paths = {}
 

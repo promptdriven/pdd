@@ -48,6 +48,7 @@ from .operation_log import (
 from .sync_determine_operation import (
     sync_determine_operation,
     get_pdd_file_paths,
+    AmbiguousModuleError,
     RunReport,
     SyncDecision,
     PDD_DIR,
@@ -2030,6 +2031,10 @@ def sync_orchestration(
             _dry_paths = get_pdd_file_paths(
                 basename, language, prompts_dir, context_override=context_override
             )
+        except AmbiguousModuleError:
+            # Issue #1677: surface ambiguity even in dry-run so `pdd sync page
+            # --dry-run` reports the conflict instead of a misleading generic log.
+            raise
         except Exception:
             _dry_paths = None
         if _dry_paths:
@@ -2068,6 +2073,12 @@ def sync_orchestration(
                 "operations_completed": [],
                 "errors": [f"Path construction failed: {str(e)}"]
             }
+    except AmbiguousModuleError:
+        # Issue #1677: an ambiguous bare basename is a hard, actionable error.
+        # Propagate it (like the dry-run branch above) so the CLI reports the
+        # conflict via handle_error instead of burying it in a generic
+        # "Failed to construct paths" result. Generation never starts.
+        raise
     except Exception as e:
         print(f"Error constructing paths: {e}")
         return {
