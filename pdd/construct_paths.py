@@ -149,6 +149,9 @@ _PDDRC_DEFAULTS_KEYS = {
     "compress_examples",
     "compress_test_context",
     "compression_fallback",
+    "test_token_budget",
+    "test_ranking_weights",
+    "test_dedup_threshold",
 }
 
 
@@ -556,6 +559,9 @@ def _resolve_config_hierarchy(
         'compress_examples': 'PDD_COMPRESS_EXAMPLES',
         'compress_test_context': 'PDD_COMPRESS_TEST_CONTEXT',
         'compression_fallback': 'PDD_COMPRESSION_FALLBACK',
+        'test_token_budget': 'PDD_TEST_TOKEN_BUDGET',
+        'test_ranking_weights': 'PDD_TEST_RANKING_WEIGHTS',
+        'test_dedup_threshold': 'PDD_TEST_DEDUP_THRESHOLD',
     }
 
     for config_key, env_var in config_keys.items():

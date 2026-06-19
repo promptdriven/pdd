@@ -27,7 +27,6 @@ from .failure_classification import (
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
 from .compression_reporting import CompressionFallbackError, record_compression_applied
 from .config_resolution import apply_compression_env
-from .content_selector import slice_test_interface_context
 from .fix_focus import FocusedInputs, is_large, prepare_focused_inputs, reconstruct_code
 from .get_language import get_language
 from .get_test_command import TestCommand, get_test_command_for_file
@@ -507,8 +506,20 @@ def fix_error_loop(
             and _test_context_compression_active()
             and failing_tests
         ):
+            # PDD_FAILING_TESTS is already set above so the packer can place
+            # the currently failing tests in its priority-0 lane.
             try:
-                compressed_test = slice_test_interface_context(unit_test_content, unit_test_file)
+                from .test_context_packer import TestContextPacker
+
+                packer = TestContextPacker(test_root=str(Path(unit_test_file).parent))
+                pack_result = packer.pack(
+                    module_path=code_file,
+                    failing_tests=failing_tests,
+                    budget_tokens=None,
+                    candidate_files=[unit_test_file],
+                    slice_failing_tests=True,
+                )
+                compressed_test = pack_result.context_text
             except CompressionFallbackError as exc:
                 console.print(
                     f"[bold red]Test context compression failed:[/bold red] {escape_brackets(str(exc))}"
@@ -525,9 +536,14 @@ def fix_error_loop(
                     total_cost,
                     model_name,
                 )
-            if compressed_test and compressed_test != unit_test_content:
-                record_compression_applied(unit_test_file, "test_interface")
             if compressed_test:
+                manifest = pack_result.manifest
+                record_compression_applied(
+                    unit_test_file,
+                    f"test_packing(selected={len(manifest.selected)},"
+                    f"omitted={len(manifest.omitted)},"
+                    f"failing_priority={manifest.failing_test_priority_count})",
+                )
                 target_test = compressed_test
         # Track whether *this* attempt's fix came from the cloud path (vs a
         # local fallback) so the success log line can prove the cloud path.
