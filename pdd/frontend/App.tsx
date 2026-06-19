@@ -852,8 +852,9 @@ const App: React.FC = () => {
                   </g>
                 </svg>
               </div>
-              <div className="hidden sm:block">
-                <h1 className="text-base sm:text-lg font-bold text-white whitespace-nowrap">Prompt Driven</h1>
+              <div className="hidden sm:flex items-baseline gap-2">
+                <h1 className="font-sans font-semibold tracking-[0.01em] text-brand-sleet text-base sm:text-lg whitespace-nowrap">PromptDriven.ai</h1>
+                <span className="font-mono font-medium uppercase tracking-[0.12em] text-brand-cyan text-[0.65rem] whitespace-nowrap">Prompt Driven Development</span>
               </div>
             </div>
 
