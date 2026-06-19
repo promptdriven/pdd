@@ -174,3 +174,63 @@ def test_accent_role_resolves_to_prompt_magenta():
 def test_version_role_resolves_to_build_green_700():
     """version uses the Build-Green-700 tint, distinct from the success base green."""
     assert cli_theme.BUILD_GREEN_700 in cli_theme.SEMANTIC_STYLES["version"]
+
+
+# ---------------------------------------------------------------------------
+# Reload safety of the Console.__init__ color-preference patch.
+#
+# cli_theme monkey-patches rich.console.Console.__init__ so every console
+# constructed after import is registered with the global color preference.
+# importlib.reload() re-executes the module in the same namespace, so the patch
+# must recognise an already-patched __init__ and reuse the genuine initializer
+# instead of wrapping its own wrapper (which previously recursed to RecursionError).
+# ---------------------------------------------------------------------------
+
+def test_reload_does_not_recurse_and_preserves_color_preference():
+    """Reloading cli_theme stays idempotent and keeps the color preference working."""
+    import importlib
+
+    from rich.console import Console
+
+    # Two reloads in a row would re-wrap the already-patched initializer and blow
+    # the stack if the patch were not reload-safe.
+    importlib.reload(cli_theme)
+    importlib.reload(cli_theme)
+
+    # A console built after reload still honors a later --color preference.
+    forced = cli_theme.get_console(file=StringIO(), width=80)
+    restore = cli_theme.apply_global_color_preference(True)
+    try:
+        assert forced.no_color is False
+        assert forced._force_terminal is True
+        forced.print("[command]pdd[/command]")
+        assert "\x1b[" in forced.file.getvalue()
+    finally:
+        restore()
+
+    # ...and a later --no-color preference disables color on a fresh console.
+    plain = cli_theme.get_console(file=StringIO(), width=80)
+    restore = cli_theme.apply_global_color_preference(False)
+    try:
+        assert plain.no_color is True
+    finally:
+        restore()
+
+
+def test_reloaded_init_uses_genuine_console_initializer():
+    """After reload, the patched __init__ delegates to the real Rich initializer.
+
+    Guards against the reload bug where the wrapper captured the already-patched
+    __init__ as its "original" and recursed when constructing a Console.
+    """
+    import importlib
+
+    from rich.console import Console
+
+    importlib.reload(cli_theme)
+
+    # Constructing a Console must not recurse, and the genuine initializer must
+    # still produce a fully-functional console.
+    console = Console(file=StringIO(), force_terminal=True, color_system="truecolor", width=80)
+    console.print("[bold]ok[/bold]")
+    assert "\x1b[" in console.file.getvalue()

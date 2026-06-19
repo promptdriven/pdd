@@ -163,17 +163,35 @@ def _register_console(con: Console) -> None:
         pass
 
 
-_ORIGINAL_CONSOLE_INIT = Console.__init__
+# Attribute names used to make the ``Console.__init__`` patch reload-safe.
+#
+# ``importlib.reload(cli_theme)`` re-executes this module in the *same*
+# namespace, so a naive ``_ORIGINAL = Console.__init__`` would capture the
+# already-patched initializer on reload and wrap it again — every later
+# ``Console()`` would then recurse through stacked wrappers until ``RecursionError``.
+# To stay idempotent we stash the *genuine* Rich initializer on the ``Console``
+# class itself the first time we patch, and tag our wrapper with a marker so we
+# can recognise it across reloads and never wrap it twice.
+_PDD_PATCH_MARKER = "_pdd_color_patch"
+_PDD_ORIGINAL_INIT_ATTR = "_pdd_original_console_init"
 
 
 def _pdd_console_init(self: Console, *args: Any, **kwargs: Any) -> None:
     """Register every Rich console constructed after PDD's theme module loads."""
-    _ORIGINAL_CONSOLE_INIT(self, *args, **kwargs)
+    # Resolve the genuine initializer from the class at call time so that the
+    # reference survives module reloads (which rebind this module's globals).
+    getattr(Console, _PDD_ORIGINAL_INIT_ATTR)(self, *args, **kwargs)
     _register_console(self)
 
 
-if Console.__init__ is not _pdd_console_init:
-    Console.__init__ = _pdd_console_init  # type: ignore[method-assign]
+setattr(_pdd_console_init, _PDD_PATCH_MARKER, True)
+
+# Only capture the original initializer the first time we install the patch.
+# On a reload ``Console.__init__`` is already our wrapper, so the genuine
+# initializer is preserved on the class and we just swap in the fresh wrapper.
+if not getattr(Console.__init__, _PDD_PATCH_MARKER, False):
+    setattr(Console, _PDD_ORIGINAL_INIT_ATTR, Console.__init__)
+Console.__init__ = _pdd_console_init  # type: ignore[method-assign]
 
 
 def apply_global_color_preference(preference: Optional[bool]) -> Callable[[], None]:
