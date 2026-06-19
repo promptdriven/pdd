@@ -4398,3 +4398,57 @@ def test_augment_architecture_from_pr_branch_dict_format_merges_modules(tmp_path
         "Dict-format PR architecture modules should be merged, "
         "but isinstance(pr_arch, list) check at agentic_sync.py:167 silently drops them"
     )
+
+
+# ---------------------------------------------------------------------------
+# Per-module context resolution plumbing (issue #1675)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_module_contexts_maps_each_module_to_its_cwd_context(tmp_path):
+    """Each module resolves the context defined by its own cwd's .pddrc."""
+    from pdd.agentic_sync import _resolve_module_contexts
+
+    cwd_a = tmp_path / "a"
+    cwd_b = tmp_path / "b"
+    cwd_a.mkdir()
+    cwd_b.mkdir()
+    (cwd_a / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  ctx_a:\n    paths: ["alpha*"]\n'
+        '    defaults:\n      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+    (cwd_b / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  ctx_b:\n    paths: ["beta*"]\n'
+        '    defaults:\n      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+
+    contexts = _resolve_module_contexts(
+        ["alpha", "beta"], {"alpha": cwd_a, "beta": cwd_b}
+    )
+    assert contexts == {"alpha": "ctx_a", "beta": "ctx_b"}
+
+
+def test_resolve_module_sync_context_passes_pddrc_path(tmp_path, monkeypatch):
+    """Context detection must use the found .pddrc, not one from the process cwd.
+
+    Regression guard for the #1675 fix: the filesystem fallback in
+    _detect_context_from_basename resolves nested prompts_dir contexts relative
+    to the supplied pddrc_path.
+    """
+    import pdd.agentic_sync as asm
+
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  default:\n    paths: ["**"]\n',
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def _fake_detect(basename, config, pddrc_path=None):
+        captured["pddrc_path"] = pddrc_path
+        return None
+
+    monkeypatch.setattr(asm, "_detect_context_from_basename", _fake_detect)
+    asm._resolve_module_sync_context("foo", tmp_path)
+    assert captured["pddrc_path"] == tmp_path / ".pddrc"

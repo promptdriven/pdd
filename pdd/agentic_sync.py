@@ -469,6 +469,9 @@ class GlobalSyncAnalysis(NamedTuple):
     module_operations: Dict[str, List[str]]
     skipped_modules: List[str]
     all_modules: List[str]
+    # Per-module context resolved against each module's own .pddrc (#1675).
+    # Defaulted so existing positional/keyword constructions stay valid.
+    module_contexts: Optional[Dict[str, Optional[str]]] = None
 
 
 class GlobalSyncModule(NamedTuple):
@@ -743,7 +746,12 @@ def _resolve_module_sync_context(
 
     if pddrc_path:
         config = _load_pddrc_config(pddrc_path)
-        context_name = _detect_context_from_basename(basename, config)
+        # Pass the found .pddrc so the filesystem fallback in
+        # _detect_context_from_basename resolves nested prompts_dir contexts
+        # against THIS .pddrc, not one discovered from the process cwd (#1675).
+        context_name = _detect_context_from_basename(
+            basename, config, pddrc_path=pddrc_path
+        )
         defaults = config.get("contexts", {}).get(
             context_name or "default", {}
         ).get("defaults", {})
@@ -757,6 +765,38 @@ def _resolve_module_sync_context(
         basename, prompts_dir, context_name=context_name
     )
     return context_name, prompts_dir, lang_to_path
+
+
+def _resolve_module_contexts(
+    modules: List[str],
+    module_cwds: Dict[str, Path],
+    module_targets: Optional[Dict[str, str]] = None,
+) -> Dict[str, Optional[str]]:
+    """Resolve each module's context against its own resolved cwd's ``.pddrc``.
+
+    Mirrors ``module_cwds``/``module_targets``: the returned value for a
+    scheduler key is the context the cwd's ``.pddrc`` assigns to that module's
+    actual child target, so the runner never forwards a context invalid for the
+    cwd the child runs in (#1675). The dict is keyed by scheduler key (what the
+    runner looks up) but detection uses the child target, so a path-qualified
+    key still matches the cwd's contexts. Modules without a resolved cwd are
+    omitted; the runner falls back to lazy resolution for those.
+    """
+    contexts: Dict[str, Optional[str]] = {}
+    targets = module_targets or {}
+    for key in modules:
+        cwd = module_cwds.get(key)
+        if cwd is None:
+            continue
+        target = targets.get(key, key)
+        try:
+            context_name, _prompts_dir, _lang = _resolve_module_sync_context(
+                target, cwd
+            )
+        except Exception:
+            context_name = None
+        contexts[key] = context_name
+    return contexts
 
 
 def _analyze_global_sync_modules(
@@ -773,6 +813,7 @@ def _analyze_global_sync_modules(
     modules_to_sync: List[str] = []
     module_cwds: Dict[str, Path] = {}
     module_targets: Dict[str, str] = {}
+    module_contexts: Dict[str, Optional[str]] = {}
     module_operations: Dict[str, List[str]] = {}
     skipped_modules: List[str] = []
     estimated_cost = 0.0
@@ -844,6 +885,7 @@ def _analyze_global_sync_modules(
                 module_operations[key] = operations
                 module_cwds[key] = candidate_cwd
                 module_targets[key] = candidate_basename
+                module_contexts[key] = context_name
                 estimated_cost += candidate_cost
                 break
 
@@ -884,6 +926,7 @@ def _analyze_global_sync_modules(
         module_operations=module_operations,
         skipped_modules=skipped_modules,
         all_modules=[module.key for module in modules],
+        module_contexts=module_contexts,
     )
 
 
@@ -1218,6 +1261,7 @@ def run_global_sync(
         issue_url=None,
         module_cwds=analysis.module_cwds,
         module_targets=analysis.module_targets,
+        module_contexts=analysis.module_contexts or {},
         initial_cost=0.0,
     )
     success, message, cost = runner.run()
@@ -2258,6 +2302,10 @@ def run_agentic_sync(
         "cwd": project_root,
     } if use_github_state else None
 
+    # Resolve each module's context against its own .pddrc so the child sync
+    # never receives a context that is invalid for the cwd it runs in (#1675).
+    module_contexts = _resolve_module_contexts(modules_to_sync, module_cwds)
+
     if durable:
         runner = DurableSyncRunner(
             basenames=modules_to_sync,
@@ -2273,6 +2321,7 @@ def run_agentic_sync(
             verbose=verbose,
             issue_url=issue_url,
             module_cwds=module_cwds,
+            module_contexts=module_contexts,
             initial_cost=llm_cost,
         )
     else:
@@ -2285,6 +2334,7 @@ def run_agentic_sync(
             verbose=verbose,
             issue_url=issue_url,
             module_cwds=module_cwds,
+            module_contexts=module_contexts,
             initial_cost=llm_cost,
         )
 

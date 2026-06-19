@@ -48,6 +48,8 @@ class DurableSyncRunner(AsyncSyncRunner):
         verbose: bool = False,
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Path]] = None,
+        module_targets: Optional[Dict[str, str]] = None,
+        module_contexts: Optional[Dict[str, Optional[str]]] = None,
         initial_cost: float = 0.0,
     ) -> None:
         self.issue_number = issue_number
@@ -73,6 +75,14 @@ class DurableSyncRunner(AsyncSyncRunner):
             verbose=verbose,
             issue_url=issue_url,
             module_cwds={},
+            # Carry target + context identity through to the base runner so a
+            # child still runs `pdd --context <ctx> sync <target>` after its cwd
+            # is remapped into a per-module worktree at runtime. Both are
+            # cwd-independent (the worktree checks out the same .pddrc), so they
+            # pass through unchanged even though module_cwds is repopulated per
+            # module during the run (#1675).
+            module_targets=dict(module_targets or {}),
+            module_contexts=dict(module_contexts or {}),
             initial_cost=initial_cost,
         )
         self.project_root = self.git_root

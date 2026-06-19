@@ -683,3 +683,39 @@ def test_real_subprocess_durable_max_workers_limits_concurrency(
         f"assertion would be vacuous — with 4 ready modules and 2 workers the "
         f"peak must reach 2"
     )
+
+
+def test_durable_runner_builds_remapped_context_and_target(tmp_path):
+    """Durable carries target + context identity into `_build_command` (#1675).
+
+    Target and context are cwd-independent, so even though durable repopulates
+    module_cwds with a per-module worktree at runtime, the child must still run
+    `pdd --context <ctx> sync <target>` — using the resolved target (not the
+    scheduler key) and the cwd's own context (not the invalid global one).
+    """
+    worktree = tmp_path / "wt" / "backend"
+    worktree.mkdir(parents=True)
+    (worktree / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  report_ctx:\n    paths: ["report*"]\n'
+        '    defaults:\n      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+    runner = DurableSyncRunner(
+        basenames=["backend/report"],
+        dep_graph={"backend/report": []},
+        sync_options={"context": "root_ctx"},  # not defined in the nested .pddrc
+        github_info=None,
+        issue_number=1675,
+        project_root=tmp_path,
+        quiet=True,
+        module_cwds={"backend/report": tmp_path / "backend"},
+        module_targets={"backend/report": "report"},
+        module_contexts={"backend/report": "report_ctx"},
+    )
+    # Simulate the per-module worktree cwd that _sync_one_module sets at runtime.
+    runner.module_cwds["backend/report"] = worktree
+
+    cmd = runner._build_command("backend/report")
+    assert cmd[-1] == "report"  # resolved target, not the "backend/report" key
+    assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "report_ctx"
+    assert "root_ctx" not in cmd
