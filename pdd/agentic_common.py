@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import functools
 import errno
 import hashlib
@@ -2731,6 +2732,80 @@ def _run_agentic_task_with_routing_config(
         _restore_routing_model_env(originals)
 
 
+def _run_feasible_routing_fallback(
+    *,
+    attempted_harnesses: set[str],
+    base_record: RoutingRecord,
+    instruction: str,
+    cwd: Path,
+    verbose: bool,
+    quiet: bool,
+    label: str,
+    timeout: Optional[float],
+    retry_delay: float,
+    deadline: Optional[float],
+    use_playwright: bool,
+    steers: Optional[List[SteerEntry]],
+    claude_policy: Optional[ClaudePolicy],
+) -> Optional[AgenticTaskResult]:
+    """Run the standard provider cascade over still-untried feasible providers.
+
+    Issue #1431: when routing escalation only ever pinned harnesses that are
+    not installed/authenticated, installed providers may never have been
+    tried. This runs the normal provider cascade (``routing_policy=None``)
+    restricted to the available providers we have not attempted yet, so a
+    feasible provider still gets a chance instead of the task failing with
+    "No agent providers are available". Returns ``None`` when there is no
+    untried feasible provider to fall back to.
+    """
+    available = get_available_agents()
+    untried = [
+        provider
+        for provider in get_agent_provider_preference()
+        if provider in available and provider not in attempted_harnesses
+    ]
+    if not untried:
+        return None
+
+    fallback_record = dataclasses.replace(
+        base_record,
+        fallback_reason=f"cascade_fallback_to_feasible_provider:{','.join(untried)}",
+        cost_usd=0.0,
+        latency_seconds=0.0,
+        verifier_result=None,
+    )
+
+    originals: Dict[str, Optional[str]] = {
+        "PDD_AGENTIC_PROVIDER": os.environ.get("PDD_AGENTIC_PROVIDER")
+    }
+    os.environ["PDD_AGENTIC_PROVIDER"] = ",".join(untried)
+    fallback_start = time.time()
+    try:
+        result = run_agentic_task(
+            instruction,
+            cwd,
+            verbose=verbose,
+            quiet=quiet,
+            label=label,
+            timeout=timeout,
+            retry_delay=retry_delay,
+            deadline=deadline,
+            use_playwright=use_playwright,
+            steers=steers,
+            claude_policy=claude_policy,
+            routing_policy=None,
+            task_class=None,
+        )
+    finally:
+        _restore_routing_model_env(originals)
+
+    fallback_record.cost_usd = result.cost_usd
+    fallback_record.latency_seconds = time.time() - fallback_start
+    fallback_record.verifier_result = "pass" if result.success else "fail"
+    emit_routing_record(fallback_record, log_dir=cwd / ".pdd" / "agentic-logs")
+    return result
+
+
 def _resolve_effort_for_provider_log(
     provider: str,
     reasoning_time: Optional[float],
@@ -5160,6 +5235,10 @@ def run_agentic_task(
         if routing_policy is not None and routing_record is not None:
             current_record = routing_record
             last_result = failure_result
+            # Providers already exercised by this task (the initial routed/
+            # cascade attempt above). Used so the feasibility fallback only
+            # tries providers that have not had a chance yet.
+            attempted_harnesses: set[str] = set(candidates)
             while True:
                 next_config, next_record = escalate(
                     routing_policy,
@@ -5176,6 +5255,22 @@ def run_agentic_task(
                     emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
                     break
 
+                # Issue #1431: routing escalation must stay feasibility-aware.
+                # Pinning PDD_AGENTIC_PROVIDER to a harness that is not
+                # installed/authenticated collapses the nested provider cascade
+                # to "No agent providers are available", so the ladder would
+                # keep emitting infeasible configs and never try a provider
+                # that could actually succeed. Skip the infeasible config,
+                # record it with an explicit fallback reason (not a failed
+                # provider attempt), and keep climbing the ladder.
+                if next_config.harness not in get_available_agents():
+                    next_record.fallback_reason = (
+                        f"infeasible_harness_unavailable:{next_config.harness}"
+                    )
+                    emit_routing_record(next_record, log_dir=cwd / ".pdd" / "agentic-logs")
+                    current_record = next_record
+                    continue
+
                 escalated_start = time.time()
                 last_result = _run_agentic_task_with_routing_config(
                     config=next_config,
@@ -5191,6 +5286,7 @@ def run_agentic_task(
                     steers=steers,
                     claude_policy=claude_policy,
                 )
+                attempted_harnesses.add(next_config.harness)
                 next_record.cost_usd = last_result.cost_usd
                 next_record.latency_seconds = time.time() - escalated_start
                 next_record.verifier_result = "pass" if last_result.success else "fail"
@@ -5198,6 +5294,30 @@ def run_agentic_task(
                 if last_result.success:
                     return last_result
                 current_record = next_record
+
+            # Issue #1431: the ladder is exhausted (or only ever offered
+            # infeasible harnesses) and we still do not have a success. If
+            # installed providers were never tried because routing only pinned
+            # unavailable harnesses, fall back to the standard provider cascade
+            # over those untried providers so a feasible one still gets a shot.
+            if not last_result.success:
+                fallback_result = _run_feasible_routing_fallback(
+                    attempted_harnesses=attempted_harnesses,
+                    base_record=current_record,
+                    instruction=instruction,
+                    cwd=cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    label=label,
+                    timeout=timeout,
+                    retry_delay=retry_delay,
+                    deadline=deadline,
+                    use_playwright=use_playwright,
+                    steers=steers,
+                    claude_policy=claude_policy,
+                )
+                if fallback_result is not None:
+                    last_result = fallback_result
             return last_result
 
         return failure_result
