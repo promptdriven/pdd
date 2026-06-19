@@ -3129,6 +3129,88 @@ def test_run_agentic_task_routing_policy_escalates_after_failure(
     assert records[1]["selected_config"]["harness"] == "google"
 
 
+def test_run_agentic_task_routing_escalation_skips_infeasible_harness_and_falls_back(
+    mock_cwd,
+    monkeypatch,
+):
+    """Issue #1431: feasibility-aware routing escalation.
+
+    The default ``bug-fix`` ladder escalates the harness to ``google``. When
+    google is not installed/authed but anthropic and openai are, the escalated
+    google configs must be skipped (recorded with an explicit fallback reason,
+    not as failed provider attempts) and routing must fall back to the
+    available openai provider instead of laddering through unavailable google
+    configs and failing with "No agent providers are available".
+    """
+    from pdd.routing_policy import default_policy
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "key")
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.delenv("PDD_AGENTIC_PROVIDER", raising=False)
+    # anthropic + openai available; google unavailable.
+    monkeypatch.setattr(
+        "pdd.agentic_common.get_available_agents", lambda: ["anthropic", "openai"]
+    )
+    monkeypatch.setattr(
+        "pdd.agentic_common.resolve_model_for_tier", lambda tier: f"tier-{tier}-model"
+    )
+
+    providers = []
+
+    def fake_run(provider, prompt_path, cwd, timeout, verbose, quiet, **kwargs):
+        providers.append(provider)
+        if provider == "anthropic":
+            return (False, "verifier failed", 0.1, "anthropic-model", None)
+        if provider == "openai":
+            return (True, "fixed by openai fallback", 0.2, "openai-model", None)
+        raise AssertionError(f"infeasible provider must not be invoked: {provider}")
+
+    monkeypatch.setattr("pdd.agentic_common._run_with_provider", fake_run)
+
+    result = run_agentic_task(
+        "Fix the bug",
+        mock_cwd,
+        routing_policy=default_policy(),
+        task_class="bug-fix",
+    )
+
+    # OpenAI is reached and succeeds; the unavailable google harness is never run.
+    assert result.success is True
+    assert result.output_text == "fixed by openai fallback"
+    assert result.provider == "openai"
+    assert "google" not in providers
+    assert providers == ["anthropic", "openai"]
+
+    records = []
+    for path in sorted((mock_cwd / ".pdd" / "agentic-logs").glob("routing-*.jsonl")):
+        records.extend(json.loads(line) for line in path.read_text().splitlines())
+
+    # Skipped infeasible google configs are recorded with an explicit fallback
+    # reason rather than as failed provider attempts.
+    infeasible = [
+        row
+        for row in records
+        if (row.get("fallback_reason") or "").startswith("infeasible_harness_unavailable:")
+    ]
+    assert infeasible, "expected at least one infeasible-harness skip record"
+    assert all(
+        row["fallback_reason"] == "infeasible_harness_unavailable:google"
+        for row in infeasible
+    )
+
+    # The fallback to the feasible provider is recorded once and passes.
+    fallback = [
+        row
+        for row in records
+        if (row.get("fallback_reason") or "").startswith(
+            "cascade_fallback_to_feasible_provider:"
+        )
+    ]
+    assert len(fallback) == 1
+    assert "openai" in fallback[0]["fallback_reason"]
+    assert fallback[0]["verifier_result"] == "pass"
+
+
 # ---------------------------------------------------------------------------
 # Issue #1365: interactive Claude post-launch auth fast-fail
 # ---------------------------------------------------------------------------
