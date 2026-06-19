@@ -5620,17 +5620,48 @@ class TestSyncCompatibilityGates:
 
         assert excinfo.value.changed_signatures == ["process"]
 
-    def test_public_surface_regression_catches_removed_import(self):
-        """Removing an ``import`` re-export is a real downstream-breaking
-        change — issue #1012's user-cited regression was specifically the
-        loss of the ``git`` module re-export, so this MUST surface."""
+    def test_public_surface_regression_ignores_removed_plain_import(self):
+        """Removing a plain ``import`` is routine cleanup, NOT a public-API
+        regression. ``import git`` (like ``from typing import Any``) is an
+        implementation detail unless it is deliberately re-exported via
+        ``__all__`` or a redundant alias. The gate used to hard-fail real
+        syncs over removed import/typing-helper names (issues #1662 / #1663 /
+        pdd_cloud#2256)."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "import git\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = (
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        # Plain ``import git`` is not public surface — removing it must pass
+        # silently (no PublicSurfaceRegressionError).
+        _verify_public_surface_regression(
+            before,
+            after,
+            "update_main_Python.prompt",
+            "pdd/update_main.py",
+            "python",
+            "Update internals only.",
+        )
+
+    def test_public_surface_regression_catches_removed_reexport_alias(self):
+        """A redundant-alias re-export (``import git as git``) IS public
+        surface per Python's re-export convention (PEP 484 / mypy
+        ``implicit_reexport=False``); removing it MUST surface. This explicit
+        opt-in replaces the old "every import is public" behavior."""
         from pdd.code_generator_main import (
             PublicSurfaceRegressionError,
             _verify_public_surface_regression,
         )
 
         before = (
-            "import git\n"
+            "import git as git\n"
             "def read_fingerprint():\n"
             "    return 'old'\n"
         )
@@ -5651,6 +5682,39 @@ class TestSyncCompatibilityGates:
 
         assert "git" in excinfo.value.removed_symbols
         assert "- git" in excinfo.value.repair_directive
+
+    def test_public_surface_regression_catches_removed_dunder_all_import(self):
+        """An import listed in ``__all__`` is an explicit public re-export;
+        removing it (and dropping it from ``__all__``) MUST surface. ``__all__``
+        remains the authoritative way to protect a re-exported import."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = ['git', 'read_fingerprint']\n"
+            "import git\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = (
+            "__all__ = ['read_fingerprint']\n"
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert "git" in excinfo.value.removed_symbols
 
     def test_public_surface_regression_catches_removed_module_attribute(self):
         """Module-level ``ast.Assign`` targets (public constants) are part
@@ -5711,40 +5775,228 @@ class TestSyncCompatibilityGates:
             "Update internals only.",
         )
 
-    def test_public_surface_regression_tracks_from_import_aliases(self):
-        """``from X import Y`` and ``from X import Y as Z`` bind ``Y``
-        and ``Z`` respectively as module attributes; both are public
-        re-exports that must be tracked. ``from X import *`` binds no
-        fixed identifier and is ignored."""
+    def test_public_surface_regression_from_import_reexport_policy(self):
+        """Outside ``__all__`` only a redundant-alias re-export
+        (``from m import y as y``) is public surface. A plain
+        ``from pathlib import Path`` or a *renaming* alias
+        ``from os.path import join as pjoin`` is an implementation detail whose
+        removal must NOT raise; the redundant-alias form MUST raise. ``from X
+        import *`` binds no fixed identifier and is ignored (issues #1662 /
+        #1663 / pdd_cloud#2256)."""
         from pdd.code_generator_main import (
             PublicSurfaceRegressionError,
             _verify_public_surface_regression,
         )
 
-        before = (
+        keep = "def read_fingerprint():\n    return 'new'\n"
+
+        # Plain import + renaming alias: neither is a re-export, so removing
+        # them must pass silently.
+        _verify_public_surface_regression(
             "from pathlib import Path\n"
             "from os.path import join as pjoin\n"
-            "def read_fingerprint():\n"
-            "    return 'old'\n"
-        )
-        after = (
-            "def read_fingerprint():\n"
-            "    return 'new'\n"
+            "def read_fingerprint():\n    return 'old'\n",
+            keep,
+            "update_main_Python.prompt",
+            "pdd/update_main.py",
+            "python",
+            "Update internals only.",
         )
 
+        # Redundant alias ``from os.path import join as join`` IS an explicit
+        # re-export → removing it MUST raise.
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
             _verify_public_surface_regression(
-                before,
-                after,
+                "from os.path import join as join\n"
+                "def read_fingerprint():\n    return 'old'\n",
+                keep,
                 "update_main_Python.prompt",
                 "pdd/update_main.py",
                 "python",
                 "Update internals only.",
             )
 
-        # Both the direct name and the alias surface as removed.
-        assert "Path" in excinfo.value.removed_symbols
-        assert "pjoin" in excinfo.value.removed_symbols
+        assert "join" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_ignores_import_only_helper_removals(self):
+        """Regression for issues #1662 / #1663 / pdd_cloud#2256: removing
+        import-only / typing-helper names (``Any``, ``Literal``, ``dataclass``,
+        ``field``, ``json``, ``Dict``, ``GoogleAuthError``, ``List``,
+        ``Optional``) when the regenerated module no longer needs them must NOT
+        trip the public-surface gate. These reproduce the verbatim
+        ``removed: ...`` failures that blocked real cloud syncs."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from typing import Any, Dict, List, Literal, Optional\n"
+            "from dataclasses import dataclass, field\n"
+            "from google.auth.exceptions import GoogleAuthError\n"
+            "import json\n"
+            "\n"
+            "def build_verdict(payload):\n"
+            "    return json.loads(payload)\n"
+        )
+        # Regenerated body keeps the real public function but drops every
+        # now-unused import/typing helper.
+        after = (
+            "def build_verdict(payload):\n"
+            "    import json\n"
+            "    return json.loads(payload)\n"
+        )
+
+        # Must pass silently — none of the removed names are public surface.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "checkup_verdict_engine_Python.prompt",
+            "pdd/checkup_verdict_engine.py",
+            "python",
+            "Refactor internals; drop unused imports.",
+        )
+
+    def test_public_surface_regression_import_only_removal_keeps_real_removal(self):
+        """Dropping unused imports is allowed, but a real public function
+        removed in the SAME generation must still surface — and ONLY that
+        function, not the imports, appears in ``removed_symbols``."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from typing import Any, Optional\n"
+            "import json\n"
+            "def keep_me():\n"
+            "    return 1\n"
+            "def drop_me():\n"
+            "    return 2\n"
+        )
+        after = (
+            "def keep_me():\n"
+            "    return 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "mod_Python.prompt",
+                "pdd/mod.py",
+                "python",
+                "Remove drop_me and unused imports.",
+            )
+
+        # Only the real public function regressed; the typing/json imports are
+        # filtered out of the public surface entirely.
+        assert excinfo.value.removed_symbols == ["drop_me"]
+
+    def test_public_surface_regression_redundant_alias_normalization_is_no_op(self):
+        """Under a stable ``__all__``, normalizing a redundant alias to the
+        plain import form (``from pathlib import Path as Path`` ->
+        ``from pathlib import Path``, or ``import pathlib as pathlib`` ->
+        ``import pathlib``) binds the SAME object and must NOT diff as a phantom
+        signature change — the redundant alias canonicalizes to the plain
+        re-export marker."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        _verify_public_surface_regression(
+            "__all__ = ['Path']\nfrom pathlib import Path as Path\n",
+            "__all__ = ['Path']\nfrom pathlib import Path\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+        _verify_public_surface_regression(
+            "__all__ = ['pathlib']\nimport pathlib as pathlib\n",
+            "__all__ = ['pathlib']\nimport pathlib\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_public_surface_regression_bare_dunder_all_annotation_is_lenient(self):
+        """A bare ``__all__: list[str]`` annotation (no value) does NOT bind
+        ``__all__`` at runtime — it is a type hint, not a declaration — so the
+        module is treated as having no ``__all__`` and imports stay
+        implementation details. Removing an unused ``import json`` must NOT
+        raise."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__: list[str]\n"
+            "import json\n"
+            "def keep():\n    return 1\n"
+        )
+        after = "def keep():\n    return 1\n"
+
+        # Bare annotation ⇒ lenient ⇒ removing the unused import is allowed.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    @pytest.mark.parametrize("unreadable_all", [
+        "__all__ = sorted(['keep'])",                 # computed
+        "__all__ = _EXPORTS",                          # name reference
+        "__all__ = ['keep']\n__all__ += ['Extra']",    # augmented
+        "__all__ = ['keep']\n__all__.append('Extra')", # in-place mutation
+        "__all__ = ['keep']\nif _cond:\n    __all__.append('Extra')",  # conditional export
+    ])
+    def test_public_surface_regression_unresolvable_dunder_all_is_lenient(self, unreadable_all):
+        """When ``__all__`` cannot be statically resolved (computed, augmented,
+        or mutated — including the realistic ``if platform: __all__.append(...)``
+        conditional-export pattern), the gate stays LENIENT: imports are still
+        treated as implementation details, so removing an unused
+        ``from typing import Any`` must NOT raise. Forcing the conservative path
+        here reintroduces the #2256 false positive (review round 6). Protecting a
+        plain-import re-export in such a module is a documented limitation — use a
+        clean ``__all__`` literal or a redundant alias instead."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "_EXPORTS = ['keep']\n_cond = True\n"
+            f"{unreadable_all}\n"
+            "from typing import Any\n"
+            "def keep():\n    return 1\n"
+        )
+        after = "_EXPORTS = ['keep']\n_cond = True\ndef keep():\n    return 1\n"
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_public_surface_regression_relative_reexport_source_flip_is_detected(self):
+        """A redundant-alias relative re-export records its source package level,
+        so re-pointing ``from . import Foo as Foo`` to ``from .. import Foo as
+        Foo`` (same bound name, different module) is a detectable signature
+        change, not a silent no-op."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                "from . import Foo as Foo\n",
+                "from .. import Foo as Foo\n",
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Foo" in excinfo.value.changed_signatures
 
     def test_public_surface_regression_tracks_annotated_assignment(self):
         """Module-level ``ast.AnnAssign`` targets (annotated public
@@ -9320,12 +9572,17 @@ class TestPublicSurfaceBindingKind:
     # ------------------------------------------------------------------
     # External review (PR #1015, iter-4): top-level imports were
     # captured by the surface helper but NOT by the signatures helper.
-    # That asymmetry let ``from pathlib import Path`` → ``def Path():
-    # ...`` slip through — the surface set kept ``Path`` (no removal),
-    # and the signatures dict had no ``Path`` entry on the before side
-    # so the new ``[function] ()`` looked like a brand-new symbol, not
-    # a re-export break. Recording imports as ``[import:...]`` in the
-    # signatures dict closes the gap.
+    # That asymmetry let an explicit re-export ``from pathlib import Path
+    # as Path`` → ``def Path(): ...`` slip through — the surface set kept
+    # ``Path`` (no removal), and the signatures dict had no ``Path`` entry
+    # on the before side so the new ``[function] ()`` looked like a
+    # brand-new symbol, not a re-export break. Recording re-exports as
+    # ``[import:...]`` in the signatures dict closes the gap.
+    #
+    # Issues #1662 / #1663 / pdd_cloud#2256: only DELIBERATE re-exports
+    # (redundant alias ``x as x`` / ``__all__``) are public surface, so
+    # the flip fixtures below use redundant aliases; plain / renaming-alias
+    # flips are covered by ``test_*_non_reexport_*`` as no-ops.
     # ------------------------------------------------------------------
     def test_from_import_to_function_flip_is_detected(self):
         from pdd.code_generator_main import (
@@ -9333,9 +9590,10 @@ class TestPublicSurfaceBindingKind:
             _verify_public_surface_regression,
         )
 
-        before = "from pathlib import Path\n"
-        # Same bound name ``Path`` but now resolves to a local function;
+        # Redundant-alias re-export ``from pathlib import Path as Path``;
+        # the same bound name ``Path`` now resolves to a local function, so
         # ``Path("/tmp")`` callers that expect the pathlib API break.
+        before = "from pathlib import Path as Path\n"
         after = "def Path():\n    return None\n"
 
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
@@ -9356,10 +9614,10 @@ class TestPublicSurfaceBindingKind:
             _verify_public_surface_regression,
         )
 
-        before = "import pathlib\n"
-        # Same bound name ``pathlib`` but now ``None`` — code that does
-        # ``pathlib.Path(...)`` raises ``AttributeError`` after the
-        # rewrite.
+        # Redundant-alias re-export ``import pathlib as pathlib``; the same
+        # bound name is now ``None`` — code that does ``pathlib.Path(...)``
+        # raises ``AttributeError`` after the rewrite.
+        before = "import pathlib as pathlib\n"
         after = "pathlib = None\n"
 
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
@@ -9374,37 +9632,45 @@ class TestPublicSurfaceBindingKind:
 
         assert "pathlib" in excinfo.value.changed_signatures
 
-    def test_import_aliased_to_function_flip_is_detected(self):
-        # ``import pathlib as p`` binds ``p``; replacing with a local
-        # ``def p()`` is the same flip as the unaliased form. The alias
-        # is encoded in the signatures snapshot so this still trips.
-        from pdd.code_generator_main import (
-            PublicSurfaceRegressionError,
-            _verify_public_surface_regression,
-        )
-
-        before = "import pathlib as p\n"
-        after = "def p():\n    return None\n"
-
-        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
-            _verify_public_surface_regression(
-                before,
-                after,
-                "module_Python.prompt",
-                "pdd/module.py",
-                "python",
-                "",
-            )
-
-        assert "p" in excinfo.value.changed_signatures
-
-    def test_unchanged_from_import_is_allowed(self):
-        # Sanity check: identical ``from X import Y`` on both sides must
-        # NOT produce a snapshot diff. The encoded source module keeps
-        # the entry stable across regeneration.
+    def test_non_reexport_import_flip_is_allowed(self):
+        """A plain import or a *renaming* alias is NOT a public re-export, so
+        flipping it to a same-named def/assignment is NOT a regression
+        (issues #1662 / #1663 / pdd_cloud#2256). ``import pathlib as p`` binds
+        a private-by-convention local name ``p`` that no caller imports as part
+        of this module's contract."""
         from pdd.code_generator_main import _verify_public_surface_regression
 
-        source = "from pathlib import Path\n"
+        # Renaming alias (``p`` != ``pathlib``) flipped to a function — allowed.
+        _verify_public_surface_regression(
+            "import pathlib as p\n",
+            "def p():\n    return None\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+        # Plain ``from pathlib import Path`` flipped to a function — allowed,
+        # even with a sibling public symbol keeping the surface non-empty.
+        _verify_public_surface_regression(
+            "from pathlib import Path\ndef keep():\n    return 1\n",
+            "def Path():\n    return None\ndef keep():\n    return 1\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_unchanged_reexport_is_allowed(self):
+        # Sanity check: an identical re-export on both sides must NOT produce
+        # a snapshot diff. A redundant alias (``Path as Path``) keeps the name
+        # on the public surface, so ``before`` is non-empty and the gate
+        # actually exercises the signature-stability path (a plain
+        # ``from pathlib import Path`` would be filtered out entirely, making
+        # this test vacuous).
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = "from pathlib import Path as Path\n"
 
         _verify_public_surface_regression(
             source,

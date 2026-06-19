@@ -789,6 +789,38 @@ def _collect_patch_targets(file_path: Optional[str]) -> Set[str]:
     return set(collect_patch_symbols_for_module(file_path))
 
 
+def _reexport_binding(alias: ast.alias) -> Optional[str]:
+    """Return the bound name when an import *alias* is an explicit re-export.
+
+    Imported names are implementation details by default: ``from typing import
+    Any``, ``import json``, ``from dataclasses import dataclass`` and the like
+    are tools the module uses, NOT part of the contract a downstream caller
+    relies on. Removing such an import when a regeneration no longer needs it
+    is a routine cleanup, not a public-API regression (issues #1662 / #1663 /
+    pdd_cloud#2256 — the public-surface gate was hard-failing real syncs over
+    `removed: Any, Literal, dataclass, field, json` and similar).
+
+    An import counts as public surface ONLY when it is *deliberately*
+    re-exported, following Python's own re-export convention (PEP 484, the
+    same rule mypy enforces under ``implicit_reexport = False``):
+
+    - a redundant alias ``import x as x`` / ``from m import y as y`` where the
+      bound name equals the imported name (handled here), or
+    - membership in a declared ``__all__`` (handled authoritatively by the
+      ``__all__`` branches in the snapshot helpers, not here).
+
+    Plain imports (``import git``) and *renaming* aliases (``from m import y as
+    z``, ``z != y``) are NOT re-exports — to keep them protected a module must
+    list them in ``__all__`` or use the redundant-alias form. Underscore
+    (private) names are never public outside ``__all__``. Returns ``None`` for
+    anything that is not an explicit, public re-export.
+    """
+    asname = alias.asname
+    if asname is None or asname != alias.name or asname.startswith("_"):
+        return None
+    return asname
+
+
 def _snapshot_public_surface(
     code_text: str,
     language: str,
@@ -801,10 +833,17 @@ def _snapshot_public_surface(
     both the removed-symbol diff and the signature-change diff because the
     enclosing class ``Outer.Inner`` is unchanged.
 
-    Module-level ``ast.Assign`` / ``ast.AnnAssign`` targets, ``ast.Import``
-    aliases, and ``ast.ImportFrom`` aliases are ALSO captured as public
-    surface — removing a re-export like ``import git`` or a public constant
-    like ``PUBLIC_SETTING = ...`` is a real downstream-breaking change.
+    Module-level ``ast.Assign`` / ``ast.AnnAssign`` targets are ALSO captured
+    as public surface — removing a public constant like ``PUBLIC_SETTING =
+    ...`` is a real downstream-breaking change.
+
+    Imports are captured ONLY when they are explicit re-exports: a redundant
+    alias ``import x as x`` / ``from m import y as y`` (see
+    ``_reexport_binding``) or a name listed in ``__all__``. Plain imports
+    (``from typing import Any``, ``import json``) and renaming aliases are
+    implementation details, so removing them does NOT trigger a regression
+    (issues #1662 / #1663 / pdd_cloud#2256). ``from X import *`` and
+    ``from __future__ import ...`` never contribute a fixed public name.
 
     When the module declares ``__all__`` as a clean list/tuple of string
     constants, that list is AUTHORITATIVE per Python semantics: a name is
@@ -922,10 +961,13 @@ def _snapshot_public_surface(
                 _add_assign_targets(node.target)
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                # ``import foo.bar`` binds the top-level package name ``foo``;
-                # ``import foo.bar as baz`` binds ``baz``.
-                exposed = alias.asname or alias.name.split(".", 1)[0]
-                if exposed and not exposed.startswith("_"):
+                # Only explicit re-exports (``import foo as foo``) are public
+                # surface; a plain ``import foo`` / ``import foo.bar`` is an
+                # implementation detail (see ``_reexport_binding``). Names in a
+                # clean ``__all__`` are handled by the authoritative branch
+                # above (which returns before this fallback).
+                exposed = _reexport_binding(alias)
+                if exposed:
                     names.add(exposed)
         elif isinstance(node, ast.ImportFrom):
             # ``from __future__ import annotations`` (and other future
@@ -940,8 +982,12 @@ def _snapshot_public_surface(
                 # identifier is bound, so it does not contribute.
                 if alias.name == "*":
                     continue
-                exposed = alias.asname or alias.name
-                if exposed and not exposed.startswith("_"):
+                # Only redundant-alias re-exports (``from m import y as y``)
+                # are public surface; a plain ``from typing import Any`` or a
+                # renaming alias ``from m import y as z`` is an implementation
+                # detail (see ``_reexport_binding``).
+                exposed = _reexport_binding(alias)
+                if exposed:
                     names.add(exposed)
 
     if patch_targets:
@@ -1921,7 +1967,16 @@ def _snapshot_public_signatures(
                 exposed = alias.asname or alias.name.split(".", 1)[0]
                 if not exposed or not _is_public_top_level(exposed):
                     continue
-                if alias.asname:
+                # Mirror ``_snapshot_public_surface``: with NO ``__all__`` an
+                # import is public surface only as an explicit re-export
+                # (``import x as x``). Without this the primary signature
+                # comparison would still flag a non-public import flipping to
+                # a same-named def (``from typing import Any`` →
+                # ``def Any()``) as a regression even though ``Any`` was never
+                # public (issues #1662 / #1663 / pdd_cloud#2256).
+                if dunder_all is None and _reexport_binding(alias) is None:
+                    continue
+                if alias.asname and alias.asname != alias.name:
                     # ``import pathlib as p`` → ``p`` binds to the
                     # ``pathlib`` module. Encoding the source module so
                     # ``import os as p`` would still produce a distinct
@@ -1932,7 +1987,11 @@ def _snapshot_public_signatures(
                     # a single top-level name; record as plain
                     # ``[import]`` — the diff key is the bound name
                     # itself, the source is whatever's documented in
-                    # the prompt body.
+                    # the prompt body. A redundant alias ``import pathlib as
+                    # pathlib`` binds the SAME object as the plain form, so it
+                    # canonicalizes to ``[import]`` too — otherwise an
+                    # alias-style normalization under ``__all__`` would diff as
+                    # a phantom signature change.
                     signatures[exposed] = "[import]"
         elif isinstance(node, ast.ImportFrom):
             # ``from X import *`` does NOT bind a fixed name (the
@@ -1947,14 +2006,26 @@ def _snapshot_public_signatures(
             # ``[assignment]``) on the same name.
             if node.module == "__future__":
                 continue
-            module = node.module or ""
+            # Encode the relative-import level so a re-export's source package
+            # is part of its fingerprint: ``from . import Foo`` and ``from ..
+            # import Foo`` bind the same name to DIFFERENT modules and must not
+            # collide on ``[import:from ]``. ``node.level`` is 0 for absolute
+            # imports (``from pathlib import Path`` stays ``pathlib``).
+            module = "." * node.level + (node.module or "")
             for alias in node.names:
                 if alias.name == "*":
                     continue
                 exposed = alias.asname or alias.name
                 if not exposed or not _is_public_top_level(exposed):
                     continue
-                if alias.asname:
+                # Mirror ``_snapshot_public_surface``: with NO ``__all__`` only
+                # redundant-alias re-exports (``from m import y as y``) are
+                # public surface; a plain ``from typing import Any`` or a
+                # renaming alias ``from m import y as z`` is an implementation
+                # detail (issues #1662 / #1663 / pdd_cloud#2256).
+                if dunder_all is None and _reexport_binding(alias) is None:
+                    continue
+                if alias.asname and alias.asname != alias.name:
                     # ``from pathlib import Path as P`` records the
                     # source identifier so re-pointing the alias at a
                     # different attribute (``from os.path import join
@@ -1964,7 +2035,11 @@ def _snapshot_public_signatures(
                     # ``from pathlib import Path`` — the bound name is
                     # ``alias.name`` so encoding the source module is
                     # sufficient to distinguish it from a same-named
-                    # ``def Path()`` later in the file.
+                    # ``def Path()`` later in the file. A redundant alias
+                    # ``from pathlib import Path as Path`` binds the SAME object
+                    # as the plain form, so it canonicalizes here too —
+                    # otherwise an alias-style normalization under ``__all__``
+                    # would diff as a phantom signature change.
                     signatures[exposed] = f"[import:from {module}]"
     if patch_targets:
         for symbol in sorted(patch_targets):
