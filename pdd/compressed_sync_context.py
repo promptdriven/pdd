@@ -42,6 +42,7 @@ class CompressedSyncContext:
     unavailable_reason: str | None = None
     missing_sources: list[str] = field(default_factory=list)
     mode: str = "compressed-sync-context"
+    test_packing_manifest: dict[str, Any] | None = None
 
 
 def _sha256_text(value: str) -> str:
@@ -143,11 +144,13 @@ def build_compressed_sync_context(
     contract_summary: Mapping[str, Any] | None = None,
     repair_directive: str | None = None,
     budget: int | None = None,
+    context_compression: str | None = None,
 ) -> CompressedSyncContext:
     """Build a deterministic, bounded context package for a sync phase."""
     effective_budget = int(budget or DEFAULT_BUDGET)
     missing: list[str] = []
     sources: list[tuple[str, str, str]] = []
+    test_packing_manifest: dict[str, Any] | None = None
 
     prompt_source = _read_source(prompt_path, "prompt", missing)
     if prompt_source is None:
@@ -168,11 +171,18 @@ def build_compressed_sync_context(
             source_path, content = source
             sources.append((source_path, label, content))
 
-    for idx, test_path in enumerate(test_paths or []):
-        source = _read_source(test_path, f"test{idx}", missing)
-        if source is not None:
-            source_path, content = source
-            sources.append((source_path, "test", content))
+    test_path_list = [str(path) for path in (test_paths or [])]
+    if test_path_list and _test_compression_requested(context_compression):
+        packed = _pack_test_paths(test_path_list, code_path)
+        if packed is not None:
+            packed_text, test_packing_manifest = packed
+            if packed_text:
+                sources.append(("test_packing", "test", packed_text))
+        else:
+            # Packer unavailable: fall back to verbatim test inclusion.
+            _append_tests_verbatim(test_path_list, sources, missing)
+    else:
+        _append_tests_verbatim(test_path_list, sources, missing)
 
     if contract_summary:
         sources.append((
@@ -199,7 +209,72 @@ def build_compressed_sync_context(
         budget=effective_budget,
         unavailable_reason=None if content else "no usable context",
         missing_sources=missing,
+        test_packing_manifest=test_packing_manifest,
     )
+
+
+def _test_compression_requested(context_compression: str | None) -> bool:
+    """True when the compression mode string enables ranked test packing."""
+    if not context_compression:
+        return False
+    tokens = {token for token in re.split(r"[,\s]+", context_compression.lower()) if token}
+    return "test" in tokens or "all" in tokens
+
+
+def _append_tests_verbatim(
+    test_path_list: Sequence[str],
+    sources: list[tuple[str, str, str]],
+    missing: list[str],
+) -> None:
+    """Existing behavior: include each test file's content verbatim."""
+    for idx, test_path in enumerate(test_path_list):
+        source = _read_source(test_path, f"test{idx}", missing)
+        if source is not None:
+            source_path, content = source
+            sources.append((source_path, "test", content))
+
+
+def _pack_test_paths(
+    test_path_list: Sequence[str],
+    code_path: str | Path | None,
+) -> tuple[str, dict[str, Any]] | None:
+    """Rank ``test_path_list`` via TestContextPacker.
+
+    Returns ``(context_text, manifest_dict)`` or ``None`` when the packer is
+    unavailable (so the caller can fall back to verbatim inclusion).
+    """
+    try:
+        from dataclasses import asdict as _asdict
+
+        from .test_context_packer import TestContextPacker
+    except Exception:
+        return None
+    test_root = _common_test_root(test_path_list)
+    try:
+        packer = TestContextPacker(test_root=test_root)
+        result = packer.pack(
+            module_path=str(code_path) if code_path else "",
+            budget_tokens=None,
+            candidate_files=test_path_list,
+        )
+    except Exception:
+        return None
+    return _redact(result.context_text), _asdict(result.manifest)
+
+
+def _common_test_root(test_path_list: Sequence[str]) -> str:
+    """Directory the packer should scan for candidate test files."""
+    dirs = [str(Path(path).parent) for path in test_path_list if path]
+    if not dirs:
+        return "tests"
+    if len(dirs) == 1:
+        return dirs[0]
+    try:
+        import os
+
+        return os.path.commonpath(dirs)
+    except ValueError:
+        return dirs[0]
 
 
 def metadata(context: CompressedSyncContext | Mapping[str, Any]) -> dict[str, Any]:
