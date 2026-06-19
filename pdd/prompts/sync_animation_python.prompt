@@ -28,6 +28,16 @@
     <include>../docs/branding.md</include>
 </branding>
 
+% Brand palette source: import the brand color constants (DEEP_NAVY, ELECTRIC_CYAN,
+% LUMEN_PURPLE, PROMPT_MAGENTA, BUILD_GREEN, DIFF_YELLOW, BREAK_RED) from the central
+% CLI color system `pdd.cli_theme` (EPIC #1540) so every surface shares one palette
+% instead of hand-defining hex values here. Wrap the import in try/except ImportError
+% and fall back to the same brand hex values when that module is absent (e.g. an
+% integration branch that predates Phase 1), so the animation never hard-depends on it.
+% Re-export these names from this module, since `sync_tui` imports DEEP_NAVY / ELECTRIC_CYAN
+% from `sync_animation`. The four artifact boxes default to:
+% prompt=LUMEN_PURPLE, code=ELECTRIC_CYAN, example=BUILD_GREEN, tests=PROMPT_MAGENTA.
+
 % Here is how to use the internal modules:
 <internal_modules>
     <pdd.logo_animation><include>context/logo_animation_example.py</include></pdd.logo_animation>
@@ -57,6 +67,7 @@
     * crash - This animation will have skull emojis in front of both "Code" and "Example". A single arrow will travel bidirectionally between the "Code" and "Example" boxes
     * verify - This animation will have magnifying glass emojis in front of both "Example" and "Code" words. A single arrow will travel bidirectionally between the "Example" and "Code" boxes
     * test - This animation will have a test tube emoji in front of the "Tests" word. A single arrow will travel along the path from "Prompt" to "Tests"
+    * test_extend - Coverage-driven test extension, animated like `test` (test tube emoji on the "Tests" word, arrow from "Prompt" to "Tests")
     * fix - This animation will have wrench emojis in front of both "Code" and "Tests" words. A single arrow will travel bidirectionally between the "Code" and "Tests" boxes
     * update - This animation will have an up arrow emoji in front of the "Prompt" word. A single arrow will travel along the path from "Code" to "Prompt"
 

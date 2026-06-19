@@ -24,7 +24,8 @@
     "functions": [
       {"name": "get_console", "signature": "(**kwargs) -> rich.console.Console"},
       {"name": "style", "signature": "(role: str, text: str) -> str"},
-      {"name": "hex_to_ansi", "signature": "(hex_color: str) -> str"}
+      {"name": "hex_to_ansi", "signature": "(hex_color: str) -> str"},
+      {"name": "apply_global_color_preference", "signature": "(preference: Optional[bool]) -> Callable[[], None]"}
     ]
   }
 }
@@ -82,6 +83,11 @@
   5. Provide `get_console(**kwargs) -> Console` that returns a `rich.console.Console`
      constructed with `theme=PDD_THEME`, forwarding any extra keyword arguments
      (e.g. `stderr=True`). It must not cache in a way that breaks per-call kwargs.
+     When a global color preference is active (see requirement 11), translate it
+     into the matching Rich constructor arguments (`force_terminal`/`no_color`/
+     `color_system`) so a console built afterward inherits the forced/disabled
+     color decision, and register the console so a later preference change reaches
+     it too.
   6. Provide `style(role: str, text: str) -> str` that wraps `text` in Rich markup
      for the given role, e.g. `style("command", "pdd sync")` -> "[command]pdd sync[/command]".
   7. Provide a module-level convenience `console = get_console()`.
@@ -103,10 +109,31 @@
          `COLORTERM` to choose the depth; the other helpers are pure.
   9. Define `__all__` listing the palette constants, BRAND_PALETTE,
      SEMANTIC_STYLES, PDD_THEME, ANSI_RESET, ANSI_FAINT, hex_to_ansi,
-     get_console, style, and console.
+     get_console, style, apply_global_color_preference, and console.
   10. No side effects beyond constructing the shared `console`. No printing at
      import time, and no environment access at import time — the only env read is
      `hex_to_ansi` checking `COLORTERM` when it is called.
+  11. Provide `apply_global_color_preference(preference: Optional[bool]) ->
+     Callable[[], None]` so the root CLI's `--color/--no-color` flag forces or
+     disables color across every command for the duration of one invocation:
+       - `True` forces color (ANSI even when output is piped/captured), `False`
+         disables it, and `None` restores auto-detection.
+       - The preference must reach BOTH consoles created later (via `get_console`)
+         AND consoles that already exist when the flag is applied. Maintain a
+         registry of constructed consoles (keyed on a stable, process-global owner
+         such as the `Console` class) and update each registered console's color
+         state when the preference changes.
+       - To cover bare `rich.console.Console()` call sites that do not go through
+         `get_console`, install an idempotent, reload-safe patch of
+         `Console.__init__` that registers each new console and applies the active
+         preference. Stash the genuine initializer on the `Console` class the first
+         time the patch installs (and tag the wrapper) so reimporting/reloading the
+         module never re-wraps an already-patched initializer (which would recurse)
+         and never resets the registry — the registry and active preference live on
+         that same stable class-anchored owner and survive `importlib.reload`.
+       - Return a zero-argument restore callable that reverts the preference and the
+         affected consoles to their prior state, so the change stays scoped to the
+         single CLI invocation.
 
 % Deliverables
   - Code: `pdd/cli_theme.py`

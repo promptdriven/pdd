@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.278.dev0",
+  "timestamp": "2026-06-19T04:14:17.628703+00:00",
+  "command": "fix",
+  "prompt_hash": "d27f3b08a706dd32a91e67c7c4623ca47728f1b2138a8533ec25d67793568021",
+  "code_hash": "b9261a68d14049db76c89179f98ee1c45a073cc9a656607d447612e23f68e285",
+  "example_hash": "5b6a8af940fe44241889a279c1a8d3c978fe0c6ec3afc648510d8e33ffa7b18c",
+  "test_hash": "f76041e4a4e313d3005d5961e76c3b08bfc26549e498d341cefe31560c328ebd",
+  "test_files": {
+    "test_sync_animation.py": "f76041e4a4e313d3005d5961e76c3b08bfc26549e498d341cefe31560c328ebd",
+    "test_sync_animation_0.py": "f76041e4a4e313d3005d5961e76c3b08bfc26549e498d341cefe31560c328ebd",
+    "test_sync_animation_e2e.py": "defb0cd1699846b903918c05add1c80c03e6b5d10e2ddb1d08acaf1b99301126",
+    "test_sync_animation_phases.py": "fa098d0dc0e6bb3f1f45863c1d01cf1a798fdcbaa3a402025aa241a39faef76c"
+  },
+  "include_deps": {
+    "README.md": "80504ec987045c156641c781764ebbd33af20da3e8854307158fe1110fe1845b",
+    "context/logo_animation_example.py": "f32a5cc330235c3b61fb16ac62d3ae7531c7c6dbc11af077fc79054736f0944d",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}
