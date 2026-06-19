@@ -4760,3 +4760,42 @@ def test_build_targeted_dep_graph_distinct_projects_same_target(tmp_path):
 
     assert graph["apps/a/src/worker_app"] == ["apps/a/src/config"]
     assert graph["apps/b/src/worker_app"] == ["apps/b/src/config"]
+
+
+def test_build_targeted_dep_graph_intra_project_edge_with_colliding_target(tmp_path):
+    # #1675 (round 11): a same-project edge service -> worker_app must resolve
+    # even when worker_app's relative target also exists in another project.
+    import json
+    from pdd.agentic_sync import _build_targeted_dep_graph
+
+    a_entries = [
+        {
+            "filename": "src/service_python.prompt",
+            "filepath": "src/service.py",
+            "dependencies": ["src/worker_app_python.prompt"],
+        },
+        {"filename": "src/worker_app_python.prompt", "filepath": "src/worker_app.py", "dependencies": []},
+    ]
+    b_entries = [
+        {"filename": "src/worker_app_python.prompt", "filepath": "src/worker_app.py", "dependencies": []},
+    ]
+    for proj, entries in (("a", a_entries), ("b", b_entries)):
+        d = tmp_path / "apps" / proj
+        (d / "prompts" / "src").mkdir(parents=True)
+        (d / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+        for name in ("service", "worker_app"):
+            if any(name in e["filename"] for e in entries):
+                (d / "prompts" / "src" / f"{name}_python.prompt").write_text("x", encoding="utf-8")
+        (d / "architecture.json").write_text(json.dumps(entries), encoding="utf-8")
+
+    modules = [
+        "apps/a/src/service",       # unique relative target
+        "apps/a/src/worker_app",    # collides with apps/b
+        "apps/b/src/worker_app",    # collides with apps/a
+    ]
+    graph, _warnings = _build_targeted_dep_graph(
+        a_entries + b_entries, modules, tmp_path, "arch.json"
+    )
+    # Same-project edge preserved despite the colliding target.
+    assert graph["apps/a/src/service"] == ["apps/a/src/worker_app"]
+    assert graph["apps/b/src/worker_app"] == []

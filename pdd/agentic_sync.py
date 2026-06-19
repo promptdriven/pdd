@@ -1667,20 +1667,21 @@ def _build_targeted_dep_graph(
 
     ``modules`` are full repo-root-relative scheduler keys, but a nested
     module's architecture entry is keyed relative to its own ``architecture.json``
-    (e.g. ``src/worker_app``). Match each key by its owning-project-relative
-    target (:func:`_resolve_module_cwd_and_target`), build the graph over those
-    targets, then remap nodes and edges back to the full keys so dependency
-    ordering survives. For bare/root-layout keys the relative target equals the
-    key, so this is an identity transform.
+    (e.g. ``src/worker_app``). Group the modules by their owning project cwd and
+    build each group against that project's OWN architecture over the
+    project-relative targets, then remap nodes and edges back to the full keys.
+    Grouping by project means:
+      * same-project edges (including ``src/service -> src/worker_app``) always
+        resolve, even when ``worker_app`` also exists in another project;
+      * two distinct projects that resolve the same relative target never
+        collapse onto one node (each is in its own group);
+      * for bare/root-layout keys the relative target equals the key and the
+        root group uses the combined architecture, so it is an identity
+        transform — unchanged from the prior behavior.
+    Cross-PROJECT dependency edges within one sync are uncommon and fall through
+    to the builder's existing "edge omitted from schedule" warning.
 
     Returns ``(graph, warnings)``.
-
-    Two distinct projects can resolve the SAME relative target (e.g.
-    ``apps/a/src/worker_app`` and ``apps/b/src/worker_app`` both -> ``src/worker_app``)
-    without being ambiguous. Collapsing them onto one relative-target node would
-    cross-wire their dependencies, so such colliding targets are scoped to each
-    module's OWN project architecture; the non-colliding majority uses a single
-    combined-architecture build (which preserves cross-project edges).
     """
     info: Dict[str, Tuple[Path, str]] = {}
     for bn in modules:
@@ -1690,37 +1691,14 @@ def _build_targeted_dep_graph(
             cwd, rel_target = project_root, bn  # surfaced later at dry-run
         info[bn] = (cwd, rel_target)
 
-    keys_by_target: Dict[str, List[str]] = {}
+    cwd_groups: Dict[Path, List[str]] = {}
     for bn in modules:
-        keys_by_target.setdefault(info[bn][1], []).append(bn)
+        cwd_groups.setdefault(info[bn][0].resolve(), []).append(bn)
 
+    root_resolved = project_root.resolve()
     graph: Dict[str, List[str]] = {bn: [] for bn in modules}
     warnings: List[str] = []
 
-    # Non-colliding modules: one combined-architecture build over relative
-    # targets, edges remapped to full keys. Identity for bare/root keys.
-    unique = [bn for bn in modules if len(keys_by_target[info[bn][1]]) == 1]
-    if unique:
-        target_to_key = {info[bn][1]: bn for bn in unique}
-        result = build_dep_graph_from_architecture_data(
-            architecture,
-            [info[bn][1] for bn in unique],
-            source_name=source_name,
-        )
-        warnings.extend(result.warnings)
-        for bn in unique:
-            graph[bn] = [
-                target_to_key.get(dep, dep)
-                for dep in result.graph.get(info[bn][1], [])
-            ]
-
-    # Colliding relative targets: scope each to its own project architecture so
-    # distinct same-named modules in different projects don't collapse (#1675).
-    collided = [bn for bn in modules if len(keys_by_target[info[bn][1]]) > 1]
-    cwd_groups: Dict[Path, List[str]] = {}
-    for bn in collided:
-        cwd_groups.setdefault(info[bn][0].resolve(), []).append(bn)
-    root_resolved = project_root.resolve()
     for cwd_resolved, group in cwd_groups.items():
         if cwd_resolved == root_resolved:
             group_arch: Any = architecture
@@ -1728,17 +1706,18 @@ def _build_targeted_dep_graph(
             group_arch, _ = _load_architecture_json(Path(cwd_resolved))
             if not group_arch:
                 group_arch = architecture
-        group_target_to_key = {info[bn][1]: bn for bn in group}  # unique per project
-        group_result = build_dep_graph_from_architecture_data(
+        # Relative targets are unique within a single project.
+        target_to_key = {info[bn][1]: bn for bn in group}
+        result = build_dep_graph_from_architecture_data(
             group_arch,
             [info[bn][1] for bn in group],
             source_name=source_name,
         )
-        warnings.extend(group_result.warnings)
+        warnings.extend(result.warnings)
         for bn in group:
             graph[bn] = [
-                group_target_to_key.get(dep, dep)
-                for dep in group_result.graph.get(info[bn][1], [])
+                target_to_key.get(dep, dep)
+                for dep in result.graph.get(info[bn][1], [])
             ]
 
     return graph, warnings
