@@ -8485,8 +8485,14 @@ def _extract_step_report(text: Optional[str]) -> Optional[str]:
     return matches[-1].strip()
 
 
-# Public alias for orchestrator callers; same semantics as ``_extract_step_report``.
-extract_step_report = _extract_step_report
+def extract_step_report(text: Optional[str]) -> Optional[str]:
+    """Public wrapper for orchestrator callers; same semantics as ``_extract_step_report``.
+
+    A real ``def`` (not an ``extract_step_report = _extract_step_report`` alias) so
+    the ``<pdd-interface>`` / architecture.json conformance verifier — which resolves
+    declared symbols only via ``FunctionDef`` nodes — sees the declared public symbol.
+    """
+    return _extract_step_report(text)
 
 
 def normalize_step_comments_state(raw: Any) -> Set[int]:
@@ -8649,16 +8655,18 @@ def post_step_comment(
     output: str,
     cwd: Path,
     body: Optional[str] = None,
+    failure_mode: Optional[str] = None,
+    failure_detail: Optional[str] = None,
 ) -> bool:
     """Post a per-step GitHub issue comment.
 
     Two modes:
 
-    1. ``body is None`` (legacy / fallback path): used by orchestrators when
-       the LLM agent itself failed and therefore could not produce a report.
-       The body is the historical FAILED template, kept verbatim for backwards
-       compatibility with existing callers (e.g. ``agentic_change_orchestrator``
-       hard-stop paths).
+    1. ``body is None`` (fallback path): used by orchestrators when the LLM
+       agent itself failed and therefore could not produce a report. Explicit
+       ``failure_mode`` values render recoverable degraded or fatal aborting
+       statuses; missing/unknown values keep the historical FAILED template for
+       compatibility with existing callers.
     2. ``body is not None``: the orchestrator extracted a ``<step_report>``
        block from a successful run. The body is sanitized + truncated by the
        orchestrator's pipeline; here we additionally strip any leading
@@ -8676,6 +8684,8 @@ def post_step_comment(
         cwd: Working directory for the ``gh`` subprocess.
         body: Optional pre-extracted, model-supplied report body. When set,
             takes precedence over the FAILED template.
+        failure_mode: Optional fallback mode: ``recoverable`` or ``fatal``.
+        failure_detail: Optional fallback detail appended below error context.
 
     Returns:
         True if the comment posted successfully, False otherwise (including
@@ -8687,15 +8697,31 @@ def post_step_comment(
         return False
 
     if body is None:
-        # Backwards-compatible fallback for agent-execution failures.
+        # Backwards-compatible fallback for agent-execution failures. Explicit
+        # modes distinguish recoverable degraded steps from terminal aborts.
         error_detail = _sanitize_comment_body(output or "", max_chars=1000)
+        extra_detail = _sanitize_comment_body(failure_detail or "", max_chars=1000)
+        if failure_mode == "recoverable":
+            status = "DEGRADED - workflow continuing"
+            footer = "Automated degraded fallback comment - workflow is continuing."
+        elif failure_mode == "fatal":
+            status = "FAILED - workflow aborting"
+            footer = "Automated fatal fallback comment - workflow is aborting."
+        else:
+            status = "FAILED"
+            footer = "Automated fallback comment - agent did not execute for this step."
+
+        detail_section = ""
+        if extra_detail:
+            detail_section = f"\n\n### Recovery Detail\n{extra_detail}\n"
         final_body = (
             f"## Step {step_num}/{total_steps}: {description}\n\n"
-            f"**Status:** FAILED\n\n"
+            f"**Status:** {status}\n\n"
             f"### Error Details\n"
-            f"```\n{error_detail}\n```\n\n"
+            f"```\n{error_detail}\n```"
+            f"{detail_section}\n\n"
             f"---\n"
-            f"*Automated fallback comment — agent did not execute for this step.*"
+            f"*{footer}*"
         )
     else:
         # Strip a single leading duplicate "## Step <N>..." line so the
