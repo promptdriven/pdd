@@ -439,10 +439,10 @@ def test_bug_orchestrator_posts_step_comment_on_success(bug_orchestrator_mocks, 
     assert "No duplicates found" in step1_body
 
 
-def test_bug_orchestrator_posts_failed_step_fallback(
+def test_bug_orchestrator_posts_degraded_step8_fallback_and_continues_to_success(
     bug_orchestrator_mocks, bug_default_args
 ):
-    """Soft failed steps should still get a visible FAILED fallback comment."""
+    """Step 8 provider failures are degraded and the workflow still completes."""
     from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 
     captured_states: list = []
@@ -452,11 +452,18 @@ def test_bug_orchestrator_posts_failed_step_fallback(
         return None
 
     bug_orchestrator_mocks["save_state"].side_effect = save_side_effect
+    bug_orchestrator_mocks["load_prompt_template"].side_effect = (
+        lambda name: (
+            "Prompt for {issue_number}\n{step8_output}\n{planned_test_count}"
+            if "step9" in name
+            else "Prompt for {issue_number}"
+        )
+    )
 
     def run_side_effect(*args, **kwargs):
         label = kwargs.get("label", "")
-        if label == "step6":
-            return (False, "Provider timeout during root cause", 0.1, "claude")
+        if label == "step8":
+            return (False, "Provider timeout during test strategy", 0.1, "claude")
         if label == "step9":
             return (
                 True,
@@ -473,21 +480,41 @@ def test_bug_orchestrator_posts_failed_step_fallback(
     )
     assert success is True
 
-    step6_calls = [
+    step8_calls = [
         c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
-        if c.kwargs.get("step_num") == 6
+        if c.kwargs.get("step_num") == 8
     ]
-    assert step6_calls
-    assert step6_calls[0].kwargs.get("body") is None
-    assert "Provider timeout" in step6_calls[0].kwargs.get("output", "")
+    assert step8_calls
+    assert step8_calls[0].kwargs.get("body") is None
+    assert step8_calls[0].kwargs.get("failure_mode") == "recoverable"
+    assert "Provider timeout" in step8_calls[0].kwargs.get("output", "")
+    assert "test strategy failed" in step8_calls[0].kwargs.get("failure_detail", "").lower()
+    assert "fallback/default planning" in step8_calls[0].kwargs.get("failure_detail", "")
 
-    step6_comment_states = [
-        s.get("step_comments", {}).get("6", {}) for s in captured_states
-        if s.get("step_comments", {}).get("6")
+    step9_run_calls = [
+        c for c in bug_orchestrator_mocks["run_agentic_task"].call_args_list
+        if c.kwargs.get("label") == "step9"
     ]
-    assert step6_comment_states
-    assert step6_comment_states[-1].get("failed_posted") is True
-    assert step6_comment_states[-1].get("posted") is not True
+    assert step9_run_calls
+    step9_instruction = step9_run_calls[0].kwargs.get("instruction", "")
+    assert "Fallback/default test planning" in step9_instruction
+    assert "PLANNED_TEST_COUNT: 1" in step9_instruction
+    assert "Provider timeout during test strategy" in step9_instruction
+
+    step8_comment_states = [
+        s.get("step_comments", {}).get("8", {}) for s in captured_states
+        if s.get("step_comments", {}).get("8")
+    ]
+    assert step8_comment_states
+    assert step8_comment_states[-1].get("failed_posted") is True
+    assert step8_comment_states[-1].get("posted") is not True
+
+    step12_calls = [
+        c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+        if c.kwargs.get("step_num") == 12
+    ]
+    assert step12_calls
+    assert step12_calls[-1].kwargs.get("body") is not None
 
 
 def test_bug_orchestrator_posts_fallback_before_provider_failure_abort(
@@ -514,6 +541,11 @@ def test_bug_orchestrator_posts_fallback_before_provider_failure_abort(
         for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
     ]
     assert posted_steps == [1, 2, 3]
+    fatal_call = bug_orchestrator_mocks["post_step_comment"].call_args_list[-1]
+    assert fatal_call.kwargs.get("step_num") == 3
+    assert fatal_call.kwargs.get("body") is None
+    assert fatal_call.kwargs.get("failure_mode") == "fatal"
+    assert bug_orchestrator_mocks["run_agentic_task"].call_count == 3
 
 
 def test_bug_orchestrator_step12_failure_returns_failure(
@@ -1278,3 +1310,171 @@ def test_bug_orchestrator_resume_with_e2e_skipped_completed_run(
         "Synthetic E2E-skip Step 11 entry must never be posted as a visible "
         "comment. Calls: " + repr(step11_calls)
     )
+
+
+# ---------------------------------------------------------------------------
+# issue #1641: a degraded (recoverable) step must not reset resume state
+# ---------------------------------------------------------------------------
+
+
+def test_has_later_completed_step_distinguishes_blocking_failures():
+    """`_has_later_completed_step`: a FAILED step is non-blocking only when a
+    later step completed (present output without the `FAILED:` sentinel)."""
+    from pdd.agentic_bug_orchestrator import _has_later_completed_step
+
+    ordered = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    base = {str(n): "<step_report>ok</step_report>" for n in range(1, 8)}
+
+    # Degraded Step 8 with later successes → non-blocking.
+    assert _has_later_completed_step(
+        {**base, "8": "FAILED: timeout", "9": "<step_report>ok</step_report>"},
+        ordered,
+        8,
+    ) is True
+
+    # Degraded Step 8 is the last persisted step → blocking (it must rerun).
+    assert _has_later_completed_step(
+        {**base, "8": "FAILED: timeout"}, ordered, 8
+    ) is False
+
+    # Every later entry is itself FAILED → still blocking.
+    assert _has_later_completed_step(
+        {**base, "8": "FAILED: timeout", "9": "FAILED: also failed"},
+        ordered,
+        8,
+    ) is False
+
+
+def test_bug_orchestrator_resume_does_not_rerun_after_degraded_step8(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """A degraded (recoverable) Step 8 must not trigger a full rerun on resume.
+
+    Step 8 can soft-fail while the workflow continues; its output is persisted
+    with the ``FAILED:`` sentinel by design (issue #1641). On resume the
+    contiguous validator must treat that degraded step as non-blocking because
+    Steps 9-12 completed — instead of downgrading ``last_completed_step`` from
+    12 back to 7 and rerunning Steps 8-12, which would redo test generation and
+    re-run the side-effectful Step 12 PR creation.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                "1": "<step_report>## Step 1</step_report>",
+                "2": "<step_report>## Step 2</step_report>",
+                "3": "<step_report>## Step 3</step_report>",
+                "4": "<step_report>## Step 4</step_report>",
+                "5": "<step_report>## Step 5</step_report>",
+                "6": "<step_report>## Step 6</step_report>",
+                "7": "<step_report>## Step 7</step_report>",
+                # Recoverable Step 8 failure persisted with the FAILED: sentinel.
+                "8": "FAILED: Provider timeout during test strategy",
+                "9": (
+                    "<step_report>## Step 9</step_report>\n"
+                    "FILES_CREATED: test_x.py"
+                ),
+                "10": "<step_report>## Step 10</step_report>\nE2E_NEEDED: no",
+                "11": (
+                    "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+                    "provide sufficient coverage."
+                ),
+                "12": "<step_report>## Step 12: PR created</step_report>",
+            },
+            "last_completed_step": 12,
+            "total_cost": 0.5,
+            "model_used": "claude",
+            # Every visible comment already posted except the degraded Step 8.
+            "step_comments": {
+                str(n): {"posted": True} for n in range(1, 13) if n != 8
+            },
+        },
+        None,
+    )
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = AssertionError(
+        "No step may re-run: Step 8 degraded but Steps 9-12 already completed."
+    )
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+    assert success is True
+
+    # The degraded Step 8 (FAILED: sentinel, no <step_report>) must not be
+    # re-posted as a success comment by the backfill sweep.
+    post_calls = bug_orchestrator_mocks["post_step_comment"].call_args_list
+    step8_calls = [c for c in post_calls if c.kwargs.get("step_num") == 8]
+    assert not step8_calls, (
+        "Degraded Step 8 must not be backfilled as a success comment. "
+        "Calls: " + repr(step8_calls)
+    )
+
+
+def test_bug_orchestrator_resume_retries_pending_degraded_step8_comment(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """A degraded Step 8 comment whose initial post failed must be retried on resume.
+
+    When the degraded fallback comment post fails transiently,
+    ``_maybe_post_step_comment`` persists ``failed_pending=True``. Because Step 8
+    is a recoverable-fallback step, the resume validator keeps it in the trusted
+    range (it is not rerun), so the on-entry backfill sweep is the only retry
+    path — it must re-post the degraded comment (``failure_mode="recoverable"``)
+    instead of skipping it as a ``FAILED:`` output.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                "1": "<step_report>## Step 1</step_report>",
+                "2": "<step_report>## Step 2</step_report>",
+                "3": "<step_report>## Step 3</step_report>",
+                "4": "<step_report>## Step 4</step_report>",
+                "5": "<step_report>## Step 5</step_report>",
+                "6": "<step_report>## Step 6</step_report>",
+                "7": "<step_report>## Step 7</step_report>",
+                "8": "FAILED: Provider timeout during test strategy",
+                "9": (
+                    "<step_report>## Step 9</step_report>\n"
+                    "FILES_CREATED: test_x.py"
+                ),
+                "10": "<step_report>## Step 10</step_report>\nE2E_NEEDED: no",
+                "11": (
+                    "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+                    "provide sufficient coverage."
+                ),
+                "12": "<step_report>## Step 12: PR created</step_report>",
+            },
+            "last_completed_step": 12,
+            "total_cost": 0.5,
+            "model_used": "claude",
+            "step_comments": {
+                **{str(n): {"posted": True} for n in range(1, 13) if n != 8},
+                # Step 8's degraded comment post failed transiently.
+                "8": {"failed_posted": False, "failed_pending": True},
+            },
+        },
+        None,
+    )
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = AssertionError(
+        "No step may re-run on resume of a completed, degraded run."
+    )
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+    assert success is True
+
+    post_calls = bug_orchestrator_mocks["post_step_comment"].call_args_list
+    step8_calls = [c for c in post_calls if c.kwargs.get("step_num") == 8]
+    assert step8_calls, (
+        "The pending degraded Step 8 comment must be retried on resume. "
+        "Calls: " + repr(post_calls)
+    )
+    # It must re-post as a degraded (recoverable) comment, not a success report.
+    assert step8_calls[0].kwargs.get("failure_mode") == "recoverable"
+    assert step8_calls[0].kwargs.get("body") is None
