@@ -136,8 +136,15 @@ def _count_python_test_units(text: str) -> Optional[Tuple[int, int]]:
 # Characters after which a ``/`` begins a regex literal (expression position)
 # rather than division. When ambiguous we err toward division (keep as code) —
 # a wrong guess only mis-counts symmetrically and can never cause a false
-# accept on its own.
-_REGEX_PREV_CHARS = frozenset("(,=:[!&|?{;}<>+-*%^~")
+# accept on its own. ``<`` and ``>`` are deliberately EXCLUDED: in TSX a ``/``
+# that follows ``<`` is a JSX closing tag (``</Provider>``), not a regex, and a
+# real regex literal essentially never follows a ``<``/``>`` comparison in test
+# code — including them made ``_strip_js_noncode`` treat the slash in
+# ``</tag>`` as a regex opener and strip the rest of the line, silently
+# dropping any assertions written after the closing tag on the same line
+# (a common compact-React-test shape, e.g.
+# ``render(<Provider><Widget /></Provider>); expect(a); expect(b);``).
+_REGEX_PREV_CHARS = frozenset("(,=:[!&|?{;}+-*%^~")
 
 
 def _strip_js_noncode(text: str) -> str:
@@ -147,12 +154,15 @@ def _strip_js_noncode(text: str) -> str:
     A hand scanner (not chained regexes) is required so that: a ``//`` inside a
     string (e.g. a ``http://`` URL) is not mistaken for a comment; a quote inside
     a comment is not mistaken for a string; a regex literal like ``/expect(/``
-    cannot pad the assertion count; and an executable ``${ expect(x) }``
-    interpolation inside a template literal is still counted (its interior is
-    stripped recursively as code). Residual: a brace inside a string inside a
-    template interpolation can mis-delimit the interpolation — a third-order
-    case tolerated because measurement is symmetric and downstream verification
-    is the backstop.
+    cannot pad the assertion count; JSX tag slashes — both the closing-tag
+    ``</Provider>`` and the self-closing ``<Widget />`` / ``<Widget count={n} />``
+    forms — are treated as code rather than regex openers, so assertions written
+    after a tag on the SAME line (a common compact-React-test shape) are NOT
+    swallowed; and an executable ``${ expect(x) }`` interpolation inside a
+    template literal is still counted (its interior is stripped recursively as
+    code). Residual: a brace inside a string inside a template interpolation can
+    mis-delimit the interpolation — a third-order case tolerated because
+    measurement is symmetric and downstream verification is the backstop.
     """
     out: List[str] = []
     i, n = 0, len(text)
@@ -171,6 +181,15 @@ def _strip_js_noncode(text: str) -> str:
                 i += 1
             i += 2
             out.append(" ")
+        elif c == "/" and nxt == ">":  # JSX self-closing tag '/>': keep as code
+            # ``<Widget />`` / ``<Widget count={n} />`` — the char before the
+            # ``/`` (e.g. ``}`` from a ``{expr}`` attribute) can be in
+            # ``_REGEX_PREV_CHARS``, so guard on the following ``>`` to stop the
+            # self-closing slash from being misread as a regex opener and
+            # swallowing any same-line assertions after the tag.
+            out.append(c)
+            prev_sig = c
+            i += 1
         elif c == "/" and prev_sig in _REGEX_PREV_CHARS:  # regex literal
             i += 1
             while i < n and text[i] not in ("/", "\n"):

@@ -3028,6 +3028,52 @@ class TestCountTestUnits:
         text = "expect(a).toBe(1); const r = /expect(foo)/; const s = a / b;\n"
         assert _count_test_units(text, "src/foo.test.ts") == (0, 1)
 
+    def test_tsx_closing_tag_does_not_swallow_same_line_assertions(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # A JSX closing tag (`</Provider>`) must NOT be treated as a regex
+        # opener — otherwise the scanner strips the rest of the line and the
+        # assertions written after the tag on the SAME line disappear from the
+        # count. This is the compact-React shape that produced a false accept
+        # (baseline undercounted to 0 assertions). Both real assertions count.
+        text = (
+            'it("renders", () => {\n'
+            "  render(<Provider><Widget /></Provider>); expect(a).toBe(1); expect(b).toBe(2);\n"
+            "});\n"
+        )
+        assert _count_test_units(text, "tests/widget.test.tsx") == (1, 2)
+
+    def test_tsx_self_closing_tag_with_expr_attr_keeps_assertions(self):
+        from pdd.one_session_sync import _count_test_units
+
+        # `<Widget count={n} />` ends in `}` (a regex-opener char) followed by
+        # ` />`; the self-closing slash must be kept as code so the trailing
+        # assertions are still counted.
+        text = 'it("a", () => { render(<Widget count={n} />); expect(x); expect(y); });\n'
+        assert _count_test_units(text, "tests/widget.test.tsx") == (1, 2)
+
+    def test_tsx_dropping_assertions_after_closing_tag_is_rejected(self):
+        from pdd.one_session_sync import _candidate_preserves_coverage
+
+        # Regression at the decision level: a candidate that drops real
+        # assertions written after a JSX closing tag on the same line must be
+        # REJECTED. Before the JSX-aware fix the baseline undercounted its
+        # assertions to 0, so this exact shrink was silently auto-accepted.
+        pre = (
+            'it("x", () => {\n'
+            "  render(<Provider><Widget /></Provider>); expect(a).toBe(1); expect(b).toBe(2);\n"
+            "});\n"
+        )
+        dropped = 'it("x", () => { expect(a).toBe(1); });\n'
+        assert _candidate_preserves_coverage(pre, dropped, "tests/widget.test.tsx") is False
+        # A genuine coverage-preserving rewrite of the same shape is accepted.
+        kept = (
+            'it("x", () => {\n'
+            "  render(<Provider><Widget /></Provider>); expect(a).toBe(1); expect(b).toBe(2); expect(c).toBe(3);\n"
+            "});\n"
+        )
+        assert _candidate_preserves_coverage(pre, kept, "tests/widget.test.tsx") is True
+
 
 # ---------------------------------------------------------------------------
 # Accept-on-exhaustion: a large but coverage-preserving test rewrite should
