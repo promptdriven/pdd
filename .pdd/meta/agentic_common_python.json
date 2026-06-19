@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.278.dev0",
-  "timestamp": "2026-06-19T00:49:39.443249+00:00",
+  "timestamp": "2026-06-19T02:32:59.719922+00:00",
   "command": "fix",
-  "prompt_hash": "fc3182cacbb09ad12e63949d281470c9d2d1e8d7bbf37def8f6f65b72c54925f",
-  "code_hash": "303029ad4719fa6ce0c598a834f4765ce62f71f40e1d84f853a97c58f1bffb21",
+  "prompt_hash": "38d48bb8626b8b2454dd391409194d1c4f51079b9bbe70045dd63b4dd596292a",
+  "code_hash": "5476fe189aa1c28c69807963b25cd09bb381bbf90cdf450b203c4a401eca4d5e",
   "example_hash": "f9cdb30a932973d341b795faf510056b95573610af5ac48e3849cf42c205998e",
-  "test_hash": "4867bc37a31c8b759b8dc84093126f9b608a364b2c9b78ae841c51ec986a597f",
+  "test_hash": "849be60c2e722da754f5d9d86ff6821c3f731a05543d2d8d3f4a748b6e92a6c6",
   "test_files": {
-    "test_agentic_common.py": "4867bc37a31c8b759b8dc84093126f9b608a364b2c9b78ae841c51ec986a597f",
+    "test_agentic_common.py": "849be60c2e722da754f5d9d86ff6821c3f731a05543d2d8d3f4a748b6e92a6c6",
     "test_agentic_common_issue_813_anthropic_api_key_oauth_shadow.py": "4207732c6fb0e88b5be1fe632acd087f0b992e1ac7498dff036a0b9b9ea72138",
     "test_agentic_common_worktree.py": "16fb52387d635f1bbccbac20d08ef5b5d878021b70fc1ad79e5d36664df2b9a9"
   },
@@ -16,7 +16,7 @@
     "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
     "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "pdd/agentic_common.py": "303029ad4719fa6ce0c598a834f4765ce62f71f40e1d84f853a97c58f1bffb21",
-    "pdd/llm_invoke.py": "3ff9e0e35d86775fc459863423098104769c3c15734f19863f14f964f24bb6f3"
+    "pdd/agentic_common.py": "5476fe189aa1c28c69807963b25cd09bb381bbf90cdf450b203c4a401eca4d5e",
+    "pdd/llm_invoke.py": "c964b73d588d726fa11020e3ccd034047a4c4ba13d83db7c62e845d70bb01aff"
   }
 }
