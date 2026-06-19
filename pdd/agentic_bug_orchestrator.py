@@ -477,6 +477,21 @@ def _has_later_completed_step(
     return False
 
 
+def _step_failure_detail(step_num: Union[int, float]) -> Optional[str]:
+    """Recovery detail for a recoverable step's degraded fallback comment.
+
+    Single source of truth so the live post and any resume re-post share the
+    same wording. Step 8 (test strategy) hands Step 9 a fallback plan; surface
+    that so the degraded comment explains the recovery.
+    """
+    if step_num == 8:
+        return (
+            "Test strategy failed; later test generation will use "
+            "fallback/default planning."
+        )
+    return None
+
+
 def _parse_changed_files(output: str, marker: str) -> List[str]:
     """Extract file paths from marker lines (multiple lines and comma-separated)."""
     files = []
@@ -2268,9 +2283,46 @@ def run_agentic_bug_orchestrator(
                 break
             s_key = str(s_num)
             s_out = step_outputs_map.get(s_key)
-            if not isinstance(s_out, str) or s_out.startswith("FAILED:"):
+            if not isinstance(s_out, str):
                 continue
             entry = raw_sc.get(s_key)
+            if s_out.startswith("FAILED:"):
+                # Retry a degraded fallback comment whose initial post failed
+                # transiently (_maybe_post_step_comment persists
+                # failed_pending=True). The success backfill below never reaches
+                # a FAILED: output, and a recoverable-fallback step is not rerun,
+                # so this sweep is the only path that can re-post it.
+                failed_pending = (
+                    isinstance(entry, dict)
+                    and entry.get("failed_pending") is True
+                    and entry.get("failed_posted") is not True
+                )
+                if failed_pending:
+                    try:
+                        s_num_int = int(float(s_key))
+                    except (TypeError, ValueError):
+                        continue
+                    desc = next(
+                        (d for (n, _name, d) in steps_config if n == s_num_int),
+                        str(s_key),
+                    )
+                    github_comment_id = _maybe_post_step_comment(
+                        step_success=False,
+                        step_num=s_num_int,
+                        description=desc,
+                        step_output=s_out,
+                        state=state,
+                        state_dir=state_dir,
+                        cwd=cwd,
+                        issue_number=issue_number,
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        use_github_state=use_github_state,
+                        github_comment_id=github_comment_id,
+                        failure_mode="recoverable",
+                        failure_detail=_step_failure_detail(s_num_int),
+                    )
+                continue
             if isinstance(entry, dict) and entry.get("posted") is True:
                 continue
             fallback_pending = (
@@ -3454,10 +3506,7 @@ def run_agentic_bug_orchestrator(
             github_comment_id=github_comment_id,
             failure_mode="fatal" if step_num == 12 else "recoverable",
             failure_detail=(
-                "Test strategy failed; later test generation will use "
-                "fallback/default planning."
-                if (not step_success and step_num == 8)
-                else None
+                _step_failure_detail(step_num) if not step_success else None
             ),
         )
 

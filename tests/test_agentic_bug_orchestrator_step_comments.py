@@ -1410,3 +1410,71 @@ def test_bug_orchestrator_resume_does_not_rerun_after_degraded_step8(
         "Degraded Step 8 must not be backfilled as a success comment. "
         "Calls: " + repr(step8_calls)
     )
+
+
+def test_bug_orchestrator_resume_retries_pending_degraded_step8_comment(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """A degraded Step 8 comment whose initial post failed must be retried on resume.
+
+    When the degraded fallback comment post fails transiently,
+    ``_maybe_post_step_comment`` persists ``failed_pending=True``. Because Step 8
+    is a recoverable-fallback step, the resume validator keeps it in the trusted
+    range (it is not rerun), so the on-entry backfill sweep is the only retry
+    path — it must re-post the degraded comment (``failure_mode="recoverable"``)
+    instead of skipping it as a ``FAILED:`` output.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                "1": "<step_report>## Step 1</step_report>",
+                "2": "<step_report>## Step 2</step_report>",
+                "3": "<step_report>## Step 3</step_report>",
+                "4": "<step_report>## Step 4</step_report>",
+                "5": "<step_report>## Step 5</step_report>",
+                "6": "<step_report>## Step 6</step_report>",
+                "7": "<step_report>## Step 7</step_report>",
+                "8": "FAILED: Provider timeout during test strategy",
+                "9": (
+                    "<step_report>## Step 9</step_report>\n"
+                    "FILES_CREATED: test_x.py"
+                ),
+                "10": "<step_report>## Step 10</step_report>\nE2E_NEEDED: no",
+                "11": (
+                    "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+                    "provide sufficient coverage."
+                ),
+                "12": "<step_report>## Step 12: PR created</step_report>",
+            },
+            "last_completed_step": 12,
+            "total_cost": 0.5,
+            "model_used": "claude",
+            "step_comments": {
+                **{str(n): {"posted": True} for n in range(1, 13) if n != 8},
+                # Step 8's degraded comment post failed transiently.
+                "8": {"failed_posted": False, "failed_pending": True},
+            },
+        },
+        None,
+    )
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = AssertionError(
+        "No step may re-run on resume of a completed, degraded run."
+    )
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+    assert success is True
+
+    post_calls = bug_orchestrator_mocks["post_step_comment"].call_args_list
+    step8_calls = [c for c in post_calls if c.kwargs.get("step_num") == 8]
+    assert step8_calls, (
+        "The pending degraded Step 8 comment must be retried on resume. "
+        "Calls: " + repr(post_calls)
+    )
+    # It must re-post as a degraded (recoverable) comment, not a success report.
+    assert step8_calls[0].kwargs.get("failure_mode") == "recoverable"
+    assert step8_calls[0].kwargs.get("body") is None

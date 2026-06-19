@@ -191,7 +191,12 @@ The orchestrator must parse step output to detect stop conditions:
   the orchestrator backfills any completed step whose output contains a
   `<step_report>` block but lacks a matching `posted: True` flag — that gate
   skips legacy pre-PR outputs and FAST_TRACK synthetic skipped-step entries,
-  both of which lack the tag.
+  both of which lack the tag. The same on-entry pass also re-posts a degraded
+  fallback comment for any in-range failed step whose `FAILED:` output is marked
+  `failed_pending` and not `failed_posted` (its initial post failed
+  transiently), using `failure_mode="recoverable"` — because a
+  recoverable-fallback step is not rerun and would otherwise never surface its
+  degraded status.
 - After posting (or skipping if already posted), return
   `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
 - Do NOT continue to subsequent steps
