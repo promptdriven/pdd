@@ -1310,3 +1310,103 @@ def test_bug_orchestrator_resume_with_e2e_skipped_completed_run(
         "Synthetic E2E-skip Step 11 entry must never be posted as a visible "
         "comment. Calls: " + repr(step11_calls)
     )
+
+
+# ---------------------------------------------------------------------------
+# issue #1641: a degraded (recoverable) step must not reset resume state
+# ---------------------------------------------------------------------------
+
+
+def test_has_later_completed_step_distinguishes_blocking_failures():
+    """`_has_later_completed_step`: a FAILED step is non-blocking only when a
+    later step completed (present output without the `FAILED:` sentinel)."""
+    from pdd.agentic_bug_orchestrator import _has_later_completed_step
+
+    ordered = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    base = {str(n): "<step_report>ok</step_report>" for n in range(1, 8)}
+
+    # Degraded Step 8 with later successes → non-blocking.
+    assert _has_later_completed_step(
+        {**base, "8": "FAILED: timeout", "9": "<step_report>ok</step_report>"},
+        ordered,
+        8,
+    ) is True
+
+    # Degraded Step 8 is the last persisted step → blocking (it must rerun).
+    assert _has_later_completed_step(
+        {**base, "8": "FAILED: timeout"}, ordered, 8
+    ) is False
+
+    # Every later entry is itself FAILED → still blocking.
+    assert _has_later_completed_step(
+        {**base, "8": "FAILED: timeout", "9": "FAILED: also failed"},
+        ordered,
+        8,
+    ) is False
+
+
+def test_bug_orchestrator_resume_does_not_rerun_after_degraded_step8(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """A degraded (recoverable) Step 8 must not trigger a full rerun on resume.
+
+    Step 8 can soft-fail while the workflow continues; its output is persisted
+    with the ``FAILED:`` sentinel by design (issue #1641). On resume the
+    contiguous validator must treat that degraded step as non-blocking because
+    Steps 9-12 completed — instead of downgrading ``last_completed_step`` from
+    12 back to 7 and rerunning Steps 8-12, which would redo test generation and
+    re-run the side-effectful Step 12 PR creation.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                "1": "<step_report>## Step 1</step_report>",
+                "2": "<step_report>## Step 2</step_report>",
+                "3": "<step_report>## Step 3</step_report>",
+                "4": "<step_report>## Step 4</step_report>",
+                "5": "<step_report>## Step 5</step_report>",
+                "6": "<step_report>## Step 6</step_report>",
+                "7": "<step_report>## Step 7</step_report>",
+                # Recoverable Step 8 failure persisted with the FAILED: sentinel.
+                "8": "FAILED: Provider timeout during test strategy",
+                "9": (
+                    "<step_report>## Step 9</step_report>\n"
+                    "FILES_CREATED: test_x.py"
+                ),
+                "10": "<step_report>## Step 10</step_report>\nE2E_NEEDED: no",
+                "11": (
+                    "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+                    "provide sufficient coverage."
+                ),
+                "12": "<step_report>## Step 12: PR created</step_report>",
+            },
+            "last_completed_step": 12,
+            "total_cost": 0.5,
+            "model_used": "claude",
+            # Every visible comment already posted except the degraded Step 8.
+            "step_comments": {
+                str(n): {"posted": True} for n in range(1, 13) if n != 8
+            },
+        },
+        None,
+    )
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = AssertionError(
+        "No step may re-run: Step 8 degraded but Steps 9-12 already completed."
+    )
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+    assert success is True
+
+    # The degraded Step 8 (FAILED: sentinel, no <step_report>) must not be
+    # re-posted as a success comment by the backfill sweep.
+    post_calls = bug_orchestrator_mocks["post_step_comment"].call_args_list
+    step8_calls = [c for c in post_calls if c.kwargs.get("step_num") == 8]
+    assert not step8_calls, (
+        "Degraded Step 8 must not be backfilled as a success comment. "
+        "Calls: " + repr(step8_calls)
+    )

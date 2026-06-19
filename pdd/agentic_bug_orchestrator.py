@@ -456,6 +456,27 @@ def _build_step8_fallback_test_plan(step8_output: str) -> str:
     )
 
 
+def _has_later_completed_step(
+    step_outputs: Dict[str, str],
+    ordered_steps: List[Union[int, float]],
+    after_step: Union[int, float],
+) -> bool:
+    """Return True if any step ordered after ``after_step`` completed successfully.
+
+    A completed step is one whose persisted output is present and does not carry
+    the ``FAILED:`` recoverable-failure sentinel. Resume validation uses this to
+    tell a non-blocking degraded step (the workflow moved on and produced later
+    results) from the point where the run actually stopped.
+    """
+    for s in ordered_steps:
+        if s <= after_step:
+            continue
+        out = step_outputs.get(str(s))
+        if isinstance(out, str) and not out.startswith("FAILED:"):
+            return True
+    return False
+
+
 def _parse_changed_files(output: str, marker: str) -> List[str]:
     """Extract file paths from marker lines (multiple lines and comma-separated)."""
     files = []
@@ -1261,6 +1282,12 @@ def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: 
 
 # Step 3 clarification hard-stop: resume must re-run triage with new user comments.
 _CLARIFICATION_STEPS = {3}
+
+# Steps whose recoverable soft-failure hands downstream work a deterministic
+# fallback (Step 8 test strategy → Step 9 fallback test plan). Their persisted
+# FAILED: sentinel must NOT downgrade resume state when a later step already
+# completed — unlike ordinary failed steps, which still re-run.
+_RECOVERABLE_FALLBACK_STEPS = {8}
 
 
 def _state_safe_step_output(output: str) -> str:
@@ -2147,10 +2174,26 @@ def run_agentic_bug_orchestrator(
     actual_last: Union[int, float] = 0
     for s in ordered_steps:
         key = str(s)
-        if key in step_outputs and not step_outputs[key].startswith("FAILED:"):
-            actual_last = s
-        else:
+        if key not in step_outputs:
+            # Genuine gap: this step never ran — resume must restart here.
             break
+        if step_outputs[key].startswith("FAILED:"):
+            # A recoverable soft-failure on a step that hands downstream work a
+            # deterministic fallback (Step 8 → Step 9 fallback test plan) is
+            # persisted with the FAILED: sentinel but is NOT a gap: the
+            # workflow continued past it and produced valid later results. When a
+            # later step completed, skip it instead of downgrading
+            # last_completed_step and rerunning already-completed, side-effectful
+            # steps (Step 9 test-gen … Step 12 PR creation). Ordinary failed
+            # steps (and a fallback step with nothing completed after it) remain
+            # the resume point and re-run.
+            if (
+                s in _RECOVERABLE_FALLBACK_STEPS
+                and _has_later_completed_step(step_outputs, ordered_steps, s)
+            ):
+                continue
+            break
+        actual_last = s
     if actual_last < last_completed_step:
         if not quiet:
             console.print(f"[yellow]State validation: correcting last_completed_step from {last_completed_step} to {actual_last}[/yellow]")
