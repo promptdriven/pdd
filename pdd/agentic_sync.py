@@ -125,25 +125,40 @@ def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
         ]
         prompt_files = [f for f in prompt_files if not f.endswith("_LLM.prompt")]
 
-        # 4. Extract basenames
+        # 4. Extract basenames as repo-root-relative module keys.
+        #
+        # A prompt lives at ``<project>/prompts/<sub>/<name>_<lang>.prompt``. The
+        # module key MUST keep BOTH the owning-project prefix (the path before
+        # ``prompts/``) and the sub-path under ``prompts/`` so a nested module
+        # like ``extensions/github_pdd_app/prompts/src/worker_app_python.prompt``
+        # yields ``extensions/github_pdd_app/src/worker_app`` — not the short
+        # ``src/worker_app`` that loses the owning project and resolves to the
+        # repo root (#1675). The downstream resolver
+        # (_resolve_module_cwd_and_target) then maps that full key back to
+        # cwd=extensions/github_pdd_app, target=src/worker_app.
         basenames: List[str] = []
         for pf in prompt_files:
-            # Strip leading path up to and including "prompts/"
-            idx = pf.find("prompts/")
-            if idx == -1:
-                continue
-            relative = pf[idx + len("prompts/"):]
-            # Extract basename: strip language suffix from filename,
-            # preserving subdirectory prefix (e.g. "commands/fix_python.prompt" -> "commands/fix")
+            if pf.startswith("prompts/"):
+                project_prefix = ""
+                relative = pf[len("prompts/"):]
+            else:
+                marker = "/prompts/"
+                idx = pf.find(marker)
+                if idx == -1:
+                    continue
+                project_prefix = pf[: idx + 1]  # keep trailing slash
+                relative = pf[idx + len(marker):]
+            # Strip language suffix from filename, preserving the sub-path under
+            # prompts/ (e.g. "commands/fix_python.prompt" -> "commands/fix").
             rel_path = Path(relative)
             filename_basename = extract_module_from_include(rel_path.name)
             if not filename_basename:
                 continue
-            # Re-attach subdirectory prefix if present
             if rel_path.parent != Path("."):
-                basename = str(rel_path.parent / filename_basename)
+                sub = str(rel_path.parent / filename_basename)
             else:
-                basename = filename_basename
+                sub = filename_basename
+            basename = f"{project_prefix}{sub}"
             if basename not in basenames:
                 basenames.append(basename)
 

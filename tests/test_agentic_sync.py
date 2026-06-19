@@ -3066,15 +3066,17 @@ class TestDetectModulesFromBranchDiff:
         ]
 
     def test_handles_extension_prompts_with_nested_prompts_dir(self):
-        """Prompts under extension dirs like extensions/github_pdd_app/prompts/ are handled.
+        """Prompts under a nested project's prompts/ keep the owning-project prefix.
 
-        Extension prompts have a different structure: the 'prompts/' directory is nested
-        inside the extension, not at the repo root. The function should still extract
-        correct basenames relative to the prompts/ directory.
+        Extension prompts live at ``<project>/prompts/...`` rather than the repo
+        root. The module key MUST be the full repo-root-relative path
+        (``extensions/github_pdd_app/pdd_executor``), keeping the owning-project
+        prefix — not the short ``pdd_executor`` that loses the project and makes
+        the resolver run from the repo root with the wrong context (#1675).
         """
         diff_output = (
             "extensions/github_pdd_app/prompts/pdd_executor_Python.prompt\n"
-            "extensions/github_pdd_app/prompts/solving_orchestrator_Python.prompt\n"
+            "extensions/github_pdd_app/prompts/src/worker_app_Python.prompt\n"
         )
         with patch("pdd.agentic_sync.subprocess.run") as mock_run:
             mock_run.side_effect = [
@@ -3082,7 +3084,10 @@ class TestDetectModulesFromBranchDiff:
                 MagicMock(returncode=0, stdout=diff_output, stderr=""),
             ]
             result = _detect_modules_from_branch_diff(Path("/fake/project"))
-        assert result == ["pdd_executor", "solving_orchestrator"]
+        assert result == [
+            "extensions/github_pdd_app/pdd_executor",
+            "extensions/github_pdd_app/src/worker_app",
+        ]
 
 
 class TestBranchDiffIsRuntimeLlmOnly:
@@ -4650,3 +4655,32 @@ def test_resolve_module_cwd_and_target_root_layout_falls_back(tmp_path):
     cwd, target = _resolve_module_cwd_and_target("src/config", tmp_path)
     assert cwd == tmp_path
     assert target == "src/config"
+
+
+def test_branch_diff_to_resolver_chain_for_nested_module(tmp_path):
+    # End-to-end regression for the maintainer's trigger (#1675): a branch diff
+    # touching extensions/github_pdd_app/prompts/src/worker_app_Python.prompt
+    # must yield the FULL key, which the resolver maps to the owning project +
+    # relative target — not the short key that loses the project prefix.
+    from pdd.agentic_sync import (
+        _detect_modules_from_branch_diff,
+        _resolve_module_cwd_and_target,
+    )
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+
+    diff = "extensions/github_pdd_app/prompts/src/worker_app_Python.prompt\n"
+    with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="feature\n", stderr=""),
+            MagicMock(returncode=0, stdout=diff, stderr=""),
+        ]
+        keys = _detect_modules_from_branch_diff(tmp_path)
+
+    assert keys == ["extensions/github_pdd_app/src/worker_app"]
+    cwd, target = _resolve_module_cwd_and_target(keys[0], tmp_path)
+    assert cwd == nested
+    assert target == "src/worker_app"
