@@ -2157,6 +2157,7 @@ def sync_orchestration(
                 test_paths=[p for p in test_paths if p],
                 run_report_path=get_run_report_path(basename, language, paths=pdd_files),
                 repair_directive=repair_directive,
+                context_compression=os.environ.get("PDD_CONTEXT_COMPRESSION"),
             )
             package_dict = asdict(package)
             compression_phase_metadata.append(compressed_context_metadata(package_dict))

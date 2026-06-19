@@ -2458,7 +2458,8 @@
     "dependencies": [
       "failure_classification_python.prompt",
       "fix_focus_python.prompt",
-      "compressed_sync_context_python.prompt"
+      "compressed_sync_context_python.prompt",
+      "test_context_packer_python.prompt"
     ],
     "priority": 65,
     "filename": "fix_error_loop_python.prompt",
@@ -2474,7 +2475,7 @@
         "functions": [
           {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None, compressed_context=None)",
+            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose = False, time = DEFAULT_TIME, code_file_ext = '.py', protect_tests = False, failure_classification = None, compressed_context = None)",
             "returns": "Tuple[bool, bool, str, str, str, float, str]"
           },
           {
@@ -9772,6 +9773,33 @@
     }
   },
   {
+    "reason": "Ranks candidate test files by a four-signal composite score and packs them under a configurable token budget, emitting a TestPackingManifest for every selection and omission decision.",
+    "dependencies": [
+      "pytest_slicer_python.prompt"
+    ],
+    "priority": 102,
+    "filename": "test_context_packer_python.prompt",
+    "filepath": "pdd/test_context_packer.py",
+    "tags": [
+      "module",
+      "python",
+      "testing",
+      "context"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "TestContextPacker.pack",
+            "signature": "(module_path: str, failing_tests: list[str] | None = None, budget_tokens: int | None = None, candidate_files: list[str] | None = None, slice_failing_tests: bool = False) -> TestPackingResult",
+            "returns": "TestPackingResult"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
     "description": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
     "dependencies": [
@@ -9976,7 +10004,8 @@
     "dependencies": [
       "context_snapshot_python.prompt",
       "contract_ir_python.prompt",
-      "operation_log_python.prompt"
+      "operation_log_python.prompt",
+      "test_context_packer_python.prompt"
     ],
     "priority": 249,
     "filename": "compressed_sync_context_python.prompt",
@@ -9992,7 +10021,7 @@
         "functions": [
           {
             "name": "build_compressed_sync_context",
-            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None) -> CompressedSyncContext",
+            "signature": "(phase, prompt_path, code_path=None, example_path=None, test_paths=None, run_report_path=None, contract_summary=None, repair_directive=None, budget=None, context_compression=None) -> CompressedSyncContext",
             "returns": "CompressedSyncContext"
           },
           {
