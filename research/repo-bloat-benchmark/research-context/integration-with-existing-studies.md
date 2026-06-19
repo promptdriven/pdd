@@ -40,8 +40,9 @@ in [`../agentic_cli_search.md`](../agentic_cli_search.md) and design §6):
 - **OSF / BIG-bench / HELM pre-registration norms** — methodological precedent for
   our pre-registered *practical-threshold* (not p-value) verdict.
 - **PDD internal precedent** — the `pdd_prompt_space` comparison arm (design §8.2)
-  reuses PDD's `token_counter` (#789 / PR #1387) once it lands, operationalizing
-  the "PDD vs. agentic" framing via prompt-space byte-invariance across repo sizes.
+  reuses the merged `pdd context` audit core (the `pdd.server.token_counter`
+  utilities; PR #1387, closing #789, merged 2026-06-11), operationalizing the
+  "PDD vs. agentic" framing via prompt-space byte-invariance across repo sizes.
 
 ---
 
@@ -72,4 +73,4 @@ boundary — which is the white space [`literature-review.md`](literature-review
 | **Critical** | Write the LOCA-bench cite-and-differentiate paragraph; confirm Codex CLI exposes per-request `usage` (the only blocker to runs, design §8.1). |
 | **High** | Calibrate §7.5 thresholds against RepoMod-Bench (91→15) and NoLiMa curves; adopt Agentless-style seed-novelty audit; cite AGENTS.md as direct support. |
 | **Medium** | Mirror the *Lost in the Noise* inverse-scaling probe across reasoning-effort settings; evaluate reusing Loc-Bench bug classes. |
-| **Deferred** | `pdd_prompt_space` arm after #789 / PR #1387 lands. |
+| **Deferred** | `pdd_prompt_space` arm, building on the merged `pdd context` audit core (PR #1387 / #789, merged 2026-06-11). |
