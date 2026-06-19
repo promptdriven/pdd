@@ -37,6 +37,7 @@ from pdd.agentic_sync import (
     _is_runtime_llm_template,
     _llm_fix_dry_run_failure,
     _load_architecture_json,
+    _normalize_modules_for_sync,
     _parse_llm_response,
     _print_global_sync_plan,
     _resolve_module_cwd,
@@ -2930,6 +2931,35 @@ class TestPostStrippingDedup:
         assert result == ["recruiting_chat", "recruiting_config"]
 
 
+class TestNormalizeModulesForSync:
+    """Tests for module basename normalization before validation."""
+
+    def test_preserves_exact_architecture_basename_that_ends_with_language_word(self, monkeypatch):
+        """`operation_log` must not become `operation` when Log is in language_format.csv."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).resolve().parents[1]))
+        architecture = [{"filename": "operation_log_python.prompt", "dependencies": []}]
+
+        result = _normalize_modules_for_sync(["operation_log"], architecture)
+
+        assert result == ["operation_log"]
+
+    def test_strips_llm_language_suffix_when_needed(self):
+        """Architecture-style LLM names still normalize to sync basenames."""
+        architecture = [{"filename": "crm_models_Python.prompt", "dependencies": []}]
+
+        result = _normalize_modules_for_sync(["crm_models_Python"], architecture)
+
+        assert result == ["crm_models"]
+
+    def test_strips_final_component_suffix_without_losing_path(self):
+        """Path-qualified names keep their directory prefix after stripping."""
+        architecture = [{"filename": "commands/contracts_python.prompt", "dependencies": []}]
+
+        result = _normalize_modules_for_sync(["commands/contracts_python"], architecture)
+
+        assert result == ["commands/contracts"]
+
+
 # ---------------------------------------------------------------------------
 # _detect_modules_from_branch_diff
 # ---------------------------------------------------------------------------
@@ -3289,6 +3319,54 @@ class TestBranchDiffSkipsLlm:
             )
 
         mock_llm.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"operation_log": []}, []),
+    )
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_branch_diff_preserves_underscored_module_when_suffix_is_known_language(
+        self,
+        mock_cli,
+        mock_gh,
+        mock_llm,
+        mock_diff,
+        mock_build_graph,
+        mock_dry_run,
+        mock_runner_cls,
+        monkeypatch,
+    ):
+        """Staging regression: operation_log must not normalize to operation."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).resolve().parents[1]))
+        mock_diff.return_value = ["operation_log"]
+        mock_gh.return_value = (True, json.dumps({
+            "title": "test", "body": "test body", "comments_url": ""
+        }))
+        mock_dry_run.return_value = (True, {"operation_log": Path("/tmp")}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "ok", 0.5)
+        mock_runner_cls.return_value = mock_runner
+
+        with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
+             patch("pdd.agentic_sync._load_architecture_json", return_value=(
+                 [{"filename": "operation_log_python.prompt", "dependencies": []}],
+                 Path("/fake/architecture.json"),
+             )):
+            success, msg, cost, model = run_agentic_sync(
+                "https://github.com/owner/repo/issues/822",
+                quiet=True,
+            )
+
+        assert success
+        mock_llm.assert_not_called()
+        assert mock_build_graph.call_args[0][1] == ["operation_log"]
+        assert mock_runner_cls.call_args[1]["basenames"] == ["operation_log"]
 
     @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff")

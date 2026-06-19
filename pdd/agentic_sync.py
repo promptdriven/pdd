@@ -87,6 +87,37 @@ def _is_runtime_llm_template(basename: str) -> bool:
     return tail.endswith("_LLM")
 
 
+def _strip_language_suffix_preserving_path(module: str) -> Optional[str]:
+    """Strip a language suffix from the final path component, preserving folders."""
+    module_path = Path(module)
+    stripped_tail = extract_module_from_include(f"{module_path.name}.prompt")
+    if not stripped_tail:
+        return None
+    parent = module_path.parent
+    if parent == Path("."):
+        return stripped_tail
+    return str(parent / stripped_tail)
+
+
+def _normalize_modules_for_sync(
+    modules: List[str],
+    architecture: Optional[List[Dict[str, Any]]],
+) -> List[str]:
+    """Normalize candidate modules while preserving exact architecture basenames."""
+    known_basenames = set(_architecture_module_basenames(architecture or []))
+
+    normalized: List[str] = []
+    for module in modules:
+        if module in known_basenames:
+            normalized.append(module)
+            continue
+
+        stripped = _strip_language_suffix_preserving_path(module)
+        normalized.append(stripped if stripped else module)
+
+    return list(dict.fromkeys(normalized))
+
+
 def _detect_modules_from_branch_diff(project_root: Path) -> List[str]:
     """Detect modules to sync by diffing the current branch against main.
 
@@ -2266,16 +2297,11 @@ def run_agentic_sync(
                 _post_error_comment(owner, repo, issue_number, msg)
             return False, msg, llm_cost, provider
 
-    # LLM returns basenames from architecture.json filenames (e.g., "crm_models_Python").
-    # pdd sync expects basenames without the language suffix (e.g., "crm_models").
-    # Strip language suffixes using the same logic as the step 10 dry-run guide.
-    # Deduplicate after stripping: LLM may return both "recruiting_config_Python" and
-    # "recruiting_config" which both map to "recruiting_config" after suffix removal.
-    stripped_modules = []
-    for m in modules_to_sync:
-        stripped = extract_module_from_include(m + ".prompt")
-        stripped_modules.append(stripped if stripped else m)
-    modules_to_sync = list(dict.fromkeys(stripped_modules))
+    # LLMs sometimes return architecture-style names with language suffixes
+    # (e.g. "crm_models_Python"). Keep exact architecture basenames first so
+    # modules whose real basename ends with a known language word
+    # (e.g. "operation_log") are not shortened to "operation".
+    modules_to_sync = _normalize_modules_for_sync(modules_to_sync, architecture)
 
     # Hard boundary (Req 9): drop any runtime *_LLM.prompt basename before it can
     # reach _filter_invalid_basenames or dry-run. These templates are consumed
