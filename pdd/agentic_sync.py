@@ -1583,6 +1583,65 @@ def _resolve_module_cwd(
     return project_root
 
 
+def _relativize_target(basename: str, cwd: Path, project_root: Path) -> str:
+    """Return the child ``pdd sync`` target for ``basename`` relative to ``cwd``.
+
+    A path-qualified basename (e.g. ``extensions/github_pdd_app/src/worker_app``)
+    is repo-root-relative. When its owning cwd is a nested project, the child must
+    run ``pdd sync src/worker_app`` from that cwd — not the full path — so strip
+    the cwd prefix. Bare basenames and basenames not under ``cwd`` are returned
+    unchanged (#1675).
+    """
+    if "/" not in basename:
+        return basename
+    try:
+        full = (Path(project_root) / basename).resolve()
+        return full.relative_to(Path(cwd).resolve()).as_posix()
+    except (ValueError, OSError):
+        return basename
+
+
+def _resolve_module_cwd_and_target(
+    basename: str, project_root: Path
+) -> Tuple[Path, str]:
+    """Resolve a module's owning cwd and the target relative to that cwd (#1675).
+
+    Bare basenames go through :func:`_resolve_module_cwd` (with strict ownership,
+    so duplicates fail loudly). A path-qualified basename is resolved to the
+    deepest ancestor directory (of its implied prompt location) that has a
+    ``.pddrc`` and physically owns the *cwd-relative* target; the target is then
+    relativized to that cwd so the child runs ``pdd sync <relative target>`` from
+    the owning project. Falls back to ``(project_root, basename)`` for a
+    root-layout path-qualified module that no nested project owns.
+    """
+    if "/" not in basename:
+        cwd = _resolve_module_cwd(basename, project_root, strict_ownership=True)
+        return cwd, basename
+
+    implied_dir = (Path(project_root) / basename).parent
+    current = implied_dir
+    while True:
+        pddrc = current / ".pddrc"
+        if (
+            current != project_root
+            and pddrc.is_file()
+            and not _is_ignored_nested_pddrc(project_root, pddrc)
+        ):
+            target = _relativize_target(basename, current, project_root)
+            try:
+                _, _, lang = _resolve_module_sync_context(target, current)
+            except Exception:
+                lang = None
+            if lang:
+                return current, target
+        if current == project_root:
+            break
+        current = current.parent
+
+    # Root-layout path-qualified module: run the full path from the repo root.
+    return project_root, basename
+
+
 def _run_single_dry_run(
     basename: str, cwd: Path, quiet: bool = False
 ) -> Tuple[bool, str]:
@@ -1758,13 +1817,22 @@ def _run_dry_run_validation(
     quiet: bool = False,
     verbose: bool = False,
     reasoning_time: Optional[float] = None,
-) -> Tuple[bool, Dict[str, Path], List[str], float]:
+) -> Tuple[bool, Dict[str, Path], Dict[str, str], List[str], float]:
     """Run dry-run validation for each module with LLM fallback.
 
+    Each module is resolved to one ``(cwd, target)`` identity — the owning
+    project cwd and the child ``pdd sync`` target relativized to it (#1675) — and
+    EVERY stage (dry-run, prompt-contract preflight, and downstream fingerprint
+    filtering / runner via the returned maps) consumes that same identity, so a
+    path-qualified module like ``extensions/github_pdd_app/src/worker_app`` runs
+    ``pdd sync src/worker_app`` from ``extensions/github_pdd_app``.
+
     Returns:
-        Tuple of (all_valid, module_to_cwd_map, error_messages, total_llm_cost).
+        Tuple of (all_valid, module_to_cwd_map, module_to_target_map,
+        error_messages, total_llm_cost), keyed by the scheduler basename.
     """
     module_cwds: Dict[str, Path] = {}
+    module_targets: Dict[str, str] = {}
     errors: List[str] = []
     total_llm_cost = 0.0
 
@@ -1781,23 +1849,21 @@ def _run_dry_run_validation(
                 )
             continue
 
-        # 1. Resolve cwd programmatically. Fail a bare basename that multiple
-        # nested projects specifically claim (#1675 req 2) as a clean validation
-        # error rather than silently syncing the wrong project.
+        # 1. Resolve the owning cwd and the cwd-relative child target together.
+        # A bare basename that multiple projects own fails as a clean validation
+        # error (#1675 req 2) rather than silently syncing the wrong project.
         try:
-            cwd = _resolve_module_cwd(
-                basename, project_root, strict_ownership=True
-            )
+            cwd, target = _resolve_module_cwd_and_target(basename, project_root)
         except AmbiguousModuleOwnerError as exc:
             errors.append(f"{basename}: {exc}")
             continue
 
-        # 2. Run dry-run
-        ok, err_output = _run_single_dry_run(basename, cwd, quiet=quiet)
+        # 2. Run dry-run with the resolved target from the owning cwd.
+        ok, err_output = _run_single_dry_run(target, cwd, quiet=quiet)
 
         if ok:
             contract_errors = _prompt_contract_errors_for_module(
-                basename, cwd, project_root
+                target, cwd, project_root
             )
             if contract_errors:
                 errors.append(
@@ -1807,6 +1873,7 @@ def _run_dry_run_validation(
                 )
                 continue
             module_cwds[basename] = cwd
+            module_targets[basename] = target
             continue
 
         # 3. Dry-run failed — try LLM fallback
@@ -1826,8 +1893,10 @@ def _run_dry_run_validation(
         total_llm_cost += llm_cost
 
         if llm_ok and llm_cwd is not None:
+            # Re-relativize the target to the cwd the LLM fallback resolved.
+            llm_target = _relativize_target(basename, llm_cwd, project_root)
             contract_errors = _prompt_contract_errors_for_module(
-                basename, llm_cwd, project_root
+                llm_target, llm_cwd, project_root
             )
             if contract_errors:
                 errors.append(
@@ -1837,6 +1906,7 @@ def _run_dry_run_validation(
                 )
                 continue
             module_cwds[basename] = llm_cwd
+            module_targets[basename] = llm_target
             if not quiet:
                 try:
                     rel = Path(".") if llm_cwd == project_root else llm_cwd.relative_to(project_root)
@@ -1849,24 +1919,29 @@ def _run_dry_run_validation(
             errors.append(f"{basename}: {llm_err or err_output}")
 
     all_valid = len(errors) == 0
-    return all_valid, module_cwds, errors, total_llm_cost
+    return all_valid, module_cwds, module_targets, errors, total_llm_cost
 
 
 def _filter_already_synced(
     modules: List[str],
     module_cwds: Dict[str, Path],
     quiet: bool = False,
+    module_targets: Optional[Dict[str, str]] = None,
 ) -> List[str]:
     """Filter out modules that are already fully synced (fingerprint matches).
 
-    For each module, runs sync_determine_operation in log_mode (read-only)
-    to check if the operation is 'nothing' (all hashes match, workflow complete).
-    Modules returning 'nothing' are removed from the sync list.
+    For each module, runs sync_determine_operation in log_mode (read-only) using
+    the module's own resolved cwd `.pddrc` (prompts_dir/context) and the
+    cwd-relative target (#1675), so a nested module's hashes are checked for the
+    project that owns it — the same (cwd-relative) identity dry-run and the
+    runner use, not the scheduler key. Modules whose operation is 'nothing' (all
+    hashes match, workflow complete) are removed.
 
     Returns:
-        List of module basenames that actually need syncing.
+        List of module basenames (scheduler keys) that actually need syncing.
     """
     needs_sync: List[str] = []
+    targets = module_targets or {}
 
     for basename in modules:
         cwd = module_cwds.get(basename)
@@ -1875,9 +1950,10 @@ def _filter_already_synced(
             needs_sync.append(basename)
             continue
 
+        target = targets.get(basename, basename)
         try:
             context_name, prompts_dir, lang_to_path = _resolve_module_sync_context(
-                basename, cwd
+                target, cwd
             )
         except Exception:
             # Language discovery failed — keep module in the list (safe fallback)
@@ -1894,7 +1970,7 @@ def _filter_already_synced(
         for lang in lang_to_path:
             try:
                 decision = _sync_determine_operation_readonly(
-                    basename=basename,
+                    basename=target,
                     language=lang,
                     target_coverage=90.0,
                     log_mode=True,
@@ -2375,12 +2451,14 @@ def run_agentic_sync(
     if not quiet:
         console.print("[bold]Running dry-run validation for each module...[/bold]")
 
-    all_valid, module_cwds, dry_run_errors, dry_run_cost = _run_dry_run_validation(
-        modules=modules_to_sync,
-        project_root=project_root,
-        quiet=quiet,
-        verbose=verbose,
-        reasoning_time=reasoning_time,
+    all_valid, module_cwds, module_targets, dry_run_errors, dry_run_cost = (
+        _run_dry_run_validation(
+            modules=modules_to_sync,
+            project_root=project_root,
+            quiet=quiet,
+            verbose=verbose,
+            reasoning_time=reasoning_time,
+        )
     )
     llm_cost += dry_run_cost
 
@@ -2409,7 +2487,9 @@ def run_agentic_sync(
     if not quiet:
         console.print("[bold]Checking fingerprints for already-synced modules...[/bold]")
 
-    modules_to_sync = _filter_already_synced(modules_to_sync, module_cwds, quiet=quiet)
+    modules_to_sync = _filter_already_synced(
+        modules_to_sync, module_cwds, quiet=quiet, module_targets=module_targets
+    )
     if not modules_to_sync:
         msg = "All modules are already synced — nothing to do."
         if not quiet:
@@ -2447,13 +2527,17 @@ def run_agentic_sync(
     } if use_github_state else None
 
     # Resolve each module into a canonical ResolvedSyncUnit (cwd / .pddrc /
-    # context / target / paths) so every stage uses one identity and a nested
-    # child never receives a context invalid for its cwd (#1675). The
-    # module_contexts dict is derived from the units for backward-compatible
-    # callers/runners that have not adopted units.
+    # context / target / paths) — the SAME (cwd, target) dry-run/contract/
+    # fingerprint validated — so every stage uses one identity and a nested or
+    # path-qualified child runs `pdd --context <ctx> sync <target>` from its
+    # owning project (#1675). The module_contexts dict is derived from the units
+    # for backward-compatible callers/runners that have not adopted units.
     module_units = {
         bn: resolve_sync_unit(
-            bn, bn, module_cwds[bn], requested_context=context_override
+            bn,
+            module_targets.get(bn, bn),
+            module_cwds[bn],
+            requested_context=context_override,
         )
         for bn in modules_to_sync
         if bn in module_cwds
@@ -2475,6 +2559,7 @@ def run_agentic_sync(
             verbose=verbose,
             issue_url=issue_url,
             module_cwds=module_cwds,
+            module_targets=module_targets,
             module_contexts=module_contexts,
             module_units=module_units,
             initial_cost=llm_cost,
@@ -2489,6 +2574,7 @@ def run_agentic_sync(
             verbose=verbose,
             issue_url=issue_url,
             module_cwds=module_cwds,
+            module_targets=module_targets,
             module_contexts=module_contexts,
             module_units=module_units,
             initial_cost=llm_cost,

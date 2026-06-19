@@ -137,3 +137,29 @@ def test_relocate_rebases_ancestor_pddrc(tmp_path):
     assert moved.cwd == worktree_root / "backend" / "functions"
     assert moved.pddrc_path == worktree_root / "backend" / ".pddrc"
     assert moved.prompts_dir == worktree_root / "backend" / "functions" / "prompts"
+
+
+def test_path_qualified_unit_has_relative_target_and_nested_context(tmp_path):
+    # The maintainer's target unit shape: key=full path, cwd=nested project,
+    # target=relative, context=nested context (#1675 final).
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    nested.mkdir(parents=True)
+    (nested / ".pddrc").write_text(
+        'version: "1.0"\n'
+        "contexts:\n"
+        "  src:\n"
+        '    paths: ["src/**"]\n'
+        "    defaults:\n"
+        '      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+    unit = resolve_sync_unit(
+        "extensions/github_pdd_app/src/worker_app",
+        "src/worker_app",
+        nested,
+        requested_context="extensions-github_pdd_app",
+    )
+    assert unit.key == "extensions/github_pdd_app/src/worker_app"
+    assert unit.cwd == nested
+    assert unit.target_basename == "src/worker_app"
+    assert unit.context == "src"

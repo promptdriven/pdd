@@ -1657,7 +1657,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         # Runner now includes initial_cost (0.05) + per-module (0.10) = 0.15
@@ -1714,7 +1714,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         success, msg, cost, model = run_agentic_sync(
             "https://github.com/owner/repo/issues/1",
@@ -1777,7 +1777,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         success, msg, cost, model = run_agentic_sync(
             "https://github.com/owner/repo/issues/1",
@@ -1831,7 +1831,7 @@ class TestRunAgenticSync:
         mock_build_graph.return_value = DepGraphFromArchitectureResult(
             {"crm_models": ["api_orders"], "api_orders": []}, []
         )
-        mock_dry_run.return_value = (True, {"crm_models": Path("/tmp"), "api_orders": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"crm_models": Path("/tmp"), "api_orders": Path("/tmp")}, {"crm_models": "crm_models", "api_orders": "api_orders"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.20)
@@ -1887,7 +1887,7 @@ class TestRunAgenticSync:
             0.07,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
@@ -1939,7 +1939,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, {"foo": "foo"}, [], 0.0)
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "durable done", 0.15)
         mock_durable_runner_cls.return_value = mock_runner
@@ -2346,7 +2346,7 @@ class TestRunDryRunValidation:
         mock_resolve.return_value = project_root
         mock_dry_run.return_value = (True, "")
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["mod_a", "mod_b"], project_root, quiet=True
         )
         assert all_valid is True
@@ -2365,7 +2365,7 @@ class TestRunDryRunValidation:
         mock_dry_run.return_value = (False, "prompt not found")
         mock_llm.return_value = (True, llm_cwd, 0.02, "")
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["mod_x"], project_root, quiet=True
         )
         assert all_valid is True
@@ -2383,7 +2383,7 @@ class TestRunDryRunValidation:
         mock_dry_run.return_value = (False, "prompt not found")
         mock_llm.return_value = (False, None, 0.01, "LLM could not resolve")
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["mod_y"], project_root, quiet=True
         )
         assert all_valid is False
@@ -2441,7 +2441,7 @@ class TestRunDryRunValidation:
         monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", mock_dry_run)
         monkeypatch.setattr("pdd.agentic_sync._llm_fix_dry_run_failure", mock_llm)
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["bad"], tmp_path, quiet=True
         )
 
@@ -2492,7 +2492,7 @@ class TestRunDryRunValidation:
         monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_, **__: tmp_path)
         monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", lambda *a, **k: (True, ""))
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["legacy"], tmp_path, quiet=True
         )
 
@@ -2543,7 +2543,7 @@ class TestRunDryRunValidation:
             lambda *a, **k: True,
         )
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["changed"], tmp_path, quiet=True
         )
 
@@ -3268,7 +3268,7 @@ class TestBranchDiffSkipsLlm:
         mock_gh.return_value = (True, json.dumps({
             "title": "test", "body": "test body", "comments_url": ""
         }))
-        mock_dry_run.return_value = (True, {}, [], 0.0)
+        mock_dry_run.return_value = (True, {}, {}, [], 0.0)
 
         with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
              patch("pdd.agentic_sync._load_architecture_json", return_value=([], Path("/fake/architecture.json"))), \
@@ -3303,7 +3303,7 @@ class TestBranchDiffSkipsLlm:
             0.50,
             "gpt-4",
         )
-        mock_dry_run.return_value = (True, {}, [], 0.0)
+        mock_dry_run.return_value = (True, {}, {}, [], 0.0)
 
         with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
              patch("pdd.agentic_sync._load_architecture_json", return_value=([], Path("/fake/architecture.json"))), \
@@ -3431,7 +3431,7 @@ class TestRuntimeLlmTemplateNoop:
             0.06,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
@@ -3798,7 +3798,7 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 1 modules synced", 0.10)
@@ -4605,3 +4605,48 @@ def test_analyze_global_sync_builds_units_with_resolved_context(
     assert units["pdd_codex"].context == "app_ctx"
     assert units["pdd_codex"].cwd == nested
     assert units["pdd_codex"].architecture_path == nested / "architecture.json"
+
+
+# ---------------------------------------------------------------------------
+# Path-qualified targeted modules -> one resolved unit (issue #1675 final)
+# ---------------------------------------------------------------------------
+
+def test_relativize_target_strips_cwd_prefix(tmp_path):
+    from pdd.agentic_sync import _relativize_target
+
+    assert _relativize_target("a/b/c", tmp_path / "a", tmp_path) == "b/c"
+    assert _relativize_target("a/b/c", tmp_path, tmp_path) == "a/b/c"
+    assert _relativize_target("bare", tmp_path / "a", tmp_path) == "bare"
+
+
+def test_resolve_module_cwd_and_target_path_qualified_nested(tmp_path, monkeypatch):
+    # Trigger from the maintainer's report: issue-sync emits
+    # extensions/github_pdd_app/src/worker_app -> cwd=extensions/github_pdd_app,
+    # target=src/worker_app (so dry-run can find the prompt).
+    import pdd.agentic_sync as asm
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    nested.mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+
+    def fake_ctx(basename, cwd):
+        if Path(cwd) == nested and basename == "src/worker_app":
+            return ("src", nested / "prompts", {"python": nested / "prompts/src/worker_app_python.prompt"})
+        return (None, Path(cwd) / "prompts", {})
+
+    monkeypatch.setattr(asm, "_resolve_module_sync_context", fake_ctx)
+    cwd, target = asm._resolve_module_cwd_and_target(
+        "extensions/github_pdd_app/src/worker_app", tmp_path
+    )
+    assert cwd == nested
+    assert target == "src/worker_app"
+
+
+def test_resolve_module_cwd_and_target_root_layout_falls_back(tmp_path):
+    # A path-qualified module no nested project owns runs the full path from root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+
+    (tmp_path / "src").mkdir()
+    cwd, target = _resolve_module_cwd_and_target("src/config", tmp_path)
+    assert cwd == tmp_path
+    assert target == "src/config"
