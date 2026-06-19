@@ -127,7 +127,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 - Print Rich error (unless quiet) and return None on errors (ValueError, InvalidGitRepositoryError, Exception).
 - Re-raise click.Abort.
 - Pass confirm_callback, force, and context from ctx.obj to construct_paths.
-- Module-level Rich Console with custom theme (info=cyan, warning=yellow, error=bold red, success=green, path=dim blue).
+- Module-level Rich Console themed with the central brand palette: build the theme from `SEMANTIC_STYLES` imported from `pdd.cli_theme` (EPIC #1540) — `custom_theme = Theme(SEMANTIC_STYLES)` — so `pdd update` shares the enhanced CLI color system (info, warning, error, success, path, etc. resolved by semantic role) instead of a local ad-hoc theme.
 
 % Dependencies
 <module_dependencies>
