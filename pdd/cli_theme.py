@@ -96,11 +96,30 @@ SEMANTIC_STYLES = {
 PDD_THEME = Theme(SEMANTIC_STYLES)
 
 _ConsoleColorState = Tuple[bool, Optional[bool], Any]
-_registered_consoles: "weakref.WeakSet[Console]" = weakref.WeakSet()
+
+# Console registry + active preference. This state must outlive
+# ``importlib.reload(cli_theme)``: a reload re-executes this module in the *same*
+# namespace, so plain module globals would be reset to empty and consoles
+# created before the reload (e.g. ``pdd.core.errors.console``) would silently
+# drop out of the registry and stop honoring later ``apply_global_color_preference``
+# calls. We therefore anchor the registry on the stable, process-global
+# ``Console`` class — the same place the genuine initializer is stashed — and
+# reuse it across reloads instead of re-creating it.
+_PDD_STATE_ATTR = "_pdd_color_state"
+
+_color_state: Dict[str, Any] = getattr(Console, _PDD_STATE_ATTR, None)
+if _color_state is None:
+    _color_state = {
+        "consoles": weakref.WeakSet(),
+        "default_states": weakref.WeakKeyDictionary(),
+        "active_preference": None,
+    }
+    setattr(Console, _PDD_STATE_ATTR, _color_state)
+
+_registered_consoles: "weakref.WeakSet[Console]" = _color_state["consoles"]
 _console_default_states: "weakref.WeakKeyDictionary[Console, _ConsoleColorState]" = (
-    weakref.WeakKeyDictionary()
+    _color_state["default_states"]
 )
-_active_color_preference: Optional[bool] = None
 
 
 def _snapshot_console_color(con: Console) -> _ConsoleColorState:
@@ -143,11 +162,12 @@ def _force_console_color(con: Console, enabled: bool) -> None:
 
 def _console_kwargs_with_global_preference(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     """Translate the active global preference into Rich constructor kwargs."""
-    if _active_color_preference is True:
+    preference = _color_state["active_preference"]
+    if preference is True:
         kwargs["no_color"] = False
         kwargs["force_terminal"] = True
         kwargs.setdefault("color_system", _preferred_color_system())
-    elif _active_color_preference is False:
+    elif preference is False:
         kwargs["no_color"] = True
     return kwargs
 
@@ -157,8 +177,9 @@ def _register_console(con: Console) -> None:
     try:
         _registered_consoles.add(con)
         _console_default_states.setdefault(con, _snapshot_console_color(con))
-        if _active_color_preference is not None:
-            _force_console_color(con, _active_color_preference)
+        preference = _color_state["active_preference"]
+        if preference is not None:
+            _force_console_color(con, preference)
     except Exception:  # pragma: no cover - WeakSet/WeakKey fallback safety
         pass
 
@@ -202,24 +223,21 @@ def apply_global_color_preference(preference: Optional[bool]) -> Callable[[], No
     immediately inherit the same choice, including forced ANSI output when
     output is captured or piped.
     """
-    global _active_color_preference
-
     if preference is None:
         return lambda: None
 
-    previous_preference = _active_color_preference
+    previous_preference = _color_state["active_preference"]
     saved_states = {
         con: _snapshot_console_color(con)
         for con in list(_registered_consoles)
     }
 
-    _active_color_preference = preference
+    _color_state["active_preference"] = preference
     for con in list(_registered_consoles):
         _force_console_color(con, preference)
 
     def restore() -> None:
-        global _active_color_preference
-        _active_color_preference = previous_preference
+        _color_state["active_preference"] = previous_preference
 
         for con, state in list(saved_states.items()):
             _restore_console_color(con, state)

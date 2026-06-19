@@ -729,6 +729,49 @@ finally:
     assert "color False True True" in result.stdout
 
 
+def test_apply_color_preference_survives_cli_theme_reload():
+    """Regression: ``pdd.core.errors.console`` exists before reloading
+    ``pdd.cli_theme``; later ``apply_color_preference(...)`` calls must still
+    update it.
+
+    The console registry is anchored on the process-global ``Console`` class, so
+    ``importlib.reload(pdd.cli_theme)`` (which resets the module's globals) must
+    not drop consoles that were registered before the reload. Run in a fresh
+    interpreter so the in-place reload cannot perturb the rest of the suite."""
+    script = """
+import importlib
+from pdd.core.errors import apply_color_preference, console as core_console
+import pdd.cli_theme as cli_theme
+
+importlib.reload(cli_theme)
+
+restore = apply_color_preference(False)
+try:
+    print('no-color', core_console.no_color)
+finally:
+    restore()
+
+restore = apply_color_preference(True)
+try:
+    print('color', core_console.no_color, core_console._force_terminal)
+finally:
+    restore()
+"""
+    env = os.environ.copy()
+    env.pop("NO_COLOR", None)
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+
+    assert "no-color True" in result.stdout
+    assert "color False True" in result.stdout
+
+
 def test_cli_no_color_flag_disables_color(runner):
     """`pdd --no-color …` is invocation-scoped and does not leak into later runs."""
     with _restore_shared_console_color() as con:

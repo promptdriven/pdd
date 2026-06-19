@@ -234,3 +234,39 @@ def test_reloaded_init_uses_genuine_console_initializer():
     console = Console(file=StringIO(), force_terminal=True, color_system="truecolor", width=80)
     console.print("[bold]ok[/bold]")
     assert "\x1b[" in console.file.getvalue()
+
+
+def test_reload_preserves_registry_for_preexisting_consoles():
+    """A console registered before reload still tracks the global color preference.
+
+    The console registry (WeakSet + active preference) is anchored on the stable
+    ``Console`` class, not on module globals, so ``importlib.reload(cli_theme)`` —
+    which resets module globals — must not drop already-registered consoles.
+    Regression for the bug where a console created before reload stopped honoring
+    later ``apply_global_color_preference(...)`` calls.
+    """
+    import importlib
+
+    from rich.console import Console
+
+    # Built (and registered) before the reload.
+    preexisting = Console(file=StringIO(), width=80)
+    assert preexisting in cli_theme._registered_consoles
+
+    importlib.reload(cli_theme)
+
+    # Still tracked after the reload through the class-anchored registry.
+    assert preexisting in cli_theme._registered_consoles
+
+    restore = cli_theme.apply_global_color_preference(False)
+    try:
+        assert preexisting.no_color is True
+    finally:
+        restore()
+
+    restore = cli_theme.apply_global_color_preference(True)
+    try:
+        assert preexisting.no_color is False
+        assert preexisting._force_terminal is True
+    finally:
+        restore()
