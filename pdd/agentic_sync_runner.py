@@ -38,6 +38,7 @@ from .construct_paths import (
     _is_known_language,
     _load_pddrc_config,
 )
+from .resolved_sync_unit import ResolvedSyncUnit
 from .sync_order import compute_sccs
 
 console = Console()
@@ -1140,6 +1141,7 @@ class AsyncSyncRunner:
         module_cwds: Optional[Dict[str, Any]] = None,
         module_targets: Optional[Dict[str, str]] = None,
         module_contexts: Optional[Dict[str, Optional[str]]] = None,
+        module_units: Optional[Dict[str, ResolvedSyncUnit]] = None,
         initial_cost: float = 0.0,
     ):
         self.basenames: List[str] = list(basenames)
@@ -1158,6 +1160,11 @@ class AsyncSyncRunner:
         # #1675). Mirrors module_cwds/module_targets; the runner never forwards
         # a context that is invalid for the cwd the child will run in.
         self.module_contexts: Dict[str, Optional[str]] = dict(module_contexts or {})
+        # Canonical per-module identity (issue #1675). When a unit exists for a
+        # key it is the single source of truth for cwd / target / context; the
+        # module_cwds/targets/contexts dicts are a fallback for callers that pass
+        # no units (ad-hoc callers, unit tests).
+        self.module_units: Dict[str, ResolvedSyncUnit] = dict(module_units or {})
         self.initial_cost = float(initial_cost or 0.0)
         self._steer_state: Dict[str, Any] = {}
 
@@ -2104,9 +2111,27 @@ class AsyncSyncRunner:
     # ------------------------------------------------------------------
     # Subprocess execution
     # ------------------------------------------------------------------
+    def _unit_for(self, basename: str) -> Optional[ResolvedSyncUnit]:
+        """Return the canonical ResolvedSyncUnit for a key, if one was provided."""
+        return self.module_units.get(basename)
+
     def _module_cwd_path(self, basename: str) -> Path:
-        """Return the resolved cwd the child sync for `basename` will run in."""
+        """Return the resolved cwd the child sync for `basename` will run in.
+
+        A canonical unit (when present) is the source of truth; otherwise fall
+        back to the module_cwds dict / project_root.
+        """
+        unit = self._unit_for(basename)
+        if unit is not None:
+            return Path(unit.cwd)
         return Path(self.module_cwds.get(basename, str(self.project_root)))
+
+    def _module_target(self, basename: str) -> str:
+        """Return the actual `pdd sync` target for a scheduler key."""
+        unit = self._unit_for(basename)
+        if unit is not None:
+            return unit.target_basename
+        return self.module_targets.get(basename, basename)
 
     def _compute_module_context(self, basename: str) -> _ModuleContextDecision:
         """Decide which ``--context`` (if any) to pass to this module's child.
@@ -2117,13 +2142,30 @@ class AsyncSyncRunner:
         into a nested cwd (or vice versa) makes the child die with
         ``Unknown context`` (issue #1675).
 
-        Behavior is intentionally a no-op for every case that works today: when
-        no context is requested, when the runner has no resolved cwd for the
-        module, when no ``.pddrc`` governs the cwd, or when the requested context
-        is valid there, the requested value is forwarded unchanged. Resolution
-        only intervenes when a requested context is invalid for the module's own
-        cwd — exactly the leak this fixes.
+        When a canonical :class:`ResolvedSyncUnit` exists for the key, its
+        already-resolved context is authoritative (resolved with the
+        omit-not-fail policy — a nested project that only has a default context
+        omits ``--context`` rather than failing). Without a unit, behavior is a
+        no-op for every case that works today: when no context is requested, when
+        the runner has no resolved cwd for the module, when no ``.pddrc`` governs
+        the cwd, or when the requested context is valid there, the requested
+        value is forwarded unchanged. Resolution only intervenes when a requested
+        context is invalid for the module's own cwd — exactly the leak this fixes.
         """
+        unit = self._unit_for(basename)
+        if unit is not None:
+            return _ModuleContextDecision(
+                context=unit.context,
+                status="unit",
+                requested=(
+                    str(self.sync_options["context"])
+                    if self.sync_options.get("context")
+                    else None
+                ),
+                cwd=Path(unit.cwd),
+                target=unit.target_basename,
+            )
+
         requested = self.sync_options.get("context")
         requested = str(requested) if requested else None
         if not requested:
@@ -2210,7 +2252,7 @@ class AsyncSyncRunner:
         Includes the module's cwd and the resolved context so the printed
         command matches what the runner actually executed (issue #1675).
         """
-        target = self.module_targets.get(basename, basename)
+        target = self._module_target(basename)
         try:
             context = self._compute_module_context(basename).context
         except Exception:
@@ -2301,7 +2343,7 @@ class AsyncSyncRunner:
         elif self.sync_options.get("budget") is not None:
             cmd.extend(["--budget", str(self.sync_options["budget"])])
 
-        cmd.append(self.module_targets.get(basename, basename))
+        cmd.append(self._module_target(basename))
         return cmd
 
     def _build_env(
@@ -2763,8 +2805,7 @@ class AsyncSyncRunner:
                 except Exception:
                     pass
 
-        cwd_value = self.module_cwds.get(basename, str(self.project_root))
-        cwd_str = str(cwd_value)
+        cwd_str = str(self._module_cwd_path(basename))
 
         try:
             process = subprocess.Popen(

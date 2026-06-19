@@ -2437,7 +2437,7 @@ class TestRunDryRunValidation:
 
         mock_dry_run = MagicMock(return_value=(True, ""))
         mock_llm = MagicMock(return_value=(True, tmp_path, 0.02, ""))
-        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_: tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_, **__: tmp_path)
         monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", mock_dry_run)
         monkeypatch.setattr("pdd.agentic_sync._llm_fix_dry_run_failure", mock_llm)
 
@@ -2489,7 +2489,7 @@ class TestRunDryRunValidation:
             encoding="utf-8",
         )
 
-        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_: tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_, **__: tmp_path)
         monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", lambda *a, **k: (True, ""))
 
         all_valid, cwds, errors, cost = _run_dry_run_validation(
@@ -2536,7 +2536,7 @@ class TestRunDryRunValidation:
             encoding="utf-8",
         )
 
-        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_: tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_, **__: tmp_path)
         monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", lambda *a, **k: (True, ""))
         monkeypatch.setattr(
             "pdd.agentic_sync._prompt_contract_strict_self_context_required",
@@ -4405,9 +4405,9 @@ def test_augment_architecture_from_pr_branch_dict_format_merges_modules(tmp_path
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_module_contexts_maps_each_module_to_its_cwd_context(tmp_path):
-    """Each module resolves the context defined by its own cwd's .pddrc."""
-    from pdd.agentic_sync import _resolve_module_contexts
+def test_resolve_sync_units_map_each_module_to_its_cwd_context(tmp_path):
+    """Each targeted module resolves a unit with the context its cwd .pddrc assigns."""
+    from pdd.resolved_sync_unit import resolve_sync_unit
 
     cwd_a = tmp_path / "a"
     cwd_b = tmp_path / "b"
@@ -4424,10 +4424,14 @@ def test_resolve_module_contexts_maps_each_module_to_its_cwd_context(tmp_path):
         encoding="utf-8",
     )
 
-    contexts = _resolve_module_contexts(
-        ["alpha", "beta"], {"alpha": cwd_a, "beta": cwd_b}
-    )
-    assert contexts == {"alpha": "ctx_a", "beta": "ctx_b"}
+    units = {
+        bn: resolve_sync_unit(bn, bn, cwd)
+        for bn, cwd in {"alpha": cwd_a, "beta": cwd_b}.items()
+    }
+    assert {bn: u.context for bn, u in units.items()} == {
+        "alpha": "ctx_a",
+        "beta": "ctx_b",
+    }
 
 
 def test_resolve_module_sync_context_passes_pddrc_path(tmp_path, monkeypatch):
@@ -4452,3 +4456,101 @@ def test_resolve_module_sync_context_passes_pddrc_path(tmp_path, monkeypatch):
     monkeypatch.setattr(asm, "_detect_context_from_basename", _fake_detect)
     asm._resolve_module_sync_context("foo", tmp_path)
     assert captured["pddrc_path"] == tmp_path / ".pddrc"
+
+
+# ---------------------------------------------------------------------------
+# Full ResolvedSyncUnit: deep discovery, ambiguity, global units (#1675)
+# ---------------------------------------------------------------------------
+
+def _pddrc_with_context(name, pattern):
+    return (
+        'version: "1.0"\n'
+        "contexts:\n"
+        f"  {name}:\n"
+        f'    paths: ["{pattern}"]\n'
+        "    defaults:\n"
+        '      prompts_dir: "prompts"\n'
+    )
+
+
+def test_resolve_module_cwd_discovers_depth_three(tmp_path):
+    # Req 1: a nested .pddrc deeper than depth 2 (apps/foo/service) is found.
+    from pdd.agentic_sync import _resolve_module_cwd
+
+    deep = tmp_path / "apps" / "foo" / "service"
+    deep.mkdir(parents=True)
+    (deep / ".pddrc").write_text(_pddrc_with_context("svc", "widget"), encoding="utf-8")
+    assert _resolve_module_cwd("widget", tmp_path) == deep
+
+
+def test_resolve_module_cwd_ambiguous_bare_basename_raises(tmp_path):
+    # Req 2: a bare basename claimed by two distinct projects cannot be owned by
+    # basename alone -> raise under strict ownership rather than silently picking.
+    from pdd.agentic_sync import _resolve_module_cwd, AmbiguousModuleOwnerError
+
+    for proj in ("a", "b"):
+        d = tmp_path / proj
+        d.mkdir()
+        (d / ".pddrc").write_text(_pddrc_with_context("ctx", "widget"), encoding="utf-8")
+
+    with pytest.raises(AmbiguousModuleOwnerError):
+        _resolve_module_cwd("widget", tmp_path, strict_ownership=True)
+
+    # Non-strict callers keep legacy first-match behavior (one of the owners).
+    assert _resolve_module_cwd("widget", tmp_path) in (tmp_path / "a", tmp_path / "b")
+
+    # A path-qualified basename is unambiguous by construction (the path names
+    # the project); it never trips the ambiguity guard. Its execution cwd is
+    # validated by dry-run, so resolution falls back to project_root and the
+    # child runs the full path from there.
+    assert (
+        _resolve_module_cwd("a/widget", tmp_path, strict_ownership=True) == tmp_path
+    )
+
+
+def test_resolve_module_cwd_single_owner_resolves(tmp_path):
+    # Req 2: with exactly one owning project, a bare basename resolves to it
+    # (no ambiguity), proving ownership is by project, not by enumeration order.
+    from pdd.agentic_sync import _resolve_module_cwd
+
+    owner = tmp_path / "only"
+    owner.mkdir()
+    (owner / ".pddrc").write_text(_pddrc_with_context("ctx", "widget"), encoding="utf-8")
+    assert _resolve_module_cwd("widget", tmp_path, strict_ownership=True) == owner
+
+
+@patch("pdd.agentic_sync.sync_determine_operation")
+@patch("pdd.agentic_sync._detect_languages_with_context")
+def test_analyze_global_sync_builds_units_with_resolved_context(
+    mock_lang, mock_determine, tmp_path
+):
+    # Req 4: global analysis produces a ResolvedSyncUnit per chosen module with
+    # the context resolved against that module's own nested cwd .pddrc.
+    nested = tmp_path / "extensions" / "app"
+    nested.mkdir(parents=True)
+    (nested / ".pddrc").write_text(
+        _pddrc_with_context("app_ctx", "pdd_codex"), encoding="utf-8"
+    )
+    mock_lang.return_value = {"python": nested / "prompts/pdd_codex_python.prompt"}
+    decision = MagicMock()
+    decision.operation = "generate"
+    decision.reason = "prompt changed"
+    decision.estimated_cost = 1.0
+    mock_determine.return_value = decision
+
+    module = GlobalSyncModule(
+        key="pdd_codex",
+        basename="pdd_codex",
+        cwd=nested,
+        architecture_path=nested / "architecture.json",
+        entry={"filename": "pdd_codex_python.prompt", "dependencies": []},
+    )
+    analysis = _analyze_global_sync_modules(
+        [module], tmp_path, quiet=True, context_override="root_ctx"
+    )
+    units = analysis.module_units or {}
+    assert "pdd_codex" in units
+    # root_ctx is invalid in the nested cwd -> substitute the nested context.
+    assert units["pdd_codex"].context == "app_ctx"
+    assert units["pdd_codex"].cwd == nested
+    assert units["pdd_codex"].architecture_path == nested / "architecture.json"

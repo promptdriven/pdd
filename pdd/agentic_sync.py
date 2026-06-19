@@ -49,6 +49,7 @@ from .construct_paths import (
 )
 from .json_atomic import atomic_write_json
 from .load_prompt_template import load_prompt_template
+from .resolved_sync_unit import ResolvedSyncUnit, resolve_sync_unit
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
 from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
@@ -472,6 +473,8 @@ class GlobalSyncAnalysis(NamedTuple):
     # Per-module context resolved against each module's own .pddrc (#1675).
     # Defaulted so existing positional/keyword constructions stay valid.
     module_contexts: Optional[Dict[str, Optional[str]]] = None
+    # Canonical per-module identity (#1675); keyed by scheduler key.
+    module_units: Optional[Dict[str, ResolvedSyncUnit]] = None
 
 
 class GlobalSyncModule(NamedTuple):
@@ -767,38 +770,6 @@ def _resolve_module_sync_context(
     return context_name, prompts_dir, lang_to_path
 
 
-def _resolve_module_contexts(
-    modules: List[str],
-    module_cwds: Dict[str, Path],
-    module_targets: Optional[Dict[str, str]] = None,
-) -> Dict[str, Optional[str]]:
-    """Resolve each module's context against its own resolved cwd's ``.pddrc``.
-
-    Mirrors ``module_cwds``/``module_targets``: the returned value for a
-    scheduler key is the context the cwd's ``.pddrc`` assigns to that module's
-    actual child target, so the runner never forwards a context invalid for the
-    cwd the child runs in (#1675). The dict is keyed by scheduler key (what the
-    runner looks up) but detection uses the child target, so a path-qualified
-    key still matches the cwd's contexts. Modules without a resolved cwd are
-    omitted; the runner falls back to lazy resolution for those.
-    """
-    contexts: Dict[str, Optional[str]] = {}
-    targets = module_targets or {}
-    for key in modules:
-        cwd = module_cwds.get(key)
-        if cwd is None:
-            continue
-        target = targets.get(key, key)
-        try:
-            context_name, _prompts_dir, _lang = _resolve_module_sync_context(
-                target, cwd
-            )
-        except Exception:
-            context_name = None
-        contexts[key] = context_name
-    return contexts
-
-
 def _analyze_global_sync_modules(
     modules: List[GlobalSyncModule],
     project_root: Path,
@@ -808,12 +779,14 @@ def _analyze_global_sync_modules(
     skip_tests: bool = False,
     skip_verify: bool = False,
     target_coverage: Optional[float] = None,
+    context_override: Optional[str] = None,
 ) -> GlobalSyncAnalysis:
     """Tier 1 global sync analysis: fingerprint-scan all architecture modules."""
     modules_to_sync: List[str] = []
     module_cwds: Dict[str, Path] = {}
     module_targets: Dict[str, str] = {}
     module_contexts: Dict[str, Optional[str]] = {}
+    module_units: Dict[str, ResolvedSyncUnit] = {}
     module_operations: Dict[str, List[str]] = {}
     skipped_modules: List[str] = []
     estimated_cost = 0.0
@@ -886,6 +859,13 @@ def _analyze_global_sync_modules(
                 module_cwds[key] = candidate_cwd
                 module_targets[key] = candidate_basename
                 module_contexts[key] = context_name
+                module_units[key] = resolve_sync_unit(
+                    key,
+                    candidate_basename,
+                    candidate_cwd,
+                    requested_context=context_override,
+                    architecture_path=module.architecture_path,
+                )
                 estimated_cost += candidate_cost
                 break
 
@@ -927,6 +907,7 @@ def _analyze_global_sync_modules(
         skipped_modules=skipped_modules,
         all_modules=[module.key for module in modules],
         module_contexts=module_contexts,
+        module_units=module_units,
     )
 
 
@@ -1191,6 +1172,7 @@ def run_global_sync(
         skip_tests=skip_tests,
         skip_verify=skip_verify,
         target_coverage=target_coverage,
+        context_override=context_override,
     )
 
     dep_graph, dep_warnings = _build_scoped_global_dep_graph(
@@ -1262,6 +1244,7 @@ def run_global_sync(
         module_cwds=analysis.module_cwds,
         module_targets=analysis.module_targets,
         module_contexts=analysis.module_contexts or {},
+        module_units=analysis.module_units or {},
         initial_cost=0.0,
     )
     success, message, cost = runner.run()
@@ -1393,16 +1376,74 @@ def _is_ignored_nested_pddrc(project_root: Path, pddrc_path: Path) -> bool:
     )
 
 
-def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
+# Maximum directory depth below project_root scanned for nested .pddrc files.
+# Bounded so a deep monorepo (e.g. apps/foo/service/...) is still discovered
+# (issue #1675 req 1) without an unbounded full-tree walk.
+NESTED_PDDRC_MAX_DEPTH = 6
+
+
+class AmbiguousModuleOwnerError(ValueError):
+    """A bare module basename is specifically claimed by >1 nested project.
+
+    The owning project cannot be determined from the basename alone; the caller
+    must qualify it by path so the right project/.pddrc is selected (#1675 req 2).
+    """
+
+
+def _iter_nested_pddrc_paths(
+    project_root: Path, max_depth: int = NESTED_PDDRC_MAX_DEPTH
+):
+    """Yield nested ``.pddrc`` paths under ``project_root``, pruned and bounded.
+
+    Prunes hidden and tooling directories *before* descending and never follows
+    symlinks, so a deep tree is scanned cheaply. Order is deterministic (sorted).
+    The root ``.pddrc`` is not yielded — only nested ones.
+    """
+
+    def _walk(dir_path: Path, depth: int):
+        if depth > max_depth:
+            return
+        try:
+            subdirs = sorted(
+                p
+                for p in dir_path.iterdir()
+                if p.is_dir() and not p.is_symlink()
+            )
+        except OSError:
+            return
+        for sub in subdirs:
+            name = sub.name
+            if name.startswith(".") or name in _NESTED_PDDRC_EXCLUDED_PARTS:
+                continue
+            candidate = sub / ".pddrc"
+            if candidate.is_file():
+                yield candidate
+            yield from _walk(sub, depth + 1)
+
+    yield from _walk(project_root, 1)
+
+
+def _resolve_module_cwd(
+    basename: str,
+    project_root: Path,
+    *,
+    strict_ownership: bool = False,
+) -> Path:
     """Determine the correct working directory for a module based on .pddrc discovery.
 
     Logic:
-    1. Scan subdirectories (recursive, max depth 2) for nested .pddrc files
-       whose context patterns match the basename. Deepest match wins
-       (nearest-config-wins resolution).
+    1. Scan subdirectories (pruned, bounded-depth walk up to
+       ``NESTED_PDDRC_MAX_DEPTH``) for nested .pddrc files whose context patterns
+       match the basename. Deepest match wins (nearest-config-wins resolution).
        Skip catch-all matches (e.g. paths: ['**']) from subdirectories —
        they match everything and should not claim ownership of unrelated modules.
     2. Fall back to project_root (which may have its own root .pddrc).
+
+    When ``strict_ownership`` is True and a *bare* basename (no ``/``) is
+    specifically claimed by more than one nested project at the deepest matching
+    level, raise :class:`AmbiguousModuleOwnerError` instead of silently picking
+    one (issue #1675 req 2). Path-qualified basenames disambiguate themselves and
+    are never treated as ambiguous.
     """
     root_has_prompt = False
     try:
@@ -1411,35 +1452,48 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     except Exception:
         root_has_prompt = False
 
-    # 1. Scan subdirectories for .pddrc files (max depth 2)
+    # 1. Scan nested .pddrc files (pruned, bounded-depth walk).
     best_match: Optional[Path] = None
     best_depth = -1
+    owners_at_best: List[Path] = []
 
-    for depth in range(1, 3):
-        pattern = "/".join(["*"] * depth) + "/.pddrc"
-        for pddrc_path in project_root.glob(pattern):
-            if _is_ignored_nested_pddrc(project_root, pddrc_path):
-                continue
-            try:
-                config = _load_pddrc_config(pddrc_path)
-                detected = _detect_context_from_basename(basename, config, pddrc_path=pddrc_path)
-                if detected and detected != "default":
-                    # Skip catch-all patterns from subdirectories — they match
-                    # everything and would incorrectly claim unrelated modules
-                    if _is_catchall_match(basename, config):
+    for pddrc_path in _iter_nested_pddrc_paths(project_root):
+        if _is_ignored_nested_pddrc(project_root, pddrc_path):
+            continue
+        try:
+            config = _load_pddrc_config(pddrc_path)
+            detected = _detect_context_from_basename(basename, config, pddrc_path=pddrc_path)
+            if detected and detected != "default":
+                # Skip catch-all patterns from subdirectories — they match
+                # everything and would incorrectly claim unrelated modules
+                if _is_catchall_match(basename, config):
+                    continue
+                candidate_dir = pddrc_path.parent
+                if _is_broad_basename_glob_match(basename, config, detected):
+                    if root_has_prompt:
                         continue
-                    candidate_dir = pddrc_path.parent
-                    if _is_broad_basename_glob_match(basename, config, detected):
-                        if root_has_prompt:
-                            continue
-                        if not _prompt_exists_for_context(candidate_dir, config, detected, basename):
-                            continue
-                    candidate_depth = len(candidate_dir.relative_to(project_root).parts)
-                    if candidate_depth > best_depth:
-                        best_match = candidate_dir
-                        best_depth = candidate_depth
-            except (ValueError, OSError):
-                continue
+                    if not _prompt_exists_for_context(candidate_dir, config, detected, basename):
+                        continue
+                candidate_depth = len(candidate_dir.relative_to(project_root).parts)
+                if candidate_depth > best_depth:
+                    best_match = candidate_dir
+                    best_depth = candidate_depth
+                    owners_at_best = [candidate_dir]
+                elif candidate_depth == best_depth and candidate_dir != best_match:
+                    owners_at_best.append(candidate_dir)
+        except (ValueError, OSError):
+            continue
+
+    if strict_ownership and "/" not in basename and len(owners_at_best) > 1:
+        owners = ", ".join(
+            sorted(str(d.relative_to(project_root)) for d in owners_at_best)
+        )
+        raise AmbiguousModuleOwnerError(
+            f"Module basename '{basename}' is specifically claimed by multiple "
+            f"nested projects ({owners}); qualify it by path "
+            f"(e.g. '<dir>/{basename}') so the owning project/.pddrc is "
+            f"unambiguous."
+        )
 
     if best_match is not None:
         return best_match
@@ -1646,8 +1700,16 @@ def _run_dry_run_validation(
                 )
             continue
 
-        # 1. Resolve cwd programmatically
-        cwd = _resolve_module_cwd(basename, project_root)
+        # 1. Resolve cwd programmatically. Fail a bare basename that multiple
+        # nested projects specifically claim (#1675 req 2) as a clean validation
+        # error rather than silently syncing the wrong project.
+        try:
+            cwd = _resolve_module_cwd(
+                basename, project_root, strict_ownership=True
+            )
+        except AmbiguousModuleOwnerError as exc:
+            errors.append(f"{basename}: {exc}")
+            continue
 
         # 2. Run dry-run
         ok, err_output = _run_single_dry_run(basename, cwd, quiet=quiet)
@@ -2302,9 +2364,19 @@ def run_agentic_sync(
         "cwd": project_root,
     } if use_github_state else None
 
-    # Resolve each module's context against its own .pddrc so the child sync
-    # never receives a context that is invalid for the cwd it runs in (#1675).
-    module_contexts = _resolve_module_contexts(modules_to_sync, module_cwds)
+    # Resolve each module into a canonical ResolvedSyncUnit (cwd / .pddrc /
+    # context / target / paths) so every stage uses one identity and a nested
+    # child never receives a context invalid for its cwd (#1675). The
+    # module_contexts dict is derived from the units for backward-compatible
+    # callers/runners that have not adopted units.
+    module_units = {
+        bn: resolve_sync_unit(
+            bn, bn, module_cwds[bn], requested_context=context_override
+        )
+        for bn in modules_to_sync
+        if bn in module_cwds
+    }
+    module_contexts = {bn: unit.context for bn, unit in module_units.items()}
 
     if durable:
         runner = DurableSyncRunner(
@@ -2322,6 +2394,7 @@ def run_agentic_sync(
             issue_url=issue_url,
             module_cwds=module_cwds,
             module_contexts=module_contexts,
+            module_units=module_units,
             initial_cost=llm_cost,
         )
     else:
@@ -2335,6 +2408,7 @@ def run_agentic_sync(
             issue_url=issue_url,
             module_cwds=module_cwds,
             module_contexts=module_contexts,
+            module_units=module_units,
             initial_cost=llm_cost,
         )
 

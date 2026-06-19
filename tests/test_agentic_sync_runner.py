@@ -4556,3 +4556,107 @@ class TestPerModuleContextResolution:
         cmd = runner._build_command("worker_app")
         assert _context_arg(cmd) == "shared"
         assert "cd backend/functions" in runner._reproduce_command("worker_app")
+
+
+# ---------------------------------------------------------------------------
+# Canonical ResolvedSyncUnit consumption (issue #1675 follow-up)
+# ---------------------------------------------------------------------------
+
+from pdd.resolved_sync_unit import ResolvedSyncUnit  # noqa: E402
+
+
+class TestRunnerConsumesResolvedUnit:
+    """When a ResolvedSyncUnit exists for a key it is the source of truth for
+    cwd / target / context, overriding the legacy dicts."""
+
+    def _unit(self, tmp_path, *, context, target="report", cwd_name="backend"):
+        cwd = tmp_path / cwd_name
+        cwd.mkdir(parents=True, exist_ok=True)
+        return ResolvedSyncUnit(
+            key="proj/report",
+            target_basename=target,
+            cwd=cwd,
+            pddrc_path=cwd / ".pddrc",
+            context=context,
+            prompts_dir=cwd / "prompts",
+        )
+
+    def test_build_command_uses_unit_target_and_context(self, tmp_path):
+        unit = self._unit(tmp_path, context="report_ctx")
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={"context": "root_ctx"},  # invalid downstream; unit wins
+            github_info=None,
+            quiet=True,
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        cmd = runner._build_command("proj/report")
+        assert cmd[-1] == "report"
+        assert _context_arg(cmd) == "report_ctx"
+        assert "root_ctx" not in cmd
+
+    def test_unit_default_only_omits_context_without_failing(self, tmp_path):
+        # Req 3: a unit resolved to no context (default-only nested) omits
+        # --context and never raises, even with a global context requested.
+        unit = self._unit(tmp_path, context=None)
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={"context": "root_ctx"},
+            github_info=None,
+            quiet=True,
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        cmd = runner._build_command("proj/report")  # must not raise
+        assert "--context" not in cmd
+        assert cmd[-1] == "report"
+
+    def test_unit_overrides_conflicting_legacy_dicts(self, tmp_path):
+        unit = self._unit(tmp_path, context="report_ctx", target="report")
+        other = tmp_path / "other"
+        other.mkdir()
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={"context": "root_ctx"},
+            github_info=None,
+            quiet=True,
+            module_cwds={"proj/report": other},
+            module_targets={"proj/report": "WRONG"},
+            module_contexts={"proj/report": "wrong_ctx"},
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        assert runner._module_cwd_path("proj/report") == unit.cwd
+        assert runner._module_target("proj/report") == "report"
+        cmd = runner._build_command("proj/report")
+        assert _context_arg(cmd) == "report_ctx"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_run_attempt_runs_child_in_unit_cwd(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path
+    ):
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n", exit_code=0
+        )
+        unit = self._unit(tmp_path, context="report_ctx")
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        runner._sync_one_module("proj/report")
+        assert mock_popen.call_args.kwargs["cwd"] == str(unit.cwd)
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[-1] == "report"
+        assert _context_arg(cmd) == "report_ctx"

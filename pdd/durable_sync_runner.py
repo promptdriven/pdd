@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from .agentic_sync_runner import AsyncSyncRunner, _read_sync_max_workers
+from .resolved_sync_unit import ResolvedSyncUnit
 
 MAX_WORKERS = _read_sync_max_workers()
 
@@ -50,6 +51,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         module_cwds: Optional[Dict[str, Path]] = None,
         module_targets: Optional[Dict[str, str]] = None,
         module_contexts: Optional[Dict[str, Optional[str]]] = None,
+        module_units: Optional[Dict[str, ResolvedSyncUnit]] = None,
         initial_cost: float = 0.0,
     ) -> None:
         self.issue_number = issue_number
@@ -58,6 +60,10 @@ class DurableSyncRunner(AsyncSyncRunner):
         self.no_resume = no_resume
         self.durable_max_parallel = durable_max_parallel
         self.parent_module_cwds = dict(module_cwds or {})
+        # Parent-checkout units; remapped onto each per-module worktree cwd at
+        # runtime in _sync_one_module so the child keeps the same target/context
+        # identity inside the worktree (#1675).
+        self.parent_module_units = dict(module_units or {})
         self.durable_worktree_path = (
             self.git_root / ".pdd" / "worktrees" / f"durable-issue-{issue_number}"
         )
@@ -83,6 +89,7 @@ class DurableSyncRunner(AsyncSyncRunner):
             # module during the run (#1675).
             module_targets=dict(module_targets or {}),
             module_contexts=dict(module_contexts or {}),
+            module_units={},
             initial_cost=initial_cost,
         )
         self.project_root = self.git_root
@@ -163,6 +170,11 @@ class DurableSyncRunner(AsyncSyncRunner):
             worktree_path = self._create_module_worktree(basename)
             module_cwd = self._module_cwd_for_worktree(basename, worktree_path)
             self.module_cwds[basename] = module_cwd
+            # Rebase the canonical unit onto the worktree cwd so the child keeps
+            # the same target/context identity inside the worktree (#1675).
+            parent_unit = self.parent_module_units.get(basename)
+            if parent_unit is not None:
+                self.module_units[basename] = parent_unit.with_cwd(module_cwd)
 
             success, cost, error = self._run_child_sync(basename)
             if not success:
@@ -182,6 +194,8 @@ class DurableSyncRunner(AsyncSyncRunner):
         finally:
             if basename in self.module_cwds:
                 del self.module_cwds[basename]
+            if basename in self.module_units:
+                del self.module_units[basename]
 
     def _run_child_sync(self, basename: str) -> Tuple[bool, float, str]:
         return super()._sync_one_module(basename)
@@ -385,8 +399,19 @@ class DurableSyncRunner(AsyncSyncRunner):
         empty = not changed_paths
         return True, "", empty
 
+    def _metadata_basename(self, basename: str) -> str:
+        """Filesystem-safe stem for this module's ``.pdd/meta`` files.
+
+        The child writes metadata named after the *target* basename it synced
+        (e.g. ``pdd sync report`` -> ``report_*.json``), which can differ from
+        the scheduler key (e.g. ``backend/report``). Use the resolved target so
+        checkpoint staging/validation matches the files the child actually wrote
+        (#1675).
+        """
+        return self._module_target(basename).replace("/", "_")
+
     def _force_add_module_metadata(self, basename: str, module_worktree: Path) -> None:
-        safe = basename.replace("/", "_")
+        safe = self._metadata_basename(basename)
         meta_dirs = [
             module_worktree / prefix
             for prefix in self._allowed_metadata_prefixes(basename)
@@ -402,7 +427,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         self._git(["add", "-f", "--", *rel_paths], cwd=module_worktree)
 
     def _unsafe_staged_paths(self, basename: str, paths: List[str]) -> List[str]:
-        safe = basename.replace("/", "_")
+        safe = self._metadata_basename(basename)
         allowed_meta_prefixes = {
             prefix.as_posix().rstrip("/") + "/"
             for prefix in self._allowed_metadata_prefixes(basename)

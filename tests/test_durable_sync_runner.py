@@ -719,3 +719,42 @@ def test_durable_runner_builds_remapped_context_and_target(tmp_path):
     assert cmd[-1] == "report"  # resolved target, not the "backend/report" key
     assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "report_ctx"
     assert "root_ctx" not in cmd
+
+
+def test_durable_remaps_unit_into_worktree_for_build_command(tmp_path):
+    """Durable carries a ResolvedSyncUnit and rebases it onto the worktree cwd
+    so the child runs `pdd --context <ctx> sync <target>` there (#1675)."""
+    from pdd.resolved_sync_unit import ResolvedSyncUnit
+
+    parent_cwd = tmp_path / "backend"
+    parent_cwd.mkdir()
+    unit = ResolvedSyncUnit(
+        key="backend/report",
+        target_basename="report",
+        cwd=parent_cwd,
+        pddrc_path=parent_cwd / ".pddrc",
+        context="report_ctx",
+        prompts_dir=parent_cwd / "prompts",
+    )
+    runner = DurableSyncRunner(
+        basenames=["backend/report"],
+        dep_graph={"backend/report": []},
+        sync_options={"context": "root_ctx"},
+        github_info=None,
+        issue_number=1675,
+        project_root=tmp_path,
+        quiet=True,
+        module_units={"backend/report": unit},
+    )
+    assert runner.parent_module_units["backend/report"].context == "report_ctx"
+
+    # Simulate the per-module worktree remap that _sync_one_module performs.
+    worktree = tmp_path / "wt" / "backend"
+    runner.module_units["backend/report"] = runner.parent_module_units[
+        "backend/report"
+    ].with_cwd(worktree)
+
+    cmd = runner._build_command("backend/report")
+    assert cmd[-1] == "report"
+    assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "report_ctx"
+    assert runner._module_cwd_path("backend/report") == worktree
