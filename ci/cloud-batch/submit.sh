@@ -65,6 +65,7 @@ SOURCE_PATHS=(
     context
     examples
     demos
+    research
     docs
     Makefile
     pyproject.toml
