@@ -1,0 +1,168 @@
+<pdd-reason>Static task-class routing table and bounded escalation ladder for agentic CLI config selection.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "dataclasses": [
+      {"name": "RoutingConfig", "fields": [
+        {"name": "harness", "type": "str"},
+        {"name": "model_tier", "type": "int"},
+        {"name": "thinking_effort", "type": "EffortLevel"},
+        {"name": "repeat_runs", "type": "int"}
+      ]},
+      {"name": "EscalationStep", "fields": [
+        {"name": "axis", "type": "str"},
+        {"name": "value", "type": "Any"},
+        {"name": "reason", "type": "str"}
+      ]},
+      {"name": "RoutingPolicyRow", "fields": [
+        {"name": "initial_config", "type": "Optional[RoutingConfig]"},
+        {"name": "escalation_steps", "type": "List[EscalationStep]"}
+      ]},
+      {"name": "RoutingPolicy", "fields": [
+        {"name": "version", "type": "str"},
+        {"name": "rows", "type": "Dict[str, RoutingPolicyRow]"},
+        {"name": "path", "type": "Optional[Path]"}
+      ]},
+      {"name": "RoutingRecord", "fields": [
+        {"name": "timestamp_utc", "type": "str"},
+        {"name": "job_id", "type": "Optional[str]"},
+        {"name": "policy_version", "type": "str"},
+        {"name": "task_class", "type": "str"},
+        {"name": "selected_config", "type": "Optional[RoutingConfig]"},
+        {"name": "escalation_step", "type": "int"},
+        {"name": "fallback_reason", "type": "Optional[str]"},
+        {"name": "cost_usd", "type": "float"},
+        {"name": "latency_seconds", "type": "float"},
+        {"name": "verifier_result", "type": "Optional[str]"}
+      ]}
+    ],
+    "functions": [
+      {"name": "default_policy", "signature": "() -> RoutingPolicy", "returns": "RoutingPolicy"},
+      {"name": "load_policy", "signature": "(path: Optional[Path]) -> RoutingPolicy", "returns": "RoutingPolicy"},
+      {"name": "select_config", "signature": "(policy: RoutingPolicy, task_class: Optional[str], budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]", "returns": "tuple[RoutingConfig | None, RoutingRecord]"},
+      {"name": "escalate", "signature": "(policy: RoutingPolicy, record: RoutingRecord, verifier_result: str, budget_remaining: Optional[float], deadline: Optional[float]) -> tuple[RoutingConfig | None, RoutingRecord]", "returns": "tuple[RoutingConfig | None, RoutingRecord]"},
+      {"name": "resolve_model_for_tier", "signature": "(tier: int) -> Optional[str]", "returns": "Optional[str]"},
+      {"name": "emit_routing_record", "signature": "(record: RoutingRecord, log_dir: Path) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/routing_policy.py` module.
+
+% Role & Scope
+Standalone routing-policy module for agentic CLI config selection. Provides a
+static YAML-configurable lookup table keyed by coarse task class and a bounded
+four-step escalation ladder. Follows the `gate_policy.py` plain-dataclass +
+YAML-merger pattern. Consumed by `run_agentic_task()` in `agentic_common.py`
+via an optional `routing_policy` keyword argument; all existing callers without
+that argument are unaffected.
+
+% Requirements
+1. **Dataclass hierarchy** — five plain `@dataclass` classes with no external
+   validation library:
+   - `RoutingConfig(harness: str = "anthropic", model_tier: int = 2, thinking_effort: EffortLevel = "medium", repeat_runs: int = 1)`
+   - `EscalationStep(axis: str, value: Any, reason: str)`
+   - `RoutingPolicyRow(initial_config: Optional[RoutingConfig], escalation_steps: List[EscalationStep] = field(default_factory=list))`
+   - `RoutingPolicy(version: str = "1", rows: Dict[str, RoutingPolicyRow] = field(default_factory=dict), path: Optional[Path] = None)`
+   - `RoutingRecord(timestamp_utc: str, job_id: Optional[str], policy_version: str, task_class: str, selected_config: Optional[RoutingConfig], escalation_step: int = 0, fallback_reason: Optional[str] = None, cost_usd: float = 0.0, latency_seconds: float = 0.0, verifier_result: Optional[str] = None)`
+
+2. **Built-in task-class rows** — `default_policy()` returns a `RoutingPolicy`
+   with seven rows keyed to SWE-bench++ empirical distribution:
+
+   | Task class    | model_tier | thinking_effort | repeat_runs |
+   |---------------|-----------|-----------------|-------------|
+   | `bug-fix`     | 2         | medium          | 1           |
+   | `feature`     | 2         | medium          | 1           |
+   | `architecture`| 1         | high            | 1           |
+   | `refactor`    | 3         | low             | 1           |
+   | `test`        | 3         | low             | 1           |
+   | `analysis`    | 3         | low             | 1           |
+   | `default`     | N/A       | N/A             | N/A         |
+
+   The `default` row has `initial_config = None` (fall through to orchestrator
+   defaults). Non-default rows each carry four escalation steps in order:
+   harness rotation (`google`), model_tier promotion (`1`), thinking_effort
+   bump (`high`), repeat_runs increment (`2`).
+
+3. **Four escalation steps per non-default row** (ordered):
+   1. `axis="harness", value="google", reason="provider rotation on transport failure"`
+   2. `axis="model_tier", value=1, reason="capability failure – promote to rank-1 tier"`
+   3. `axis="thinking_effort", value="high", reason="quality failure – increase reasoning depth"`
+   4. `axis="repeat_runs", value=2, reason="flaky verifier – add one repeat run"`
+
+4. **`load_policy(path: Optional[Path]) -> RoutingPolicy`** — when `path` is
+   `None`, check the `PDD_ROUTING_POLICY` environment variable; if it is set to
+   a non-empty string, treat its value as the path (raise `FileNotFoundError` if
+   that file does not exist, matching the explicit-path behavior); return
+   `default_policy()` only when both `path` and the env var are absent. When
+   `path` is non-None and the file does not exist, raise `FileNotFoundError`
+   (matching `gate_policy.py` behavior). When the file exists, parse YAML, merge
+   the `rows` mapping onto the built-in defaults (unknown task-class keys extend
+   the built-in rows; existing keys are overridden per-field), and preserve the
+   `version` field from the YAML. Degrade gracefully on unexpected YAML shapes by
+   logging a warning and falling back to the default value for each affected field.
+
+5. **`select_config(policy, task_class, budget_remaining, deadline)`** —
+   normalise `None` or unrecognised `task_class` to `"default"`. Look up the
+   row; when `initial_config is None` (the `"default"` row), return
+   `(None, RoutingRecord(..., fallback_reason="no_policy_row"))`. No pre-checks
+   (budget/deadline) are performed at selection time. The returned `RoutingRecord`
+   has `escalation_step=0`, `timestamp_utc` set to the current UTC time in
+   ISO-8601 format, and `job_id` read from the `PDD_JOB_ID` env var (or `None`).
+
+6. **`escalate(policy, record, verifier_result, budget_remaining, deadline)`** —
+   apply escalation steps sequentially starting from `record.escalation_step`.
+   Before committing to the next step, perform two pre-checks:
+   - **Budget check**: when `budget_remaining` is not `None` and
+     `budget_remaining < 1.5 * record.cost_usd`, halt with
+     `fallback_reason="budget_exhausted"`.
+   - **Deadline check**: when `deadline` is not `None` and
+     `deadline - time.monotonic() < record.latency_seconds`, halt with
+     `fallback_reason="deadline_exhausted"`.
+   - Budget is checked first when both fail simultaneously.
+   When the step index reaches `len(escalation_steps)`, return the record
+   unchanged with `verifier_result` updated and `fallback_reason` indicating
+   ladder exhaustion. Apply the matching `EscalationStep` to a copy of the
+   current `RoutingConfig`, increment `escalation_step` in the returned record,
+   and set `verifier_result` on the record.
+
+7. **`resolve_model_for_tier(tier: int) -> Optional[str]`** — load
+   `data/deepswe_manifest.json` (relative to the package root, module-level
+   cached after first load). Return the `model` field of the entry with the
+   highest `model_rank_score` whose `model_rank_score` places it at the
+   requested DeepSWE rank (rank 1 = highest score). Return `None` when the
+   manifest is missing, malformed, or no entry matches the tier. Never raises.
+
+8. **`emit_routing_record(record: RoutingRecord, log_dir: Path) -> None`** —
+   ensure `log_dir` exists, write one JSON line to
+   `log_dir / f"routing-{timestamp}.jsonl"` where `timestamp` is
+   `record.timestamp_utc` with colons replaced by dashes for filesystem safety.
+   Silently ignore `OSError` (no-write environments). The JSON line serialises
+   all `RoutingRecord` fields; `selected_config` is serialised as a dict.
+
+9. **`EffortLevel`** — import from `pdd.reasoning` (do not redefine). Use it
+   as the type for `RoutingConfig.thinking_effort`.
+
+10. **Error safety** — all public functions degrade gracefully on unexpected
+    YAML shapes, missing data files, or malformed manifest entries. Log warnings
+    via the standard `logging` module; never raise from non-error paths.
+
+% Dependencies
+<gate_policy_pattern>
+    <include mode="interface">pdd/gate_policy.py</include>
+</gate_policy_pattern>
+<deepswe_manifest_schema>
+    <include select="lines:1-15">pdd/data/deepswe_manifest.json</include>
+</deepswe_manifest_schema>
+<reasoning_effort_type>
+    <include select="def:time_to_effort_level,lines:1-20">pdd/reasoning.py</include>
+</reasoning_effort_type>
+
+% Deliverables
+- `pdd/routing_policy.py`
