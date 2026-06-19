@@ -6277,6 +6277,10 @@ class TestIssue1215Round10Step5SkippedEdgeCases:
             "pr_owner": "o",
             "pr_repo": "r",
             "pr_head_sha": "abc123deadbeef",
+            # Match the run's targeted scope so the #1574 pr_test_scope identity
+            # check (added alongside the Step-7 gate) doesn't discard this resume
+            # cache — sibling resume fixtures set this too; this one was missed.
+            "pr_test_scope": "targeted",
             "last_completed_step": 6.3,
             "current_step": 7,
             "step_outputs": {
