@@ -749,7 +749,7 @@ These options can be used with any command:
 - `--context CONTEXT_NAME`: Override automatic context detection and use the specified context from `.pddrc`.
 - `--list-contexts`: List all available contexts defined in `.pddrc` and exit.
 - `--compress-examples`: Automatically apply `mode="interface"` to example includes (legacy; prefer `--context-compression examples`).
-- `--compress-test-context`: Compress test includes to failing tests only (legacy; prefer `--context-compression test`).
+- `--compress-test-context`: Rank and select tests under a configurable token budget (`PDD_TEST_TOKEN_BUDGET`, default 2 000 tokens) using import-graph distance, symbol overlap, failure recency, and file recency. Failing tests (from `PDD_FAILING_TESTS` or `.pytest_cache`) are always included first. A `TestPackingManifest` explaining selected and omitted tests is emitted in the run telemetry (legacy: prefer `--context-compression test`).
 - `--context-compression {off,test,examples,contracts,all}`: Set context compression for this CLI invocation (default: `off`). Must appear **before** the subcommand (e.g. `pdd --context-compression test generate ...`). `sync` and `fix` also accept the same flags after their subcommand.
 - `--compression-fallback {full,error}`: When compression or slicing fails, use full content (`full`, default) or abort (`error`). Global placement is the same as `--context-compression`.
 
@@ -976,7 +976,7 @@ Options:
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
 - `--compress-examples`: Automatically apply `mode="interface"` to example files in the `<include>` graph for this sync operation.
-- `--compress-test-context`: Use AST-based slicing to include only failing tests and fixtures in the fix/test context.
+- `--compress-test-context`: Rank and select test files under `PDD_TEST_TOKEN_BUDGET` (default 2 000 tokens) for this sync operation. Failing tests are packed first; remaining candidates are ranked by import distance, symbol overlap, and recency. Emits a `TestPackingManifest` in telemetry.
 - `--context-compression {off,test,examples,contracts,all}`: Set a global compression mode for this sync operation (default: `off`). `test` and `examples` mirror the legacy flags; `contracts` extracts contract rules and metadata from prompts and documentation; `all` enables all compression modes.
 - `--compression-fallback {full,error}`: Strategy for when a file cannot be compressed (default: `full`).
 - `--durable`: Issue-sync only. Run each module in an isolated git worktree under `.pdd/worktrees/sync-issue-<N>-<module>/` and checkpoint successful module output to a dedicated durable branch worktree under `.pdd/worktrees/durable-issue-<N>/`. Default issue-sync behavior (shared parallel worktree) is unchanged unless this flag is passed.
@@ -3485,6 +3485,9 @@ PDD automatically detects the appropriate context based on:
 - `context_compression`: Compression mode string controlling which file types are compressed in sync context packages. Accepted values: `"test"` (compress test files), `"examples"` (compress example files), `"contracts"` (compress prompt/contract files), `"all"` (all of the above). Set to `"off"` to disable all compression and clear all compression env keys, overriding `compressed_context` and the sub-settings below. Maps to the `PDD_CONTEXT_COMPRESSION` environment variable.
 - `compress_examples`: Whether to include examples in compressed context packages (default: `false`). When `true`, example files are compressed and included in phase packages passed to generation and repair steps. Maps to the `PDD_COMPRESS_EXAMPLES` environment variable.
 - `compress_test_context`: Whether to compress test context in compressed phase packages (default: `false`). When `true`, existing test files are compressed and included in phase packages. Maps to the `PDD_COMPRESS_TEST_CONTEXT` environment variable.
+- `test_token_budget`: Token cap for ranked test context selection in this context (default: `2000`). Maps to the `PDD_TEST_TOKEN_BUDGET` environment variable.
+- `test_ranking_weights`: JSON object overriding the four `TestContextPacker` ranking weights for this context. Maps to `PDD_TEST_RANKING_WEIGHTS`.
+- `test_dedup_threshold`: Jaccard similarity threshold for near-duplicate test file deduplication (default: `0.8`). Maps to `PDD_TEST_DEDUP_THRESHOLD`.
 - `compression_fallback`: Fallback behavior when compressed context is unavailable or compression fails (default: `"full"`). The value `"full"` falls back to the full (uncompressed) context. Maps to the `PDD_COMPRESSION_FALLBACK` environment variable.
 
 **Path Behavior**:
@@ -3547,6 +3550,9 @@ PDD uses several environment variables to customize its behavior:
 - **`PDD_EXAMPLE_OUTPUT_PATH`**: Default path for the `example` command.
 - **`PDD_TEST_OUTPUT_PATH`**: Default path for the unit test file.
 - **`PDD_TEST_COVERAGE_TARGET`**: Default target coverage percentage.
+- **`PDD_TEST_TOKEN_BUDGET`**: Token cap for ranked test context selection (default: `2000`). Set to `0` to disable test context entirely. Used by `TestContextPacker` when `--context-compression test` is active.
+- **`PDD_TEST_RANKING_WEIGHTS`**: JSON string overriding the four ranking weights used by `TestContextPacker`. Default: `{"import_distance":0.4,"symbol_overlap":0.3,"failure_recency":0.2,"file_recency":0.1}`.
+- **`PDD_TEST_DEDUP_THRESHOLD`**: Jaccard similarity threshold (0–1) above which two candidate test files are treated as near-duplicates; only the higher-scoring one is retained (default: `0.8`).
 - **`PDD_PREPROCESS_OUTPUT_PATH`**: Default path for the `preprocess` command.
 - **`PDD_FIX_TEST_OUTPUT_PATH`**: Default path for the fixed unit test files in the `fix` command.
 - **`PDD_FIX_CODE_OUTPUT_PATH`**: Default path for the fixed code files in the `fix` command.

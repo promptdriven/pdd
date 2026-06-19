@@ -984,6 +984,7 @@ def sync_main(
                                     paths=pdd_files,
                                 ),
                                 repair_directive=repair_directive,
+                                context_compression=os.environ.get("PDD_CONTEXT_COMPRESSION"),
                             )
                             package_dict = asdict(package)
                             compression_phase_metadata.append(

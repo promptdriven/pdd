@@ -701,10 +701,29 @@ def test_load_pddrc_clean_config_no_warnings(tmp_path, recwarn):
         '      target_coverage: 80.0\n'
         '      budget: 10.0\n'
         '      max_attempts: 3\n'
+        '      test_token_budget: 1200\n'
+        '      test_ranking_weights: {"import_distance": 1.0}\n'
+        '      test_dedup_threshold: 0.7\n'
     )
     _load_pddrc_config(pddrc)
     unknown_warnings = [w for w in recwarn.list if "unknown key" in str(w.message).lower()]
     assert unknown_warnings == []
+
+
+def test_resolve_config_hierarchy_maps_test_packing_defaults_to_env_vars():
+    resolved = _resolve_config_hierarchy(
+        cli_options={},
+        context_config={},
+        env_vars={
+            "PDD_TEST_TOKEN_BUDGET": "900",
+            "PDD_TEST_RANKING_WEIGHTS": '{"file_recency": 1.0}',
+            "PDD_TEST_DEDUP_THRESHOLD": "0.6",
+        },
+    )
+
+    assert resolved["test_token_budget"] == "900"
+    assert resolved["test_ranking_weights"] == '{"file_recency": 1.0}'
+    assert resolved["test_dedup_threshold"] == "0.6"
 
 
 def test_load_pddrc_warning_message_format(tmp_path):
