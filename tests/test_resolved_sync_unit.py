@@ -104,14 +104,36 @@ def test_no_pddrc_yields_no_context(tmp_path):
     assert unit.pddrc_path is None
 
 
-def test_with_cwd_rebases_paths_preserves_context(tmp_path):
+def test_relocate_rebases_paths_preserves_context(tmp_path):
     nested = tmp_path / "extensions" / "github_pdd_app"
     _write(nested / ".pddrc", _NESTED_SPECIFIC)
     unit = resolve_sync_unit("pdd_codex", "pdd_codex", nested)
-    worktree = tmp_path / "wt" / "extensions" / "github_pdd_app"
-    remapped = unit.with_cwd(worktree)
-    assert remapped.cwd == worktree
+    worktree_root = tmp_path / "wt"
+    remapped = unit.relocate(tmp_path, worktree_root)
+    assert remapped.cwd == worktree_root / "extensions" / "github_pdd_app"
     assert remapped.context == "pdd_executor_pkg"
-    assert remapped.pddrc_path == worktree / ".pddrc"
-    assert remapped.generate_output_path == worktree / "pdd"
+    assert remapped.pddrc_path == worktree_root / "extensions" / "github_pdd_app" / ".pddrc"
+    assert remapped.generate_output_path == worktree_root / "extensions" / "github_pdd_app" / "pdd"
     assert isinstance(remapped, ResolvedSyncUnit)
+
+
+def test_relocate_rebases_ancestor_pddrc(tmp_path):
+    # The #1675 fix: a .pddrc that is an ANCESTOR of cwd (one level up) must
+    # rebase into the worktree too, not stay pointing at the original checkout.
+    backend = tmp_path / "backend"
+    cwd = backend / "functions"
+    cwd.mkdir(parents=True)
+    _write(backend / ".pddrc", _DEFAULT_ONLY)
+    unit = ResolvedSyncUnit(
+        key="backend/functions/widget",
+        target_basename="widget",
+        cwd=cwd,
+        pddrc_path=backend / ".pddrc",  # ancestor of cwd
+        context=None,
+        prompts_dir=cwd / "prompts",
+    )
+    worktree_root = tmp_path / "wt"
+    moved = unit.relocate(tmp_path, worktree_root)
+    assert moved.cwd == worktree_root / "backend" / "functions"
+    assert moved.pddrc_path == worktree_root / "backend" / ".pddrc"
+    assert moved.prompts_dir == worktree_root / "backend" / "functions" / "prompts"

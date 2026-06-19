@@ -4519,6 +4519,57 @@ def test_resolve_module_cwd_single_owner_resolves(tmp_path):
     assert _resolve_module_cwd("widget", tmp_path, strict_ownership=True) == owner
 
 
+_DEFAULT_ONLY_PDDRC = (
+    'version: "1.0"\n'
+    "contexts:\n"
+    "  default:\n"
+    '    paths: ["**"]\n'
+    "    defaults:\n"
+    '      prompts_dir: "prompts"\n'
+)
+
+
+def test_resolve_module_cwd_strict_resolves_nested_only_prompt_owner(tmp_path):
+    # Req 1: a bare basename whose prompt lives only in a nested project (under
+    # its default context, with no specific pattern) resolves to that nested
+    # project under strict ownership — not root with the parent context.
+    from pdd.agentic_sync import _resolve_module_cwd
+
+    svc = tmp_path / "svc"
+    (svc / "prompts").mkdir(parents=True)
+    (svc / ".pddrc").write_text(_DEFAULT_ONLY_PDDRC, encoding="utf-8")
+    (svc / "prompts" / "widget_python.prompt").write_text("x", encoding="utf-8")
+    assert _resolve_module_cwd("widget", tmp_path, strict_ownership=True) == svc
+
+
+def test_resolve_module_cwd_strict_root_plus_nested_is_ambiguous(tmp_path):
+    # Req 1/2: a bare basename owned by BOTH the repo root and a nested project
+    # is ambiguous (the old "run from root, reuse parent context" class of bug).
+    from pdd.agentic_sync import _resolve_module_cwd, AmbiguousModuleOwnerError
+
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("x", encoding="utf-8")
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    (svc / ".pddrc").write_text(_pddrc_with_context("ctx", "widget"), encoding="utf-8")
+    with pytest.raises(AmbiguousModuleOwnerError):
+        _resolve_module_cwd("widget", tmp_path, strict_ownership=True)
+
+
+def test_resolve_module_cwd_strict_different_depth_is_ambiguous(tmp_path):
+    # Req 2: two projects at different nesting depths both claiming a bare
+    # basename are ambiguous — the deeper one must not silently win.
+    from pdd.agentic_sync import _resolve_module_cwd, AmbiguousModuleOwnerError
+
+    foo = tmp_path / "apps" / "foo"
+    svc = foo / "service"
+    svc.mkdir(parents=True)
+    (foo / ".pddrc").write_text(_pddrc_with_context("ctx_foo", "widget"), encoding="utf-8")
+    (svc / ".pddrc").write_text(_pddrc_with_context("ctx_svc", "widget"), encoding="utf-8")
+    with pytest.raises(AmbiguousModuleOwnerError):
+        _resolve_module_cwd("widget", tmp_path, strict_ownership=True)
+
+
 @patch("pdd.agentic_sync.sync_determine_operation")
 @patch("pdd.agentic_sync._detect_languages_with_context")
 def test_analyze_global_sync_builds_units_with_resolved_context(

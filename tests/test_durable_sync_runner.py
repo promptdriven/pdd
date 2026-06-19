@@ -748,13 +748,14 @@ def test_durable_remaps_unit_into_worktree_for_build_command(tmp_path):
     )
     assert runner.parent_module_units["backend/report"].context == "report_ctx"
 
-    # Simulate the per-module worktree remap that _sync_one_module performs.
-    worktree = tmp_path / "wt" / "backend"
+    # Simulate the per-module worktree remap that _sync_one_module performs
+    # (relocate from the repo root onto the worktree root).
+    worktree_root = tmp_path / "wt"
     runner.module_units["backend/report"] = runner.parent_module_units[
         "backend/report"
-    ].with_cwd(worktree)
+    ].relocate(tmp_path, worktree_root)
 
     cmd = runner._build_command("backend/report")
     assert cmd[-1] == "report"
     assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "report_ctx"
-    assert runner._module_cwd_path("backend/report") == worktree
+    assert runner._module_cwd_path("backend/report") == worktree_root / "backend"

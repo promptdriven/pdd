@@ -1146,6 +1146,7 @@ def run_global_sync(
     compressed_context: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """Run project-wide Tier 1 global sync from architecture.json."""
+    _clear_nested_pddrc_cache()
     project_root = _find_project_root(Path.cwd())
     all_modules, architecture, arch_path = _architecture_sync_modules(project_root)
     if not architecture:
@@ -1423,6 +1424,45 @@ def _iter_nested_pddrc_paths(
     yield from _walk(project_root, 1)
 
 
+# Per-run cache of the (expensive) nested-.pddrc discovery walk, keyed by
+# resolved project root. A sync run does not add .pddrc files mid-run, so the
+# topology is stable; cleared at the start of each top-level sync entry point so
+# it never goes stale across runs (#1675 perf).
+_NESTED_PDDRC_CACHE: Dict[Tuple[str, int], Tuple[Path, ...]] = {}
+
+
+def _clear_nested_pddrc_cache() -> None:
+    """Reset the nested-.pddrc discovery cache (call at the start of a sync run)."""
+    _NESTED_PDDRC_CACHE.clear()
+
+
+def _nested_pddrc_paths(
+    project_root: Path, max_depth: int = NESTED_PDDRC_MAX_DEPTH
+) -> Tuple[Path, ...]:
+    """Cached, materialized nested-.pddrc discovery for ``project_root``."""
+    key = (str(project_root.resolve()), max_depth)
+    cached = _NESTED_PDDRC_CACHE.get(key)
+    if cached is None:
+        cached = tuple(_iter_nested_pddrc_paths(project_root, max_depth))
+        _NESTED_PDDRC_CACHE[key] = cached
+    return cached
+
+
+def _dedup_resolved_paths(paths: List[Path]) -> List[Path]:
+    """Return ``paths`` de-duplicated by resolved location, preserving order."""
+    seen: set = set()
+    out: List[Path] = []
+    for p in paths:
+        try:
+            rp = p.resolve()
+        except OSError:
+            rp = p
+        if rp not in seen:
+            seen.add(rp)
+            out.append(p)
+    return out
+
+
 def _resolve_module_cwd(
     basename: str,
     project_root: Path,
@@ -1452,48 +1492,89 @@ def _resolve_module_cwd(
     except Exception:
         root_has_prompt = False
 
-    # 1. Scan nested .pddrc files (pruned, bounded-depth walk).
+    # 1. Scan nested .pddrc files (pruned, bounded-depth walk). best_match is the
+    # deepest specific (nearest-config-wins) claim used for the actual cwd. Under
+    # strict ownership we additionally collect every distinct project that OWNS
+    # the basename — by a specific .pddrc claim OR by physically holding the
+    # prompt — so a bare basename owned by more than one project (at any depth,
+    # including the repo root) fails as ambiguous instead of silently resolving
+    # to one (issue #1675 req 2). The owner sweep runs only under strict
+    # ownership (the targeted dry-run path), so the non-strict global path keeps
+    # its exact prior behavior and cost.
     best_match: Optional[Path] = None
     best_depth = -1
-    owners_at_best: List[Path] = []
+    owners: List[Path] = []
+    if strict_ownership and root_has_prompt:
+        owners.append(project_root)
 
-    for pddrc_path in _iter_nested_pddrc_paths(project_root):
+    for pddrc_path in _nested_pddrc_paths(project_root):
         if _is_ignored_nested_pddrc(project_root, pddrc_path):
             continue
         try:
             config = _load_pddrc_config(pddrc_path)
-            detected = _detect_context_from_basename(basename, config, pddrc_path=pddrc_path)
-            if detected and detected != "default":
-                # Skip catch-all patterns from subdirectories — they match
-                # everything and would incorrectly claim unrelated modules
-                if _is_catchall_match(basename, config):
-                    continue
-                candidate_dir = pddrc_path.parent
-                if _is_broad_basename_glob_match(basename, config, detected):
-                    if root_has_prompt:
-                        continue
-                    if not _prompt_exists_for_context(candidate_dir, config, detected, basename):
-                        continue
-                candidate_depth = len(candidate_dir.relative_to(project_root).parts)
-                if candidate_depth > best_depth:
-                    best_match = candidate_dir
-                    best_depth = candidate_depth
-                    owners_at_best = [candidate_dir]
-                elif candidate_depth == best_depth and candidate_dir != best_match:
-                    owners_at_best.append(candidate_dir)
         except (ValueError, OSError):
             continue
+        candidate_dir = pddrc_path.parent
 
-    if strict_ownership and "/" not in basename and len(owners_at_best) > 1:
-        owners = ", ".join(
-            sorted(str(d.relative_to(project_root)) for d in owners_at_best)
+        # Deepest specific claim drives the resolved cwd (unchanged logic).
+        detected = _detect_context_from_basename(
+            basename, config, pddrc_path=pddrc_path
         )
-        raise AmbiguousModuleOwnerError(
-            f"Module basename '{basename}' is specifically claimed by multiple "
-            f"nested projects ({owners}); qualify it by path "
-            f"(e.g. '<dir>/{basename}') so the owning project/.pddrc is "
-            f"unambiguous."
-        )
+        specific_claim = False
+        if detected and detected != "default" and not _is_catchall_match(
+            basename, config
+        ):
+            if _is_broad_basename_glob_match(basename, config, detected):
+                specific_claim = (not root_has_prompt) and _prompt_exists_for_context(
+                    candidate_dir, config, detected, basename
+                )
+            else:
+                specific_claim = True
+
+        if specific_claim:
+            try:
+                candidate_depth = len(candidate_dir.relative_to(project_root).parts)
+            except ValueError:
+                candidate_depth = -1
+            if candidate_depth > best_depth:
+                best_match = candidate_dir
+                best_depth = candidate_depth
+
+        if strict_ownership:
+            owns_prompt = False
+            try:
+                _, _, nested_lang = _resolve_module_sync_context(
+                    basename, candidate_dir
+                )
+                owns_prompt = bool(nested_lang)
+            except Exception:
+                owns_prompt = False
+            if (specific_claim or owns_prompt) and candidate_dir not in owners:
+                owners.append(candidate_dir)
+
+    if strict_ownership and "/" not in basename:
+        distinct = _dedup_resolved_paths(owners)
+        if len(distinct) > 1:
+            names = ", ".join(
+                sorted(
+                    "(project root)"
+                    if d.resolve() == project_root.resolve()
+                    else str(d.relative_to(project_root))
+                    for d in distinct
+                )
+            )
+            raise AmbiguousModuleOwnerError(
+                f"Module basename '{basename}' is owned by multiple projects "
+                f"({names}); qualify it by path (e.g. '<dir>/{basename}') so the "
+                f"owning project/.pddrc is unambiguous."
+            )
+        # Nested-only ownership the pattern scan missed (prompt present but no
+        # specific context pattern): resolve to that single nested owner instead
+        # of falling back to root with the parent context (issue #1675 req 1).
+        if best_match is None and len(distinct) == 1:
+            only = distinct[0]
+            if only.resolve() != project_root.resolve():
+                best_match = only
 
     if best_match is not None:
         return best_match
@@ -2055,6 +2136,7 @@ def run_agentic_sync(
     Returns:
         Tuple of (success, message, total_cost, model_used).
     """
+    _clear_nested_pddrc_cache()
     # 1. Check gh CLI
     if not _check_gh_cli():
         return False, "GitHub CLI (gh) not found. Install from https://cli.github.com/", 0.0, ""

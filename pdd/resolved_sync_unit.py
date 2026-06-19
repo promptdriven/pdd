@@ -50,29 +50,30 @@ class ResolvedSyncUnit:
     test_output_path: Optional[Path] = None
     meta_path: Optional[Path] = None
 
-    def with_cwd(self, new_cwd: Path) -> "ResolvedSyncUnit":
-        """Return a copy rebased onto ``new_cwd`` (e.g. a durable worktree).
+    def relocate(self, old_root: Path, new_root: Path) -> "ResolvedSyncUnit":
+        """Return a copy with every path rebased from ``old_root`` to ``new_root``.
 
-        Advisory paths that were under the old cwd are recomputed relative to
-        ``new_cwd`` so durable child syncs report worktree-relative locations.
-        The context name is cwd-independent (the worktree checks out the same
-        ``.pddrc``) and is preserved.
+        Unlike :meth:`with_cwd`, this rebases relative to a common root, so paths
+        that are *ancestors* of ``cwd`` (e.g. a ``.pddrc`` one level up) relocate
+        correctly. Used by durable sync to move a unit from the primary checkout
+        into a per-module worktree that mirrors the repo layout, keeping the unit
+        a single source of truth inside the worktree (#1675).
         """
-        old_cwd = self.cwd
-        new_cwd = Path(new_cwd)
+        old_root = Path(old_root).resolve()
+        new_root = Path(new_root)
 
         def _rebase(p: Optional[Path]) -> Optional[Path]:
             if p is None:
                 return None
             try:
-                return new_cwd / p.relative_to(old_cwd)
+                return new_root / p.resolve().relative_to(old_root)
             except ValueError:
                 return p
 
         return ResolvedSyncUnit(
             key=self.key,
             target_basename=self.target_basename,
-            cwd=new_cwd,
+            cwd=_rebase(self.cwd) or self.cwd,
             pddrc_path=_rebase(self.pddrc_path),
             context=self.context,
             prompts_dir=_rebase(self.prompts_dir) or self.prompts_dir,

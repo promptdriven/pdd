@@ -174,7 +174,12 @@ class DurableSyncRunner(AsyncSyncRunner):
             # the same target/context identity inside the worktree (#1675).
             parent_unit = self.parent_module_units.get(basename)
             if parent_unit is not None:
-                self.module_units[basename] = parent_unit.with_cwd(module_cwd)
+                # Relocate relative to the repo root (the worktree mirrors it) so
+                # paths that are ancestors of cwd — e.g. a .pddrc one level up —
+                # rebase into the worktree too (#1675).
+                self.module_units[basename] = parent_unit.relocate(
+                    self.git_root, worktree_path
+                )
 
             success, cost, error = self._run_child_sync(basename)
             if not success:
