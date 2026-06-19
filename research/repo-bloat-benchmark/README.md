@@ -25,6 +25,14 @@ promoted to `docs/whitepaper_with_benchmarks/`; active infra lives here.
   embedding/repo-map retrieval), per-agent profiles (Codex CLI, Claude Code, Aider,
   Cursor, SWE-agent), and why the retrieval family predicts an agent's sensitivity to
   repo bloat — motivating a pre-registered cross-agent extension. Cited.
+- **[pdd_direct_generation_routing.md](pdd_direct_generation_routing.md)** —
+  design note for issue [#1584](https://github.com/promptdriven/pdd/issues/1584):
+  how to compare model, temperature, reasoning, and multi-shot configs for the
+  native `llm_invoke` path before shipping a static v1 policy.
+- **[agentic_cli_routing.md](agentic_cli_routing.md)** — design note for issue
+  [#1585](https://github.com/promptdriven/pdd/issues/1585): how to compare
+  agentic CLI harness, model, thinking, and repeat-run configs once cross-CLI
+  usage/cost instrumentation is available.
 
 ## Planned layout
 
