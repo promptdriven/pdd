@@ -135,6 +135,146 @@ Notes:
 
 The durable PDD chain:
 
+<a name="automated-grounding"></a>
+## Automated Grounding (PDD Cloud)
+
+Unlike standard LLM interactions where every request is a blank slate, PDD Cloud uses **Automated Grounding** to reduce implementation drift.
+
+### How It Works
+
+When you run `pdd generate`, the system:
+1. Embeds your prompt into a vector
+2. Searches for similar prompts in the cloud database (cosine similarity)
+3. Auto-injects the closest (prompt, code) pair as a few-shot example
+
+**This is automatic.** You don't configure it. As you edit your prompt:
+- The embedding changes
+- Different examples may be retrieved
+- Generation naturally adapts to your prompt's content
+
+On first generation: Similar existing modules in your project may provide grounding.
+On re-generation: Your prior successful generation is typically the closest match.
+
+### Why This Matters for Prompt Writing
+
+- **Your prompt wording affects grounding.** Similar prompts retrieve similar examples.
+- **Implementation patterns can be handled automatically in Cloud workflows.** Grounding can provide structural consistency from similar modules (class vs functional, helper patterns, etc.).
+- **Prompts can be minimal in Cloud workflows.** Focus on requirements; Cloud grounding handles many implementation patterns when enough relevant history exists.
+
+*Note: This is distinct from "Examples as Interfaces" (which teach how to **use** a dependency). Grounding teaches the model how to **write** the current module.*
+
+> **Local users (no cloud):** Without grounding, prompts must be more detailed—include structural guidance and explicit examples via `<include>`. Use a shared preamble for coding style. The minimal prompt guidance in this document assumes cloud access.
+
+---
+
+## Automated Context Compression
+
+To manage large context windows and reduce costs, PDD supports automated context compression. This feature reduces the token count of dependencies while maintaining their behavioral contract.
+
+### How It Works
+
+Users can enable compression via **global** CLI flags (before the subcommand), `.pddrc` defaults, or command-local flags on `pdd sync` / `pdd fix`:
+
+- **`--compress-examples`**: Automatically applies `mode="interface"` to all example files in the `<include>` graph. This extracts signatures and docstrings, replacing function bodies with `...`.
+- **`--compress-test-context`**: Rank and select tests under a configurable token budget (`PDD_TEST_TOKEN_BUDGET`, default 2 000 tokens) using import-graph distance, symbol overlap, failure recency, and file recency. Failing tests (from `PDD_FAILING_TESTS` or `.pytest_cache`) are always included first. A `TestPackingManifest` explaining selected and omitted tests is emitted in run telemetry. See [Ranked Test Selection](#ranked-test-selection) below.
+- **`--context-compression {off,test,examples,contracts,all}`**: Enables one or more compression modes for the invocation.
+
+Place global flags before the subcommand, for example `pdd --context-compression test generate prompts/foo_python.prompt`. The `generate` and `preprocess` commands do **not** accept `--context-compression` after the subcommand; `sync` and `fix` may pass the same flags after their subcommand as well.
+
+### The "Mold Walls" Concept
+
+Compressed context acts as a "mold" that constrains the generated code. By sending only the interface of a dependency, you define the boundaries (the "mold walls") without cluttering the context with implementation details. This ensures the generated code respects the dependency's contract while staying within token budgets.
+
+### Fallback Behavior
+
+If compression fails (e.g., due to AST parsing errors in a dependency), the system defaults to full file inclusion to ensure correctness. This behavior can be controlled with the `--compression-fallback {full,error}` flag.
+
+### Reporting
+
+PDD reports active compression modes in the execution summary, lists successfully compressed include targets (path and mode), and records any fallback events (including the file path when slicing or selection fails).
+
+### Ranked Test Selection
+
+When `--context-compression test` (or `--compress-test-context`) is active, PDD selects which test files to include using a token-budget-aware ranking algorithm rather than including all available tests. This prevents context rot from old or unrelated tests crowding out the prompt, dependencies, and grounding examples.
+
+**How it works:**
+
+1. **Failing tests are always included first.** Tests listed in `PDD_FAILING_TESTS` or `.pytest_cache/v/cache/lastfailed` bypass budget accounting and are packed unconditionally. If a failing-test file exceeds the remaining budget, `PytestSlicer` reduces it to only the failing functions and their necessary fixtures.
+2. **Remaining candidates are ranked by a four-signal composite score:**
+   - Import-graph distance to the module under change (weight 0.40) — closer = higher score
+   - Symbol-reference overlap with the module's exported API (weight 0.30)
+   - Failure recency from `.pytest_cache` or `PDD_FAILING_TESTS` (weight 0.20)
+   - File modification recency (weight 0.10)
+3. **Greedy packing under a token budget** — Ranked candidates are packed highest-score-first until `PDD_TEST_TOKEN_BUDGET` (default: 2 000 tokens) is exhausted. A redundancy penalty (AdaGReS-style marginal scoring) is applied so that two test files exercising the same public symbols contribute diminishing value.
+4. **Cross-file deduplication** — Test files with Jaccard similarity above `PDD_TEST_DEDUP_THRESHOLD` (default: 0.8) on their imported symbol sets are deduplicated; only the higher-scoring file is retained.
+5. **A `TestPackingManifest` is emitted** for each invocation, listing every selected test (with file, token count, score, and reason) and every omitted test (with reason: budget exhausted, near-duplicate of a selected file, or unrelated import path). The manifest appears in the compressed-context telemetry alongside other compression events.
+
+**Configuration:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `PDD_TEST_TOKEN_BUDGET` | `2000` | Token cap for test context. Set to `0` to skip test context entirely without error. |
+| `PDD_TEST_RANKING_WEIGHTS` | `{"import_distance":0.4,"symbol_overlap":0.3,"failure_recency":0.2,"file_recency":0.1}` | JSON override for the four ranking weights. |
+| `PDD_TEST_DEDUP_THRESHOLD` | `0.8` | Jaccard similarity threshold above which two test files are considered near-duplicates. |
+
+**Graceful degradation:**
+- If the import graph cannot be built (unparseable module), ranking falls back to recency-only scoring.
+- If `.pytest_cache` is absent, the failure-recency signal is skipped and logged as unavailable.
+- If no test files exist, an empty manifest is returned without error.
+
+---
+
+## Grounding Overrides: Pin & Exclude (PDD Cloud)
+
+For users with PDD Cloud access, you can override automatic grounding using XML tags:
+
+**`<pin>module_name</pin>`** — Force a specific example to always be included
+- Use case: Ensure a critical module always follows a "golden" pattern
+- Use case: Bootstrap a new module with a specific style
+
+**`<exclude>module_name</exclude>`** — Block a specific example(s) from being retrieved
+- Use case: Escape an old pattern that's pulling generation in the wrong direction
+- Use case: Intentionally break from established patterns for a redesign
+
+These tags are processed by the preprocessor (like `<include>`) and removed before the LLM sees the prompt.
+
+**Most prompts don't need these.** Automatic grounding works well for:
+- Standard modules with similar existing examples
+- Re-generations of established modules
+- Modules following common project patterns
+
+### When to Pin, Exclude, or Review for Critical Modules
+
+For high-risk modules — typically `auth`, `payments`, and `compliance` — the
+automatic top-similarity example is not enough evidence on its own. For these,
+explicitly choose **at least one** of:
+
+- **`<pin>module_name</pin>`** — pin a vetted "golden" example so regeneration
+  cannot silently drift to a different prior implementation.
+- **`<exclude>old_module</exclude>`** — block any superseded or known-bad
+  implementation from being retrieved.
+- **`pdd ... --review-examples`** — interactively approve each `<pin>` tag in the
+  prompt **before** cloud/local generation runs. `generation.grounding.reviewed`
+  is `true` only when every cloud `examplesUsed` entry was pre-approved via a
+  matching `<pin>` (module/slug/id). Cloud-selected examples that were not
+  pinned and pre-approved are still recorded in the manifest but leave
+  `reviewed` false.
+
+These decisions land in the evidence manifest (`generation.grounding`, see
+`docs/evidence_manifest.md`), so reviewers can audit exactly which examples
+shaped a critical module's generation.
+
+To enforce this in CI, declare a policy in `.pdd/grounding_policy.yaml`:
+
+```yaml
+grounding:
+  require_review_for_critical_modules: true
+  require_pinned_examples_for:
+    - auth
+    - payments
+    - compliance
+```
+
 ```text
 Prompt = source of truth
 Contract rules = durable obligations
