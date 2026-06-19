@@ -4724,3 +4724,39 @@ def test_build_targeted_dep_graph_preserves_nested_edges(tmp_path):
         "extensions/github_pdd_app/src/config"
     ]
     assert graph["extensions/github_pdd_app/src/config"] == []
+
+
+def test_build_targeted_dep_graph_distinct_projects_same_target(tmp_path):
+    # #1675: two distinct projects each own `src/worker_app` -> `src/config`.
+    # The dep graph must wire each worker_app to ITS OWN config, not collapse
+    # them onto a shared relative-target node.
+    import json
+    from pdd.agentic_sync import _build_targeted_dep_graph
+
+    arch_entries = [
+        {
+            "filename": "src/worker_app_python.prompt",
+            "filepath": "src/worker_app.py",
+            "dependencies": ["src/config_python.prompt"],
+        },
+        {"filename": "src/config_python.prompt", "filepath": "src/config.py", "dependencies": []},
+    ]
+    for proj in ("a", "b"):
+        d = tmp_path / "apps" / proj
+        (d / "prompts" / "src").mkdir(parents=True)
+        (d / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+        (d / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+        (d / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+        (d / "architecture.json").write_text(json.dumps(arch_entries), encoding="utf-8")
+
+    modules = [
+        "apps/a/src/worker_app",
+        "apps/a/src/config",
+        "apps/b/src/worker_app",
+        "apps/b/src/config",
+    ]
+    combined = arch_entries + arch_entries  # flattened combined arch (collides)
+    graph, _warnings = _build_targeted_dep_graph(combined, modules, tmp_path, "arch.json")
+
+    assert graph["apps/a/src/worker_app"] == ["apps/a/src/config"]
+    assert graph["apps/b/src/worker_app"] == ["apps/b/src/config"]

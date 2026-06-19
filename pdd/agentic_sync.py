@@ -1674,32 +1674,74 @@ def _build_targeted_dep_graph(
     key, so this is an identity transform.
 
     Returns ``(graph, warnings)``.
+
+    Two distinct projects can resolve the SAME relative target (e.g.
+    ``apps/a/src/worker_app`` and ``apps/b/src/worker_app`` both -> ``src/worker_app``)
+    without being ambiguous. Collapsing them onto one relative-target node would
+    cross-wire their dependencies, so such colliding targets are scoped to each
+    module's OWN project architecture; the non-colliding majority uses a single
+    combined-architecture build (which preserves cross-project edges).
     """
-    key_to_target: Dict[str, str] = {}
+    info: Dict[str, Tuple[Path, str]] = {}
     for bn in modules:
         try:
-            _, rel_target = _resolve_module_cwd_and_target(bn, project_root)
+            cwd, rel_target = _resolve_module_cwd_and_target(bn, project_root)
         except AmbiguousModuleOwnerError:
-            rel_target = bn  # surfaced later as a dry-run validation failure
-        key_to_target[bn] = rel_target
+            cwd, rel_target = project_root, bn  # surfaced later at dry-run
+        info[bn] = (cwd, rel_target)
 
-    target_to_key: Dict[str, str] = {}
+    keys_by_target: Dict[str, List[str]] = {}
     for bn in modules:
-        target_to_key.setdefault(key_to_target[bn], bn)
+        keys_by_target.setdefault(info[bn][1], []).append(bn)
 
-    result = build_dep_graph_from_architecture_data(
-        architecture,
-        [key_to_target[bn] for bn in modules],
-        source_name=source_name,
-    )
-    graph = {
-        bn: [
-            target_to_key.get(dep, dep)
-            for dep in result.graph.get(key_to_target[bn], [])
-        ]
-        for bn in modules
-    }
-    return graph, list(result.warnings)
+    graph: Dict[str, List[str]] = {bn: [] for bn in modules}
+    warnings: List[str] = []
+
+    # Non-colliding modules: one combined-architecture build over relative
+    # targets, edges remapped to full keys. Identity for bare/root keys.
+    unique = [bn for bn in modules if len(keys_by_target[info[bn][1]]) == 1]
+    if unique:
+        target_to_key = {info[bn][1]: bn for bn in unique}
+        result = build_dep_graph_from_architecture_data(
+            architecture,
+            [info[bn][1] for bn in unique],
+            source_name=source_name,
+        )
+        warnings.extend(result.warnings)
+        for bn in unique:
+            graph[bn] = [
+                target_to_key.get(dep, dep)
+                for dep in result.graph.get(info[bn][1], [])
+            ]
+
+    # Colliding relative targets: scope each to its own project architecture so
+    # distinct same-named modules in different projects don't collapse (#1675).
+    collided = [bn for bn in modules if len(keys_by_target[info[bn][1]]) > 1]
+    cwd_groups: Dict[Path, List[str]] = {}
+    for bn in collided:
+        cwd_groups.setdefault(info[bn][0].resolve(), []).append(bn)
+    root_resolved = project_root.resolve()
+    for cwd_resolved, group in cwd_groups.items():
+        if cwd_resolved == root_resolved:
+            group_arch: Any = architecture
+        else:
+            group_arch, _ = _load_architecture_json(Path(cwd_resolved))
+            if not group_arch:
+                group_arch = architecture
+        group_target_to_key = {info[bn][1]: bn for bn in group}  # unique per project
+        group_result = build_dep_graph_from_architecture_data(
+            group_arch,
+            [info[bn][1] for bn in group],
+            source_name=source_name,
+        )
+        warnings.extend(group_result.warnings)
+        for bn in group:
+            graph[bn] = [
+                group_target_to_key.get(dep, dep)
+                for dep in group_result.graph.get(info[bn][1], [])
+            ]
+
+    return graph, warnings
 
 
 def _run_single_dry_run(
