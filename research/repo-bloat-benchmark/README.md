@@ -16,6 +16,9 @@ promoted to `docs/whitepaper_with_benchmarks/`; active infra lives here.
 - **[design.md](design.md)** — the design document: benchmark architecture,
   scenario format, distractor sourcing strategy (subset-and-regrow), instrumentation
   plan, and reporting format. Read this first.
+- **[presentation.md](presentation.md)** — a GitHub-rendered, Marp-exportable slide
+  deck of the design talk (the question → subset-and-regrow → the pipeline → the
+  three instrumentation taps → pre-registered verdict). A 15-slide tour of `design.md`.
 - **[agentic_cli_search.md](agentic_cli_search.md)** — background section (issue
   [#1430](https://github.com/promptdriven/pdd/issues/1430)): how agentic coding CLIs
   acquire code context, a mechanism-level taxonomy (agentic grep/read vs.
