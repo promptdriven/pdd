@@ -1,0 +1,30 @@
+<pdd-reason>Extracts bounded public compatibility surface from a .py file for generation context injection (#1652).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "extract_compatibility_contract", "signature": "(py_file: Path, *, max_symbols: int = 200, test_files: Optional[List[Path]] = None)", "returns": "CompatibilityContract"},
+      {"name": "CompatibilityContract.to_prompt_block", "signature": "()", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write `pdd/compatibility_contract.py` that extracts the public compatibility surface from an existing generated Python file and serializes it into a prompt-friendly text block suitable for injection into generation context.
+
+% Requirements
+1. Pydantic v2 model `CompatibilityContract` with fields: `public_symbols: List[str]`, `callable_signatures: Dict[str, str]`, `patch_targets: List[str]`, `source_hash: str` (SHA-256 hex digest of file bytes), `truncated: bool`, `truncated_counts: Dict[str, int]` (maps category name to count of symbols omitted due to capping; empty when no category is capped).
+2. `extract_compatibility_contract(py_file: Path, *, max_symbols: int = 200, test_files: Optional[List[Path]] = None) -> CompatibilityContract`: when `py_file` is missing or raises `SyntaxError`, return an empty contract with empty collections and `truncated=False`.
+3. Public symbols use `__all__`-authoritative logic: when the module declares `__all__` as a static list/tuple of string literals, only names in `__all__` are considered public; otherwise include all non-underscore-prefixed top-level names (functions, classes, constants, and import re-exports); skip dunder names unless listed in `__all__`.
+4. `callable_signatures` maps qualified name to `ast.unparse()`-based signature for public top-level functions, async functions, and classes plus their public methods; nested class methods use dotted qualified names (e.g., `Outer.Inner.method`); prefix each entry with a kind tag: `[function]`, `[async_function]`, `[class]`, `[method]`.
+5. `patch_targets`: when `test_files` is provided, scan each file's source for `unittest.mock.patch` decorator or context-manager strings containing module-relative underscore-prefixed names; when `test_files` is omitted, fall back to all module-level underscore-prefixed non-dunder function names defined in `py_file`.
+6. Apply `max_symbols` cap independently per category (`public_symbols`, `callable_signatures` keys, `patch_targets`) after stable alphabetical sort; set `truncated=True` and populate `truncated_counts[category_name] = original_count - max_symbols` for each capped category.
+7. `to_prompt_block() -> str`: produce a `% Compatibility Surface` section with `% public_symbols:` (comma-separated), `% callable_signatures:` (one entry per line, indented two spaces), and `% patch_targets:` (comma-separated); for each category that was capped, append `# (truncated: N symbols omitted)` where N is read from `truncated_counts[category_name]`.
+
+% Deliverables
+- Code: `pdd/compatibility_contract.py`
