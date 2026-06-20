@@ -1,10 +1,10 @@
 {
   "pdd_version": "0.0.278",
-  "timestamp": "2026-06-19T23:06:17.816318+00:00",
+  "timestamp": "2026-06-20T00:18:44.040679+00:00",
   "command": "example",
-  "prompt_hash": "75ef1845b8b0e79a72071e71c08c75194f2d86e8ada3759396ae6148e6d3d309",
+  "prompt_hash": "2a283f6821bdd98b0b4b385af49fd5f3d2079086f6ab3816bf6ac0882fe7098d",
   "code_hash": "9c5766efba9f4907d5a366dc21cac7fa83e6731e471754d2145ecb686a22797f",
-  "example_hash": "85b6d23c316a9dca98c3449c037b468fe26e481a648f2063b87d77767e879a9f",
+  "example_hash": "ffd7b8e93d234b7df0e9edcc3b2cfd3b40686ec215c3eaa038c1d9eb749dfd96",
   "test_hash": "7a4a23ed7c00408887d4ca9b604cb9715e0ad6e0a9c3e9e1b4df78603b396f41",
   "test_files": {
     "test_sync_orchestration.py": "7a4a23ed7c00408887d4ca9b604cb9715e0ad6e0a9c3e9e1b4df78603b396f41"
@@ -23,7 +23,7 @@
     "context/get_test_command_example.py": "33b16476536f8c9424d3222ffc4a5cd5ecee6ad0589b2c66a4f3c7f1e265106c",
     "context/operation_log_example.py": "2660def7012d9b79bad3db33cf399ac603cc1c35dff0b064cbdd2638a013de1d",
     "context/python_env_detector_example.py": "65619b3e8bad0509f1ccf54d81b5c3760f423b6fc1925c932fc7968da78a172e",
-    "context/sync_determine_operation_example.py": "287da0e52dbe7e8256ba27cd28f78f52b99eec05e2dcbe338c20af7019e86081",
+    "context/sync_determine_operation_example.py": "ac5541ad156bf90831fa93c9737ee4e5f13929daf0a04e6ad041b7ab3534726e",
     "context/update_main_example.py": "b318834c648f25e6141d81f3ecac1d9da592a6bb4740500983f2b07b8a10d902",
     "pdd/compressed_sync_context.py": "661fde0fcc42ce39c1004e47a774a8fd799b789065519cb5688949c35fed4859",
     "pdd/get_run_command.py": "5eec778a234abc4ace4166d71a68f6e49f1b81491962867de81f61be882a5319",
