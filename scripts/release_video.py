@@ -317,12 +317,14 @@ def run(
     cwd: Path,
     input_text: str | None = None,
     timeout: float | None = None,
+    env: dict[str, str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     try:
         completed = subprocess.run(
             command,
             cwd=str(cwd),
+            env=env,
             input=input_text,
             text=True,
             capture_output=True,
@@ -545,8 +547,17 @@ def generate_script_with_claude(
     if claude_tools.strip():
         command.extend(["--allowedTools", claude_tools.strip()])
     prompt = render_release_video_prompt(context, prompt_template, cwd)
+    claude_env = os.environ.copy()
+    strip_anthropic_creds_for_claude_subprocess(claude_env)
     try:
-        completed = run(command, cwd=cwd, input_text=prompt, timeout=timeout, check=False)
+        completed = run(
+            command,
+            cwd=cwd,
+            input_text=prompt,
+            timeout=timeout,
+            env=claude_env,
+            check=False,
+        )
     except ReleaseVideoError as exc:
         raise ReleaseVideoError(
             "Claude Code script generation failed before PDS publish; "
@@ -558,6 +569,15 @@ def generate_script_with_claude(
     if len(script) < 200:
         raise ReleaseVideoError("Claude Code produced an unexpectedly short release video script.")
     return script.rstrip() + "\n"
+
+
+def strip_anthropic_creds_for_claude_subprocess(env: dict[str, str]) -> bool:
+    """Keep release-video Claude generation on OAuth when both auth paths exist."""
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from pdd.agentic_common import _strip_anthropic_creds_for_claude_subprocess
+
+    return _strip_anthropic_creds_for_claude_subprocess(env, quiet=True)
 
 
 def classify_claude_quota_auth_failure(output: str) -> str | None:

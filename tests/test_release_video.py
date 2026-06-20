@@ -368,6 +368,66 @@ def test_release_video_claude_quota_failure_is_script_generation_diagnostic(tmp_
     assert not capture.exists()
 
 
+def test_release_video_claude_generation_prefers_oauth_over_inherited_api_key(
+    tmp_path: Path,
+    monkeypatch,
+):
+    release_video = load_release_video_module()
+    prompt_template = tmp_path / "release_video_LLM.prompt"
+    prompt_template.write_text("Context:\n{release_context}\n", encoding="utf8")
+    captured: dict[str, object] = {}
+
+    def fake_run(
+        command,
+        *,
+        cwd: Path,
+        input_text: str | None = None,
+        timeout: float | None = None,
+        env: dict[str, str] | None = None,
+        check: bool = True,
+    ):
+        captured["command"] = command
+        captured["input_text"] = input_text
+        captured["env"] = env
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=reusable_script_text(),
+            stderr="",
+        )
+
+    from pdd import agentic_common
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "stale-depleted-api-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "stale-auth-token")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
+    monkeypatch.delenv("PDD_KEEP_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(agentic_common, "_claude_has_oauth_login", lambda: True)
+    monkeypatch.setattr(release_video, "ensure_command_exists", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(release_video, "run", fake_run)
+
+    script = release_video.generate_script_with_claude(
+        context="# PDD release context",
+        claude_cli="claude",
+        claude_model="claude-opus-4-8",
+        claude_tools="",
+        prompt_template=prompt_template,
+        timeout=60,
+        cwd=tmp_path,
+    )
+
+    claude_env = captured["env"]
+    assert isinstance(claude_env, dict)
+    assert "ANTHROPIC_API_KEY" not in claude_env
+    assert "ANTHROPIC_AUTH_TOKEN" not in claude_env
+    assert claude_env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+    assert os.environ["ANTHROPIC_API_KEY"] == "stale-depleted-api-key"
+    assert os.environ["ANTHROPIC_AUTH_TOKEN"] == "stale-auth-token"
+    assert "--model" in captured["command"]
+    assert "PDD release context" in captured["input_text"]
+    assert "\nNARRATOR:\n" in script
+
+
 def test_release_video_claude_quota_auth_classifier():
     release_video = load_release_video_module()
 
