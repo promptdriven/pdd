@@ -1622,17 +1622,35 @@ def _resolve_module_cwd_and_target(
     """Resolve a module's owning cwd and the target relative to that cwd (#1675).
 
     Bare basenames go through :func:`_resolve_module_cwd` (with strict ownership,
-    so duplicates fail loudly). A path-qualified basename is resolved to the
-    deepest ancestor directory (of its implied prompt location) that has a
-    ``.pddrc`` and physically owns the *cwd-relative* target; the target is then
-    relativized to that cwd so the child runs ``pdd sync <relative target>`` from
-    the owning project. Falls back to ``(project_root, basename)`` for a
-    root-layout path-qualified module that no nested project owns.
+    so duplicates fail loudly). A path-qualified basename is resolved in two
+    steps:
+
+    1. **Full repo-root-relative key** (e.g. ``extensions/github_pdd_app/src/worker_app``,
+       as emitted by branch-diff): walk up from the implied prompt location to the
+       deepest ancestor directory with a ``.pddrc`` that physically owns the
+       cwd-relative target, and relativize the target to it.
+    2. **Nested-relative key** (e.g. ``src/worker_app`` from the LLM/manual
+       identification, where the prompt actually lives at
+       ``extensions/github_pdd_app/prompts/src/worker_app``): no ancestor owns it,
+       so scan all nested projects for ones that physically own the key as-is. If
+       exactly one project owns it, canonicalize to that project (cwd=owner,
+       target=key); if more than one, raise :class:`AmbiguousModuleOwnerError`.
+
+    Falls back to ``(project_root, basename)`` for a root-layout path-qualified
+    module that no nested project owns.
     """
     if "/" not in basename:
         cwd = _resolve_module_cwd(basename, project_root, strict_ownership=True)
         return cwd, basename
 
+    def _owns(target: str, cwd: Path) -> bool:
+        try:
+            _, _, lang = _resolve_module_sync_context(target, cwd)
+            return bool(lang)
+        except Exception:
+            return False
+
+    # 1. Full repo-root-relative key: deepest ancestor .pddrc owning the target.
     implied_dir = (Path(project_root) / basename).parent
     current = implied_dir
     while True:
@@ -1643,15 +1661,32 @@ def _resolve_module_cwd_and_target(
             and not _is_ignored_nested_pddrc(project_root, pddrc)
         ):
             target = _relativize_target(basename, current, project_root)
-            try:
-                _, _, lang = _resolve_module_sync_context(target, current)
-            except Exception:
-                lang = None
-            if lang:
+            if _owns(target, current):
                 return current, target
         if current == project_root:
             break
         current = current.parent
+
+    # 2. Nested-relative key (LLM/manual): find the unique nested project that
+    # physically owns the key as-is, and canonicalize the cwd to it (#1675).
+    owners = [
+        pddrc_path.parent
+        for pddrc_path in _nested_pddrc_paths(project_root)
+        if not _is_ignored_nested_pddrc(project_root, pddrc_path)
+        and _owns(basename, pddrc_path.parent)
+    ]
+    owners = _dedup_resolved_paths(owners)
+    if len(owners) > 1:
+        names = ", ".join(
+            sorted(str(d.relative_to(project_root)) for d in owners)
+        )
+        raise AmbiguousModuleOwnerError(
+            f"Module '{basename}' is owned by multiple projects ({names}); "
+            f"qualify it by its full repo-root-relative path so the owning "
+            f"project is unambiguous."
+        )
+    if len(owners) == 1:
+        return owners[0], basename
 
     # Root-layout path-qualified module: run the full path from the repo root.
     return project_root, basename

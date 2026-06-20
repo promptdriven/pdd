@@ -4799,3 +4799,52 @@ def test_build_targeted_dep_graph_intra_project_edge_with_colliding_target(tmp_p
     # Same-project edge preserved despite the colliding target.
     assert graph["apps/a/src/service"] == ["apps/a/src/worker_app"]
     assert graph["apps/b/src/worker_app"] == []
+
+
+def test_resolve_module_cwd_and_target_canonicalizes_nested_relative_key(tmp_path):
+    # #1675: a short nested-relative key (e.g. from LLM/manual identification)
+    # whose prompt lives in exactly one nested project canonicalizes to that
+    # project, not the repo root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+
+    cwd, target = _resolve_module_cwd_and_target("src/worker_app", tmp_path)
+    assert cwd == nested
+    assert target == "src/worker_app"
+
+
+def test_resolve_module_cwd_and_target_nested_relative_key_ambiguous(tmp_path):
+    # A nested-relative key owned by two projects is ambiguous -> fail loudly.
+    from pdd.agentic_sync import (
+        _resolve_module_cwd_and_target,
+        AmbiguousModuleOwnerError,
+    )
+
+    for proj in ("a", "b"):
+        d = tmp_path / "apps" / proj
+        (d / "prompts" / "src").mkdir(parents=True)
+        (d / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+        (d / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+
+    with pytest.raises(AmbiguousModuleOwnerError):
+        _resolve_module_cwd_and_target("src/worker_app", tmp_path)
+
+
+def test_resolve_module_cwd_and_target_root_layout_path_qualified(tmp_path):
+    # A path-qualified key owned by the repo root (no nested owner) stays at root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+
+    (tmp_path / "prompts" / "src").mkdir(parents=True)
+    (tmp_path / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+    # An unrelated nested project that does NOT own src/config.
+    other = tmp_path / "extensions" / "other"
+    (other / "prompts").mkdir(parents=True)
+    (other / ".pddrc").write_text(_pddrc_with_context("other", "other/**"), encoding="utf-8")
+
+    cwd, target = _resolve_module_cwd_and_target("src/config", tmp_path)
+    assert cwd == tmp_path
+    assert target == "src/config"
