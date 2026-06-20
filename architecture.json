@@ -61,6 +61,11 @@
             "returns": "ClaudePolicy"
           },
           {
+            "name": "build_agentic_task_instruction",
+            "signature": "(instruction: str, *, user_feedback: Optional[str] = None, steers: Optional[List[SteerEntry]] = None) -> str",
+            "returns": "str"
+          },
+          {
             "name": "run_agentic_task",
             "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None, steers=None, claude_policy=None, routing_policy=None, task_class=None) -> AgenticTaskResult",
             "returns": "AgenticTaskResult"

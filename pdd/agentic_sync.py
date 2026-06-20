@@ -21,7 +21,7 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
-from .agentic_common import run_agentic_task
+from .agentic_common import build_agentic_task_instruction, run_agentic_task
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
@@ -1953,6 +1953,11 @@ _LOW_SIGNAL_COMMENT_PREFIXES = (
 )
 
 
+def _provider_prompt_len(instruction: str) -> int:
+    """Length of the exact prompt text that ``run_agentic_task`` sends."""
+    return len(build_agentic_task_instruction(instruction))
+
+
 def _compact_architecture_for_identification(
     architecture: Optional[List[Dict[str, Any]]],
 ) -> Optional[List[Dict[str, Any]]]:
@@ -2223,12 +2228,12 @@ def run_agentic_sync(
         # to fit, so surface a REAL input_too_large failure rather than letting
         # an over-limit call collapse to "no modules to sync".
         prompt = _render(issue_content)
-        if len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
+        if _provider_prompt_len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
             prompt = _render(
                 _escape_format_braces(_build_identify_issue_content(title, body, None))
             )
-        if len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
-            base_len = len(
+        if _provider_prompt_len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
+            base_len = _provider_prompt_len(
                 _render(
                     _escape_format_braces(_build_identify_issue_content(title, "", None))
                 )
@@ -2246,10 +2251,11 @@ def run_agentic_sync(
                         )
                     )
                 )
-        if len(prompt) > _IDENTIFY_MODULES_MAX_CHARS:
+        provider_prompt_len = _provider_prompt_len(prompt)
+        if provider_prompt_len > _IDENTIFY_MODULES_MAX_CHARS:
             msg = (
                 "LLM failed to identify modules: input_too_large: identify-modules "
-                f"prompt is {len(prompt)} chars, over the "
+                f"provider prompt is {provider_prompt_len} chars, over the "
                 f"{_IDENTIFY_MODULES_MAX_CHARS}-char budget even after compaction; "
                 "reduce architecture.json scope or split the sync."
             )
@@ -2297,10 +2303,14 @@ def run_agentic_sync(
                 _post_error_comment(owner, repo, issue_number, msg)
             return False, msg, llm_cost, provider
 
+    # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
+    architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
+
     # LLMs sometimes return architecture-style names with language suffixes
     # (e.g. "crm_models_Python"). Keep exact architecture basenames first so
     # modules whose real basename ends with a known language word
-    # (e.g. "operation_log") are not shortened to "operation".
+    # (e.g. "operation_log") are not shortened to "operation". This must run
+    # after PR-branch architecture augmentation so new modules are protected too.
     modules_to_sync = _normalize_modules_for_sync(modules_to_sync, architecture)
 
     # Hard boundary (Req 9): drop any runtime *_LLM.prompt basename before it can
@@ -2323,9 +2333,6 @@ def run_agentic_sync(
         if not quiet:
             console.print(f"[green]{msg}[/green]")
         return True, msg, llm_cost, provider
-
-    # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
-    architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
 
     # 9.5 Filter out basenames not in architecture.json (catches LLM hallucinations)
     modules_to_sync, invalid_basenames = _filter_invalid_basenames(modules_to_sync, architecture)

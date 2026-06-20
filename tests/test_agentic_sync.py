@@ -48,6 +48,7 @@ from pdd.agentic_sync import (
     run_agentic_sync,
     run_global_sync,
 )
+from pdd.agentic_common import build_agentic_task_instruction
 from pdd.agentic_sync_runner import (
     DepGraphFromArchitectureResult,
     build_dep_graph_from_architecture,
@@ -3368,6 +3369,59 @@ class TestBranchDiffSkipsLlm:
         assert mock_build_graph.call_args[0][1] == ["operation_log"]
         assert mock_runner_cls.call_args[1]["basenames"] == ["operation_log"]
 
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"operation_log": []}, []),
+    )
+    @patch("pdd.agentic_sync._augment_architecture_from_pr_branch")
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_pr_branch_only_underscored_module_is_preserved_after_augmentation(
+        self,
+        mock_cli,
+        mock_gh,
+        mock_llm,
+        mock_diff,
+        mock_augment,
+        mock_build_graph,
+        mock_dry_run,
+        mock_runner_cls,
+        monkeypatch,
+    ):
+        """New PR-only modules must be normalized against augmented architecture."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).resolve().parents[1]))
+        mock_diff.return_value = ["operation_log"]
+        mock_gh.return_value = (True, json.dumps({
+            "title": "test", "body": "test body", "comments_url": ""
+        }))
+        mock_augment.return_value = [
+            {"filename": "operation_log_python.prompt", "dependencies": []}
+        ]
+        mock_dry_run.return_value = (True, {"operation_log": Path("/tmp")}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "ok", 0.5)
+        mock_runner_cls.return_value = mock_runner
+
+        with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
+             patch("pdd.agentic_sync._load_architecture_json", return_value=(
+                 [],
+                 Path("/fake/architecture.json"),
+             )):
+            success, msg, cost, model = run_agentic_sync(
+                "https://github.com/owner/repo/issues/822",
+                quiet=True,
+            )
+
+        assert success
+        mock_llm.assert_not_called()
+        assert mock_build_graph.call_args[0][1] == ["operation_log"]
+        assert mock_runner_cls.call_args[1]["basenames"] == ["operation_log"]
+
     @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff")
     @patch("pdd.agentic_sync.run_agentic_task")
@@ -4714,6 +4768,74 @@ class TestIdentifyModulesPromptSize:
         # origin/dependency fields the LLM actually needs are still present.
         assert "foo_Python.prompt" in prompt
         assert len(prompt) < _IDENTIFY_MODULES_MAX_CHARS
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @_identify_fallback_patches
+    def test_size_guard_accounts_for_run_agentic_task_wrapper(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_find_root,
+        mock_branch_diff,
+        mock_runtime_only,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_build_graph,
+        mock_dry_run,
+        mock_filter_synced,
+        mock_runner_cls,
+        monkeypatch,
+    ):
+        """PDD_USER_FEEDBACK and the fixed provider suffix count toward budget."""
+        monkeypatch.setenv("PDD_USER_FEEDBACK", "abc")
+        template = "ISSUE:\n{issue_content}\nARCH:\n{architecture_json}\nNUM:{issue_number}"
+        mock_load_prompt.return_value = template
+        architecture = [
+            {"filename": "foo_Python.prompt", "filepath": "pdd/foo", "origin": "code", "dependencies": []}
+        ]
+        compact = _compact_architecture_for_identification(architecture)
+        safe_arch_json = json.dumps(compact, indent=2).replace("{", "{{").replace("}", "}}")
+
+        def render(body: str) -> str:
+            issue_content = _build_identify_issue_content("WRAPPER_TITLE_TOKEN", body, None)
+            return template.format(
+                issue_content=issue_content,
+                architecture_json=safe_arch_json,
+                issue_number=1,
+            )
+
+        base_len = len(render(""))
+        body = "B" * (_IDENTIFY_MODULES_MAX_CHARS - base_len - 10)
+        # The raw instruction fits, but run_agentic_task's wrapper would push
+        # the actual provider prompt over the limit without the new guard.
+        assert len(render(body)) < _IDENTIFY_MODULES_MAX_CHARS
+        assert len(build_agentic_task_instruction(render(body))) > _IDENTIFY_MODULES_MAX_CHARS
+
+        issue_data = {"title": "WRAPPER_TITLE_TOKEN", "body": body, "comments_url": ""}
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (architecture, Path("/tmp/architecture.json"))
+        mock_agentic_task.return_value = (
+            True,
+            'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true',
+            0.0,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
+
+        run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
+
+        mock_agentic_task.assert_called_once()
+        prompt = mock_agentic_task.call_args.kwargs["instruction"]
+        assert len(build_agentic_task_instruction(prompt)) <= _IDENTIFY_MODULES_MAX_CHARS
+        assert "WRAPPER_TITLE_TOKEN" in prompt
 
     @_identify_fallback_patches
     def test_pathological_arch_hard_fails_with_input_too_large(
