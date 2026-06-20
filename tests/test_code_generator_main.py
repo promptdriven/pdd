@@ -5951,12 +5951,14 @@ class TestSyncCompatibilityGates:
     def test_public_surface_regression_unresolvable_dunder_all_is_lenient(self, unreadable_all):
         """When ``__all__`` cannot be statically resolved (computed, augmented,
         or mutated — including the realistic ``if platform: __all__.append(...)``
-        conditional-export pattern), the gate stays LENIENT: imports are still
-        treated as implementation details, so removing an unused
-        ``from typing import Any`` must NOT raise. Forcing the conservative path
-        here reintroduces the #2256 false positive (review round 6). Protecting a
-        plain-import re-export in such a module is a documented limitation — use a
-        clean ``__all__`` literal or a redundant alias instead."""
+        conditional-export pattern), the gate stays LENIENT FOR IMPORTS: an
+        import is still treated as an implementation detail, so removing an
+        unused ``from typing import Any`` must NOT raise. Capturing every import
+        conservatively here would reintroduce the #2256 false positive.
+        Protecting a plain-IMPORT re-export listed only in such an unresolvable
+        ``__all__`` is a documented limitation — use a clean ``__all__`` literal
+        or a redundant alias. (A DEFINED symbol added via the mutation IS
+        protected — see the next test.)"""
         from pdd.code_generator_main import _verify_public_surface_regression
 
         before = (
@@ -5966,6 +5968,159 @@ class TestSyncCompatibilityGates:
             "def keep():\n    return 1\n"
         )
         after = "_EXPORTS = ['keep']\n_cond = True\ndef keep():\n    return 1\n"
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    @pytest.mark.parametrize("mutation", [
+        "__all__.append('Extra')",                  # in-place method mutation
+        "__all__.extend(['Extra'])",                # another mutator method
+        "__all__ += ['Extra']",                     # augmented assignment
+        "__all__[0] = 'Extra'",                     # subscript write
+        "if _cond:\n    __all__.append('Extra')",   # conditional export
+    ])
+    def test_public_surface_regression_mutated_dunder_all_protects_appended_symbol(self, mutation):
+        """A runtime ``__all__`` mutation makes the static literal unresolvable,
+        so ``_extract_dunder_all`` returns ``None`` and the module falls back to
+        the heuristic — which still protects a DEFINED public symbol added via
+        that mutation. Here ``Extra`` is a real function exported by
+        ``__all__.append('Extra')`` / ``.extend`` / ``+=`` / subscript / a
+        conditional append; removing it on regeneration MUST raise. This guards
+        the mutation-fallback behavior: a parser that silently IGNORED ``.append``
+        would treat ``__all__`` as the stale ``['keep']`` and let ``Extra`` be
+        removed. (Imports in the same regime stay re-export-only — see the
+        lenient test above — so this is NOT the #2256 conservative path.)"""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "_cond = True\n"
+            "__all__ = ['keep']\n"
+            f"{mutation}\n"
+            "def keep():\n    return 1\n"
+            "def Extra():\n    return 2\n"
+        )
+        # Regeneration keeps the mutation but drops the appended public function.
+        after = (
+            "_cond = True\n"
+            "__all__ = ['keep']\n"
+            f"{mutation}\n"
+            "def keep():\n    return 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Extra" in excinfo.value.removed_symbols
+
+    def test_public_surface_regression_dunder_all_mutation_overridden_by_later_literal(self):
+        """``__all__`` resolution is SOURCE-ORDER: an earlier in-place mutation
+        is OVERRIDDEN by a later clean top-level literal rebind (Python's
+        last-write-wins). ``__all__ = ['A']; __all__.append('B'); __all__ =
+        ['A']`` resolves to ``{'A'}`` again — so the module stays authoritative
+        and removing the unlisted ``B`` MUST NOT raise (the append is discarded
+        at runtime, so ``B`` was never actually exported)."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__ = ['A']\n"
+            "__all__.append('B')\n"
+            "__all__ = ['A']\n"
+            "def A():\n    return 1\n"
+            "def B():\n    return 2\n"
+        )
+        after = (
+            "__all__ = ['A']\n"
+            "__all__.append('B')\n"
+            "__all__ = ['A']\n"
+            "def A():\n    return 1\n"
+        )
+
+        # ``__all__`` resolves to {'A'}; ``B`` is not exported -> removable.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_public_surface_regression_dunder_all_import_rebind_falls_back(self):
+        """Importing ``__all__`` (``from exports import __all__``) replaces the
+        module's ``__all__`` with a value that cannot be resolved statically, so
+        the gate falls back to the heuristic and conservatively protects defined
+        symbols. A bare ``import``/``from`` that binds some OTHER name (``from
+        typing import Any``) is unaffected — it does not touch ``__all__``."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "__all__ = ['A']\n"
+            "from exports import __all__\n"
+            "def A():\n    return 1\n"
+            "def B():\n    return 2\n"
+        )
+        after = (
+            "__all__ = ['A']\n"
+            "from exports import __all__\n"
+            "def A():\n    return 1\n"
+        )
+
+        # ``__all__`` is unresolvable (imported) -> heuristic -> ``B`` protected.
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "B" in excinfo.value.removed_symbols
+
+    @pytest.mark.parametrize("annotation", [
+        "__all__: list[str]",      # value-less name annotation
+        "__all__[0]: str",         # value-less subscript annotation (no runtime write)
+    ])
+    def test_public_surface_regression_value_less_dunder_all_annotation_is_no_op(self, annotation):
+        """A value-less annotation on ``__all__`` (or one of its elements) does
+        NOT assign or mutate at runtime — it is purely a type hint — so it must
+        NOT reset the resolved ``__all__``. With a prior clean literal
+        ``__all__ = ['A']`` still authoritative, removing an unlisted ``B`` must
+        NOT raise (the annotation's ``Store`` ctx is an AST artifact, not a
+        write)."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "__all__ = ['A']\n"
+            f"{annotation}\n"
+            "def A():\n    return 1\n"
+            "def B():\n    return 2\n"
+        )
+        after = (
+            "__all__ = ['A']\n"
+            f"{annotation}\n"
+            "def A():\n    return 1\n"
+        )
 
         _verify_public_surface_regression(
             before,

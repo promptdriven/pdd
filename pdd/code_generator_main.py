@@ -11,7 +11,7 @@ import subprocess
 import requests
 import tempfile
 import sys
-from typing import Optional, Tuple, Dict, Any, List, Set, Mapping
+from typing import Optional, Tuple, Dict, Any, Iterator, List, Set, Mapping
 
 import click
 from rich.console import Console
@@ -641,6 +641,142 @@ def _collect_bound_module_names(tree: ast.Module) -> Set[str]:
     return bound
 
 
+# Scope and comprehension node groups used by the ``__all__`` mutation scan.
+_SCOPE_NODE_TYPES = (
+    ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda,
+)
+_COMPREHENSION_TYPES = (
+    ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp,
+)
+# List methods that mutate the receiver in place. A call to any of these on
+# ``__all__`` (``__all__.append(...)`` etc.) changes the runtime export list,
+# so a clean literal can no longer be trusted. Read-only methods like
+# ``.copy()`` / ``.index()`` are deliberately excluded so they do not force the
+# fallback needlessly.
+_DUNDER_ALL_MUTATOR_METHODS = frozenset({
+    "append", "extend", "insert", "remove", "pop", "clear",
+    "sort", "reverse", "__setitem__", "__delitem__", "__iadd__",
+})
+
+
+def _scannable_children(node: ast.AST) -> Iterator[ast.AST]:
+    """Yield the children of *node* to scan for module-level ``__all__`` writes,
+    with two scope-aware adjustments:
+
+    * A nested scope (def / async def / class / lambda) yields NOTHING — its
+      body executes later (or never) against a LOCAL ``__all__``, and its header
+      (decorators / defaults / annotations) is not scanned either: a write to
+      ``__all__`` from there is absurd in generated code AND, for annotations
+      under ``from __future__ import annotations``, never evaluated, so scanning
+      it produced false positives. Such writes are an accepted limitation.
+    * A comprehension / generator expression omits the loop TARGETS (Python-3
+      comprehension-local) but yields the iterables, filter conditions, and
+      element/key/value expressions, so a walrus (``(__all__ := ...)``) — which
+      leaks to the enclosing scope — is still seen.
+
+    Every other node yields all children unchanged.
+    """
+    if isinstance(node, _SCOPE_NODE_TYPES):
+        return
+    if isinstance(node, _COMPREHENSION_TYPES):
+        for generator in node.generators:
+            yield generator.iter
+            yield from generator.ifs
+        if isinstance(node, ast.DictComp):
+            yield node.key
+            yield node.value
+        else:
+            yield node.elt
+        return
+    yield from ast.iter_child_nodes(node)
+
+
+def _node_writes_dunder_all(node: ast.AST) -> bool:
+    """True if *node* itself is a direct write / in-place mutation of the bare
+    module ``__all__`` name (NOT a plain top-level rebind, which the caller
+    excludes by scanning only such a statement's value)."""
+    store_del = (ast.Store, ast.Del)
+    if isinstance(node, ast.Name):
+        return node.id == "__all__" and isinstance(node.ctx, store_del)
+    if isinstance(node, ast.Subscript):
+        return (
+            isinstance(node.value, ast.Name)
+            and node.value.id == "__all__"
+            and isinstance(node.ctx, store_del)
+        )
+    if isinstance(node, ast.Call):
+        func = node.func
+        return (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "__all__"
+            and func.attr in _DUNDER_ALL_MUTATOR_METHODS
+        )
+    # Pattern / exception captures bind a bare name given as a STRING field, so
+    # they never appear as a Store ``Name`` node.
+    if isinstance(node, ast.ExceptHandler):
+        return node.name == "__all__"
+    if isinstance(node, ast.MatchAs):
+        return node.name == "__all__"
+    if isinstance(node, ast.MatchStar):
+        return node.name == "__all__"
+    if isinstance(node, ast.MatchMapping):
+        return node.rest == "__all__"
+    # An import that BINDS ``__all__`` (``from exports import __all__`` /
+    # ``from m import x as __all__`` / ``import __all__``) replaces the module's
+    # ``__all__`` with an imported value we cannot resolve statically — so it is
+    # an unreadable rebind, not just a normal import. (A plain ``from typing
+    # import Any`` binds ``Any``, not ``__all__``, and is ignored here.)
+    if isinstance(node, ast.ImportFrom):
+        return any(
+            (alias.asname or alias.name) == "__all__" for alias in node.names
+        )
+    if isinstance(node, ast.Import):
+        return any(
+            (alias.asname or alias.name.split(".", 1)[0]) == "__all__"
+            for alias in node.names
+        )
+    return False
+
+
+def _subtree_mutates_dunder_all(node: ast.AST) -> bool:
+    """Recursively scan *node* (module-level execution) for any ``__all__``
+    write/mutation, honouring scope and comprehension boundaries via
+    ``_scannable_children``."""
+    if _node_writes_dunder_all(node):
+        return True
+    return any(
+        _subtree_mutates_dunder_all(child) for child in _scannable_children(node)
+    )
+
+
+def _clean_dunder_all_literal(node: ast.AST) -> Optional[Set[str]]:
+    """Return the set of names when *node* is a top-level ``__all__ = <list /
+    tuple of string literals>`` (or the bound-``AnnAssign`` form ``__all__: T =
+    <same>``) — the ONLY statically readable ``__all__`` declaration. Returns
+    ``None`` for any other statement (a non-literal/computed value, a non-string
+    element, or a node that is not a direct ``__all__`` name assignment)."""
+    if isinstance(node, ast.Assign):
+        targets: List[ast.AST] = list(node.targets)
+        value: Optional[ast.AST] = node.value
+    elif isinstance(node, ast.AnnAssign) and node.value is not None:
+        targets = [node.target]
+        value = node.value
+    else:
+        return None
+    if not any(isinstance(t, ast.Name) and t.id == "__all__" for t in targets):
+        return None
+    if not isinstance(value, (ast.List, ast.Tuple)):
+        return None
+    names: Set[str] = set()
+    for elt in value.elts:
+        if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+            names.add(elt.value)
+        else:
+            return None
+    return names
+
+
 def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
     """Return module-level ``__all__`` names if declared as a clean literal list.
 
@@ -664,56 +800,42 @@ def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
     - Bound ``ast.AnnAssign`` (``__all__: list[str] = [...]``) →
       treated the same as a plain assignment.
 
-    Returns ``None`` when no clean ``__all__`` literal survives to the
-    end of the module, OR when ``__all__`` is never assigned at module
-    scope. In either case the fallback "non-underscore" heuristic
-    applies.
+    Returns ``None`` when no clean ``__all__`` literal survives to the end of
+    the module, when ``__all__`` is never assigned at module scope, OR when the
+    last thing to touch ``__all__`` is a runtime write the literal cannot
+    capture — a computed/imported rebind, an ``ast.AugAssign``, an in-place
+    mutation (``__all__.append(...)``, ``__all__[i] = ...``, ``del __all__``), a
+    conditional/looped rebind, etc. (see ``_subtree_mutates_dunder_all``). The
+    scan is SOURCE-ORDER: an earlier mutation is OVERRIDDEN by a later clean
+    literal rebind (``__all__ = [...]; __all__.append(...); __all__ = [...]`` is
+    resolvable again), matching Python's last-write-wins runtime semantics. When
+    the result is ``None`` the fallback "non-underscore" heuristic applies, which
+    still protects defined symbols added via a mutation (e.g. a function appended
+    to ``__all__``) while keeping imports re-export-only.
     """
     state: Optional[Set[str]] = None
     for node in tree.body:
-        if isinstance(node, ast.AugAssign):
-            target = node.target
-            if isinstance(target, ast.Name) and target.id == "__all__":
-                # AugAssign is opaque: fall back to heuristic.
-                state = None
+        # A value-less annotation (``__all__: T``, ``__all__[0]: T``, ``x: T``)
+        # does NOT assign or mutate at runtime — it is purely a type hint — so it
+        # is a no-op for ``__all__`` resolution (leaves any prior clean literal
+        # in place). Its target's ``Store`` ctx is an AST artifact, not a write.
+        # (An annotation EXPRESSION that mutates ``__all__`` — ``x:
+        # __all__.append(...)`` — is absurd and, under ``from __future__ import
+        # annotations``, never even evaluated; treated as an accepted limitation.)
+        if isinstance(node, ast.AnnAssign) and node.value is None:
             continue
-
-        targets: List[ast.AST] = []
-        value: Optional[ast.AST] = None
-        if isinstance(node, ast.Assign):
-            targets = list(node.targets)
-            value = node.value
-        elif isinstance(node, ast.AnnAssign) and node.value is not None:
-            targets = [node.target]
-            value = node.value
-        else:
-            continue
-        # Look for a target that is a plain `__all__` Name.
-        is_dunder_all_target = any(
-            isinstance(t, ast.Name) and t.id == "__all__" for t in targets
-        )
-        if not is_dunder_all_target or value is None:
-            continue
-        if not isinstance(value, (ast.List, ast.Tuple)):
-            # Computed __all__ (e.g. sorted(...), X + Y, name reference).
-            # The last assignment wins per Python runtime semantics, so
-            # this OVERRIDES any prior clean literal — reset to None so
-            # the heuristic falls back.
+        literal = _clean_dunder_all_literal(node)
+        if literal is not None:
+            # Clean top-level literal rebind — authoritative. A later one wins
+            # and RESTORES resolvability even after an earlier mutation.
+            state = literal
+        elif _subtree_mutates_dunder_all(node):
+            # Any other write to ``__all__`` (computed/imported rebind, augmented
+            # assignment, in-place mutation, conditional/looped rebind, tuple
+            # unpacking, walrus, ``for``/``with``/``except``/``case`` target):
+            # the runtime value diverges from any static literal, so fall back.
             state = None
-            continue
-        names: Set[str] = set()
-        clean = True
-        for elt in value.elts:
-            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
-                names.add(elt.value)
-            else:
-                clean = False
-                break
-        # Whether clean or dirty, this assignment overrides any prior
-        # state. Clean literals replace state with the new set; dirty
-        # literals (non-string elements like a Name reference inside the
-        # list) reset to None because we cannot trust the runtime value.
-        state = names if clean else None
+        # else: this statement does not touch ``__all__`` → state unchanged.
     return state
 
 
