@@ -15,7 +15,9 @@ def release_video_env(extra: dict | None = None) -> dict:
     for key in (
         "CLAUDE_MODEL",
         "CLAUDE_TIMEOUT",
+        "RELEASE_VIDEO_ATTEMPT_ID",
         "RELEASE_VIDEO_CLAUDE_TOOLS",
+        "RELEASE_VIDEO_IDEMPOTENCY_KEY",
         "RELEASE_VIDEO_PROMPT_TEMPLATE",
         "RELEASE_VIDEO_SCRIPT_PATH",
     ):
@@ -144,6 +146,11 @@ print(json.dumps({response_literal}))
     )
 
 
+def pds_idempotency_key(capture: Path) -> str:
+    pds_call = json.loads(capture.read_text(encoding="utf8"))["argv"]
+    return pds_call[pds_call.index("--idempotency-key") + 1]
+
+
 def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
@@ -202,6 +209,292 @@ def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
     assert pds_call[pds_call.index("--repo-name") + 1] == "promptdriven/pdd"
     idempotency_key = pds_call[pds_call.index("--idempotency-key") + 1]
     assert idempotency_key.startswith("pdd-release-video:v1.1.0:")
+
+
+def test_release_video_default_idempotency_key_uses_tag_and_git_sha(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    env = release_video_env({"PDS_STUB_CAPTURE": str(capture)})
+    pds = pds_stub(
+        tmp_path,
+        {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/default-key"}},
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(pds),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+
+    assert pds_idempotency_key(capture) == "pdd-release-video:v1.1.0:abc123def456"
+
+
+def test_release_video_env_full_idempotency_key_overrides_default(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    env = release_video_env(
+        {
+            "PDS_STUB_CAPTURE": str(capture),
+            "RELEASE_VIDEO_IDEMPOTENCY_KEY": "manual-release-video-key",
+        }
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/env-key"}},
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+
+    assert pds_idempotency_key(capture) == "manual-release-video-key"
+
+
+def test_release_video_attempt_id_adds_retry_suffix(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    env = release_video_env({"PDS_STUB_CAPTURE": str(capture)})
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/retry"}},
+                )
+            ),
+            "--idempotency-attempt-id",
+            "20260620-001",
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+
+    assert (
+        pds_idempotency_key(capture)
+        == "pdd-release-video:v1.1.0:abc123def456:retry-20260620-001"
+    )
+
+
+def test_release_video_env_attempt_id_adds_retry_suffix(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    env = release_video_env(
+        {
+            "PDS_STUB_CAPTURE": str(capture),
+            "RELEASE_VIDEO_ATTEMPT_ID": "ops-retry",
+        }
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/env-retry"}},
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+
+    assert (
+        pds_idempotency_key(capture)
+        == "pdd-release-video:v1.1.0:abc123def456:retry-ops-retry"
+    )
+
+
+def test_release_video_fails_when_full_key_and_attempt_id_are_both_supplied(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    env = release_video_env({"PDS_STUB_CAPTURE": str(capture)})
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/conflict"}},
+                )
+            ),
+            "--idempotency-key",
+            "manual-release-video-key",
+            "--idempotency-attempt-id",
+            "ops-retry",
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "Use either a full release-video idempotency key or an attempt id, not both."
+        in result.stderr
+    )
+    assert not capture.exists()
+
+
+def test_release_video_idempotency_conflict_fails_before_claude_generation(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    env = release_video_env({"PDS_STUB_CAPTURE": str(capture)})
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--claude-cli",
+            str(tmp_path / "missing-claude"),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/conflict"}},
+                )
+            ),
+            "--idempotency-key",
+            "manual-release-video-key",
+            "--idempotency-attempt-id",
+            "ops-retry",
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "Use either a full release-video idempotency key or an attempt id, not both."
+        in result.stderr
+    )
+    assert "Claude CLI" not in result.stderr
+    assert not (repo / "claude_prompt.txt").exists()
+    assert not capture.exists()
+
+
+def test_release_video_makefile_passes_idempotency_env_vars():
+    makefile_text = (ROOT / "Makefile").read_text(encoding="utf8")
+
+    assert "RELEASE_VIDEO_IDEMPOTENCY_KEY ?=" in makefile_text
+    assert "RELEASE_VIDEO_ATTEMPT_ID ?=" in makefile_text
+    assert (
+        'RELEASE_VIDEO_IDEMPOTENCY_KEY="$(RELEASE_VIDEO_IDEMPOTENCY_KEY)"'
+        in makefile_text
+    )
+    assert (
+        'RELEASE_VIDEO_ATTEMPT_ID="$(RELEASE_VIDEO_ATTEMPT_ID)"'
+        in makefile_text
+    )
 
 
 def test_release_video_can_select_existing_pds_project(tmp_path: Path):
