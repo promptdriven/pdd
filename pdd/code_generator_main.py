@@ -693,8 +693,12 @@ def _scannable_children(node: ast.AST) -> Iterator[ast.AST]:
 
 def _node_writes_dunder_all(node: ast.AST) -> bool:
     """True if *node* itself is a direct write / in-place mutation of the bare
-    module ``__all__`` name (NOT a plain top-level rebind, which the caller
-    excludes by scanning only such a statement's value)."""
+    module ``__all__`` name. ``_subtree_mutates_dunder_all`` applies it across a
+    statement's whole subtree, so a non-literal rebind trips it through its
+    target ``Name(__all__, Store)``. Clean literal rebinds never rely on this:
+    ``_extract_dunder_all`` resolves them via ``_clean_dunder_all_literal``
+    before the scan, so any ``__all__`` store/delete reaching here is an
+    unresolvable (computed / conditional / unpacked) write."""
     store_del = (ast.Store, ast.Del)
     if isinstance(node, ast.Name):
         return node.id == "__all__" and isinstance(node.ctx, store_del)
