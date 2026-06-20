@@ -1,111 +1,168 @@
+"""
+Example demonstrating how to use the PDD sync_orchestration module.
+
+This module automates the complete PDD (Prompt-Driven Development) workflow loop
+consisting of:
+  1. auto-deps (injecting prompt dependencies)
+  2. generate (creating code from the prompt)
+  3. example (creating a minimal usage example)
+  4. crash (resolving runtime errors)
+  5. verify (validating output against prompt intent)
+  6. test (generating unit tests)
+  7. fix (resolving unit test failures)
+  8. update (back-propagating learnings to the prompt)
+
+Inputs to sync_orchestration:
+    - basename (str): The logical name of the module to sync.
+    - target_coverage (float): Desired code coverage percentage (default: 90.0).
+    - language (str): Programming language target (default: "python").
+    - prompts_dir (str): Path to prompts directory.
+    - code_dir (str): Path to source code directory.
+    - examples_dir (str): Path to examples directory.
+    - tests_dir (str): Path to tests directory.
+    - max_attempts (int): Max attempts in iterative loops (default: 3).
+    - budget (float): Max total cost allowed for LLM operations in USD (default: 10.0).
+    - skip_verify (bool): If True, skips functional verification.
+    - skip_tests (bool): If True, skips unit test generation and fixing.
+    - dry_run (bool): If True, displays live sync analysis without executing actions.
+    - force (bool): If True, bypasses interactive confirmation prompts.
+    - strength (float): LLM model power setting from 0.0 to 1.0 (default: 0.5).
+    - temperature (float): LLM sampling randomness (default: 0.0).
+    - quiet (bool): If True, runs silently without interactive TUI panels.
+
+Outputs of sync_orchestration:
+    - A dictionary containing:
+        - success (bool): Overall success status.
+        - summary (str): Concise human-readable execution summary.
+        - operations_completed (list): List of completed operations.
+        - skipped_operations (list): List of skipped operations.
+        - total_cost (float): Total LLM cost accumulated during the run in USD.
+        - total_time (float): Wall-clock execution time in seconds.
+        - final_state (dict): Map of target file types and their resolution path/existence.
+        - errors (list): List of encountered error messages.
+"""
+
+from __future__ import annotations
+
+import json
 import os
 import sys
-import shutil
 from pathlib import Path
 
-# Ensure the pdd package is discoverable by inserting the project root into sys.path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# Add project root to sys.path to resolve absolute imports correctly
+project_root = Path(__file__).resolve().parents[1]
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from pdd.sync_orchestration import sync_orchestration
 
-def main():
-    """
-    Demonstrates how to invoke the sync_orchestration workflow.
-    
-    sync_orchestration coordinates the complete Prompt-Driven Development (PDD)
-    lifecycle (auto-deps -> generate -> example -> crash -> verify -> test -> fix -> update).
 
-    Inputs:
-        basename (str): The base name for the module prompt (e.g. 'calculator').
-        target_coverage (float): Desired code coverage percentage. Defaults to 90.0.
-        language (str): Target language of the generated code. Defaults to 'python'.
-        prompts_dir (str): Directory where prompt files reside. Defaults to 'prompts'.
-        code_dir (str): Directory where generated code will be saved. Defaults to 'src'.
-        examples_dir (str): Directory where examples will be saved. Defaults to 'examples'.
-        tests_dir (str): Directory where tests will be saved. Defaults to 'tests'.
-        dry_run (bool): If True, analyzes and returns current sync state logs without modifying code.
-        quiet (bool): Suppresses animation / visual CLI output if True.
-        force (bool): Overwrites target files without interactive CLI confirmation.
-        strength (float): AI model strength setting from 0.0 to 1.0.
+def setup_mock_environment() -> tuple[Path, dict[str, Path]]:
+    """Sets up a mock workspace in the './output' directory."""
+    base_dir = Path("./output")
+    base_dir.mkdir(parents=True, exist_ok=True)
 
-    Returns:
-        Dict[str, Any]: A dictionary containing:
-            - success (bool): Overall completion status.
-            - operations_completed (List[str]): List of completed operation stages.
-            - skipped_operations (List[str]): List of skipped operation stages.
-            - total_cost (float): Total LLM cost in USD.
-            - total_time (float): Total elapsed time in seconds.
-            - errors (List[str]): Captured errors.
-            - summary (str): A descriptive overview message.
-    """
-    # Setup clean output directory structures relative to current directory
-    output_dir = Path("./output")
-    prompts_dir = output_dir / "prompts"
-    code_dir = output_dir / "src"
-    examples_dir = output_dir / "examples"
-    tests_dir = output_dir / "tests"
+    # Configure subdirectories
+    dirs = {
+        "prompts": base_dir / "prompts",
+        "src": base_dir / "src",
+        "examples": base_dir / "examples",
+        "tests": base_dir / "tests",
+    }
+    for d in dirs.values():
+        d.mkdir(parents=True, exist_ok=True)
 
-    prompts_dir.mkdir(parents=True, exist_ok=True)
-    code_dir.mkdir(parents=True, exist_ok=True)
-    examples_dir.mkdir(parents=True, exist_ok=True)
-    tests_dir.mkdir(parents=True, exist_ok=True)
+    # Create a mock prompt file representing a basic calculator module
+    prompt_file = dirs["prompts"] / "calculator_python.prompt"
+    prompt_content = """---
+name: calculator_python
+language: Python
+---
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "add", "signature": "(a: int, b: int) -> int"}
+    ]
+  }
+}
+</pdd-interface>
 
-    # Generate a dummy prompt so the orchestrator has a target to analyze
+Create a simple calculator module that implements an add function.
+"""
+    prompt_file.write_text(prompt_content, encoding="utf-8")
+
+    return base_dir, dirs
+
+
+def main() -> None:
+    print("=== PDD Sync Orchestrator Example ===")
+
+    # Setup the workspace environment
+    base_dir, dirs = setup_mock_environment()
     basename = "calculator"
-    prompt_file = prompts_dir / f"{basename}_python.prompt"
-    prompt_file.write_text(
-        "Write a Python Calculator class with add, subtract, and multiply methods.",
-        encoding="utf-8"
-    )
 
-    print("--- 1. Running Sync Orchestration in Dry-Run (Heuristic Analysis) Mode ---")
-    # We execute with dry_run=True to inspect the current state changes cleanly
-    # without making active LLM calls or mutating state files.
-    dry_run_results = sync_orchestration(
+    # Verify LLM Credentials are present for executing the orchestration logic
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        print("Neither OPENAI_API_KEY nor GEMINI_API_KEY is set.")
+        print("Sync operations require LLM access. Exiting example gracefully.")
+        sys.exit(0)
+
+    # -------------------------------------------------------------------------
+    # Scenario 1: Dry-Run Mode (Pre-flight Sync Analysis)
+    # -------------------------------------------------------------------------
+    print("\n--- Running Sync in Dry-Run Mode ---")
+    dry_run_result = sync_orchestration(
         basename=basename,
-        target_coverage=90.0,
         language="python",
-        prompts_dir=str(prompts_dir),
-        code_dir=str(code_dir),
-        examples_dir=str(examples_dir),
-        tests_dir=str(tests_dir),
+        prompts_dir=str(dirs["prompts"]),
+        code_dir=str(dirs["src"]),
+        examples_dir=str(dirs["examples"]),
+        tests_dir=str(dirs["tests"]),
         dry_run=True,
         quiet=True,
-        force=True
     )
 
-    print(f"Success                  : {dry_run_results.get('success')}")
-    print(f"Log Entries Found        : {len(dry_run_results.get('log_entries', []))}")
-    
-    # Optional: If an API key is present, we can demonstrate a live sync
-    # otherwise we skip gracefully to comply with non-interactive headless requirements.
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("GEMINI_API_KEY")
-    if api_key:
-        print("\n--- 2. Live Key Detected: Running Live Orchestration Flow ---")
-        live_results = sync_orchestration(
-            basename=basename,
-            target_coverage=90.0,
-            language="python",
-            prompts_dir=str(prompts_dir),
-            code_dir=str(code_dir),
-            examples_dir=str(examples_dir),
-            tests_dir=str(tests_dir),
-            dry_run=False,
-            quiet=True,
-            force=True,
-            budget=2.0,  # Strict $2 limit for example
-            strength=0.0  # Cheapest model for speed/cost
-        )
-        print(f"Sync Success             : {live_results.get('success')}")
-        print(f"Operations Executed      : {live_results.get('operations_completed')}")
-        print(f"Total LLM Cost (USD)     : ${live_results.get('total_cost', 0.0):.4f}")
-        print(f"Execution Summary        : {live_results.get('summary')}")
-    else:
-        print("\n--- 2. Skipping Live Orchestration (No API key in env) ---")
+    print("Dry-Run Analysis Result:")
+    print(f"  • Success Status: {dry_run_result.get('success')}")
+    print(f"  • Log Entries Evaluated: {len(dry_run_result.get('log_entries', []))}")
 
-    # Cleanup generated artifacts
-    if output_dir.exists():
-        shutil.rmtree(output_dir, ignore_errors=True)
+    # -------------------------------------------------------------------------
+    # Scenario 2: Headless Workflow Execution (With Skip Handling)
+    # -------------------------------------------------------------------------
+    print("\n--- Running Headless Sync Workflow (Skip Tests & Verification) ---")
+    
+    # Run the orchestrator with tests and verification skipped for demonstration.
+    # Passing force=True and quiet=True prevents interactive UI panels.
+    sync_result = sync_orchestration(
+        basename=basename,
+        language="python",
+        prompts_dir=str(dirs["prompts"]),
+        code_dir=str(dirs["src"]),
+        examples_dir=str(dirs["examples"]),
+        tests_dir=str(dirs["tests"]),
+        skip_tests=True,
+        skip_verify=True,
+        force=True,
+        quiet=True,
+        budget=2.0,  # Cap budget at $2.00 USD
+    )
+
+    print("\nWorkflow Execution Results:")
+    print(f"  • Overall Success       : {sync_result.get('success')}")
+    print(f"  • Summary Summary       : {sync_result.get('summary')}")
+    print(f"  • Completed Operations  : {sync_result.get('operations_completed')}")
+    print(f"  • Skipped Operations    : {sync_result.get('skipped_operations')}")
+    print(f"  • Total LLM Spend       : ${sync_result.get('total_cost', 0.0):.4f} USD")
+    print(f"  • Last Model Invoked    : {sync_result.get('model_name')}")
+    print(f"  • Total Time Elapsed    : {sync_result.get('total_time', 0.0):.2f}s")
+    
+    print("\nFinal Workspace State on Disk:")
+    for file_type, info in sync_result.get("final_state", {}).items():
+        print(f"  - {file_type:<10}: Exists={info['exists']}, Path={Path(info['path']).name}")
+
 
 if __name__ == "__main__":
     main()

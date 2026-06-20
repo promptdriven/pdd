@@ -1,14 +1,9 @@
-#!/usr/bin/env python3
-"""
-Example demonstrating how to use the sync_determine_operation module to analyze
-a PDD unit's state and determine the next required sync operation.
-"""
-
 import os
 import sys
+import json
 from pathlib import Path
 
-# Ensure the pdd package is discoverable by adding the project root to sys.path
+# Add the parent directory of the script's directory to sys.path to allow importing the pdd package
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pdd.sync_determine_operation import (
@@ -17,76 +12,94 @@ from pdd.sync_determine_operation import (
     SyncDecision,
 )
 
+def main():
+    """
+    This example demonstrates how to use the 'sync_determine_operation' module
+    to resolve file paths and determine the next logical development step
+    (e.g., generate, test, fix, or update) based on the project's current state.
+    """
+    print("=== Initializing PDD Sync Decision Example ===")
 
-def main() -> None:
-    # 1. Setup a mock environment inside the designated './output' directory
+    # Define our output directory for the mock workspace
     output_dir = Path("./output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Define context variables
+    basename = "calculator"
+    language = "Python"
     prompts_dir = output_dir / "prompts"
     prompts_dir.mkdir(parents=True, exist_ok=True)
 
-    # Define the module metadata we want to inspect
-    basename = "calculator"
-    language = "Python"
-    target_coverage = 80.0  # target test coverage percentage (0.0 to 100.0)
-
-    # Create a mock prompt file (required for the module to resolve paths correctly)
+    # 1. Create a mock prompt file
+    # This represents a prompt describing our desired module.
     prompt_file = prompts_dir / f"{basename}_{language}.prompt"
     prompt_file.write_text(
-        "Generate a robust Calculator class in Python supporting basic arithmetic operations.",
-        encoding="utf-8",
+        "Create a robust calculator with basic arithmetic operations.", 
+        encoding="utf-8"
     )
+    print(f"Created mock prompt file: {prompt_file.relative_to(Path.cwd())}")
 
-    print("--- 1. Resolving PDD File Paths ---")
-    # Resolve the expected file paths for prompt, code, example, and tests
-    # inputs:
-    #   - basename: short name of the module (e.g. 'calculator')
-    #   - language: target programming language (e.g. 'Python')
-    #   - prompts_dir: directory where prompt files reside
-    # returns:
-    #   - Dict[str, Path] mapping file keys ('prompt', 'code', 'example', 'test', 'test_files') to Paths
-    pdd_paths = get_pdd_file_paths(
+    # 2. Resolve PDD paths for the module
+    # get_pdd_file_paths determines where code, test, and example files are
+    # located relative to the workspace configuration.
+    print("\n--- Resolving File Paths ---")
+    paths = get_pdd_file_paths(
         basename=basename,
         language=language,
-        prompts_dir=str(prompts_dir),
+        prompts_dir=str(prompts_dir)
     )
 
-    for file_type, path in pdd_paths.items():
+    # Documenting the expected returned paths structure:
+    # - 'prompt': Path to the original prompt file
+    # - 'code': Expected path for generated implementation code
+    # - 'example': Expected path for usage example code
+    # - 'test': Expected path for test files
+    # - 'test_files': List of all matching test files for multi-file test coverage
+    for key, path in paths.items():
         if isinstance(path, list):
-            print(f"  • {file_type}: {[str(p.relative_to(output_dir.parent)) for p in path]}")
+            paths_str = ", ".join(str(p.relative_to(Path.cwd())) for p in path)
+            print(f"  • {key}: [{paths_str}]")
         else:
-            print(f"  • {file_type}: {path.relative_to(output_dir.parent)}")
+            print(f"  • {key}: {path.relative_to(Path.cwd())}")
 
-    print("\n--- 2. Determining the Next Sync Operation ---")
-    # Determine the next operation based on the current file state and metadata history.
-    # Since this is a new module with no fingerprint or run history, the analyzer
-    # should deterministically recommend a 'generate' operation.
-    # We pass `read_only=True` and `log_mode=True` to run the analysis safely without mutating disk locks.
-    # inputs:
-    #   - basename: 'calculator'
-    #   - language: 'Python'
-    #   - target_coverage: 80.0 (desired coverage %)
-    #   - log_mode: True (bypasses SyncLock mechanism entirely for read-only analysis)
-    #   - prompts_dir: Directory containing prompt files
-    #   - read_only: True (prevents metadata mutation)
-    # returns:
-    #   - SyncDecision: dataclass containing operation, reason, confidence, and estimated_cost
+    # 3. Determine the next PDD operation
+    # sync_determine_operation analyzes the disk state and metadata to select
+    # the next action in the PDD workflow.
+    #
+    # Parameters explained:
+    # - basename (str): The logical name of the module.
+    # - language (str): The programming language.
+    # - target_coverage (float): The desired test coverage percentage (e.g., 90.0).
+    # - budget (float): Maximum dollar budget to allow for LLM operations.
+    # - prompts_dir (str): Location of the prompts folder.
+    # - read_only (bool): If True, skips mutating any state files while analyzing.
+    print("\n--- Running State Analysis ---")
     decision: SyncDecision = sync_determine_operation(
         basename=basename,
         language=language,
-        target_coverage=target_coverage,
-        log_mode=True,
+        target_coverage=90.0,
+        budget=10.0,
         prompts_dir=str(prompts_dir),
-        read_only=True,
+        read_only=True
     )
 
-    print(f"Recommended Operation : {decision.operation.upper()}")
-    print(f"Reason                : {decision.reason}")
-    print(f"Decision Confidence   : {decision.confidence:.2f}")
-    print(f"Estimated Cost (USD)  : ${decision.estimated_cost:.2f}")
-
+    # 4. Display the Sync Decision Results
+    # Output properties of SyncDecision:
+    # - operation (str): The selected action (e.g., 'generate', 'test', 'fix', 'nothing')
+    # - reason (str): Human-readable explanation of why this decision was made
+    # - confidence (float): Certainty score of the decision engine (0.0 to 1.0)
+    # - estimated_cost (float): Estimated cost in dollars for the chosen operation
+    # - details (dict): Extra debugging contexts/metadata
+    print("\n--- Determined Sync Decision ---")
+    print(f"  • Recommended Operation : {decision.operation.upper()}")
+    print(f"  • Reason                : {decision.reason}")
+    print(f"  • Confidence Score      : {decision.confidence:.2f}")
+    print(f"  • Estimated LLM Cost    : ${decision.estimated_cost:.2f}")
+    
     if decision.details:
-        print(f"Decision Details      : {decision.details}")
+        print(f"  • Details               : {json.dumps(decision.details)}")
 
+    print("\n=== Example Run Completed Successfully ===")
 
 if __name__ == "__main__":
     main()
