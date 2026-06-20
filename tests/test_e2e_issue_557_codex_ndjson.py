@@ -158,7 +158,7 @@ class TestAgenticSyncCodexE2E:
              patch("pdd.agentic_common._subprocess_run_spooled") as mock_subprocess_spooled, \
              patch("time.sleep"), \
              patch("pdd.agentic_sync._run_dry_run_validation",
-                   return_value=(True, {"auth": tmp_path, "payments": tmp_path}, [], 0.0)), \
+                   return_value=(True, {"auth": tmp_path, "payments": tmp_path}, {"auth": "auth", "payments": "payments"}, [], 0.0)), \
              patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner:
             # Issue #1646: openai routes through the spooled runner; share the
             # same mock so the configured CompletedProcess flows through it.
@@ -235,7 +235,7 @@ class TestAgenticSyncCodexE2E:
              patch("pdd.agentic_common._subprocess_run_spooled") as mock_subprocess_spooled, \
              patch("time.sleep"), \
              patch("pdd.agentic_sync._run_dry_run_validation",
-                   return_value=(True, {"users": tmp_path}, [], 0.0)), \
+                   return_value=(True, {"users": tmp_path}, {"users": "users"}, [], 0.0)), \
              patch("pdd.agentic_sync.AsyncSyncRunner") as mock_runner:
             # Issue #1646: openai routes through the spooled runner; share the
             # same mock so the configured CompletedProcess flows through it.

@@ -4268,3 +4268,395 @@ class TestRealSubprocessOutputCapture:
         assert "Overall status: Failed" in error, (
             "failure reason must preserve the streamed marker after eviction"
         )
+
+
+# ---------------------------------------------------------------------------
+# Per-module --context resolution (issue #1675)
+# ---------------------------------------------------------------------------
+
+_ROOT_PDDRC = '''version: "1.0"
+contexts:
+  extensions-github_pdd_app:
+    paths: ["extensions/github_pdd_app/**"]
+    defaults:
+      prompts_dir: "prompts"
+  default:
+    paths: ["**"]
+    defaults:
+      prompts_dir: "prompts"
+'''
+
+_NESTED_PDDRC = '''version: "1.0"
+contexts:
+  pdd_executor_pkg:
+    paths: ["pdd_codex*", "src/**"]
+    defaults:
+      prompts_dir: "prompts"
+  default:
+    paths: ["**"]
+    defaults:
+      prompts_dir: "prompts"
+'''
+
+_NESTED_PDDRC_NOMATCH = '''version: "1.0"
+contexts:
+  other_pkg:
+    paths: ["unrelated/**"]
+    defaults:
+      prompts_dir: "prompts"
+  default:
+    paths: ["**"]
+    defaults:
+      prompts_dir: "prompts"
+'''
+
+
+def _write_file(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _context_arg(cmd: List[str]):
+    """Return the value passed after --context, or None if absent."""
+    return cmd[cmd.index("--context") + 1] if "--context" in cmd else None
+
+
+def _ctx_error_type():
+    """Resolve the resolver-error type lazily so collection never breaks pre-fix."""
+    import pdd.agentic_sync_runner as _asr
+
+    return getattr(_asr, "SyncContextResolutionError", RuntimeError)
+
+
+class TestPerModuleContextResolution:
+    """Child `pdd sync` must use a --context valid for the module's own cwd.
+
+    Root cause (issue #1675): `_build_command` forwarded a single global
+    `sync_options["context"]` while `_run_attempt` ran each child in a
+    per-module cwd. A root context could be paired with a nested cwd whose
+    `.pddrc` does not define it, killing the child with "Unknown context".
+    """
+
+    def _runner(self, tmp_path, *, basenames, module_cwds, context,
+                module_targets=None):
+        runner = AsyncSyncRunner(
+            basenames=basenames,
+            dep_graph={b: [] for b in basenames},
+            sync_options={"context": context} if context else {},
+            github_info=None,
+            quiet=True,
+            module_cwds=module_cwds,
+            module_targets=module_targets or {},
+        )
+        runner.project_root = tmp_path
+        return runner
+
+    def test_root_context_not_leaked_into_nested_cwd(self, tmp_path):
+        # Criterion 1: root .pddrc defines extensions-github_pdd_app; nested
+        # .pddrc does not. Agentic sync for a nested module must not pass the
+        # root context into the nested cwd.
+        _write_file(tmp_path / ".pddrc", _ROOT_PDDRC)
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="extensions-github_pdd_app",
+        )
+        cmd = runner._build_command("pdd_codex")
+        assert "extensions-github_pdd_app" not in cmd
+        assert _context_arg(cmd) == "pdd_executor_pkg"
+
+    def test_root_context_forwarded_from_root_cwd(self, tmp_path):
+        # Criterion 3: root context still works from repo root and is not
+        # forced into a nested cwd.
+        _write_file(tmp_path / ".pddrc", _ROOT_PDDRC)
+        runner = self._runner(
+            tmp_path,
+            basenames=["extensions/github_pdd_app/foo"],
+            module_cwds={"extensions/github_pdd_app/foo": tmp_path},
+            context="extensions-github_pdd_app",
+        )
+        cmd = runner._build_command("extensions/github_pdd_app/foo")
+        assert _context_arg(cmd) == "extensions-github_pdd_app"
+
+    def test_nested_context_forwarded_when_valid(self, tmp_path):
+        # Criterion 2: a nested context resolves from the nested cwd and is not
+        # forced back to repo root.
+        _write_file(tmp_path / ".pddrc", _ROOT_PDDRC)
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="pdd_executor_pkg",
+        )
+        cmd = runner._build_command("pdd_codex")
+        assert _context_arg(cmd) == "pdd_executor_pkg"
+
+    def test_invalid_unresolvable_context_raises(self, tmp_path):
+        # Acceptance: when an explicit context is invalid for the cwd and no
+        # per-module context resolves, fail early with a resolver error rather
+        # than emitting a doomed child command.
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC_NOMATCH)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="extensions-github_pdd_app",
+        )
+        with pytest.raises(_ctx_error_type()):
+            runner._build_command("pdd_codex")
+
+    def test_no_pddrc_forwards_requested_context(self, tmp_path):
+        # Regression guard: a repo with no governing .pddrc keeps legacy
+        # behavior and forwards the requested context unchanged.
+        sub = tmp_path / "proj"
+        sub.mkdir(parents=True, exist_ok=True)
+        runner = self._runner(
+            tmp_path,
+            basenames=["mod"],
+            module_cwds={"mod": sub},
+            context="whatever",
+        )
+        cmd = runner._build_command("mod")
+        assert _context_arg(cmd) == "whatever"
+
+    def test_directly_constructed_runner_forwards_context(self, tmp_path):
+        # Regression guard: a runner constructed without per-module cwds keeps
+        # legacy forwarding (cwd-aware validation applies only to modules the
+        # orchestrator placed in a specific cwd).
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={"context": "some_ctx"},
+            github_info=None,
+            quiet=True,
+        )
+        cmd = runner._build_command("foo")
+        assert _context_arg(cmd) == "some_ctx"
+
+    def test_duplicate_basename_context_follows_cwd(self, tmp_path):
+        # Criterion 5: two projects share a basename but each owns a different
+        # context. The context must follow the module's resolved cwd, not the
+        # global flag.
+        proj_a = tmp_path / "a"
+        proj_b = tmp_path / "b"
+        _write_file(proj_a / ".pddrc", _NESTED_PDDRC)  # defines pdd_executor_pkg
+        _write_file(proj_b / ".pddrc", _NESTED_PDDRC.replace(
+            "pdd_executor_pkg", "ctx_b"))
+        runner = self._runner(
+            tmp_path,
+            basenames=["a/pdd_codex", "b/pdd_codex"],
+            module_cwds={"a/pdd_codex": proj_a, "b/pdd_codex": proj_b},
+            module_targets={"a/pdd_codex": "pdd_codex", "b/pdd_codex": "pdd_codex"},
+            context="pdd_executor_pkg",
+        )
+        cmd_a = runner._build_command("a/pdd_codex")
+        cmd_b = runner._build_command("b/pdd_codex")
+        assert _context_arg(cmd_a) == "pdd_executor_pkg"
+        assert _context_arg(cmd_b) == "ctx_b"
+
+    def test_reproduce_command_includes_cwd_and_context(self, tmp_path):
+        # Acceptance: reproduce-local output includes both cwd and command.
+        _write_file(tmp_path / ".pddrc", _ROOT_PDDRC)
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="extensions-github_pdd_app",
+        )
+        block = runner._build_conformance_hard_failure(
+            "pdd_codex",
+            "Architecture conformance error for pdd_codex",
+            "", "",
+        )
+        assert "cd extensions/github_pdd_app" in block
+        assert "--context pdd_executor_pkg" in block
+        assert "sync pdd_codex" in block
+
+    def test_sync_one_module_surfaces_resolver_error_without_running_child(
+        self, tmp_path
+    ):
+        # End-to-end: a context-resolution failure must surface as a clean
+        # module failure before any child process is spawned.
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        _write_file(nested / ".pddrc", _NESTED_PDDRC_NOMATCH)
+        runner = self._runner(
+            tmp_path,
+            basenames=["pdd_codex"],
+            module_cwds={"pdd_codex": nested},
+            context="extensions-github_pdd_app",
+        )
+        with patch("pdd.agentic_sync_runner.subprocess.Popen") as mock_popen:
+            success, _cost, error = runner._sync_one_module("pdd_codex")
+        assert not success
+        assert not mock_popen.called
+        assert "extensions-github_pdd_app" in error
+
+    def test_threaded_module_context_takes_precedence_over_lazy(self, tmp_path):
+        # The deterministic module_contexts map (built during analysis) is
+        # consulted for substitution, not only lazy re-resolution. The nested
+        # .pddrc defines both the target's context and an unrelated one; the
+        # threaded map selects the unrelated (but valid) one to prove the map,
+        # not lazy target-matching, drove the decision.
+        nested = tmp_path / "extensions" / "github_pdd_app"
+        two = (
+            'version: "1.0"\n'
+            "contexts:\n"
+            "  pdd_executor_pkg:\n"
+            '    paths: ["pdd_codex*"]\n'
+            "    defaults:\n"
+            '      prompts_dir: "prompts"\n'
+            "  alt_ctx:\n"
+            '    paths: ["zzz/**"]\n'
+            "    defaults:\n"
+            '      prompts_dir: "prompts"\n'
+        )
+        _write_file(nested / ".pddrc", two)
+        runner = AsyncSyncRunner(
+            basenames=["pdd_codex"],
+            dep_graph={"pdd_codex": []},
+            sync_options={"context": "extensions-github_pdd_app"},
+            github_info=None,
+            quiet=True,
+            module_cwds={"pdd_codex": nested},
+            module_targets={"pdd_codex": "pdd_codex"},
+            module_contexts={"pdd_codex": "alt_ctx"},
+        )
+        runner.project_root = tmp_path
+        cmd = runner._build_command("pdd_codex")
+        assert _context_arg(cmd) == "alt_ctx"
+
+    def test_same_named_context_resolves_against_nested_cwd(self, tmp_path):
+        # Criterion 4: a context name shared by root and nested .pddrc resolves
+        # against the nested cwd, and reproduce-local points at that project.
+        shared = (
+            'version: "1.0"\n'
+            "contexts:\n"
+            "  shared:\n"
+            '    paths: ["**"]\n'
+            "    defaults:\n"
+            '      prompts_dir: "prompts"\n'
+        )
+        _write_file(tmp_path / ".pddrc", shared)
+        nested = tmp_path / "backend" / "functions"
+        _write_file(nested / ".pddrc", shared)
+        runner = self._runner(
+            tmp_path,
+            basenames=["worker_app"],
+            module_cwds={"worker_app": nested},
+            context="shared",
+        )
+        cmd = runner._build_command("worker_app")
+        assert _context_arg(cmd) == "shared"
+        assert "cd backend/functions" in runner._reproduce_command("worker_app")
+
+
+# ---------------------------------------------------------------------------
+# Canonical ResolvedSyncUnit consumption (issue #1675 follow-up)
+# ---------------------------------------------------------------------------
+
+from pdd.resolved_sync_unit import ResolvedSyncUnit  # noqa: E402
+
+
+class TestRunnerConsumesResolvedUnit:
+    """When a ResolvedSyncUnit exists for a key it is the source of truth for
+    cwd / target / context, overriding the legacy dicts."""
+
+    def _unit(self, tmp_path, *, context, target="report", cwd_name="backend"):
+        cwd = tmp_path / cwd_name
+        cwd.mkdir(parents=True, exist_ok=True)
+        return ResolvedSyncUnit(
+            key="proj/report",
+            target_basename=target,
+            cwd=cwd,
+            pddrc_path=cwd / ".pddrc",
+            context=context,
+            prompts_dir=cwd / "prompts",
+        )
+
+    def test_build_command_uses_unit_target_and_context(self, tmp_path):
+        unit = self._unit(tmp_path, context="report_ctx")
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={"context": "root_ctx"},  # invalid downstream; unit wins
+            github_info=None,
+            quiet=True,
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        cmd = runner._build_command("proj/report")
+        assert cmd[-1] == "report"
+        assert _context_arg(cmd) == "report_ctx"
+        assert "root_ctx" not in cmd
+
+    def test_unit_default_only_omits_context_without_failing(self, tmp_path):
+        # Req 3: a unit resolved to no context (default-only nested) omits
+        # --context and never raises, even with a global context requested.
+        unit = self._unit(tmp_path, context=None)
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={"context": "root_ctx"},
+            github_info=None,
+            quiet=True,
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        cmd = runner._build_command("proj/report")  # must not raise
+        assert "--context" not in cmd
+        assert cmd[-1] == "report"
+
+    def test_unit_overrides_conflicting_legacy_dicts(self, tmp_path):
+        unit = self._unit(tmp_path, context="report_ctx", target="report")
+        other = tmp_path / "other"
+        other.mkdir()
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={"context": "root_ctx"},
+            github_info=None,
+            quiet=True,
+            module_cwds={"proj/report": other},
+            module_targets={"proj/report": "WRONG"},
+            module_contexts={"proj/report": "wrong_ctx"},
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        assert runner._module_cwd_path("proj/report") == unit.cwd
+        assert runner._module_target("proj/report") == "report"
+        cmd = runner._build_command("proj/report")
+        assert _context_arg(cmd) == "report_ctx"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_run_attempt_runs_child_in_unit_cwd(
+        self, mock_find, mock_popen, mock_cost, mock_unlink, tmp_path
+    ):
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n", exit_code=0
+        )
+        unit = self._unit(tmp_path, context="report_ctx")
+        runner = AsyncSyncRunner(
+            basenames=["proj/report"],
+            dep_graph={"proj/report": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            module_units={"proj/report": unit},
+        )
+        runner.project_root = tmp_path
+        runner._sync_one_module("proj/report")
+        assert mock_popen.call_args.kwargs["cwd"] == str(unit.cwd)
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[-1] == "report"
+        assert _context_arg(cmd) == "report_ctx"
