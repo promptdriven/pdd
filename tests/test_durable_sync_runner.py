@@ -759,3 +759,45 @@ def test_durable_remaps_unit_into_worktree_for_build_command(tmp_path):
     assert cmd[-1] == "report"
     assert "--context" in cmd and cmd[cmd.index("--context") + 1] == "report_ctx"
     assert runner._module_cwd_path("backend/report") == worktree_root / "backend"
+
+
+def test_durable_allows_ancestor_pddrc_metadata(tmp_path):
+    """#1675 (review): operation_log anchors a module's metadata at the nearest
+    .pddrc PARENT, which can be an ANCESTOR of the module cwd. A module run from
+    backend/functions governed by backend/.pddrc writes backend/.pdd/meta — durable
+    mode must treat that as allowed, not reject the correctly-staged file as unsafe."""
+    from pdd.resolved_sync_unit import ResolvedSyncUnit
+
+    cwd = tmp_path / "backend" / "functions"
+    cwd.mkdir(parents=True)
+    governing = tmp_path / "backend"
+    unit = ResolvedSyncUnit(
+        key="backend/functions/report",
+        target_basename="report",
+        cwd=cwd,
+        pddrc_path=governing / ".pddrc",  # ancestor of cwd
+        context=None,
+        prompts_dir=cwd / "prompts",
+    )
+    runner = DurableSyncRunner(
+        basenames=["backend/functions/report"],
+        dep_graph={"backend/functions/report": []},
+        sync_options={},
+        github_info=None,
+        issue_number=1675,
+        project_root=tmp_path,
+        quiet=True,
+        module_cwds={"backend/functions/report": cwd},
+        module_targets={"backend/functions/report": "report"},
+        module_units={"backend/functions/report": unit},
+    )
+    prefixes = {p.as_posix() for p in runner._allowed_metadata_prefixes("backend/functions/report")}
+    assert "backend/.pdd/meta" in prefixes, prefixes  # the governing .pddrc parent
+    # the correctly-anchored ancestor metadata file is NOT flagged unsafe
+    assert runner._unsafe_staged_paths(
+        "backend/functions/report", ["backend/.pdd/meta/report_python.json"]
+    ) == []
+    # but a wrong-name file under that same dir is still rejected
+    assert runner._unsafe_staged_paths(
+        "backend/functions/report", ["backend/.pdd/meta/other_python.json"]
+    ) == ["backend/.pdd/meta/other_python.json"]

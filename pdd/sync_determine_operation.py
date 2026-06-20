@@ -212,7 +212,15 @@ def _reanchor_under_basename_subdir(
     if "/" not in basename:
         return path_obj
     dir_prefix, _ = _extract_name_part(basename)
-    sub = [p for p in dir_prefix.replace("\\", "/").split("/") if p]
+    # Drop empty, current- and parent-directory segments so a basename can never
+    # introduce a path-traversal component (".."/".") into the re-anchored output
+    # path (CodeQL: uncontrolled data in path expression). A module's directory is
+    # always a plain forward-relative path.
+    sub = [
+        p
+        for p in dir_prefix.replace("\\", "/").split("/")
+        if p and p not in (".", "..")
+    ]
     if not sub:
         return path_obj
 

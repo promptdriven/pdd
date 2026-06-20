@@ -469,15 +469,33 @@ class DurableSyncRunner(AsyncSyncRunner):
 
     def _allowed_metadata_prefixes(self, basename: str) -> List[Path]:
         prefixes = [Path(".pdd") / "meta"]
-        parent_cwd = self.parent_module_cwds.get(basename)
-        if parent_cwd is not None:
+
+        def _add(root: Optional[Path]) -> None:
+            if root is None:
+                return
             try:
-                rel = parent_cwd.resolve().relative_to(self.git_root)
+                rel = root.resolve().relative_to(self.git_root)
             except ValueError:
-                rel = None
-            if rel and rel != Path("."):
+                return
+            if rel != Path("."):
                 prefixes.append(rel / ".pdd" / "meta")
-        return prefixes
+
+        # The module cwd's own .pdd/meta.
+        _add(self.parent_module_cwds.get(basename))
+        # #1675: operation_log anchors a module's metadata at the nearest .pddrc
+        # PARENT, which may be an ANCESTOR of the module cwd (e.g. cwd
+        # backend/functions governed by backend/.pddrc writes backend/.pdd/meta).
+        # Allow that governing project root too, or correctly-staged ancestor
+        # metadata is wrongly rejected as unsafe / never force-added.
+        unit = self.parent_module_units.get(basename)
+        if unit is not None and unit.pddrc_path is not None:
+            _add(unit.pddrc_path.parent)
+
+        deduped: List[Path] = []
+        for prefix in prefixes:
+            if prefix not in deduped:
+                deduped.append(prefix)
+        return deduped
 
     def _apply_module_patch_to_durable_branch(
         self, basename: str, module_worktree: Path
