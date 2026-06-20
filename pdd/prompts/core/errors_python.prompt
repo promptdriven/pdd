@@ -1,4 +1,16 @@
 <pdd-reason>Central error handling and reporting for the CLI.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "get_core_dump_errors", "signature": "() -> List[Dict[str, Any]]", "returns": "List[Dict[str, Any]]"},
+      {"name": "clear_core_dump_errors", "signature": "() -> None", "returns": "None"},
+      {"name": "handle_error", "signature": "(exception: Exception, command_name: str, quiet: bool) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
 
 # prompts/core/errors_python.prompt
 % You are an expert Python engineer. Your goal is to write the error handling logic for the PDD CLI in `pdd/core/errors.py`.
@@ -26,6 +38,7 @@
      - Logic: Records error details (command name, type, message, traceback) to `_core_dump_errors`.
      - If `quiet` is `False`, prints error messages to the Rich console using the `error` style.
      - Provides specific messages for `FileNotFoundError`, `ValueError`, `IOError`, `click.UsageError`, and `MarkupError`.
+     - Escape dynamic exception text with `rich.markup.escape(str(exception))` before interpolating it into Rich markup for `FileNotFoundError`, `ValueError`/`IOError`, and the generic unexpected-error branch. This preserves literal paths containing Rich metacharacters such as Next.js dynamic route segments (`[id]`) in ambiguity/error output instead of letting Rich treat them as markup.
      - Catches and safely escapes `MarkupError` messages before printing.
      - Does *not* re-raise the exception; simply handles printing and recording.
 

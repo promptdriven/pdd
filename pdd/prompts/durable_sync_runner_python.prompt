@@ -1,5 +1,17 @@
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>resolved_sync_unit_python.prompt</pdd-dependency>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "DurableSyncRunner", "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0)", "returns": "DurableSyncRunner"},
+      {"name": "DurableSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"}
+    ]
+  }
+}
+</pdd-interface>
 
 % Goal
 Write the `pdd/durable_sync_runner.py` module.
