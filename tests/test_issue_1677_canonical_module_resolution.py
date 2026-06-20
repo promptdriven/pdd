@@ -377,18 +377,44 @@ def test_unregistered_flat_module_unaffected(tmp_path, monkeypatch):
     assert Path(paths["test"]).name == "test_widget.tsx"
 
 
-def test_unregistered_qualified_no_directory_duplication(tmp_path, monkeypatch):
-    """When the configured output dir shares a segment with the basename's directory
-    (a non-trivial mapping only architecture.json can encode), the segment must NOT be
-    duplicated (`frontend/src/frontend/...`)."""
+def test_unregistered_qualified_shared_area_not_duplicated(tmp_path, monkeypatch):
+    """When the configured output dir shares an area with the basename's directory
+    (`frontend/src/` + `frontend/app/login/page`), the shared segment is recognised and
+    the result is `frontend/src/app/login/page.tsx` — not duplicated, not collapsed."""
     _unregistered_project(tmp_path, generate="frontend/src/", example="frontend/src/", test="frontend/src/")
     d = tmp_path / "prompts" / "frontend" / "app" / "login"
     d.mkdir(parents=True)
     (d / "page_TypeScriptReact.prompt").write_text("p")
     monkeypatch.chdir(tmp_path)
     paths = get_pdd_file_paths("frontend/app/login/page", "TypeScriptReact", prompts_dir="prompts")
-    for key in ("code", "example", "test"):
-        assert Path(paths[key]).as_posix().count("frontend/") <= 1, paths[key]
+    assert Path(paths["code"]).as_posix().endswith("frontend/src/app/login/page.tsx")
+    assert Path(paths["code"]).as_posix().count("frontend/") == 1
+
+
+def test_unregistered_qualified_tail_head_overlap(tmp_path, monkeypatch):
+    """`app/login/page` under `src/app/` resolves to `src/app/login/page.tsx` (the
+    output dir's tail `app` overlaps the basename's head — no `src/app/app/...`)."""
+    _unregistered_project(tmp_path, generate="src/app/", example="src/app/", test="src/app/")
+    d = tmp_path / "prompts" / "app" / "login"
+    d.mkdir(parents=True)
+    (d / "page_TypeScriptReact.prompt").write_text("p")
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("app/login/page", "TypeScriptReact", prompts_dir="prompts")
+    assert Path(paths["code"]).as_posix().endswith("src/app/login/page.tsx")
+    assert "app/app" not in Path(paths["code"]).as_posix()
+
+
+def test_unregistered_qualified_repo_path_contains_prefix(tmp_path, monkeypatch):
+    """A repo path component equal to the basename's directory (e.g. the project living
+    under a `foo/` directory) must NOT cause the directory to be dropped — overlap is
+    measured against the configured output dir, not the absolute repo path."""
+    project = tmp_path / "foo"  # repo path contains 'foo'
+    (project / "prompts" / "foo").mkdir(parents=True)
+    _unregistered_project(project, generate="src/", example="src/", test="src/")
+    (project / "prompts" / "foo" / "page_TypeScriptReact.prompt").write_text("p")
+    monkeypatch.chdir(project)
+    paths = get_pdd_file_paths("foo/page", "TypeScriptReact", prompts_dir="prompts")
+    assert Path(paths["code"]).as_posix().endswith("src/foo/page.tsx")
 
 
 def test_metadata_key_is_path_aware_for_qualified_names():
