@@ -90,12 +90,101 @@ def test_unique_bare_basename_still_resolves(tmp_path, monkeypatch):
     assert Path(paths["code"]).as_posix().endswith("src/app/dashboard/dashboard.tsx")
 
 
+def test_ambiguous_leaf_gets_distinct_example_test_paths(tmp_path, monkeypatch):
+    """Two path-qualified modules sharing an ambiguous leaf (`page`) must NOT collide
+    on `examples/page_example.tsx` / `tests/test_page.tsx` — the example/test stems are
+    derived from the canonical code path so they stay distinct."""
+    _make_two_page_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    login = get_pdd_file_paths("app/login/page", "TypeScriptReact", prompts_dir="prompts")
+    settings = get_pdd_file_paths("app/settings/page", "TypeScriptReact", prompts_dir="prompts")
+    # Source files already resolve correctly.
+    assert Path(login["code"]).as_posix().endswith("src/app/login/page.tsx")
+    assert Path(settings["code"]).as_posix().endswith("src/app/settings/page.tsx")
+    # Example/test artifacts must be distinct (the collision the issue flagged).
+    assert Path(login["example"]) != Path(settings["example"])
+    assert Path(login["test"]) != Path(settings["test"])
+    assert "page_example" != Path(login["example"]).name  # not the bare collision name
+
+
+def test_unique_leaf_keeps_flat_example_test_paths(tmp_path, monkeypatch):
+    """Backward compat: a unique leaf keeps the flat `examples/<stem>_example` path."""
+    _make_two_page_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("dashboard", "TypeScriptReact", prompts_dir="prompts")
+    assert Path(paths["example"]).name == "dashboard_example.tsx"
+    assert Path(paths["test"]).name == "test_dashboard.tsx"
+
+
 def test_path_qualified_basename_resolves_correct_module(tmp_path, monkeypatch):
     """`pdd sync app/login/page` resolves to the login page, not settings."""
     _make_two_page_project(tmp_path)
     monkeypatch.chdir(tmp_path)
     paths = get_pdd_file_paths("app/login/page", "TypeScriptReact", prompts_dir="prompts")
     assert Path(paths["code"]).as_posix().endswith("src/app/login/page.tsx")
+
+
+def test_wrong_path_qualified_name_does_not_resolve_to_leaf(tmp_path, monkeypatch):
+    """A wrong/foreign path-qualified name (`foo/page`, no such directory) must NOT
+    silently resolve to a same-leaf module in a different directory
+    (`app/login/page`). It is treated as not-found, not the wrong module."""
+    _make_two_page_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("foo/page", "TypeScriptReact", prompts_dir="prompts")
+    code = Path(paths["code"]).as_posix()
+    prompt = Path(paths["prompt"]).as_posix()
+    # Must not have resolved to the login (or settings) module.
+    assert not code.endswith("src/app/login/page.tsx")
+    assert not code.endswith("src/app/settings/page.tsx")
+    assert "app/login/page_TypeScriptReact.prompt" not in prompt
+    assert "app/settings/page_TypeScriptReact.prompt" not in prompt
+
+
+def test_correct_path_qualified_name_still_resolves(tmp_path, monkeypatch):
+    """The strict directory check must NOT break a correct path-qualified name."""
+    _make_two_page_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("app/settings/page", "TypeScriptReact", prompts_dir="prompts")
+    assert Path(paths["code"]).as_posix().endswith("src/app/settings/page.tsx")
+
+
+def test_wrong_prefix_multipart_qualified_name_does_not_resolve(tmp_path, monkeypatch):
+    """`foo/login/page` (wrong top directory) must NOT resolve to `app/login/page`
+    just because the last two path parts match — the full path-qualified basename must
+    be a suffix of the module filepath."""
+    _make_two_page_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("foo/login/page", "TypeScriptReact", prompts_dir="prompts")
+    assert not Path(paths["code"]).as_posix().endswith("src/app/login/page.tsx")
+
+
+def test_shorter_qualified_form_still_resolves(tmp_path, monkeypatch):
+    """A legitimately shorter qualified form (`login/page`) still resolves to
+    `app/login/page` (it is a true path-suffix of the filepath)."""
+    _make_two_page_project(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("login/page", "TypeScriptReact", prompts_dir="prompts")
+    assert Path(paths["code"]).as_posix().endswith("src/app/login/page.tsx")
+
+
+def test_qualified_name_does_not_borrow_root_module_architecture(tmp_path, monkeypatch):
+    """A wrong qualified name `foo/page` must not borrow a root `page` module's
+    architecture entry (filepath/prompt). It is treated as a new, path-qualified
+    module instead — its prompt is expected under `prompts/foo/`, not the root one.
+
+    (Note: deriving the *code* path for such an unmatched new module still flows
+    through `construct_paths`, which is out of scope here; this test pins the
+    resolver behavior — the existing root module is not adopted.)"""
+    _write_pddrc(tmp_path)
+    (tmp_path / "architecture.json").write_text(json.dumps(
+        [{"filename": "page_TypeScriptReact.prompt", "filepath": "src/page.tsx"}]))
+    pdir = tmp_path / "prompts"
+    pdir.mkdir()
+    (pdir / "page_TypeScriptReact.prompt").write_text("root page")
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("foo/page", "TypeScriptReact", prompts_dir="prompts")
+    # The root module's own prompt file is not adopted for the foreign qualified name.
+    assert Path(paths["prompt"]).as_posix().endswith("prompts/foo/page_TypeScriptReact.prompt")
 
 
 def test_language_variants_not_ambiguous(tmp_path, monkeypatch):

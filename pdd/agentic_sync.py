@@ -2240,7 +2240,18 @@ def run_agentic_sync(
             )
 
     if not modules_to_sync:
-        msg = f"No valid modules to sync (all basenames were invalid: {invalid_basenames})"
+        if ambiguous_basenames:
+            details = "; ".join(
+                f"'{name}' -> {', '.join(choices)}"
+                for name, choices in ambiguous_basenames.items()
+            )
+            msg = (
+                "No unambiguous modules to sync (issue #1677). Ambiguous short module "
+                f"name(s): {details}. Re-run with a path-qualified module name (one of "
+                "the paths listed) so PDD writes to the intended file."
+            )
+        else:
+            msg = f"No valid modules to sync (all basenames were invalid: {invalid_basenames})"
         if use_github_state:
             _post_error_comment(owner, repo, issue_number, msg)
         return False, msg, llm_cost, provider

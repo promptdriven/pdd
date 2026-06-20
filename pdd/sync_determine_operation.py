@@ -305,7 +305,15 @@ def _module_filepath_matches_basename(
     basename: str,
     context_name: Optional[str] = None,
 ) -> bool:
-    """Return True when a flat architecture filename still clearly maps to a nested basename."""
+    """Return True when a flat architecture filename still clearly maps to a nested basename.
+
+    A path-qualified basename must be a path-SUFFIX of the module filepath. This
+    accepts an exact match and legitimately shorter qualified forms
+    (``login/page`` -> ``src/app/login/page.tsx``) while rejecting a wrong directory
+    (issue #1677: ``foo/login/page`` or ``foo/page`` must NOT map to
+    ``src/app/login/page.tsx``, and ``foo/page`` must NOT map to a root ``page.tsx``).
+    A single-component (flat) basename keeps leaf matching.
+    """
     if not module_filepath:
         return False
 
@@ -315,10 +323,14 @@ def _module_filepath_matches_basename(
     if not basename_parts or not filepath_parts:
         return False
 
-    if len(basename_parts) >= 2 and len(filepath_parts) >= 2:
-        return tuple(filepath_parts[-2:]) == tuple(basename_parts[-2:])
+    # Flat basename: match by leaf only.
+    if len(basename_parts) == 1:
+        return filepath_parts[-1] == basename_parts[-1]
 
-    return filepath_parts[-1] == basename_parts[-1]
+    # Path-qualified basename: require it to be a full path-suffix of the filepath.
+    if len(basename_parts) > len(filepath_parts):
+        return False
+    return tuple(filepath_parts[-len(basename_parts):]) == tuple(basename_parts)
 
 
 def _overlay_configured_output_paths(
@@ -455,7 +467,6 @@ def _find_prompt_file(
     # case-sensitive on Linux, so we can't rely on the glob pattern for
     # basenames like "dashboard" vs on-disk "Dashboard".
     lang_lower = language.lower()
-    dir_hint = basename.rsplit('/', 1)[0] if '/' in basename else None
     matches = []
     for candidate in prompts_root.rglob("*.prompt"):
         if not candidate.is_file():
@@ -467,17 +478,37 @@ def _find_prompt_file(
                 matches.append(candidate)
                 break
     if matches:
-        if len(matches) > 1:
+        if len(matches) > 1 and context_prefix:
             # Prefer match within context prefix (e.g., backend/utils)
-            if context_prefix:
-                ctx_filtered = [m for m in matches if context_prefix in str(m.relative_to(prompts_root))]
-                if ctx_filtered:
-                    matches = ctx_filtered
-            # Then prefer match matching directory hint from basename
-            if dir_hint and len(matches) > 1:
-                hint_matches = [m for m in matches if dir_hint in str(m)]
-                if hint_matches:
-                    matches = hint_matches
+            ctx_filtered = [m for m in matches if context_prefix in str(m.relative_to(prompts_root))]
+            if ctx_filtered:
+                matches = ctx_filtered
+        # Issue #1677: a path-qualified basename (e.g. `app/login/page`) must resolve
+        # to a prompt WITHIN its own directory. Do not fall back to a same-leaf prompt
+        # in a different directory — that silently syncs the wrong module for a
+        # mistyped/foreign path like `foo/page`. The basename must be a path-SUFFIX of
+        # the match's module path (its absolute directory plus the module leaf). Using
+        # the absolute path means a deep prompts_dir or a context whose directories are
+        # already part of prompts_root still matches, while an unrelated directory does
+        # not (and `foo` inside an absolute prefix like /home/foo cannot false-match,
+        # since only the suffix is compared).
+        if "/" in basename:
+            basename_variants = {Path(basename).parts}
+            relative_basename = _relative_basename_for_context(basename, context_name)
+            if relative_basename != basename:
+                basename_variants.add(Path(relative_basename).parts)
+            aligned = []
+            for m in matches:
+                module_leaf = extract_module_from_include(m.name) or m.stem
+                module_parts = m.parent.parts + (module_leaf,)
+                if any(
+                    len(bp) <= len(module_parts) and tuple(module_parts[-len(bp):]) == bp
+                    for bp in basename_variants
+                ):
+                    aligned.append(m)
+            if not aligned:
+                return None
+            matches = aligned
         matches.sort(key=lambda p: (len(p.parts), str(p)))
         return matches[0]
 
@@ -519,11 +550,25 @@ def _get_filepath_from_architecture(
 
         context_name = _resolve_context_name_for_basename(basename) if basename else None
 
+        # Issue #1677: a path-qualified basename (e.g. `foo/page`) must only match a
+        # module whose filepath aligns with its directory. Otherwise an exact match on
+        # a bare leaf filename (`page_*.prompt`) silently resolves a mistyped/foreign
+        # path to an unrelated same-leaf module. Flat basenames are unaffected (their
+        # ambiguity is already handled upstream).
+        path_qualified = bool(basename) and "/" in basename
+
+        def _aligns(module: Dict[str, Any]) -> bool:
+            if not path_qualified:
+                return True
+            return _module_filepath_matches_basename(
+                module.get("filepath"), basename, context_name=context_name
+            )
+
         # Try exact filename match first
         for module in modules:
             if not isinstance(module, dict):
                 continue
-            if module.get("filename") == prompt_filename:
+            if module.get("filename") == prompt_filename and _aligns(module):
                 return module.get("filepath"), module.get("filename")
 
         # Try case-insensitive filename match
@@ -531,7 +576,7 @@ def _get_filepath_from_architecture(
         for module in modules:
             if not isinstance(module, dict):
                 continue
-            if module.get("filename", "").lower() == prompt_filename_lower:
+            if module.get("filename", "").lower() == prompt_filename_lower and _aligns(module):
                 return module.get("filepath"), module.get("filename")
 
         # Try basename + language match if provided
@@ -1050,9 +1095,28 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # Respect .pddrc context's prompts_dir prefix so new modules land in the
             # correct subdirectory (e.g., prompts/backend/utils/ not prompts/).
             prompt_filename = f"{name}_{language}.prompt"
-            prompt_path = str(prompts_root / prompt_filename)
+            # Issue #1677: a path-qualified basename keeps its directory so a new
+            # module lands at prompts/<dir>/<leaf> — never collapsing to the bare leaf,
+            # which would otherwise re-resolve to an unrelated same-leaf module
+            # elsewhere (e.g. `foo/page` picking up a root `page` prompt). Any leading
+            # directory segments already present at the tail of prompts_root (a deep
+            # prompts_dir passed by sync_main, or a context prefix) are stripped so they
+            # are not duplicated.
+            relative_basename = _relative_basename_for_context(basename, resolved_context_name)
+            rel_dir_parts = Path(relative_basename).parts[:-1]
+            root_parts = prompts_root.parts
+            overlap = 0
+            for k in range(min(len(root_parts), len(rel_dir_parts)), 0, -1):
+                if root_parts[-k:] == rel_dir_parts[:k]:
+                    overlap = k
+                    break
+            effective_dir_parts = rel_dir_parts[overlap:]
+            if effective_dir_parts:
+                prompt_path = str(prompts_root.joinpath(*effective_dir_parts, prompt_filename))
+            else:
+                prompt_path = str(prompts_root / prompt_filename)
             pddrc_path = _find_pddrc_file(prompts_root_anchor)
-            if pddrc_path:
+            if pddrc_path and not effective_dir_parts:
                 try:
                     config = _load_pddrc_config(pddrc_path)
                     context_name = (
@@ -1138,14 +1202,24 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 else:
                     logger.debug(f"Path source: generate={code_path} (from architecture.json)")
 
-                example_path = project_root / f"{example_dir}{code_stem}_example{_dot(extension)}"
-                test_path = project_root / f"{test_dir}test_{code_stem}{_dot(extension)}"
+                # Issue #1677: when the leaf basename is ambiguous (several architecture
+                # modules share it, e.g. Next.js `page`), two path-qualified modules
+                # (`app/login/page`, `app/settings/page`) would otherwise both write to
+                # `examples/page_example.tsx` and `tests/test_page.tsx`. Derive the
+                # example/test stem from the canonical code path so the artifacts are
+                # distinct per module. Unique leaves keep the flat stem (backward compat).
+                example_stem = code_stem
+                if arch_path and len(_architecture_module_choices(arch_path, name, language)) > 1:
+                    example_stem = _safe_basename(Path(arch_filepath).with_suffix("").as_posix())
+
+                example_path = project_root / f"{example_dir}{example_stem}_example{_dot(extension)}"
+                test_path = project_root / f"{test_dir}test_{example_stem}{_dot(extension)}"
 
                 # If the flattened prompt basename already has corresponding example/test
                 # artifacts, prefer those over the architecture filepath stem. This keeps
                 # command summaries and sync behavior aligned with repos that intentionally
                 # namespace files such as lib_sse_example.ts or test_api_route.ts.
-                if name != code_stem:
+                if name != code_stem and example_stem == code_stem:
                     basename_example_path = project_root / f"{example_dir}{name}_example{_dot(extension)}"
                     basename_test_path = project_root / f"{test_dir}test_{name}{_dot(extension)}"
                     preferred_example = False
