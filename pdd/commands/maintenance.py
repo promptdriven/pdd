@@ -13,6 +13,7 @@ from ..agentic_sync import _is_github_issue_url, run_agentic_sync, run_global_sy
 from ..construct_paths import _find_pddrc_file, _load_pddrc_config
 from ..track_cost import track_cost
 from ..core.errors import handle_error
+from ..sync_determine_operation import AmbiguousModuleError
 from ..core.utils import _run_setup_utility, echo_model_line
 from ..evidence_manifest import (
     collect_sync_evidence_paths,
@@ -494,6 +495,12 @@ def sync(
         return str(result), total_cost, model_name
     except click.Abort:
         raise
+    except AmbiguousModuleError as exc:
+        # Issue #1677: an ambiguous module name is a hard, actionable error. Always
+        # print the choices (even under --quiet) and exit non-zero, so CI/automation,
+        # quiet runs and the agentic child runners never read it as success.
+        handle_error(exc, "sync", quiet=False)
+        raise click.exceptions.Exit(1)
     except Exception as exception:
         if evidence and basename and not _is_github_issue_url(basename):
             _write_sync_evidence_manifest(
@@ -578,6 +585,12 @@ def _run_agentic_sync_dispatch(
 
     except (click.Abort, click.exceptions.Exit):
         raise
+    except AmbiguousModuleError as exc:
+        # Issue #1677: fail hard on an ambiguous module name (see the single-module
+        # sync handler) — always print and exit non-zero so automation never treats it
+        # as success.
+        handle_error(exc, "sync", quiet=False)
+        raise click.exceptions.Exit(1)
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
         return None
@@ -639,6 +652,12 @@ def _run_global_sync_dispatch(
 
     except (click.Abort, click.exceptions.Exit):
         raise
+    except AmbiguousModuleError as exc:
+        # Issue #1677: fail hard on an ambiguous module name (see the single-module
+        # sync handler) — always print and exit non-zero so automation never treats it
+        # as success.
+        handle_error(exc, "sync", quiet=False)
+        raise click.exceptions.Exit(1)
     except Exception as exception:
         handle_error(exception, "sync", ctx.obj.get("quiet", False))
         return None

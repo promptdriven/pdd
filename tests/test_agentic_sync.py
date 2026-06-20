@@ -21,23 +21,16 @@ from pdd.agentic_sync import (
     _architecture_module_basenames,
     _architecture_sync_modules,
     _augment_architecture_from_pr_branch,
-    _build_identify_issue_content,
     _build_scoped_global_dep_graph,
     _branch_diff_is_runtime_llm_only,
-    _compact_architecture_for_identification,
     _detect_modules_from_branch_diff,
     _filter_already_synced,
-    _filter_low_signal_comments,
     _find_project_root,
-    _is_low_signal_comment,
-    _truncate_head_tail,
-    _IDENTIFY_MODULES_MAX_CHARS,
     _is_catchall_match,
     _is_github_issue_url,
     _is_runtime_llm_template,
     _llm_fix_dry_run_failure,
     _load_architecture_json,
-    _normalize_modules_for_sync,
     _parse_llm_response,
     _print_global_sync_plan,
     _resolve_module_cwd,
@@ -47,6 +40,13 @@ from pdd.agentic_sync import (
     GlobalSyncModule,
     run_agentic_sync,
     run_global_sync,
+    _IDENTIFY_MODULES_MAX_CHARS,
+    _build_identify_issue_content,
+    _compact_architecture_for_identification,
+    _filter_low_signal_comments,
+    _is_low_signal_comment,
+    _normalize_modules_for_sync,
+    _truncate_head_tail,
 )
 from pdd.agentic_common import build_agentic_task_instruction
 from pdd.agentic_sync_runner import (
@@ -1665,7 +1665,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         # Runner now includes initial_cost (0.05) + per-module (0.10) = 0.15
@@ -1722,7 +1722,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         success, msg, cost, model = run_agentic_sync(
             "https://github.com/owner/repo/issues/1",
@@ -1785,7 +1785,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         success, msg, cost, model = run_agentic_sync(
             "https://github.com/owner/repo/issues/1",
@@ -1839,7 +1839,7 @@ class TestRunAgenticSync:
         mock_build_graph.return_value = DepGraphFromArchitectureResult(
             {"crm_models": ["api_orders"], "api_orders": []}, []
         )
-        mock_dry_run.return_value = (True, {"crm_models": Path("/tmp"), "api_orders": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"crm_models": Path("/tmp"), "api_orders": Path("/tmp")}, {"crm_models": "crm_models", "api_orders": "api_orders"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 2 modules synced successfully", 0.20)
@@ -1895,7 +1895,7 @@ class TestRunAgenticSync:
             0.07,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
@@ -1947,7 +1947,7 @@ class TestRunAgenticSync:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, {"foo": "foo"}, [], 0.0)
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "durable done", 0.15)
         mock_durable_runner_cls.return_value = mock_runner
@@ -2354,7 +2354,7 @@ class TestRunDryRunValidation:
         mock_resolve.return_value = project_root
         mock_dry_run.return_value = (True, "")
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["mod_a", "mod_b"], project_root, quiet=True
         )
         assert all_valid is True
@@ -2373,7 +2373,7 @@ class TestRunDryRunValidation:
         mock_dry_run.return_value = (False, "prompt not found")
         mock_llm.return_value = (True, llm_cwd, 0.02, "")
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["mod_x"], project_root, quiet=True
         )
         assert all_valid is True
@@ -2391,7 +2391,7 @@ class TestRunDryRunValidation:
         mock_dry_run.return_value = (False, "prompt not found")
         mock_llm.return_value = (False, None, 0.01, "LLM could not resolve")
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["mod_y"], project_root, quiet=True
         )
         assert all_valid is False
@@ -2445,11 +2445,11 @@ class TestRunDryRunValidation:
 
         mock_dry_run = MagicMock(return_value=(True, ""))
         mock_llm = MagicMock(return_value=(True, tmp_path, 0.02, ""))
-        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_: tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_, **__: tmp_path)
         monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", mock_dry_run)
         monkeypatch.setattr("pdd.agentic_sync._llm_fix_dry_run_failure", mock_llm)
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["bad"], tmp_path, quiet=True
         )
 
@@ -2497,10 +2497,10 @@ class TestRunDryRunValidation:
             encoding="utf-8",
         )
 
-        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_: tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_, **__: tmp_path)
         monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", lambda *a, **k: (True, ""))
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["legacy"], tmp_path, quiet=True
         )
 
@@ -2544,14 +2544,14 @@ class TestRunDryRunValidation:
             encoding="utf-8",
         )
 
-        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_: tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._resolve_module_cwd", lambda *_, **__: tmp_path)
         monkeypatch.setattr("pdd.agentic_sync._run_single_dry_run", lambda *a, **k: (True, ""))
         monkeypatch.setattr(
             "pdd.agentic_sync._prompt_contract_strict_self_context_required",
             lambda *a, **k: True,
         )
 
-        all_valid, cwds, errors, cost = _run_dry_run_validation(
+        all_valid, cwds, _targets, errors, cost = _run_dry_run_validation(
             ["changed"], tmp_path, quiet=True
         )
 
@@ -2932,35 +2932,6 @@ class TestPostStrippingDedup:
         assert result == ["recruiting_chat", "recruiting_config"]
 
 
-class TestNormalizeModulesForSync:
-    """Tests for module basename normalization before validation."""
-
-    def test_preserves_exact_architecture_basename_that_ends_with_language_word(self, monkeypatch):
-        """`operation_log` must not become `operation` when Log is in language_format.csv."""
-        monkeypatch.setenv("PDD_PATH", str(Path(__file__).resolve().parents[1]))
-        architecture = [{"filename": "operation_log_python.prompt", "dependencies": []}]
-
-        result = _normalize_modules_for_sync(["operation_log"], architecture)
-
-        assert result == ["operation_log"]
-
-    def test_strips_llm_language_suffix_when_needed(self):
-        """Architecture-style LLM names still normalize to sync basenames."""
-        architecture = [{"filename": "crm_models_Python.prompt", "dependencies": []}]
-
-        result = _normalize_modules_for_sync(["crm_models_Python"], architecture)
-
-        assert result == ["crm_models"]
-
-    def test_strips_final_component_suffix_without_losing_path(self):
-        """Path-qualified names keep their directory prefix after stripping."""
-        architecture = [{"filename": "commands/contracts_python.prompt", "dependencies": []}]
-
-        result = _normalize_modules_for_sync(["commands/contracts_python"], architecture)
-
-        assert result == ["commands/contracts"]
-
-
 # ---------------------------------------------------------------------------
 # _detect_modules_from_branch_diff
 # ---------------------------------------------------------------------------
@@ -3103,15 +3074,17 @@ class TestDetectModulesFromBranchDiff:
         ]
 
     def test_handles_extension_prompts_with_nested_prompts_dir(self):
-        """Prompts under extension dirs like extensions/github_pdd_app/prompts/ are handled.
+        """Prompts under a nested project's prompts/ keep the owning-project prefix.
 
-        Extension prompts have a different structure: the 'prompts/' directory is nested
-        inside the extension, not at the repo root. The function should still extract
-        correct basenames relative to the prompts/ directory.
+        Extension prompts live at ``<project>/prompts/...`` rather than the repo
+        root. The module key MUST be the full repo-root-relative path
+        (``extensions/github_pdd_app/pdd_executor``), keeping the owning-project
+        prefix — not the short ``pdd_executor`` that loses the project and makes
+        the resolver run from the repo root with the wrong context (#1675).
         """
         diff_output = (
             "extensions/github_pdd_app/prompts/pdd_executor_Python.prompt\n"
-            "extensions/github_pdd_app/prompts/solving_orchestrator_Python.prompt\n"
+            "extensions/github_pdd_app/prompts/src/worker_app_Python.prompt\n"
         )
         with patch("pdd.agentic_sync.subprocess.run") as mock_run:
             mock_run.side_effect = [
@@ -3119,7 +3092,10 @@ class TestDetectModulesFromBranchDiff:
                 MagicMock(returncode=0, stdout=diff_output, stderr=""),
             ]
             result = _detect_modules_from_branch_diff(Path("/fake/project"))
-        assert result == ["pdd_executor", "solving_orchestrator"]
+        assert result == [
+            "extensions/github_pdd_app/pdd_executor",
+            "extensions/github_pdd_app/src/worker_app",
+        ]
 
 
 class TestBranchDiffIsRuntimeLlmOnly:
@@ -3305,7 +3281,7 @@ class TestBranchDiffSkipsLlm:
         mock_gh.return_value = (True, json.dumps({
             "title": "test", "body": "test body", "comments_url": ""
         }))
-        mock_dry_run.return_value = (True, {}, [], 0.0)
+        mock_dry_run.return_value = (True, {}, {}, [], 0.0)
 
         with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
              patch("pdd.agentic_sync._load_architecture_json", return_value=([], Path("/fake/architecture.json"))), \
@@ -3320,107 +3296,6 @@ class TestBranchDiffSkipsLlm:
             )
 
         mock_llm.assert_not_called()
-
-    @patch("pdd.agentic_sync.AsyncSyncRunner")
-    @patch("pdd.agentic_sync._run_dry_run_validation")
-    @patch(
-        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
-        return_value=DepGraphFromArchitectureResult({"operation_log": []}, []),
-    )
-    @patch("pdd.agentic_sync._detect_modules_from_branch_diff")
-    @patch("pdd.agentic_sync.run_agentic_task")
-    @patch("pdd.agentic_sync._run_gh_command")
-    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
-    def test_branch_diff_preserves_underscored_module_when_suffix_is_known_language(
-        self,
-        mock_cli,
-        mock_gh,
-        mock_llm,
-        mock_diff,
-        mock_build_graph,
-        mock_dry_run,
-        mock_runner_cls,
-        monkeypatch,
-    ):
-        """Staging regression: operation_log must not normalize to operation."""
-        monkeypatch.setenv("PDD_PATH", str(Path(__file__).resolve().parents[1]))
-        mock_diff.return_value = ["operation_log"]
-        mock_gh.return_value = (True, json.dumps({
-            "title": "test", "body": "test body", "comments_url": ""
-        }))
-        mock_dry_run.return_value = (True, {"operation_log": Path("/tmp")}, [], 0.0)
-
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = (True, "ok", 0.5)
-        mock_runner_cls.return_value = mock_runner
-
-        with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
-             patch("pdd.agentic_sync._load_architecture_json", return_value=(
-                 [{"filename": "operation_log_python.prompt", "dependencies": []}],
-                 Path("/fake/architecture.json"),
-             )):
-            success, msg, cost, model = run_agentic_sync(
-                "https://github.com/owner/repo/issues/822",
-                quiet=True,
-            )
-
-        assert success
-        mock_llm.assert_not_called()
-        assert mock_build_graph.call_args[0][1] == ["operation_log"]
-        assert mock_runner_cls.call_args[1]["basenames"] == ["operation_log"]
-
-    @patch("pdd.agentic_sync.AsyncSyncRunner")
-    @patch("pdd.agentic_sync._run_dry_run_validation")
-    @patch(
-        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
-        return_value=DepGraphFromArchitectureResult({"operation_log": []}, []),
-    )
-    @patch("pdd.agentic_sync._augment_architecture_from_pr_branch")
-    @patch("pdd.agentic_sync._detect_modules_from_branch_diff")
-    @patch("pdd.agentic_sync.run_agentic_task")
-    @patch("pdd.agentic_sync._run_gh_command")
-    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
-    def test_pr_branch_only_underscored_module_is_preserved_after_augmentation(
-        self,
-        mock_cli,
-        mock_gh,
-        mock_llm,
-        mock_diff,
-        mock_augment,
-        mock_build_graph,
-        mock_dry_run,
-        mock_runner_cls,
-        monkeypatch,
-    ):
-        """New PR-only modules must be normalized against augmented architecture."""
-        monkeypatch.setenv("PDD_PATH", str(Path(__file__).resolve().parents[1]))
-        mock_diff.return_value = ["operation_log"]
-        mock_gh.return_value = (True, json.dumps({
-            "title": "test", "body": "test body", "comments_url": ""
-        }))
-        mock_augment.return_value = [
-            {"filename": "operation_log_python.prompt", "dependencies": []}
-        ]
-        mock_dry_run.return_value = (True, {"operation_log": Path("/tmp")}, [], 0.0)
-
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = (True, "ok", 0.5)
-        mock_runner_cls.return_value = mock_runner
-
-        with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
-             patch("pdd.agentic_sync._load_architecture_json", return_value=(
-                 [],
-                 Path("/fake/architecture.json"),
-             )):
-            success, msg, cost, model = run_agentic_sync(
-                "https://github.com/owner/repo/issues/822",
-                quiet=True,
-            )
-
-        assert success
-        mock_llm.assert_not_called()
-        assert mock_build_graph.call_args[0][1] == ["operation_log"]
-        assert mock_runner_cls.call_args[1]["basenames"] == ["operation_log"]
 
     @patch("pdd.agentic_sync._run_dry_run_validation")
     @patch("pdd.agentic_sync._detect_modules_from_branch_diff")
@@ -3441,7 +3316,7 @@ class TestBranchDiffSkipsLlm:
             0.50,
             "gpt-4",
         )
-        mock_dry_run.return_value = (True, {}, [], 0.0)
+        mock_dry_run.return_value = (True, {}, {}, [], 0.0)
 
         with patch("pdd.agentic_sync._find_project_root", return_value=Path("/fake")), \
              patch("pdd.agentic_sync._load_architecture_json", return_value=([], Path("/fake/architecture.json"))), \
@@ -3569,7 +3444,7 @@ class TestRuntimeLlmTemplateNoop:
             0.06,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
@@ -3936,7 +3811,7 @@ class TestIdentifyModulesPromptReceivesIssueNumber:
             0.05,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
 
         mock_runner = MagicMock()
         mock_runner.run.return_value = (True, "All 1 modules synced", 0.10)
@@ -4539,9 +4414,501 @@ def test_augment_architecture_from_pr_branch_dict_format_merges_modules(tmp_path
 
 
 # ---------------------------------------------------------------------------
-# Issue #1664: keep the identify-modules LLM prompt under the provider input
-# limit (compact architecture + filter machine-noise comments + size guard).
+# Per-module context resolution plumbing (issue #1675)
 # ---------------------------------------------------------------------------
+
+
+def test_resolve_sync_units_map_each_module_to_its_cwd_context(tmp_path):
+    """Each targeted module resolves a unit with the context its cwd .pddrc assigns."""
+    from pdd.resolved_sync_unit import resolve_sync_unit
+
+    cwd_a = tmp_path / "a"
+    cwd_b = tmp_path / "b"
+    cwd_a.mkdir()
+    cwd_b.mkdir()
+    (cwd_a / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  ctx_a:\n    paths: ["alpha*"]\n'
+        '    defaults:\n      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+    (cwd_b / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  ctx_b:\n    paths: ["beta*"]\n'
+        '    defaults:\n      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+
+    units = {
+        bn: resolve_sync_unit(bn, bn, cwd)
+        for bn, cwd in {"alpha": cwd_a, "beta": cwd_b}.items()
+    }
+    assert {bn: u.context for bn, u in units.items()} == {
+        "alpha": "ctx_a",
+        "beta": "ctx_b",
+    }
+
+
+def test_resolve_module_sync_context_passes_pddrc_path(tmp_path, monkeypatch):
+    """Context detection must use the found .pddrc, not one from the process cwd.
+
+    Regression guard for the #1675 fix: the filesystem fallback in
+    _detect_context_from_basename resolves nested prompts_dir contexts relative
+    to the supplied pddrc_path.
+    """
+    import pdd.agentic_sync as asm
+
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\ncontexts:\n  default:\n    paths: ["**"]\n',
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def _fake_detect(basename, config, pddrc_path=None):
+        captured["pddrc_path"] = pddrc_path
+        return None
+
+    monkeypatch.setattr(asm, "_detect_context_from_basename", _fake_detect)
+    asm._resolve_module_sync_context("foo", tmp_path)
+    assert captured["pddrc_path"] == tmp_path / ".pddrc"
+
+
+# ---------------------------------------------------------------------------
+# Full ResolvedSyncUnit: deep discovery, ambiguity, global units (#1675)
+# ---------------------------------------------------------------------------
+
+def _pddrc_with_context(name, pattern):
+    return (
+        'version: "1.0"\n'
+        "contexts:\n"
+        f"  {name}:\n"
+        f'    paths: ["{pattern}"]\n'
+        "    defaults:\n"
+        '      prompts_dir: "prompts"\n'
+    )
+
+
+def test_resolve_module_cwd_discovers_depth_three(tmp_path):
+    # Req 1: a nested .pddrc deeper than depth 2 (apps/foo/service) is found.
+    from pdd.agentic_sync import _resolve_module_cwd
+
+    deep = tmp_path / "apps" / "foo" / "service"
+    deep.mkdir(parents=True)
+    (deep / ".pddrc").write_text(_pddrc_with_context("svc", "widget"), encoding="utf-8")
+    assert _resolve_module_cwd("widget", tmp_path) == deep
+
+
+def test_resolve_module_cwd_ambiguous_bare_basename_raises(tmp_path):
+    # Req 2: a bare basename claimed by two distinct projects cannot be owned by
+    # basename alone -> raise under strict ownership rather than silently picking.
+    from pdd.agentic_sync import _resolve_module_cwd, AmbiguousModuleOwnerError
+
+    for proj in ("a", "b"):
+        d = tmp_path / proj
+        d.mkdir()
+        (d / ".pddrc").write_text(_pddrc_with_context("ctx", "widget"), encoding="utf-8")
+
+    with pytest.raises(AmbiguousModuleOwnerError):
+        _resolve_module_cwd("widget", tmp_path, strict_ownership=True)
+
+    # Non-strict callers keep legacy first-match behavior (one of the owners).
+    assert _resolve_module_cwd("widget", tmp_path) in (tmp_path / "a", tmp_path / "b")
+
+    # A path-qualified basename is unambiguous by construction (the path names
+    # the project); it never trips the ambiguity guard. Its execution cwd is
+    # validated by dry-run, so resolution falls back to project_root and the
+    # child runs the full path from there.
+    assert (
+        _resolve_module_cwd("a/widget", tmp_path, strict_ownership=True) == tmp_path
+    )
+
+
+def test_resolve_module_cwd_single_owner_resolves(tmp_path):
+    # Req 2: with exactly one owning project, a bare basename resolves to it
+    # (no ambiguity), proving ownership is by project, not by enumeration order.
+    from pdd.agentic_sync import _resolve_module_cwd
+
+    owner = tmp_path / "only"
+    owner.mkdir()
+    (owner / ".pddrc").write_text(_pddrc_with_context("ctx", "widget"), encoding="utf-8")
+    assert _resolve_module_cwd("widget", tmp_path, strict_ownership=True) == owner
+
+
+_DEFAULT_ONLY_PDDRC = (
+    'version: "1.0"\n'
+    "contexts:\n"
+    "  default:\n"
+    '    paths: ["**"]\n'
+    "    defaults:\n"
+    '      prompts_dir: "prompts"\n'
+)
+
+
+def test_resolve_module_cwd_strict_resolves_nested_only_prompt_owner(tmp_path):
+    # Req 1: a bare basename whose prompt lives only in a nested project (under
+    # its default context, with no specific pattern) resolves to that nested
+    # project under strict ownership — not root with the parent context.
+    from pdd.agentic_sync import _resolve_module_cwd
+
+    svc = tmp_path / "svc"
+    (svc / "prompts").mkdir(parents=True)
+    (svc / ".pddrc").write_text(_DEFAULT_ONLY_PDDRC, encoding="utf-8")
+    (svc / "prompts" / "widget_python.prompt").write_text("x", encoding="utf-8")
+    assert _resolve_module_cwd("widget", tmp_path, strict_ownership=True) == svc
+
+
+def test_resolve_module_cwd_strict_root_plus_nested_is_ambiguous(tmp_path):
+    # Req 1/2: a bare basename owned by BOTH the repo root and a nested project
+    # is ambiguous (the old "run from root, reuse parent context" class of bug).
+    from pdd.agentic_sync import _resolve_module_cwd, AmbiguousModuleOwnerError
+
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "widget_python.prompt").write_text("x", encoding="utf-8")
+    svc = tmp_path / "svc"
+    svc.mkdir()
+    (svc / ".pddrc").write_text(_pddrc_with_context("ctx", "widget"), encoding="utf-8")
+    with pytest.raises(AmbiguousModuleOwnerError):
+        _resolve_module_cwd("widget", tmp_path, strict_ownership=True)
+
+
+def test_resolve_module_cwd_strict_different_depth_is_ambiguous(tmp_path):
+    # Req 2: two projects at different nesting depths both claiming a bare
+    # basename are ambiguous — the deeper one must not silently win.
+    from pdd.agentic_sync import _resolve_module_cwd, AmbiguousModuleOwnerError
+
+    foo = tmp_path / "apps" / "foo"
+    svc = foo / "service"
+    svc.mkdir(parents=True)
+    (foo / ".pddrc").write_text(_pddrc_with_context("ctx_foo", "widget"), encoding="utf-8")
+    (svc / ".pddrc").write_text(_pddrc_with_context("ctx_svc", "widget"), encoding="utf-8")
+    with pytest.raises(AmbiguousModuleOwnerError):
+        _resolve_module_cwd("widget", tmp_path, strict_ownership=True)
+
+
+@patch("pdd.agentic_sync.sync_determine_operation")
+@patch("pdd.agentic_sync._detect_languages_with_context")
+def test_analyze_global_sync_builds_units_with_resolved_context(
+    mock_lang, mock_determine, tmp_path
+):
+    # Req 4: global analysis produces a ResolvedSyncUnit per chosen module with
+    # the context resolved against that module's own nested cwd .pddrc.
+    nested = tmp_path / "extensions" / "app"
+    nested.mkdir(parents=True)
+    (nested / ".pddrc").write_text(
+        _pddrc_with_context("app_ctx", "pdd_codex"), encoding="utf-8"
+    )
+    mock_lang.return_value = {"python": nested / "prompts/pdd_codex_python.prompt"}
+    decision = MagicMock()
+    decision.operation = "generate"
+    decision.reason = "prompt changed"
+    decision.estimated_cost = 1.0
+    mock_determine.return_value = decision
+
+    module = GlobalSyncModule(
+        key="pdd_codex",
+        basename="pdd_codex",
+        cwd=nested,
+        architecture_path=nested / "architecture.json",
+        entry={"filename": "pdd_codex_python.prompt", "dependencies": []},
+    )
+    analysis = _analyze_global_sync_modules(
+        [module], tmp_path, quiet=True, context_override="root_ctx"
+    )
+    units = analysis.module_units or {}
+    assert "pdd_codex" in units
+    # root_ctx is invalid in the nested cwd -> substitute the nested context.
+    assert units["pdd_codex"].context == "app_ctx"
+    assert units["pdd_codex"].cwd == nested
+    assert units["pdd_codex"].architecture_path == nested / "architecture.json"
+
+
+# ---------------------------------------------------------------------------
+# Path-qualified targeted modules -> one resolved unit (issue #1675 final)
+# ---------------------------------------------------------------------------
+
+def test_relativize_target_strips_cwd_prefix(tmp_path):
+    from pdd.agentic_sync import _relativize_target
+
+    assert _relativize_target("a/b/c", tmp_path / "a", tmp_path) == "b/c"
+    assert _relativize_target("a/b/c", tmp_path, tmp_path) == "a/b/c"
+    assert _relativize_target("bare", tmp_path / "a", tmp_path) == "bare"
+
+
+def test_resolve_module_cwd_and_target_path_qualified_nested(tmp_path, monkeypatch):
+    # Trigger from the maintainer's report: issue-sync emits
+    # extensions/github_pdd_app/src/worker_app -> cwd=extensions/github_pdd_app,
+    # target=src/worker_app (so dry-run can find the prompt).
+    import pdd.agentic_sync as asm
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    nested.mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+
+    def fake_ctx(basename, cwd):
+        if Path(cwd) == nested and basename == "src/worker_app":
+            return ("src", nested / "prompts", {"python": nested / "prompts/src/worker_app_python.prompt"})
+        return (None, Path(cwd) / "prompts", {})
+
+    monkeypatch.setattr(asm, "_resolve_module_sync_context", fake_ctx)
+    cwd, target = asm._resolve_module_cwd_and_target(
+        "extensions/github_pdd_app/src/worker_app", tmp_path
+    )
+    assert cwd == nested
+    assert target == "src/worker_app"
+
+
+def test_resolve_module_cwd_and_target_root_layout_falls_back(tmp_path):
+    # A path-qualified module no nested project owns runs the full path from root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+
+    (tmp_path / "src").mkdir()
+    cwd, target = _resolve_module_cwd_and_target("src/config", tmp_path)
+    assert cwd == tmp_path
+    assert target == "src/config"
+
+
+def test_branch_diff_to_resolver_chain_for_nested_module(tmp_path):
+    # End-to-end regression for the maintainer's trigger (#1675): a branch diff
+    # touching extensions/github_pdd_app/prompts/src/worker_app_Python.prompt
+    # must yield the FULL key, which the resolver maps to the owning project +
+    # relative target — not the short key that loses the project prefix.
+    from pdd.agentic_sync import (
+        _detect_modules_from_branch_diff,
+        _resolve_module_cwd_and_target,
+    )
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+
+    diff = "extensions/github_pdd_app/prompts/src/worker_app_Python.prompt\n"
+    with patch("pdd.agentic_sync.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            MagicMock(returncode=0, stdout="feature\n", stderr=""),
+            MagicMock(returncode=0, stdout=diff, stderr=""),
+        ]
+        keys = _detect_modules_from_branch_diff(tmp_path)
+
+    assert keys == ["extensions/github_pdd_app/src/worker_app"]
+    cwd, target = _resolve_module_cwd_and_target(keys[0], tmp_path)
+    assert cwd == nested
+    assert target == "src/worker_app"
+
+
+def test_build_targeted_dep_graph_preserves_nested_edges(tmp_path):
+    # #1675: full keys don't match nested arch entries directly (edges dropped);
+    # _build_targeted_dep_graph matches via the relative target and remaps edges
+    # back to full keys so nested dependency ordering is preserved.
+    from pdd.agentic_sync import _build_targeted_dep_graph
+    from pdd.agentic_sync_runner import build_dep_graph_from_architecture_data
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+    (nested / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+
+    architecture = [
+        {
+            "filename": "src/worker_app_python.prompt",
+            "filepath": "src/worker_app.py",
+            "dependencies": ["src/config_python.prompt"],
+        },
+        {"filename": "src/config_python.prompt", "filepath": "src/config.py", "dependencies": []},
+    ]
+    modules = [
+        "extensions/github_pdd_app/src/worker_app",
+        "extensions/github_pdd_app/src/config",
+    ]
+
+    # Without remapping, full keys do not match the nested entries -> no edges.
+    naive = build_dep_graph_from_architecture_data(architecture, modules)
+    assert naive.graph["extensions/github_pdd_app/src/worker_app"] == []
+
+    # With the targeted builder, the edge is preserved and remapped to full keys.
+    graph, _warnings = _build_targeted_dep_graph(
+        architecture, modules, tmp_path, "architecture.json"
+    )
+    assert graph["extensions/github_pdd_app/src/worker_app"] == [
+        "extensions/github_pdd_app/src/config"
+    ]
+    assert graph["extensions/github_pdd_app/src/config"] == []
+
+
+def test_build_targeted_dep_graph_distinct_projects_same_target(tmp_path):
+    # #1675: two distinct projects each own `src/worker_app` -> `src/config`.
+    # The dep graph must wire each worker_app to ITS OWN config, not collapse
+    # them onto a shared relative-target node.
+    import json
+    from pdd.agentic_sync import _build_targeted_dep_graph
+
+    arch_entries = [
+        {
+            "filename": "src/worker_app_python.prompt",
+            "filepath": "src/worker_app.py",
+            "dependencies": ["src/config_python.prompt"],
+        },
+        {"filename": "src/config_python.prompt", "filepath": "src/config.py", "dependencies": []},
+    ]
+    for proj in ("a", "b"):
+        d = tmp_path / "apps" / proj
+        (d / "prompts" / "src").mkdir(parents=True)
+        (d / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+        (d / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+        (d / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+        (d / "architecture.json").write_text(json.dumps(arch_entries), encoding="utf-8")
+
+    modules = [
+        "apps/a/src/worker_app",
+        "apps/a/src/config",
+        "apps/b/src/worker_app",
+        "apps/b/src/config",
+    ]
+    combined = arch_entries + arch_entries  # flattened combined arch (collides)
+    graph, _warnings = _build_targeted_dep_graph(combined, modules, tmp_path, "arch.json")
+
+    assert graph["apps/a/src/worker_app"] == ["apps/a/src/config"]
+    assert graph["apps/b/src/worker_app"] == ["apps/b/src/config"]
+
+
+def test_build_targeted_dep_graph_intra_project_edge_with_colliding_target(tmp_path):
+    # #1675 (round 11): a same-project edge service -> worker_app must resolve
+    # even when worker_app's relative target also exists in another project.
+    import json
+    from pdd.agentic_sync import _build_targeted_dep_graph
+
+    a_entries = [
+        {
+            "filename": "src/service_python.prompt",
+            "filepath": "src/service.py",
+            "dependencies": ["src/worker_app_python.prompt"],
+        },
+        {"filename": "src/worker_app_python.prompt", "filepath": "src/worker_app.py", "dependencies": []},
+    ]
+    b_entries = [
+        {"filename": "src/worker_app_python.prompt", "filepath": "src/worker_app.py", "dependencies": []},
+    ]
+    for proj, entries in (("a", a_entries), ("b", b_entries)):
+        d = tmp_path / "apps" / proj
+        (d / "prompts" / "src").mkdir(parents=True)
+        (d / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+        for name in ("service", "worker_app"):
+            if any(name in e["filename"] for e in entries):
+                (d / "prompts" / "src" / f"{name}_python.prompt").write_text("x", encoding="utf-8")
+        (d / "architecture.json").write_text(json.dumps(entries), encoding="utf-8")
+
+    modules = [
+        "apps/a/src/service",       # unique relative target
+        "apps/a/src/worker_app",    # collides with apps/b
+        "apps/b/src/worker_app",    # collides with apps/a
+    ]
+    graph, _warnings = _build_targeted_dep_graph(
+        a_entries + b_entries, modules, tmp_path, "arch.json"
+    )
+    # Same-project edge preserved despite the colliding target.
+    assert graph["apps/a/src/service"] == ["apps/a/src/worker_app"]
+    assert graph["apps/b/src/worker_app"] == []
+
+
+def test_resolve_module_cwd_and_target_canonicalizes_nested_relative_key(tmp_path):
+    # #1675: a short nested-relative key (e.g. from LLM/manual identification)
+    # whose prompt lives in exactly one nested project canonicalizes to that
+    # project, not the repo root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+
+    cwd, target = _resolve_module_cwd_and_target("src/worker_app", tmp_path)
+    assert cwd == nested
+    assert target == "src/worker_app"
+
+
+def test_resolve_module_cwd_and_target_nested_relative_key_ambiguous(tmp_path):
+    # A nested-relative key owned by two projects is ambiguous -> fail loudly.
+    from pdd.agentic_sync import (
+        _resolve_module_cwd_and_target,
+        AmbiguousModuleOwnerError,
+    )
+
+    for proj in ("a", "b"):
+        d = tmp_path / "apps" / proj
+        (d / "prompts" / "src").mkdir(parents=True)
+        (d / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+        (d / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+
+    with pytest.raises(AmbiguousModuleOwnerError):
+        _resolve_module_cwd_and_target("src/worker_app", tmp_path)
+
+
+def test_resolve_module_cwd_and_target_root_layout_path_qualified(tmp_path):
+    # A path-qualified key owned by the repo root (no nested owner) stays at root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+
+    (tmp_path / "prompts" / "src").mkdir(parents=True)
+    (tmp_path / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+    # An unrelated nested project that does NOT own src/config.
+    other = tmp_path / "extensions" / "other"
+    (other / "prompts").mkdir(parents=True)
+    (other / ".pddrc").write_text(_pddrc_with_context("other", "other/**"), encoding="utf-8")
+
+    cwd, target = _resolve_module_cwd_and_target("src/config", tmp_path)
+    assert cwd == tmp_path
+    assert target == "src/config"
+
+
+def test_resolve_module_cwd_and_target_root_ownership_wins_over_nested(tmp_path):
+    # #1675: when the repo root owns a path-qualified key AND a nested project
+    # also has a same-named module, the repo-root-relative key resolves to root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+
+    (tmp_path / "prompts" / "src").mkdir(parents=True)
+    (tmp_path / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+
+    cwd, target = _resolve_module_cwd_and_target("src/config", tmp_path)
+    assert cwd == tmp_path
+    assert target == "src/config"
+
+
+def test_resolve_module_cwd_and_target_root_context_points_into_nested(tmp_path):
+    # pdd_cloud case (#1675): the ROOT .pddrc has a context whose prompts_dir
+    # points INTO the nested extension's prompt tree, so root can *resolve* the
+    # prompt path but does not OWN the module. A short nested-relative key must
+    # canonicalize to the nested project + its own context, not root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+    from pdd.resolved_sync_unit import resolve_sync_unit
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        "contexts:\n"
+        "  extensions-github_pdd_app:\n"
+        '    paths: ["extensions/github_pdd_app/**"]\n'
+        "    defaults:\n"
+        '      prompts_dir: "extensions/github_pdd_app/prompts"\n'
+        "  default:\n"
+        '    paths: ["**"]\n'
+        "    defaults:\n"
+        '      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+
+    cwd, target = _resolve_module_cwd_and_target("src/worker_app", tmp_path)
+    assert cwd == nested
+    assert target == "src/worker_app"
+    unit = resolve_sync_unit(
+        "src/worker_app", target, cwd, requested_context="extensions-github_pdd_app"
+    )
+    assert unit.context == "src"  # nested context, NOT the root one
+
 
 
 def _big_interface_entry(filename: str, *, dep: str = "") -> Dict[str, Any]:
@@ -4557,6 +4924,39 @@ def _big_interface_entry(filename: str, *, dep: str = "") -> Dict[str, Any]:
         "description": "DESCRIPTION_TEXT " * 100,
         "reason": "REASON_TEXT " * 50,
     }
+
+class TestNormalizeModulesForSync:
+    """Tests for module basename normalization before validation."""
+
+    def test_preserves_exact_architecture_basename_that_ends_with_language_word(self, monkeypatch):
+        """`operation_log` must not become `operation` when Log is in language_format.csv."""
+        monkeypatch.setenv("PDD_PATH", str(Path(__file__).resolve().parents[1]))
+        architecture = [{"filename": "operation_log_python.prompt", "dependencies": []}]
+
+        result = _normalize_modules_for_sync(["operation_log"], architecture)
+
+        assert result == ["operation_log"]
+
+    def test_strips_llm_language_suffix_when_needed(self):
+        """Architecture-style LLM names still normalize to sync basenames."""
+        architecture = [{"filename": "crm_models_Python.prompt", "dependencies": []}]
+
+        result = _normalize_modules_for_sync(["crm_models_Python"], architecture)
+
+        assert result == ["crm_models"]
+
+    def test_strips_final_component_suffix_without_losing_path(self):
+        """Path-qualified names keep their directory prefix after stripping."""
+        architecture = [{"filename": "commands/contracts_python.prompt", "dependencies": []}]
+
+        result = _normalize_modules_for_sync(["commands/contracts_python"], architecture)
+
+        assert result == ["commands/contracts"]
+
+
+# ---------------------------------------------------------------------------
+# _detect_modules_from_branch_diff
+# ---------------------------------------------------------------------------
 
 
 class TestCompactArchitectureForIdentification:
@@ -4755,7 +5155,7 @@ class TestIdentifyModulesPromptSize:
             0.0,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
         run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
@@ -4827,7 +5227,7 @@ class TestIdentifyModulesPromptSize:
             0.0,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
         run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
@@ -4926,7 +5326,7 @@ class TestIdentifyModulesPromptSize:
             0.0,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
         run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)
@@ -4984,7 +5384,7 @@ class TestIdentifyModulesPromptSize:
             0.0,
             "anthropic",
         )
-        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, [], 0.0)
+        mock_dry_run.return_value = (True, {"foo": Path("/tmp")}, {"foo": "foo"}, [], 0.0)
         mock_runner_cls.return_value.run.return_value = (True, "synced", 0.0)
 
         run_agentic_sync("https://github.com/owner/repo/issues/1", quiet=True)

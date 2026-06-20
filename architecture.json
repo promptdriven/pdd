@@ -7470,13 +7470,52 @@
     }
   },
   {
+    "reason": "Carries canonical per-module sync identity through agentic sync, runner, and durable worktree flows.",
+    "description": "Defines ResolvedSyncUnit and resolve_sync_unit so every sync stage uses the same cwd, target basename, context, prompts directory, and advisory paths for a module.",
+    "dependencies": [
+      "construct_paths_python.prompt"
+    ],
+    "priority": 215,
+    "filename": "resolved_sync_unit_python.prompt",
+    "filepath": "pdd/resolved_sync_unit.py",
+    "tags": [
+      "sync",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "ResolvedSyncUnit",
+            "kind": "dataclass"
+          }
+        ],
+        "functions": [
+          {
+            "name": "ResolvedSyncUnit.relocate",
+            "signature": "(old_root: Path, new_root: Path) -> ResolvedSyncUnit",
+            "returns": "ResolvedSyncUnit"
+          },
+          {
+            "name": "resolve_sync_unit",
+            "signature": "(key: str, target_basename: str, cwd: Path, *, requested_context: Optional[str] = None, architecture_path: Optional[Path] = None) -> ResolvedSyncUnit",
+            "returns": "ResolvedSyncUnit"
+          }
+        ]
+      }
+    }
+  },
+  {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
     "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
       "agentic_sync_runner_python.prompt",
-      "durable_sync_runner_python.prompt"
+      "durable_sync_runner_python.prompt",
+      "resolved_sync_unit_python.prompt"
     ],
     "priority": 215,
     "filename": "agentic_sync_python.prompt",
@@ -7492,7 +7531,7 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7500,7 +7539,7 @@
           },
           {
             "name": "run_global_sync",
-            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float, strength: Optional[float], temperature: Optional[float], context_override: Optional[str]) -> Tuple[bool, str, float, str]",
+            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float, strength: Optional[float], temperature: Optional[float], context_override: Optional[str], compressed_context: bool = False) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Runs AsyncSyncRunner for stale modules unless dry_run=True; timeout_adder, strength, temperature, and context_override are forwarded via sync_options so child retries keep the parent config/model knobs"
@@ -7537,7 +7576,8 @@
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
       "agentic_test_orchestrator_python.prompt",
-      "sync_order_python.prompt"
+      "sync_order_python.prompt",
+      "resolved_sync_unit_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -7553,7 +7593,7 @@
         "functions": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner",
+            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, *, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Any]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0) -> AsyncSyncRunner",
             "returns": "AsyncSyncRunner"
           },
           {
@@ -7598,7 +7638,8 @@
     "reason": "Durable issue-sync execution engine that isolates each module in a dedicated git worktree and checkpoints successful module output to a durable branch.",
     "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Worker concurrency follows the same precedence as the parent: total_budget forces one worker, an explicit durable_max_parallel overrides, otherwise it reads the shared PDD_SYNC_MAX_WORKERS default via _read_sync_max_workers(). Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, and on success applies the module diff to the durable branch as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
     "dependencies": [
-      "agentic_sync_runner_python.prompt"
+      "agentic_sync_runner_python.prompt",
+      "resolved_sync_unit_python.prompt"
     ],
     "priority": 216,
     "filename": "durable_sync_runner_python.prompt",
@@ -7614,7 +7655,7 @@
         "functions": [
           {
             "name": "DurableSyncRunner",
-            "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
+            "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, module_contexts: Optional[Dict[str, Optional[str]]] = None, module_units: Optional[Dict[str, ResolvedSyncUnit]] = None, initial_cost: float = 0.0)",
             "returns": "DurableSyncRunner",
             "sideEffects": [
               "Resolves durable branch name and durable worktree path; total_budget in sync_options forces sequential scheduling, else an explicit durable_max_parallel caps concurrency, else concurrency falls back to the shared PDD_SYNC_MAX_WORKERS default via agentic_sync_runner._read_sync_max_workers()"
@@ -9092,6 +9133,42 @@
     "position": {
       "x": 21120,
       "y": 220
+    }
+  },
+  {
+    "reason": "Central error handling and reporting for the CLI.",
+    "description": "Provides shared Rich console error output and core-dump error collection for CLI command failures.",
+    "dependencies": [],
+    "priority": 5,
+    "filename": "core/errors_python.prompt",
+    "filepath": "pdd/core/errors.py",
+    "tags": [
+      "core",
+      "cli",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_core_dump_errors",
+            "signature": "() -> List[Dict[str, Any]]",
+            "returns": "List[Dict[str, Any]]"
+          },
+          {
+            "name": "clear_core_dump_errors",
+            "signature": "() -> None",
+            "returns": "None"
+          },
+          {
+            "name": "handle_error",
+            "signature": "(exception: Exception, command_name: str, quiet: bool) -> None",
+            "returns": "None"
+          }
+        ]
+      }
     }
   },
   {

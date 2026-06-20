@@ -48,6 +48,7 @@ from pdd.llm_invoke import llm_invoke
 from pdd.get_language import get_language
 from pdd.template_expander import expand_template
 from pdd.architecture_registry import extract_modules
+from pdd.sync_order import extract_module_from_include
 
 # Constants - Use functions for dynamic path resolution
 def get_pdd_dir():
@@ -84,7 +85,36 @@ LOCKS_DIR = get_locks_dir()
 # Export constants for other modules
 __all__ = ['PDD_DIR', 'META_DIR', 'LOCKS_DIR', 'Fingerprint', 'RunReport', 'SyncDecision',
            'sync_determine_operation', 'analyze_conflict_with_llm', 'read_run_report', 'get_pdd_file_paths',
-           '_check_example_success_history']
+           '_check_example_success_history', 'AmbiguousModuleError']
+
+
+class AmbiguousModuleError(ValueError):
+    """Raised when a bare module basename maps to more than one architecture module.
+
+    Issue #1677: short basenames such as ``page`` (common in Next.js projects where
+    many files are named ``page.tsx``/``layout.tsx``) are not a stable module
+    identity. When such a name matches multiple ``architecture.json`` entries that
+    resolve to *different* output files, ``pdd sync`` must fail before generating
+    files instead of silently picking one (first-match-wins) or falling back to a
+    ``.pddrc`` default path like ``frontend/src/page.tsx``.
+
+    Subclasses :class:`ValueError` so that existing best-effort callers of
+    :func:`get_pdd_file_paths` (operation logging, drift heal, evidence/checkup
+    gates) degrade gracefully via their broad ``except`` clauses, while sync
+    *generation* paths explicitly re-raise it to fail fast.
+    """
+
+    def __init__(self, basename: str, language: str, choices: List[str]):
+        self.basename = basename
+        self.language = language
+        self.choices = list(choices)
+        choice_lines = "\n".join(f"  - {c}" for c in self.choices)
+        super().__init__(
+            f"Ambiguous module '{basename}' for language {language}: it maps to "
+            f"{len(self.choices)} different files in architecture.json:\n{choice_lines}\n"
+            f"Re-run with a path-qualified module name (e.g. the prompt's directory "
+            f"path, like 'app/login/{basename}') so PDD writes to the intended file."
+        )
 
 
 def _safe_basename(basename: str) -> str:
@@ -133,6 +163,77 @@ def _extract_name_part(basename: str) -> tuple:
         dir_part, name_part = basename.rsplit('/', 1)
         return dir_part + '/', name_part
     return '', basename
+
+
+def _leading_overlap(base: List[str], sub: List[str]) -> int:
+    """Number of leading ``sub`` components already provided by ``base``.
+
+    The larger of two alignments: ``base``'s TAIL equals ``sub``'s HEAD
+    (``src/app`` + ``app/login``) or a shared PREFIX/area (``frontend/src`` +
+    ``frontend/app/login``).
+    """
+    tail_head = 0
+    for k in range(min(len(base), len(sub)), 0, -1):
+        if base[-k:] == sub[:k]:
+            tail_head = k
+            break
+    common_prefix = 0
+    for j in range(min(len(base), len(sub)), 0, -1):
+        if base[:j] == sub[:j]:
+            common_prefix = j
+            break
+    return max(tail_head, common_prefix)
+
+
+def _reanchor_under_basename_subdir(
+    path_value: Any, basename: str, project_root: Optional[Path] = None
+) -> Path:
+    """Re-anchor an output path under a path-qualified basename's subdirectory.
+
+    Issue #1677: only used when a module has no architecture entry (construct_paths
+    then collapses a path-qualified basename to its bare leaf). Inserts the basename's
+    subdirectory so ``foo/page`` writes to ``src/foo/page.tsx`` rather than
+    ``src/page.tsx``, while not duplicating a directory segment the output already
+    provides.
+
+    The overlap is measured against the computed path's parent made RELATIVE to the
+    project root (or cwd), so it reflects whatever output directory construct_paths
+    actually used — honoring env vars, absolute config values and context selection —
+    without being fooled by the absolute repo prefix:
+
+    * ``frontend/src`` + ``frontend/app/login`` -> ``frontend/src/app/login`` (shared area)
+    * ``src/app`` + ``app/login`` -> ``src/app/login`` (tail/head)
+    * repo under ``/x/foo`` with ``src/`` + ``foo`` -> ``/x/foo/src/foo/page`` (the repo
+      ``foo`` is in the stripped prefix, not the relative output dir)
+    * a subdir construct_paths already preserved (``examples/foo``) collapses to no
+      remainder and the path is returned unchanged.
+    """
+    path_obj = Path(path_value)
+    if "/" not in basename:
+        return path_obj
+    dir_prefix, _ = _extract_name_part(basename)
+    # Drop empty, current- and parent-directory segments so a basename can never
+    # introduce a path-traversal component (".."/".") into the re-anchored output
+    # path (CodeQL: uncontrolled data in path expression). A module's directory is
+    # always a plain forward-relative path.
+    sub = [
+        p
+        for p in dir_prefix.replace("\\", "/").split("/")
+        if p and p not in (".", "..")
+    ]
+    if not sub:
+        return path_obj
+
+    anchor = project_root or Path.cwd()
+    try:
+        base_dir_parts = list(path_obj.parent.resolve(strict=False).relative_to(anchor.resolve(strict=False)).parts)
+    except (ValueError, OSError):
+        base_dir_parts = list(path_obj.parent.parts)
+
+    remaining = sub[_leading_overlap(base_dir_parts, sub):]
+    if not remaining:
+        return path_obj
+    return path_obj.parent.joinpath(*remaining, path_obj.name)
 
 
 def _find_architecture_json(start_path: Optional[Path] = None) -> Optional[Path]:
@@ -275,7 +376,15 @@ def _module_filepath_matches_basename(
     basename: str,
     context_name: Optional[str] = None,
 ) -> bool:
-    """Return True when a flat architecture filename still clearly maps to a nested basename."""
+    """Return True when a flat architecture filename still clearly maps to a nested basename.
+
+    A path-qualified basename must be a path-SUFFIX of the module filepath. This
+    accepts an exact match and legitimately shorter qualified forms
+    (``login/page`` -> ``src/app/login/page.tsx``) while rejecting a wrong directory
+    (issue #1677: ``foo/login/page`` or ``foo/page`` must NOT map to
+    ``src/app/login/page.tsx``, and ``foo/page`` must NOT map to a root ``page.tsx``).
+    A single-component (flat) basename keeps leaf matching.
+    """
     if not module_filepath:
         return False
 
@@ -285,10 +394,14 @@ def _module_filepath_matches_basename(
     if not basename_parts or not filepath_parts:
         return False
 
-    if len(basename_parts) >= 2 and len(filepath_parts) >= 2:
-        return tuple(filepath_parts[-2:]) == tuple(basename_parts[-2:])
+    # Flat basename: match by leaf only.
+    if len(basename_parts) == 1:
+        return filepath_parts[-1] == basename_parts[-1]
 
-    return filepath_parts[-1] == basename_parts[-1]
+    # Path-qualified basename: require it to be a full path-suffix of the filepath.
+    if len(basename_parts) > len(filepath_parts):
+        return False
+    return tuple(filepath_parts[-len(basename_parts):]) == tuple(basename_parts)
 
 
 def _overlay_configured_output_paths(
@@ -425,7 +538,6 @@ def _find_prompt_file(
     # case-sensitive on Linux, so we can't rely on the glob pattern for
     # basenames like "dashboard" vs on-disk "Dashboard".
     lang_lower = language.lower()
-    dir_hint = basename.rsplit('/', 1)[0] if '/' in basename else None
     matches = []
     for candidate in prompts_root.rglob("*.prompt"):
         if not candidate.is_file():
@@ -437,17 +549,37 @@ def _find_prompt_file(
                 matches.append(candidate)
                 break
     if matches:
-        if len(matches) > 1:
+        if len(matches) > 1 and context_prefix:
             # Prefer match within context prefix (e.g., backend/utils)
-            if context_prefix:
-                ctx_filtered = [m for m in matches if context_prefix in str(m.relative_to(prompts_root))]
-                if ctx_filtered:
-                    matches = ctx_filtered
-            # Then prefer match matching directory hint from basename
-            if dir_hint and len(matches) > 1:
-                hint_matches = [m for m in matches if dir_hint in str(m)]
-                if hint_matches:
-                    matches = hint_matches
+            ctx_filtered = [m for m in matches if context_prefix in str(m.relative_to(prompts_root))]
+            if ctx_filtered:
+                matches = ctx_filtered
+        # Issue #1677: a path-qualified basename (e.g. `app/login/page`) must resolve
+        # to a prompt WITHIN its own directory. Do not fall back to a same-leaf prompt
+        # in a different directory — that silently syncs the wrong module for a
+        # mistyped/foreign path like `foo/page`. The basename must be a path-SUFFIX of
+        # the match's module path (its absolute directory plus the module leaf). Using
+        # the absolute path means a deep prompts_dir or a context whose directories are
+        # already part of prompts_root still matches, while an unrelated directory does
+        # not (and `foo` inside an absolute prefix like /home/foo cannot false-match,
+        # since only the suffix is compared).
+        if "/" in basename:
+            basename_variants = {Path(basename).parts}
+            relative_basename = _relative_basename_for_context(basename, context_name)
+            if relative_basename != basename:
+                basename_variants.add(Path(relative_basename).parts)
+            aligned = []
+            for m in matches:
+                module_leaf = extract_module_from_include(m.name) or m.stem
+                module_parts = m.parent.parts + (module_leaf,)
+                if any(
+                    len(bp) <= len(module_parts) and tuple(module_parts[-len(bp):]) == bp
+                    for bp in basename_variants
+                ):
+                    aligned.append(m)
+            if not aligned:
+                return None
+            matches = aligned
         matches.sort(key=lambda p: (len(p.parts), str(p)))
         return matches[0]
 
@@ -489,11 +621,25 @@ def _get_filepath_from_architecture(
 
         context_name = _resolve_context_name_for_basename(basename) if basename else None
 
+        # Issue #1677: a path-qualified basename (e.g. `foo/page`) must only match a
+        # module whose filepath aligns with its directory. Otherwise an exact match on
+        # a bare leaf filename (`page_*.prompt`) silently resolves a mistyped/foreign
+        # path to an unrelated same-leaf module. Flat basenames are unaffected (their
+        # ambiguity is already handled upstream).
+        path_qualified = bool(basename) and "/" in basename
+
+        def _aligns(module: Dict[str, Any]) -> bool:
+            if not path_qualified:
+                return True
+            return _module_filepath_matches_basename(
+                module.get("filepath"), basename, context_name=context_name
+            )
+
         # Try exact filename match first
         for module in modules:
             if not isinstance(module, dict):
                 continue
-            if module.get("filename") == prompt_filename:
+            if module.get("filename") == prompt_filename and _aligns(module):
                 return module.get("filepath"), module.get("filename")
 
         # Try case-insensitive filename match
@@ -501,7 +647,7 @@ def _get_filepath_from_architecture(
         for module in modules:
             if not isinstance(module, dict):
                 continue
-            if module.get("filename", "").lower() == prompt_filename_lower:
+            if module.get("filename", "").lower() == prompt_filename_lower and _aligns(module):
                 return module.get("filepath"), module.get("filename")
 
         # Try basename + language match if provided
@@ -542,6 +688,77 @@ def _get_filepath_from_architecture(
 
     except (FileNotFoundError, json.JSONDecodeError, TypeError):
         return None, None
+
+
+def _architecture_module_choices(
+    architecture_path: Path,
+    basename: str,
+    language: str,
+) -> List[str]:
+    """Return the distinct canonical output files a BARE basename maps to.
+
+    Issue #1677: used to detect ambiguity before resolving/generating. A return
+    value with two or more entries means ``basename`` is ambiguous for ``language``
+    (it would otherwise be resolved by silent first-match-wins or a ``.pddrc``
+    default). Path-qualified basenames (containing ``/``) are already disambiguated
+    by their directory, so this returns ``[]`` for them.
+
+    Matching is by prompt FILENAME leaf (``<basename>_<language>.prompt``, case
+    insensitive) — exactly how :func:`_get_filepath_from_architecture` resolves a
+    bare basename — NEVER by the filepath stem. The filename is compared by its leaf
+    segment so directory-qualified architecture filenames (e.g.
+    ``app/login/page_TypeScriptReact.prompt``, produced by
+    ``normalize_architecture_filenames``) are matched too. This is deliberate: a
+    different module whose code file merely happens to be named ``page.tsx`` (e.g. a
+    ``home`` route with ``filepath`` ``src/home/page.tsx`` and filename
+    ``home_*.prompt``) must not be treated as a match for ``page``, otherwise a
+    uniquely-named module would be falsely reported as ambiguous. The
+    language-specific filename also means a module that exists in two languages
+    (``foo.py`` + ``foo.ts``) is not flagged for a single-language query.
+
+    A single ``architecture.json`` lists every filepath relative to one root, so the
+    distinct targets are simply the deduplicated matched filepaths — two filepaths
+    that differ at all (e.g. ``src/page.tsx`` vs ``frontend/src/page.tsx``) are
+    genuinely different modules and remain distinct. (The agentic *combined*
+    multi-architecture view resolves filepaths against each source architecture's
+    directory before comparing; see ``agentic_sync._architecture_outputs_by_basename``.)
+    """
+    if "/" in basename:
+        return []
+
+    try:
+        with open(architecture_path, "r", encoding="utf-8") as handle:
+            modules = extract_modules(json.load(handle))
+    except (FileNotFoundError, json.JSONDecodeError, TypeError, OSError):
+        return []
+
+    if not modules:
+        return []
+
+    target_filename = f"{basename}_{language}.prompt".lower()
+    lang_ext = get_extension(language).lower()
+    distinct: set = set()
+    for module in modules:
+        if not isinstance(module, dict):
+            continue
+        filepath = str(module.get("filepath") or "").strip()
+        if not filepath:
+            continue
+        filename = module.get("filename", "") or ""
+        if filename.endswith("_LLM.prompt"):
+            continue
+        leaf = Path(filename).name
+        if leaf.lower() == target_filename:
+            distinct.add(Path(filepath).as_posix())
+        elif not extract_module_from_include(leaf):
+            # Non-prompt architecture filename (e.g. `GitHubAppCTA.tsx`): the module
+            # is identified by its filepath stem instead. Gate on the language
+            # extension so a same-stem file in another language is not conflated.
+            suffix = Path(filepath).suffix.lstrip(".").lower()
+            if Path(filepath).stem == basename and lang_ext and suffix == lang_ext:
+                distinct.add(Path(filepath).as_posix())
+
+    return sorted(distinct)
 
 
 @dataclass
@@ -928,6 +1145,16 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
         # Issue #225: Check architecture.json for filepath FIRST
         arch_path = _find_architecture_json(prompts_root_anchor)
 
+        # Issue #1677: fail fast on an ambiguous BARE basename BEFORE resolving a
+        # prompt or falling back to a .pddrc default path. A short name such as
+        # `page` (common in Next.js, where many files are `page.tsx`) that maps to
+        # more than one architecture module must not be resolved by silent
+        # first-match-wins or written to a generic `<generate_output_path>/page.tsx`.
+        if arch_path:
+            ambiguous_choices = _architecture_module_choices(arch_path, basename, language)
+            if len(ambiguous_choices) > 1:
+                raise AmbiguousModuleError(basename, language, ambiguous_choices)
+
         # Issue #1169: Use _find_prompt_file for authoritative prompt resolution.
         # This handles case-insensitive matching, nested subdirectories, and
         # architecture.json hints in a single code path.
@@ -939,9 +1166,28 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             # Respect .pddrc context's prompts_dir prefix so new modules land in the
             # correct subdirectory (e.g., prompts/backend/utils/ not prompts/).
             prompt_filename = f"{name}_{language}.prompt"
-            prompt_path = str(prompts_root / prompt_filename)
+            # Issue #1677: a path-qualified basename keeps its directory so a new
+            # module lands at prompts/<dir>/<leaf> — never collapsing to the bare leaf,
+            # which would otherwise re-resolve to an unrelated same-leaf module
+            # elsewhere (e.g. `foo/page` picking up a root `page` prompt). Any leading
+            # directory segments already present at the tail of prompts_root (a deep
+            # prompts_dir passed by sync_main, or a context prefix) are stripped so they
+            # are not duplicated.
+            relative_basename = _relative_basename_for_context(basename, resolved_context_name)
+            rel_dir_parts = Path(relative_basename).parts[:-1]
+            root_parts = prompts_root.parts
+            overlap = 0
+            for k in range(min(len(root_parts), len(rel_dir_parts)), 0, -1):
+                if root_parts[-k:] == rel_dir_parts[:k]:
+                    overlap = k
+                    break
+            effective_dir_parts = rel_dir_parts[overlap:]
+            if effective_dir_parts:
+                prompt_path = str(prompts_root.joinpath(*effective_dir_parts, prompt_filename))
+            else:
+                prompt_path = str(prompts_root / prompt_filename)
             pddrc_path = _find_pddrc_file(prompts_root_anchor)
-            if pddrc_path:
+            if pddrc_path and not effective_dir_parts:
                 try:
                     config = _load_pddrc_config(pddrc_path)
                     context_name = (
@@ -1027,14 +1273,24 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 else:
                     logger.debug(f"Path source: generate={code_path} (from architecture.json)")
 
-                example_path = project_root / f"{example_dir}{code_stem}_example{_dot(extension)}"
-                test_path = project_root / f"{test_dir}test_{code_stem}{_dot(extension)}"
+                # Issue #1677: when the leaf basename is ambiguous (several architecture
+                # modules share it, e.g. Next.js `page`), two path-qualified modules
+                # (`app/login/page`, `app/settings/page`) would otherwise both write to
+                # `examples/page_example.tsx` and `tests/test_page.tsx`. Derive the
+                # example/test stem from the canonical code path so the artifacts are
+                # distinct per module. Unique leaves keep the flat stem (backward compat).
+                example_stem = code_stem
+                if arch_path and len(_architecture_module_choices(arch_path, name, language)) > 1:
+                    example_stem = _safe_basename(Path(arch_filepath).with_suffix("").as_posix())
+
+                example_path = project_root / f"{example_dir}{example_stem}_example{_dot(extension)}"
+                test_path = project_root / f"{test_dir}test_{example_stem}{_dot(extension)}"
 
                 # If the flattened prompt basename already has corresponding example/test
                 # artifacts, prefer those over the architecture filepath stem. This keeps
                 # command summaries and sync behavior aligned with repos that intentionally
                 # namespace files such as lib_sse_example.ts or test_api_route.ts.
-                if name != code_stem:
+                if name != code_stem and example_stem == code_stem:
                     basename_example_path = project_root / f"{example_dir}{name}_example{_dot(extension)}"
                     basename_test_path = project_root / f"{test_dir}test_{name}{_dot(extension)}"
                     preferred_example = False
@@ -1177,6 +1433,23 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 test_path = Path(test_path)
                 example_path = Path(example_path)
                 code_path = Path(code_path)
+
+                # Issue #1677: keep a path-qualified basename's subdirectory (this branch
+                # only runs for a module with no architecture entry; see the prompt-exists
+                # branch for the rationale and the shared-segment handling). The
+                # CONTEXT-RELATIVE basename is used so a context whose prompts_dir already
+                # maps the directory (e.g. `backend/utils/x` under context `backend-utils`)
+                # is left to its configured generate_output_path, not re-prefixed.
+                # An explicit output path ending in '/' is a COMPLETE directory (the
+                # branches above already used it as-is): re-prefixing it with the
+                # basename's subdir would double the path (e.g. backend/functions/utils/
+                # + backend/utils/x -> .../utils/utils/x), so skip the re-anchor there.
+                if not (generate_output_path and generate_output_path.endswith('/')):
+                    code_path = _reanchor_under_basename_subdir(code_path, construct_paths_basename)
+                if not (example_output_path and example_output_path.endswith('/')):
+                    example_path = _reanchor_under_basename_subdir(example_path, construct_paths_basename)
+                if not (test_output_path and test_output_path.endswith('/')):
+                    test_path = _reanchor_under_basename_subdir(test_path, construct_paths_basename)
 
                 # Bug #156: Find all matching test files
                 test_dir_path = test_path.parent
@@ -1370,10 +1643,21 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 example_path = code_dir / f"{code_stem}_example{code_ext}"
                 test_path = code_dir / f"test_{code_stem}{code_ext}"
         
+        # Issue #1677: this path runs only for a module with NO architecture entry
+        # (registered modules return from the architecture branch above). construct_paths
+        # collapses a path-qualified basename to its bare leaf, so a new `foo/page` would
+        # write to src/page.tsx / examples/page_example.tsx — colliding with any other
+        # `*/page`. Re-anchor under the CONTEXT-RELATIVE basename subdirectory so a
+        # context whose prompts_dir already maps the directory is left to its configured
+        # generate_output_path (not re-prefixed / duplicated).
+        code_path = _reanchor_under_basename_subdir(code_path, construct_paths_basename)
+        example_path = _reanchor_under_basename_subdir(example_path, construct_paths_basename)
+        test_path = _reanchor_under_basename_subdir(test_path, construct_paths_basename)
+
         # Ensure all paths are Path objects
         if isinstance(code_path, str):
             code_path = Path(code_path)
-        
+
         # Keep paths as they are (absolute or relative as returned by construct_paths)
         # This ensures consistency with how construct_paths expects them
 
@@ -1395,6 +1679,10 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
             'test_files': matching_test_files or [test_path]  # Bug #156: All matching test files
         }
 
+    except AmbiguousModuleError:
+        # Issue #1677: ambiguity is a hard, actionable error — never let the broad
+        # fallback below swallow it into a (wrong) default path.
+        raise
     except Exception as e:
         # Fallback to simple naming if construct_paths fails
         extension = get_extension(language)
@@ -2166,6 +2454,10 @@ def _perform_sync_analysis(
         _initial_paths = get_pdd_file_paths(
             basename, language, prompts_dir, context_override=context_override
         )
+    except AmbiguousModuleError:
+        # Issue #1677: propagate ambiguity so sync fails fast instead of silently
+        # analyzing with empty paths and generating to the wrong module.
+        raise
     except Exception:
         _initial_paths = {}
 
