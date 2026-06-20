@@ -326,6 +326,71 @@ def test_agentic_does_not_flag_language_variants(tmp_path):
 # --------------------------------------------------------------------------- #
 # Metadata backward-compat (acceptance criteria)
 # --------------------------------------------------------------------------- #
+def _unregistered_project(root: Path, *, generate="src/", example="examples/", test="tests/") -> None:
+    (root / ".pddrc").write_text(
+        "contexts:\n  default:\n    paths: ['**']\n    defaults:\n"
+        "      prompts_dir: 'prompts'\n"
+        f"      generate_output_path: '{generate}'\n"
+        f"      example_output_path: '{example}'\n"
+        f"      test_output_path: '{test}'\n"
+    )
+    (root / "architecture.json").write_text("[]")  # nothing registered
+
+
+def test_unregistered_qualified_module_preserves_directory(tmp_path, monkeypatch):
+    """A path-qualified module with NO architecture entry (a new module) must keep its
+    directory in code/example/test instead of collapsing to the bare leaf — otherwise
+    two `*/page` modules overwrite each other's `src/page.tsx`/`examples/page_example`."""
+    _unregistered_project(tmp_path)
+    d = tmp_path / "prompts" / "foo"
+    d.mkdir(parents=True)
+    (d / "page_TypeScriptReact.prompt").write_text("p")
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("foo/page", "TypeScriptReact", prompts_dir="prompts")
+    assert Path(paths["code"]).as_posix().endswith("src/foo/page.tsx")
+    assert Path(paths["example"]).as_posix().endswith("examples/foo/page_example.tsx")
+    assert Path(paths["test"]).as_posix().endswith("tests/foo/test_page.tsx")
+
+
+def test_unregistered_qualified_two_modules_do_not_collide(tmp_path, monkeypatch):
+    _unregistered_project(tmp_path)
+    for sub in ("foo", "bar"):
+        d = tmp_path / "prompts" / sub
+        d.mkdir(parents=True)
+        (d / "page_TypeScriptReact.prompt").write_text("p")
+    monkeypatch.chdir(tmp_path)
+    foo = get_pdd_file_paths("foo/page", "TypeScriptReact", prompts_dir="prompts")
+    bar = get_pdd_file_paths("bar/page", "TypeScriptReact", prompts_dir="prompts")
+    assert Path(foo["code"]) != Path(bar["code"])
+    assert Path(foo["example"]) != Path(bar["example"])
+    assert Path(foo["test"]) != Path(bar["test"])
+
+
+def test_unregistered_flat_module_unaffected(tmp_path, monkeypatch):
+    _unregistered_project(tmp_path)
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "prompts" / "widget_TypeScriptReact.prompt").write_text("p")
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("widget", "TypeScriptReact", prompts_dir="prompts")
+    assert Path(paths["code"]).as_posix().endswith("src/widget.tsx")
+    assert Path(paths["example"]).name == "widget_example.tsx"
+    assert Path(paths["test"]).name == "test_widget.tsx"
+
+
+def test_unregistered_qualified_no_directory_duplication(tmp_path, monkeypatch):
+    """When the configured output dir shares a segment with the basename's directory
+    (a non-trivial mapping only architecture.json can encode), the segment must NOT be
+    duplicated (`frontend/src/frontend/...`)."""
+    _unregistered_project(tmp_path, generate="frontend/src/", example="frontend/src/", test="frontend/src/")
+    d = tmp_path / "prompts" / "frontend" / "app" / "login"
+    d.mkdir(parents=True)
+    (d / "page_TypeScriptReact.prompt").write_text("p")
+    monkeypatch.chdir(tmp_path)
+    paths = get_pdd_file_paths("frontend/app/login/page", "TypeScriptReact", prompts_dir="prompts")
+    for key in ("code", "example", "test"):
+        assert Path(paths[key]).as_posix().count("frontend/") <= 1, paths[key]
+
+
 def test_metadata_key_is_path_aware_for_qualified_names():
     """Path-qualified identity already yields a distinct, path-aware metadata key;
     no mass-rename needed. Old unique bare keys remain stable."""

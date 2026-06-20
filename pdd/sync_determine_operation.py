@@ -165,6 +165,50 @@ def _extract_name_part(basename: str) -> tuple:
     return '', basename
 
 
+def _compose_output_path(output_dir: str, dir_prefix: str, filename: str) -> str:
+    """Join a configured output directory + the basename's subdirectory + filename.
+
+    Issue #1677: a path-qualified basename (e.g. ``foo/page``) must keep its directory
+    in the generated code/example/test paths instead of collapsing to the bare leaf
+    (``src/page.tsx``) — which would let two different modules overwrite each other —
+    or duplicating it (``src/foo/foo/page.tsx``). Any overlap between the output
+    directory's tail and the subdirectory's head is removed so a configured prefix
+    that already contains part of the path is not repeated.
+    """
+    normalized_dir = output_dir.replace("\\", "/")
+    is_absolute = normalized_dir.startswith("/")
+    base = [p for p in normalized_dir.split("/") if p]
+    sub = [p for p in dir_prefix.replace("\\", "/").split("/") if p]
+    overlap = 0
+    for k in range(min(len(base), len(sub)), 0, -1):
+        if base[-k:] == sub[:k]:
+            overlap = k
+            break
+    joined = "/".join(base + sub[overlap:] + [filename])
+    return "/" + joined if is_absolute else joined
+
+
+def _reanchor_under_basename_subdir(path_value: Any, basename: str) -> Path:
+    """Re-anchor an output path under a path-qualified basename's subdirectory.
+
+    Issue #1677: only used when a module has no architecture entry (construct_paths
+    then collapses a path-qualified basename to its bare leaf). Inserts the basename's
+    subdirectory so ``foo/page`` writes to ``src/foo/page.tsx`` rather than
+    ``src/page.tsx``. Skips when the output directory already shares a path component
+    with the subdirectory: that prompts-dir -> output-dir mapping is non-trivial (e.g.
+    ``frontend/app/login/page`` under ``frontend/src/``) and only architecture.json can
+    encode it reliably, so blindly inserting would duplicate the shared segment.
+    """
+    path_obj = Path(path_value)
+    if "/" not in basename:
+        return path_obj
+    dir_prefix, _ = _extract_name_part(basename)
+    sub_parts = [p for p in dir_prefix.replace("\\", "/").split("/") if p]
+    if not sub_parts or set(sub_parts) & set(path_obj.parent.parts):
+        return path_obj
+    return Path(_compose_output_path(str(path_obj.parent), dir_prefix, path_obj.name))
+
+
 def _find_architecture_json(start_path: Optional[Path] = None) -> Optional[Path]:
     """Find architecture.json by searching upward from start_path.
 
@@ -1363,6 +1407,13 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 example_path = Path(example_path)
                 code_path = Path(code_path)
 
+                # Issue #1677: keep a path-qualified basename's subdirectory (this branch
+                # only runs for a module with no architecture entry; see the prompt-exists
+                # branch for the rationale and the shared-segment guard).
+                code_path = _reanchor_under_basename_subdir(code_path, basename)
+                example_path = _reanchor_under_basename_subdir(example_path, basename)
+                test_path = _reanchor_under_basename_subdir(test_path, basename)
+
                 # Bug #156: Find all matching test files
                 test_dir_path = test_path.parent
                 test_stem = f"test_{glob.escape(name_part)}"
@@ -1555,10 +1606,19 @@ def get_pdd_file_paths(basename: str, language: str, prompts_dir: str = "prompts
                 example_path = code_dir / f"{code_stem}_example{code_ext}"
                 test_path = code_dir / f"test_{code_stem}{code_ext}"
         
+        # Issue #1677: this path runs only for a module with NO architecture entry
+        # (registered modules return from the architecture branch above). construct_paths
+        # collapses a path-qualified basename to its bare leaf, so a new `foo/page` would
+        # write to src/page.tsx / examples/page_example.tsx — colliding with any other
+        # `*/page`. Re-anchor code/example/test under the basename's subdirectory.
+        code_path = _reanchor_under_basename_subdir(code_path, basename)
+        example_path = _reanchor_under_basename_subdir(example_path, basename)
+        test_path = _reanchor_under_basename_subdir(test_path, basename)
+
         # Ensure all paths are Path objects
         if isinstance(code_path, str):
             code_path = Path(code_path)
-        
+
         # Keep paths as they are (absolute or relative as returned by construct_paths)
         # This ensures consistency with how construct_paths expects them
 
