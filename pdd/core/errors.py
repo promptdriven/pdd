@@ -195,12 +195,15 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
 
         if isinstance(exception, FileNotFoundError):
             console.print(
-                f"  [error]File not found:[/error] {exception}",
+                f"  [error]File not found:[/error] {escape(str(exception))}",
                 style="error",
             )
         elif isinstance(exception, (ValueError, IOError)):
+            # Issue #1677: escape the message — it can contain paths with Rich-markup
+            # metacharacters (e.g. a Next.js dynamic route `src/app/users/[id]/page.tsx`),
+            # which would otherwise be swallowed and make the listed choices unreadable.
             console.print(
-                f"  [error]Input/Output Error:[/error] {exception}",
+                f"  [error]Input/Output Error:[/error] {escape(str(exception))}",
                 style="error",
             )
         elif isinstance(exception, click.UsageError):
@@ -231,7 +234,7 @@ def handle_error(exception: Exception, command_name: str, quiet: bool):
             )
         else:
             console.print(
-                f"  [error]An unexpected error occurred:[/error] {exception}",
+                f"  [error]An unexpected error occurred:[/error] {escape(str(exception))}",
                 style="error",
             )
 

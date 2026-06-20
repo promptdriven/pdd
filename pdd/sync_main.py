@@ -26,7 +26,7 @@ from .construct_paths import (
     _get_context_config,
     get_extension
 )
-from .sync_determine_operation import get_pdd_file_paths
+from .sync_determine_operation import get_pdd_file_paths, AmbiguousModuleError
 from .operation_log import get_run_report_path
 from .architecture_include_validation import print_architecture_include_validation_warnings
 from .compressed_sync_context import build_compressed_sync_context, metadata as compressed_context_metadata
@@ -1288,6 +1288,12 @@ def sync_main(
 
             aggregated_results["results_by_language"][lang] = sync_result
 
+        except AmbiguousModuleError:
+            # Issue #1677: an ambiguous bare basename is an actionable user error, not
+            # an "unexpected" per-language failure. Propagate it so the sync command
+            # surfaces the conflict (and the list of valid path-qualified choices)
+            # through handle_error, consistent with the dry-run path.
+            raise
         except Exception as e:
             if not quiet:
                 rprint(f"[bold red]An unexpected error occurred during sync for '{lang}':[/bold red] {e}")
