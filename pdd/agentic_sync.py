@@ -44,6 +44,7 @@ from .architecture_registry import (
 from .construct_paths import (
     _detect_context_from_basename,
     _extract_prefix_from_prompts_dir,
+    _find_nearest_pddrc_for_file,
     _find_pddrc_file,
     _load_pddrc_config,
 )
@@ -1616,6 +1617,46 @@ def _relativize_target(basename: str, cwd: Path, project_root: Path) -> str:
         return basename
 
 
+def _project_owns_target_locally(target: str, cwd: Path) -> bool:
+    """Return True only when ``cwd`` PHYSICALLY owns ``target``'s prompt (#1675).
+
+    A project owns a target only if the prompt the target resolves to actually
+    lives in that project's own tree — i.e. the nearest ``.pddrc`` to the prompt
+    file is the one governing ``cwd``. This rejects the case where a project's
+    ``.pddrc`` context merely *points into* another project's prompt tree (e.g. a
+    repo-root context whose ``prompts_dir`` reaches into
+    ``extensions/github_pdd_app/prompts``): the root can resolve the path but does
+    not own the module — the nested project does.
+    """
+    try:
+        _, _, lang_to_path = _resolve_module_sync_context(target, cwd)
+    except Exception:
+        return False
+    if not lang_to_path:
+        return False
+
+    cwd_pddrc = _find_pddrc_file(cwd)
+    cwd_resolved = Path(cwd).resolve()
+    for prompt_path in lang_to_path.values():
+        try:
+            resolved_prompt = Path(prompt_path).resolve()
+        except OSError:
+            return False
+        if cwd_pddrc is None:
+            # No .pddrc governs cwd: the prompt must sit directly under cwd.
+            try:
+                resolved_prompt.relative_to(cwd_resolved)
+            except ValueError:
+                return False
+            continue
+        nearest_pddrc, _ = _find_nearest_pddrc_for_file(resolved_prompt)
+        if nearest_pddrc is None or (
+            nearest_pddrc.resolve() != Path(cwd_pddrc).resolve()
+        ):
+            return False
+    return True
+
+
 def _resolve_module_cwd_and_target(
     basename: str, project_root: Path
 ) -> Tuple[Path, str]:
@@ -1643,14 +1684,8 @@ def _resolve_module_cwd_and_target(
         cwd = _resolve_module_cwd(basename, project_root, strict_ownership=True)
         return cwd, basename
 
-    def _owns(target: str, cwd: Path) -> bool:
-        try:
-            _, _, lang = _resolve_module_sync_context(target, cwd)
-            return bool(lang)
-        except Exception:
-            return False
-
-    # 1. Full repo-root-relative key: deepest ancestor .pddrc owning the target.
+    # 1. Full repo-root-relative key: deepest ancestor .pddrc that physically
+    # owns the cwd-relative target (the prompt actually lives in that project).
     implied_dir = (Path(project_root) / basename).parent
     current = implied_dir
     while True:
@@ -1661,16 +1696,16 @@ def _resolve_module_cwd_and_target(
             and not _is_ignored_nested_pddrc(project_root, pddrc)
         ):
             target = _relativize_target(basename, current, project_root)
-            if _owns(target, current):
+            if _project_owns_target_locally(target, current):
                 return current, target
         if current == project_root:
             break
         current = current.parent
 
-    # The key is repo-root-relative: if the repo root itself physically owns it,
-    # it is a root-layout module and root ownership wins over any nested project
-    # that happens to also have a same-named module (#1675).
-    if _owns(basename, project_root):
+    # The key is repo-root-relative: root ownership wins ONLY when the prompt is
+    # truly root-local (its nearest .pddrc is the root's), not when a root context
+    # merely points into a nested project's prompt tree (#1675).
+    if _project_owns_target_locally(basename, project_root):
         return project_root, basename
 
     # 2. Nested-relative key (LLM/manual): find the unique nested project that
@@ -1679,7 +1714,7 @@ def _resolve_module_cwd_and_target(
         pddrc_path.parent
         for pddrc_path in _nested_pddrc_paths(project_root)
         if not _is_ignored_nested_pddrc(project_root, pddrc_path)
-        and _owns(basename, pddrc_path.parent)
+        and _project_owns_target_locally(basename, pddrc_path.parent)
     ]
     owners = _dedup_resolved_paths(owners)
     if len(owners) > 1:

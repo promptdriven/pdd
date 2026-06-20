@@ -4865,3 +4865,38 @@ def test_resolve_module_cwd_and_target_root_ownership_wins_over_nested(tmp_path)
     cwd, target = _resolve_module_cwd_and_target("src/config", tmp_path)
     assert cwd == tmp_path
     assert target == "src/config"
+
+
+def test_resolve_module_cwd_and_target_root_context_points_into_nested(tmp_path):
+    # pdd_cloud case (#1675): the ROOT .pddrc has a context whose prompts_dir
+    # points INTO the nested extension's prompt tree, so root can *resolve* the
+    # prompt path but does not OWN the module. A short nested-relative key must
+    # canonicalize to the nested project + its own context, not root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+    from pdd.resolved_sync_unit import resolve_sync_unit
+
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        "contexts:\n"
+        "  extensions-github_pdd_app:\n"
+        '    paths: ["extensions/github_pdd_app/**"]\n'
+        "    defaults:\n"
+        '      prompts_dir: "extensions/github_pdd_app/prompts"\n'
+        "  default:\n"
+        '    paths: ["**"]\n'
+        "    defaults:\n"
+        '      prompts_dir: "prompts"\n',
+        encoding="utf-8",
+    )
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "worker_app_python.prompt").write_text("x", encoding="utf-8")
+
+    cwd, target = _resolve_module_cwd_and_target("src/worker_app", tmp_path)
+    assert cwd == nested
+    assert target == "src/worker_app"
+    unit = resolve_sync_unit(
+        "src/worker_app", target, cwd, requested_context="extensions-github_pdd_app"
+    )
+    assert unit.context == "src"  # nested context, NOT the root one
