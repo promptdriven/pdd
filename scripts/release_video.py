@@ -76,12 +76,12 @@ class ReleaseVideoError(RuntimeError):
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if args.preflight:
-        return preflight_release_video(args)
-
-    repo = Path(args.repo).resolve()
-
     try:
+        validate_release_video_idempotency_options(args)
+        if args.preflight:
+            return preflight_release_video(args)
+
+        repo = Path(args.repo).resolve()
         tag = resolve_release_tag(repo, args.tag or os.environ.get("RELEASE_TAG"))
         git_sha = args.git_sha or os.environ.get("RELEASE_GIT_SHA") or git(
             repo,
@@ -209,7 +209,19 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--target", default=os.environ.get("RELEASE_VIDEO_TARGET", "publish"))
     parser.add_argument("--platform", default=os.environ.get("RELEASE_VIDEO_PLATFORM", "youtube"))
     parser.add_argument("--privacy", default=os.environ.get("RELEASE_VIDEO_PRIVACY", "unlisted"))
-    parser.add_argument("--idempotency-key", help="PDS idempotency key.")
+    parser.add_argument(
+        "--idempotency-key",
+        default=os.environ.get("RELEASE_VIDEO_IDEMPOTENCY_KEY", ""),
+        help="Full PDS idempotency key. Defaults to RELEASE_VIDEO_IDEMPOTENCY_KEY.",
+    )
+    parser.add_argument(
+        "--idempotency-attempt-id",
+        default=os.environ.get("RELEASE_VIDEO_ATTEMPT_ID", ""),
+        help=(
+            "Retry attempt label appended to the default release-video idempotency key. "
+            "Defaults to RELEASE_VIDEO_ATTEMPT_ID."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Plan without creating video or uploading.")
     parser.add_argument(
         "--preflight",
@@ -217,6 +229,15 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Check local release-video configuration without creating artifacts.",
     )
     return parser.parse_args(argv)
+
+
+def validate_release_video_idempotency_options(args: argparse.Namespace) -> None:
+    full_key = str(args.idempotency_key or "").strip()
+    attempt_id = str(args.idempotency_attempt_id or "").strip()
+    if full_key and attempt_id:
+        raise ReleaseVideoError(
+            "Use either a full release-video idempotency key or an attempt id, not both."
+        )
 
 
 def preflight_release_video(args: argparse.Namespace) -> int:
@@ -701,7 +722,12 @@ def create_release_video(
     if project_id:
         command.extend(["--project", project_id])
     project_name = args.project_name or ("" if project_id else f"PDD {tag} release")
-    idempotency_key = args.idempotency_key or f"pdd-release-video:{tag}:{git_sha}"
+    idempotency_key = release_video_idempotency_key(
+        tag=tag,
+        git_sha=git_sha,
+        full_key=args.idempotency_key,
+        attempt_id=args.idempotency_attempt_id,
+    )
     pds_args = [
         "release-video",
         "create",
@@ -748,6 +774,28 @@ def create_release_video(
     if not isinstance(parsed, dict):
         raise ReleaseVideoError("PDS CLI returned JSON that was not an object.")
     return parsed
+
+
+def release_video_idempotency_key(
+    *,
+    tag: str,
+    git_sha: str,
+    full_key: str | None,
+    attempt_id: str | None,
+) -> str:
+    full_key = str(full_key or "").strip()
+    attempt_id = str(attempt_id or "").strip()
+    if full_key and attempt_id:
+        raise ReleaseVideoError(
+            "Use either a full release-video idempotency key or an attempt id, not both."
+        )
+
+    default_key = f"pdd-release-video:{tag}:{git_sha}"
+    if full_key:
+        return full_key
+    if attempt_id:
+        return f"{default_key}:retry-{attempt_id}"
+    return default_key
 
 
 def find_youtube_url(value: Any) -> str | None:
