@@ -1667,6 +1667,12 @@ def _resolve_module_cwd_and_target(
             break
         current = current.parent
 
+    # The key is repo-root-relative: if the repo root itself physically owns it,
+    # it is a root-layout module and root ownership wins over any nested project
+    # that happens to also have a same-named module (#1675).
+    if _owns(basename, project_root):
+        return project_root, basename
+
     # 2. Nested-relative key (LLM/manual): find the unique nested project that
     # physically owns the key as-is, and canonicalize the cwd to it (#1675).
     owners = [

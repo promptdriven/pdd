@@ -4848,3 +4848,20 @@ def test_resolve_module_cwd_and_target_root_layout_path_qualified(tmp_path):
     cwd, target = _resolve_module_cwd_and_target("src/config", tmp_path)
     assert cwd == tmp_path
     assert target == "src/config"
+
+
+def test_resolve_module_cwd_and_target_root_ownership_wins_over_nested(tmp_path):
+    # #1675: when the repo root owns a path-qualified key AND a nested project
+    # also has a same-named module, the repo-root-relative key resolves to root.
+    from pdd.agentic_sync import _resolve_module_cwd_and_target
+
+    (tmp_path / "prompts" / "src").mkdir(parents=True)
+    (tmp_path / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+    nested = tmp_path / "extensions" / "github_pdd_app"
+    (nested / "prompts" / "src").mkdir(parents=True)
+    (nested / ".pddrc").write_text(_pddrc_with_context("src", "src/**"), encoding="utf-8")
+    (nested / "prompts" / "src" / "config_python.prompt").write_text("x", encoding="utf-8")
+
+    cwd, target = _resolve_module_cwd_and_target("src/config", tmp_path)
+    assert cwd == tmp_path
+    assert target == "src/config"
