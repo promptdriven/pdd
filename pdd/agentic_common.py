@@ -4706,6 +4706,43 @@ def _extract_anthropic_standard_usage(
     return {"claude": [record]}
 
 
+def build_agentic_task_instruction(
+    instruction: str,
+    *,
+    user_feedback: Optional[str] = None,
+    steers: Optional[List[SteerEntry]] = None,
+) -> str:
+    """Return the exact instruction text written for provider execution."""
+    if user_feedback is None:
+        user_feedback = os.environ.get("PDD_USER_FEEDBACK")
+
+    feedback_section = ""
+    if user_feedback:
+        feedback_section = (
+            "\n\n## User Feedback\n"
+            "The user provided the following feedback from a previous execution attempt. "
+            "Factor this into your response:\n"
+            f"{user_feedback}\n"
+        )
+
+    steering_section = ""
+    if steers:
+        steering_section = "\n\n## Steered user input (mid-run)\n"
+        steering_section += (
+            "The following comments arrived during this run. Factor them into this step:\n"
+        )
+        for steer in steers:
+            steering_section += (
+                f"- @{steer.author} ({steer.comment_id}): "
+                f"{_steer_body_for_llm(steer.body)}\n"
+            )
+
+    return (
+        f"{instruction}{feedback_section}{steering_section}\n\n"
+        "You have full file access to explore and modify files as needed."
+    )
+
+
 def run_agentic_task(
     instruction: str,
     cwd: Path,
@@ -4837,33 +4874,7 @@ def run_agentic_task(
     prompt_filename = f".agentic_prompt_{uuid.uuid4().hex[:8]}.txt"
     prompt_path = cwd / prompt_filename
 
-    # Inject user feedback from GitHub issue comments (set by GitHub App executor)
-    user_feedback = os.environ.get("PDD_USER_FEEDBACK")
-    feedback_section = ""
-    if user_feedback:
-        feedback_section = (
-            "\n\n## User Feedback\n"
-            "The user provided the following feedback from a previous execution attempt. "
-            "Factor this into your response:\n"
-            f"{user_feedback}\n"
-        )
-
-    steering_section = ""
-    if steers:
-        steering_section = "\n\n## Steered user input (mid-run)\n"
-        steering_section += (
-            "The following comments arrived during this run. Factor them into this step:\n"
-        )
-        for steer in steers:
-            steering_section += (
-                f"- @{steer.author} ({steer.comment_id}): "
-                f"{_steer_body_for_llm(steer.body)}\n"
-            )
-
-    full_instruction = (
-        f"{instruction}{feedback_section}{steering_section}\n\n"
-        "You have full file access to explore and modify files as needed."
-    )
+    full_instruction = build_agentic_task_instruction(instruction, steers=steers)
 
     try:
         # Write prompt to file
