@@ -23,6 +23,18 @@ class FakeGitHubReleaseClient:
         self.body = body
 
 
+class SequencedGitHubReleaseClient(FakeGitHubReleaseClient):
+    def __init__(self, bodies: list[str]):
+        super().__init__(bodies[-1])
+        self.bodies = bodies
+
+    def get_release_body(self, tag: str) -> str:
+        self.viewed_tags.append(tag)
+        if self.bodies:
+            self.body = self.bodies.pop(0)
+        return self.body
+
+
 def load_backfill_module():
     spec = importlib.util.spec_from_file_location("backfill_release_video_discord", SCRIPT)
     assert spec is not None
@@ -61,6 +73,56 @@ def test_backfill_posts_discord_followup_and_marks_release_body():
         )
     ]
     assert github.body.startswith(f"Release video: {youtube_url}\n\n")
+    assert module.discord_backfill_marker("v0.0.283", youtube_url) in github.body
+
+
+def test_backfill_persists_marker_before_posting_discord():
+    module = load_backfill_module()
+    github = FakeGitHubReleaseClient("Existing notes.\n")
+    posts: list[tuple[str, dict]] = []
+
+    def fail_edit(tag: str, body: str) -> None:
+        raise module.BackfillError("release edit failed")
+
+    github.edit_release_body = fail_edit
+
+    with pytest.raises(module.BackfillError, match="release edit failed"):
+        module.backfill_release_video_discord(
+            tag="v0.0.283",
+            youtube_url="https://youtu.be/RIkxCaylRAQ",
+            repo="promptdriven/pdd",
+            webhook_url="https://discord.example/webhook",
+            github=github,
+            post_discord=lambda webhook_url, payload: posts.append((webhook_url, payload)),
+        )
+
+    assert posts == []
+
+
+def test_backfill_merges_marker_into_latest_release_body_before_posting():
+    module = load_backfill_module()
+    youtube_url = "https://youtu.be/RIkxCaylRAQ"
+    github = SequencedGitHubReleaseClient(
+        [
+            "Initial notes.\n",
+            "Concurrent maintainer edit.\n",
+        ]
+    )
+    posts: list[tuple[str, dict]] = []
+
+    result = module.backfill_release_video_discord(
+        tag="v0.0.283",
+        youtube_url=youtube_url,
+        repo="promptdriven/pdd",
+        webhook_url="https://discord.example/webhook",
+        github=github,
+        post_discord=lambda webhook_url, payload: posts.append((webhook_url, payload)),
+    )
+
+    assert result.posted is True
+    assert len(posts) == 1
+    assert "Concurrent maintainer edit." in github.body
+    assert "Initial notes." not in github.body
     assert module.discord_backfill_marker("v0.0.283", youtube_url) in github.body
 
 
@@ -107,6 +169,29 @@ def test_backfill_adds_missing_link_without_reposting_when_marker_exists():
     assert result.skipped_reason == "discord-followup-already-marked"
     assert posts == []
     assert github.body.startswith(f"Release video: {youtube_url}\n\n")
+
+
+def test_backfill_uses_canonical_youtube_id_for_markers_and_existing_links():
+    module = load_backfill_module()
+    watch_url = "https://www.youtube.com/watch?v=RIkxCaylRAQ&utm_source=discord"
+    short_url = "https://youtu.be/RIkxCaylRAQ"
+    marker = module.discord_backfill_marker("v0.0.283", watch_url)
+    github = FakeGitHubReleaseClient(f"Release video: {watch_url}\n\nNotes.\n\n{marker}\n")
+    posts: list[tuple[str, dict]] = []
+
+    result = module.backfill_release_video_discord(
+        tag="v0.0.283",
+        youtube_url=short_url,
+        repo="promptdriven/pdd",
+        webhook_url="",
+        github=github,
+        post_discord=lambda webhook_url, payload: posts.append((webhook_url, payload)),
+    )
+
+    assert marker == module.discord_backfill_marker("v0.0.283", short_url)
+    assert result.posted is False
+    assert posts == []
+    assert github.edits == []
 
 
 def test_backfill_does_not_skip_for_a_different_video_url():

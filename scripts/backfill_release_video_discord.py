@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from typing import Any
@@ -18,6 +19,8 @@ from typing import Any
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 YOUTUBE_URL_RE = re.compile(r"^https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+$")
+YOUTUBE_URL_IN_TEXT_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+")
+YOUTUBE_VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,}$")
 GITHUB_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 MARKER_NAME = "pdd-release-video-discord-backfill"
 
@@ -111,13 +114,50 @@ class GitHubReleaseClient:
         return completed
 
 
+def youtube_video_id(youtube_url: str) -> str:
+    parsed = urllib.parse.urlparse(youtube_url)
+    if parsed.scheme not in {"http", "https"}:
+        raise BackfillError(f"YouTube URL must use http or https: {youtube_url!r}.")
+
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+
+    video_id = ""
+    if host == "youtu.be":
+        video_id = parsed.path.strip("/").split("/", 1)[0]
+    elif host == "youtube.com":
+        if parsed.path == "/watch":
+            video_id = urllib.parse.parse_qs(parsed.query).get("v", [""])[0]
+        elif parsed.path.startswith("/embed/") or parsed.path.startswith("/shorts/"):
+            parts = parsed.path.strip("/").split("/")
+            if len(parts) >= 2:
+                video_id = parts[1]
+
+    if not YOUTUBE_VIDEO_ID_RE.fullmatch(video_id):
+        raise BackfillError(f"YouTube URL does not include a valid video id: {youtube_url!r}.")
+    return video_id
+
+
 def discord_backfill_marker(tag: str, youtube_url: str) -> str:
-    digest = hashlib.sha256(f"{tag}\n{youtube_url}".encode("utf8")).hexdigest()
-    return f"<!-- {MARKER_NAME}: tag={tag} url_sha256={digest} -->"
+    video_id = youtube_video_id(youtube_url)
+    digest = hashlib.sha256(f"{tag}\n{video_id}".encode("utf8")).hexdigest()
+    return f"<!-- {MARKER_NAME}: tag={tag} video_sha256={digest} -->"
+
+
+def release_body_has_youtube_video(body: str, video_id: str) -> bool:
+    for match in YOUTUBE_URL_IN_TEXT_RE.finditer(body):
+        try:
+            if youtube_video_id(match.group(0)) == video_id:
+                return True
+        except BackfillError:
+            continue
+    return False
 
 
 def ensure_release_body_has_video_link(body: str, youtube_url: str) -> tuple[str, bool]:
-    if youtube_url in body:
+    video_id = youtube_video_id(youtube_url)
+    if release_body_has_youtube_video(body, video_id):
         return body, False
     prefix = f"Release video: {youtube_url}"
     if body.strip():
@@ -170,6 +210,7 @@ def validate_inputs(tag: str, youtube_url: str, repo: str) -> None:
         raise BackfillError(f"Release tag must look like vX.Y.Z, got {tag!r}.")
     if not YOUTUBE_URL_RE.fullmatch(youtube_url):
         raise BackfillError(f"YouTube URL does not look valid: {youtube_url!r}.")
+    youtube_video_id(youtube_url)
     if not GITHUB_REPO_RE.fullmatch(repo):
         raise BackfillError(f"GitHub repo must look like owner/name, got {repo!r}.")
 
@@ -187,9 +228,9 @@ def backfill_release_video_discord(
 
     body = github.get_release_body(tag)
     marker = discord_backfill_marker(tag, youtube_url)
-    body_with_link, link_added = ensure_release_body_has_video_link(body, youtube_url)
 
     if marker in body:
+        body_with_link, link_added = ensure_release_body_has_video_link(body, youtube_url)
         if link_added:
             github.edit_release_body(tag, body_with_link)
         return BackfillResult(
@@ -202,14 +243,27 @@ def backfill_release_video_discord(
     if not webhook_url:
         raise BackfillError("DISCORD_WEBHOOK_URL is required when a follow-up has not been marked.")
 
-    if link_added:
-        github.edit_release_body(tag, body_with_link)
+    latest_body = github.get_release_body(tag)
+    if marker in latest_body:
+        latest_body_with_link, link_added = ensure_release_body_has_video_link(
+            latest_body,
+            youtube_url,
+        )
+        if link_added:
+            github.edit_release_body(tag, latest_body_with_link)
+        return BackfillResult(
+            posted=False,
+            release_body_updated=link_added,
+            marker_added=False,
+            skipped_reason="discord-followup-already-marked",
+        )
+
+    body_with_link, link_added = ensure_release_body_has_video_link(latest_body, youtube_url)
+    marked_body, marker_added = ensure_release_body_has_marker(body_with_link, tag, youtube_url)
+    if link_added or marker_added:
+        github.edit_release_body(tag, marked_body)
 
     post_discord(webhook_url, build_discord_payload(tag, youtube_url, repo))
-
-    marked_body, marker_added = ensure_release_body_has_marker(body_with_link, tag, youtube_url)
-    if marker_added:
-        github.edit_release_body(tag, marked_body)
 
     return BackfillResult(
         posted=True,
