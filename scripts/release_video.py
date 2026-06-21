@@ -610,9 +610,31 @@ def generate_script_with_claude(
 
 def strip_anthropic_creds_for_claude_subprocess(env: dict[str, str]) -> bool:
     """Keep release-video Claude generation on OAuth when both auth paths exist."""
-    if str(REPO_ROOT) not in sys.path:
-        sys.path.insert(0, str(REPO_ROOT))
-    from pdd.agentic_common import _strip_anthropic_creds_for_claude_subprocess
+    if env.get("CLAUDE_CODE_USE_BEDROCK") or env.get("CLAUDE_CODE_USE_VERTEX"):
+        return False
+
+    if (env.get("PDD_KEEP_ANTHROPIC_API_KEY") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return False
+
+    if not (env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")):
+        return False
+
+    if env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        env.pop("ANTHROPIC_API_KEY", None)
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        return True
+
+    try:
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from pdd.agentic_common import _strip_anthropic_creds_for_claude_subprocess
+    except ModuleNotFoundError:
+        return False
 
     return _strip_anthropic_creds_for_claude_subprocess(env, quiet=True)
 

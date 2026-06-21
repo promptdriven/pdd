@@ -1,3 +1,4 @@
+import builtins
 import importlib.util
 import json
 import os
@@ -802,13 +803,10 @@ def test_release_video_claude_generation_prefers_oauth_over_inherited_api_key(
             stderr="",
         )
 
-    from pdd import agentic_common
-
     monkeypatch.setenv("ANTHROPIC_API_KEY", "stale-depleted-api-key")
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "stale-auth-token")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "oauth-token")
     monkeypatch.delenv("PDD_KEEP_ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(agentic_common, "_claude_has_oauth_login", lambda: True)
     monkeypatch.setattr(release_video, "ensure_command_exists", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(release_video, "run", fake_run)
 
@@ -832,6 +830,46 @@ def test_release_video_claude_generation_prefers_oauth_over_inherited_api_key(
     assert "--model" in captured["command"]
     assert "PDD release context" in captured["input_text"]
     assert "\nNARRATOR:\n" in script
+
+
+def test_release_video_env_oauth_strip_does_not_import_pdd(monkeypatch):
+    release_video = load_release_video_module()
+    env = {
+        "ANTHROPIC_API_KEY": "stale-depleted-api-key",
+        "ANTHROPIC_AUTH_TOKEN": "stale-auth-token",
+        "CLAUDE_CODE_OAUTH_TOKEN": "oauth-token",
+    }
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "pdd" or name.startswith("pdd."):
+            raise AssertionError(f"unexpected pdd import: {name}")
+        return real_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as guard:
+        guard.setattr(builtins, "__import__", guarded_import)
+        assert release_video.strip_anthropic_creds_for_claude_subprocess(env) is True
+
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+
+
+def test_release_video_strip_missing_optional_pdd_dependency_is_nonfatal(monkeypatch):
+    release_video = load_release_video_module()
+    env = {"ANTHROPIC_API_KEY": "stale-depleted-api-key"}
+    real_import = builtins.__import__
+
+    def missing_yaml_import(name, *args, **kwargs):
+        if name == "pdd.agentic_common":
+            raise ModuleNotFoundError("No module named 'yaml'", name="yaml")
+        return real_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as guard:
+        guard.setattr(builtins, "__import__", missing_yaml_import)
+        assert release_video.strip_anthropic_creds_for_claude_subprocess(env) is False
+
+    assert env["ANTHROPIC_API_KEY"] == "stale-depleted-api-key"
 
 
 def test_release_video_claude_quota_auth_classifier():
