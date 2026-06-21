@@ -91,7 +91,13 @@ class TestAgenticSyncInitialCostE2E:
                 llm_analysis_cost,
                 "anthropic",
             )
-            mock_dry_run.return_value = (True, {"mymod": Path("/tmp")}, [], 0.0)
+            mock_dry_run.return_value = (
+                True,
+                {"mymod": Path("/tmp")},
+                {"mymod": "mymod"},
+                [],
+                0.0,
+            )
 
             success, msg, total_cost, provider = run_agentic_sync(
                 "https://github.com/owner/repo/issues/1", quiet=True
