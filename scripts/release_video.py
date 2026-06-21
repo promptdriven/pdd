@@ -204,6 +204,18 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=os.environ.get("RELEASE_VIDEO_PROJECT_ID", ""),
         help="Existing PDS project id to use instead of creating a release project.",
     )
+    parser.add_argument(
+        "--bootstrap-selected-project",
+        action="store_true",
+        default=env_flag("RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT"),
+        help="Pass --bootstrap-selected-project to PDS for selected-project recovery.",
+    )
+    parser.add_argument(
+        "--force-regenerate",
+        action="store_true",
+        default=env_flag("RELEASE_VIDEO_FORCE_REGENERATE"),
+        help="Pass --force-regenerate to PDS for release-video recovery.",
+    )
     parser.add_argument("--project-name", help="PDS project name. Defaults to 'PDD <tag> release'.")
     parser.add_argument("--preset", default=os.environ.get("RELEASE_VIDEO_PRESET", "release-notes"))
     parser.add_argument("--target", default=os.environ.get("RELEASE_VIDEO_TARGET", "publish"))
@@ -229,6 +241,10 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Check local release-video configuration without creating artifacts.",
     )
     return parser.parse_args(argv)
+
+
+def env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def validate_release_video_idempotency_options(args: argparse.Namespace) -> None:
@@ -761,6 +777,10 @@ def create_release_video(
     changelog_full_path = repo / changelog_path
     if changelog_full_path.exists():
         pds_args.extend(["--changelog", str(changelog_full_path)])
+    if args.bootstrap_selected_project:
+        pds_args.append("--bootstrap-selected-project")
+    if args.force_regenerate:
+        pds_args.append("--force-regenerate")
     if args.dry_run:
         pds_args.append("--dry-run")
 

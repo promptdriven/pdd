@@ -19,6 +19,8 @@ def release_video_env(extra: dict | None = None) -> dict:
         "RELEASE_VIDEO_CLAUDE_TOOLS",
         "RELEASE_VIDEO_IDEMPOTENCY_KEY",
         "RELEASE_VIDEO_PROMPT_TEMPLATE",
+        "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT",
+        "RELEASE_VIDEO_FORCE_REGENERATE",
         "RELEASE_VIDEO_SCRIPT_PATH",
     ):
         env.pop(key, None)
@@ -147,8 +149,60 @@ print(json.dumps({response_literal}))
 
 
 def pds_idempotency_key(capture: Path) -> str:
-    pds_call = json.loads(capture.read_text(encoding="utf8"))["argv"]
+    pds_call = pds_capture_argv(capture)
     return pds_call[pds_call.index("--idempotency-key") + 1]
+
+
+def pds_capture_argv(capture: Path) -> list[str]:
+    return json.loads(capture.read_text(encoding="utf8"))["argv"]
+
+
+def run_release_video_with_existing_script(
+    tmp_path: Path,
+    *,
+    extra_args: list[str] | None = None,
+    env_extra: dict | None = None,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+    env = release_video_env(
+        {
+            "PDS_STUB_CAPTURE": str(capture),
+            **(env_extra or {}),
+        }
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/recovery"}},
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+            *(extra_args or []),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=env,
+        check=True,
+    )
+    return result, capture
 
 
 def test_release_video_generates_script_and_invokes_pds_publish(tmp_path: Path):
@@ -482,6 +536,50 @@ def test_release_video_idempotency_conflict_fails_before_claude_generation(
     assert not capture.exists()
 
 
+def test_release_video_cli_can_bootstrap_selected_project(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        extra_args=["--bootstrap-selected-project"],
+    )
+
+    assert "--bootstrap-selected-project" in pds_capture_argv(capture)
+
+
+def test_release_video_env_can_bootstrap_selected_project(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        env_extra={"RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT": "1"},
+    )
+
+    assert "--bootstrap-selected-project" in pds_capture_argv(capture)
+
+
+def test_release_video_cli_can_force_regenerate(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        extra_args=["--force-regenerate"],
+    )
+
+    assert "--force-regenerate" in pds_capture_argv(capture)
+
+
+def test_release_video_env_can_force_regenerate(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        env_extra={"RELEASE_VIDEO_FORCE_REGENERATE": "1"},
+    )
+
+    assert "--force-regenerate" in pds_capture_argv(capture)
+
+
+def test_release_video_recovery_flags_default_to_disabled(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(tmp_path)
+
+    pds_call = pds_capture_argv(capture)
+    assert "--bootstrap-selected-project" not in pds_call
+    assert "--force-regenerate" not in pds_call
+
+
 def test_release_video_makefile_passes_idempotency_env_vars():
     makefile_text = (ROOT / "Makefile").read_text(encoding="utf8")
 
@@ -493,6 +591,21 @@ def test_release_video_makefile_passes_idempotency_env_vars():
     )
     assert (
         'RELEASE_VIDEO_ATTEMPT_ID="$(RELEASE_VIDEO_ATTEMPT_ID)"'
+        in makefile_text
+    )
+
+
+def test_release_video_makefile_passes_recovery_env_vars():
+    makefile_text = (ROOT / "Makefile").read_text(encoding="utf8")
+
+    assert "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0" in makefile_text
+    assert "RELEASE_VIDEO_FORCE_REGENERATE ?= 0" in makefile_text
+    assert (
+        'RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)"'
+        in makefile_text
+    )
+    assert (
+        'RELEASE_VIDEO_FORCE_REGENERATE="$(RELEASE_VIDEO_FORCE_REGENERATE)"'
         in makefile_text
     )
 
