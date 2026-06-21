@@ -681,6 +681,7 @@ Release-video diagnostics and recovery:
 - If Claude Code quota/auth blocks script generation, reuse a generated script artifact with `RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md make release-video RELEASE_TAG=<tag>`.
 - For selected-project bootstrap recovery, reuse the generated script and run `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_PROJECT_ID=<project-id> RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT=1 RELEASE_VIDEO_FORCE_REGENERATE=1 RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>`.
 - For PDS publish retries, inspect the previous run first. Exact retries should reuse the original idempotency key; start a new attempt only after confirming the old run should not be reused, with `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>` or a full `RELEASE_VIDEO_IDEMPOTENCY_KEY=<key>`.
+- If a release video is recovered after the release workflow already posted to Discord, run the **Backfill release video Discord post** workflow with the release tag and YouTube URL. Local equivalent: `DISCORD_WEBHOOK_URL=<webhook> make release-video-discord-backfill RELEASE_TAG=<tag> RELEASE_VIDEO_YOUTUBE_URL=<youtube-url>`.
 - Set `PDS_CLI` if `pds` is not on `PATH`. Use `RELEASE_VIDEO=0` only for an emergency release that must skip paid video generation/upload.
 
 ### 9. Troubleshooting Development Setup

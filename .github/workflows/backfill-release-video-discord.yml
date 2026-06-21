@@ -1,0 +1,43 @@
+name: Backfill release video Discord post
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag, for example v0.0.283"
+        required: true
+        type: string
+      youtube_url:
+        description: "Recovered YouTube release-video URL"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  backfill-discord:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Backfill Discord release-video follow-up
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ inputs.tag }}
+          YOUTUBE_URL: ${{ inputs.youtube_url }}
+        run: |
+          set -euo pipefail
+          python scripts/backfill_release_video_discord.py \
+            --tag "$TAG" \
+            --youtube-url "$YOUTUBE_URL" \
+            --repo "${{ github.repository }}"
