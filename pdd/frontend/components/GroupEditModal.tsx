@@ -118,7 +118,7 @@ const GroupEditModal: React.FC<GroupEditModalProps> = ({
                       {m.filename.replace(/\.prompt$/, '')}
                     </p>
                     {m.group && m.group !== name.trim() && (
-                      <p className="text-[10px] text-yellow-500 truncate">Currently in: {m.group}</p>
+                      <p className="text-[10px] text-cyan-500 truncate">Currently in: {m.group}</p>
                     )}
                   </div>
                 </label>
@@ -136,7 +136,7 @@ const GroupEditModal: React.FC<GroupEditModalProps> = ({
             <button
               onClick={handleSave}
               disabled={!name.trim()}
-              className="px-4 py-2 rounded-lg text-sm font-medium bg-accent-600 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-accent-500 hover:bg-accent-500 text-white disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               Save Group
             </button>

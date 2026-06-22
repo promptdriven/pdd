@@ -56,7 +56,7 @@ const ExtractRow: React.FC<ExtractRowProps> = ({ extract }) => {
     extract.is_fresh === true
       ? 'bg-green-500/20 text-green-400 border-green-500/30'
       : extract.is_fresh === false
-      ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
+      ? 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
       : 'bg-surface-600/30 text-surface-400 border-surface-500/30';
 
   return (
@@ -162,7 +162,7 @@ const ExtractsPanel: React.FC = () => {
         <p className="text-red-400 text-sm">{error}</p>
         <button
           onClick={loadExtracts}
-          className="px-3 py-1.5 bg-accent-600 hover:bg-accent-500 text-white rounded-lg text-sm transition-colors"
+          className="px-3 py-1.5 bg-accent-500 hover:bg-accent-500 text-white rounded-lg text-sm transition-colors"
         >
           Retry
         </button>
@@ -194,7 +194,7 @@ const ExtractsPanel: React.FC = () => {
           <span className="font-medium text-white">{data.total}</span> cached extract{data.total !== 1 ? 's' : ''}
         </span>
         {data.stale_count > 0 && (
-          <span className="text-yellow-400">
+          <span className="text-cyan-400">
             {data.stale_count} stale
           </span>
         )}

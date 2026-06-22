@@ -521,7 +521,7 @@ const ProjectSettings: React.FC = () => {
         <p className="text-surface-400">Failed to load configuration</p>
         <button
           onClick={loadConfig}
-          className="px-4 py-2 bg-accent-600 hover:bg-accent-500 text-white rounded-lg transition-colors"
+          className="px-4 py-2 bg-accent-500 hover:bg-accent-500 text-white rounded-lg transition-colors"
         >
           Retry
         </button>
@@ -550,7 +550,7 @@ const ProjectSettings: React.FC = () => {
               ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
               : saveSuccess
               ? 'bg-green-600 text-white'
-              : 'bg-accent-600 hover:bg-accent-500 text-white'
+              : 'bg-accent-500 hover:bg-accent-500 text-white'
           }`}
         >
           {saving ? (
@@ -640,7 +640,7 @@ const ProjectSettings: React.FC = () => {
         {/* Current Status */}
         <div className="flex items-center gap-3 p-3 rounded-lg bg-surface-800/50 mb-4">
           <div className={`w-3 h-3 rounded-full ${
-            authStatus?.authenticated ? 'bg-green-400' : 'bg-yellow-400 animate-pulse'
+            authStatus?.authenticated ? 'bg-green-400' : 'bg-cyan-400 animate-pulse'
           }`} />
           <div>
             <p className="text-sm font-medium text-white">
@@ -696,7 +696,7 @@ const ProjectSettings: React.FC = () => {
 
       {/* Unsaved changes warning */}
       {hasChanges() && (
-        <div className="mt-4 p-3 bg-yellow-500/20 border border-yellow-500/50 rounded-lg text-yellow-300 text-sm">
+        <div className="mt-4 p-3 bg-cyan-500/20 border border-cyan-500/50 rounded-lg text-cyan-300 text-sm">
           You have unsaved changes. Click "Save Changes" to persist your configuration.
         </div>
       )}

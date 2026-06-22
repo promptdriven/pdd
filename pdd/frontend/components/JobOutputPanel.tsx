@@ -99,7 +99,7 @@ const JobOutputPanel: React.FC<JobOutputPanelProps> = ({
           {/* Status indicator */}
           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
             job.status === 'running' ? 'bg-accent-400 animate-pulse' :
-            job.status === 'queued' ? 'bg-yellow-400' :
+            job.status === 'queued' ? 'bg-cyan-400' :
             job.status === 'completed' ? 'bg-green-400' :
             job.status === 'failed' ? 'bg-red-400' :
             'bg-surface-400'
@@ -182,14 +182,14 @@ const JobOutputPanel: React.FC<JobOutputPanelProps> = ({
               </div>
               <div className="h-1.5 bg-surface-700 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-gradient-to-r from-accent-600 to-accent-400 rounded-full transition-all duration-300"
+                  className="h-full bg-gradient-to-r from-accent-500 to-accent-400 rounded-full transition-all duration-300"
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>
             </div>
           ) : (
             <div className="h-1.5 bg-surface-700 rounded-full overflow-hidden">
-              <div className="h-full w-1/3 bg-gradient-to-r from-accent-600 to-accent-400 rounded-full animate-indeterminate" />
+              <div className="h-full w-1/3 bg-gradient-to-r from-accent-500 to-accent-400 rounded-full animate-indeterminate" />
             </div>
           )}
         </div>
@@ -233,7 +233,7 @@ const JobOutputPanel: React.FC<JobOutputPanelProps> = ({
                 outputRef.current.scrollTop = outputRef.current.scrollHeight;
               }
             }}
-            className="fixed bottom-20 right-8 px-3 py-2 bg-accent-600 hover:bg-accent-500 text-white text-xs font-medium rounded-lg shadow-lg transition-colors flex items-center gap-2"
+            className="fixed bottom-20 right-8 px-3 py-2 bg-accent-500 hover:bg-accent-500 text-white text-xs font-medium rounded-lg shadow-lg transition-colors flex items-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 14l-7 7m0 0l-7-7m7 7V3" />

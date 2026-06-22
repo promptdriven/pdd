@@ -78,16 +78,16 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
   // Determine context usage color
   const getUsageColor = (percent: number): string => {
     if (percent < 50) return 'text-green-400';
-    if (percent < 75) return 'text-yellow-400';
-    if (percent < 90) return 'text-orange-400';
+    if (percent < 75) return 'text-cyan-400';
+    if (percent < 90) return 'text-sky-400';
     return 'text-red-400';
   };
 
   // Get progress bar color class
   const getBarColor = (percent: number): string => {
     if (percent < 50) return 'bg-green-500';
-    if (percent < 75) return 'bg-yellow-500';
-    if (percent < 90) return 'bg-orange-500';
+    if (percent < 75) return 'bg-cyan-500';
+    if (percent < 90) return 'bg-sky-500';
     return 'bg-red-500';
   };
 
@@ -125,7 +125,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
             onClick={() => onViewModeChange('raw')}
             className={`px-2 sm:px-3 py-1 text-[10px] sm:text-xs font-medium transition-all duration-200 ${
               viewMode === 'raw'
-                ? 'bg-accent-600 text-white'
+                ? 'bg-accent-500 text-white'
                 : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600'
             }`}
           >
@@ -136,7 +136,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
             disabled={!processedMetrics && !preprocessingError}
             className={`px-2 sm:px-3 py-1 text-[10px] sm:text-xs font-medium transition-all duration-200 ${
               viewMode === 'processed'
-                ? 'bg-accent-600 text-white'
+                ? 'bg-accent-500 text-white'
                 : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600'
             } ${!processedMetrics && !preprocessingError ? 'opacity-50 cursor-not-allowed' : ''}`}
             title={preprocessingError ? `Error: ${preprocessingError}` : 'View processed prompt with includes expanded'}
@@ -162,7 +162,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
               !hasCodeFile
                 ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
                 : showCodePanel
-                ? 'bg-blue-600 text-white'
+                ? 'bg-blue-500 text-white'
                 : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
             }`}
             title={!hasCodeFile ? 'No code file available' : showCodePanel ? 'Hide code panel' : 'Show code side-by-side'}
@@ -181,7 +181,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
               !hasTestFile
                 ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
                 : showTestPanel
-                ? 'bg-yellow-600 text-white'
+                ? 'bg-cyan-600 text-white'
                 : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
             }`}
             title={!hasTestFile ? 'No test file available' : showTestPanel ? 'Hide test panel' : 'Show test side-by-side'}
@@ -216,7 +216,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
             onClick={onTogglePreview}
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 ${
               showPreview
-                ? 'bg-accent-600 text-white'
+                ? 'bg-accent-500 text-white'
                 : 'bg-surface-700/50 text-surface-300 hover:bg-surface-600 hover:text-white'
             }`}
             title={showPreview ? 'Show source code' : 'Show rendered preview'}
@@ -241,7 +241,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
             className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all duration-200 ${
               !hasCodeFile
                 ? 'bg-surface-700/30 text-surface-500 cursor-not-allowed'
-                : 'bg-gradient-to-r from-purple-600/50 to-blue-600/50 text-purple-200 hover:from-purple-500 hover:to-blue-500 hover:text-white'
+                : 'bg-gradient-to-r from-purple-600/50 to-blue-500/50 text-purple-200 hover:from-purple-500 hover:to-blue-500 hover:text-white'
             }`}
             title={!hasCodeFile ? 'No code file available' : 'View detailed diff analysis'}
           >
@@ -321,7 +321,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
               <div className="flex items-center gap-1.5" title={`${codeLineCount} lines of code / ${promptLineCount} lines of prompt`}>
                 <span className="text-[10px] sm:text-xs text-surface-400 hidden sm:inline">Code:Prompt:</span>
                 <span className={`text-xs sm:text-sm font-mono ${
-                  codeLineCount / promptLineCount >= 1 ? 'text-blue-400' : 'text-orange-400'
+                  codeLineCount / promptLineCount >= 1 ? 'text-blue-400' : 'text-sky-400'
                 }`}>
                   {(codeLineCount / promptLineCount).toFixed(1)}x
                 </span>
@@ -359,7 +359,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
               />
               {/* Output capacity (green/orange based on warning) */}
               <div
-                className={`h-full transition-all ${isOutputWarning ? 'bg-orange-500/50' : 'bg-green-500/30'}`}
+                className={`h-full transition-all ${isOutputWarning ? 'bg-sky-500/50' : 'bg-green-500/30'}`}
                 style={{ width: `${Math.max(outputPercent, 0)}%` }}
                 title={`Output capacity: ${formatTokens(outputCapacity)} tokens (${outputPercent.toFixed(1)}%)`}
               />
@@ -376,8 +376,8 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
               <span>Thinking {formatTokens(thinkingBudget)}</span>
             </div>
             <div className="flex items-center gap-1">
-              <div className={`w-2 h-2 rounded-sm ${isOutputWarning ? 'bg-orange-500' : 'bg-green-500/50'}`} />
-              <span className={isOutputWarning ? 'text-orange-400' : ''}>
+              <div className={`w-2 h-2 rounded-sm ${isOutputWarning ? 'bg-sky-500' : 'bg-green-500/50'}`} />
+              <span className={isOutputWarning ? 'text-sky-400' : ''}>
                 Output {formatTokens(outputCapacity)}
                 {isOutputWarning && ' (low)'}
               </span>
@@ -420,7 +420,7 @@ const PromptMetricsBar: React.FC<PromptMetricsBarProps> = ({
             ))}
           </div>
           {contextAudit.warnings.length > 0 && (
-            <div className="mt-1 text-[9px] sm:text-[10px] text-orange-400/80">
+            <div className="mt-1 text-[9px] sm:text-[10px] text-sky-400/80">
               {contextAudit.warnings.length} deferred/unresolved warning
               {contextAudit.warnings.length === 1 ? '' : 's'}
             </div>

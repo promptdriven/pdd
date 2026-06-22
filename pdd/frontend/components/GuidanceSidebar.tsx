@@ -107,7 +107,7 @@ const GuidanceSidebar: React.FC<GuidanceSidebarProps> = ({ isOpen, onClose }) =>
                   <h5 className="text-xs font-medium text-text-secondary mb-2 flex items-center gap-1.5">
                     <span className={`w-2 h-2 rounded-full ${
                       category === 'include' ? 'bg-blue-400' :
-                      category === 'dynamic' ? 'bg-amber-400' :
+                      category === 'dynamic' ? 'bg-cyan-400' :
                       category === 'grounding' ? 'bg-purple-400' :
                       'bg-gray-400'
                     }`} />

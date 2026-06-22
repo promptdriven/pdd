@@ -118,7 +118,7 @@ const CommandOutput: React.FC<CommandOutputProps> = ({ jobId, command, onClose, 
       case 'running': return 'text-blue-400';
       case 'completed': return 'text-green-400';
       case 'failed': return 'text-red-400';
-      case 'cancelled': return 'text-yellow-400';
+      case 'cancelled': return 'text-cyan-400';
     }
   };
 

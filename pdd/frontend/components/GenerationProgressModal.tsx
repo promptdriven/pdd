@@ -141,7 +141,7 @@ const GenerationProgressModal: React.FC<GenerationProgressModalProps> = ({
             {/* Close button */}
             <button
               onClick={onClose}
-              className="w-full px-4 py-2.5 bg-accent-600 hover:bg-accent-500 text-white rounded-xl font-medium transition-colors"
+              className="w-full px-4 py-2.5 bg-accent-500 hover:bg-accent-500 text-white rounded-xl font-medium transition-colors"
             >
               Close
             </button>

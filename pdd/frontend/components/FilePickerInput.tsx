@@ -48,7 +48,7 @@ const FilePickerInput: React.FC<FilePickerInputProps> = ({
 
   // Determine border color based on detection status
   const borderClass = isDetected !== undefined
-    ? (isDetected ? 'border-green-500/50' : 'border-yellow-500/50')
+    ? (isDetected ? 'border-green-500/50' : 'border-cyan-500/50')
     : 'border-surface-600';
 
   return (
