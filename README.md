@@ -59,7 +59,10 @@ For pre-merge prompt and user-story quality (vague terms, vocabulary, optional L
 
 For deterministic contract-section lint (`<contract_rules>`, `<coverage>`, waivers, story `## Covers`), see [docs/contract_check.md](docs/contract_check.md).
 
-For a rule-to-story/test coverage matrix (`pdd checkup coverage`), see [docs/coverage_contracts.md](docs/coverage_contracts.md).
+For a rule-to-story/test coverage matrix (`pdd checkup coverage`), including the
+`@pytest.mark.story` regression marker and the per-story `has_regression_test`
+dimension, see [docs/coverage_contracts.md](docs/coverage_contracts.md) and
+[docs/generating_user_stories.md](docs/generating_user_stories.md).
 
 For non-interactive bounded prompt repair after a failed prompt source-set checkup, see [docs/prompt_repair.md](docs/prompt_repair.md).
 

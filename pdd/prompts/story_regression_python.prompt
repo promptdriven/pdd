@@ -1,0 +1,85 @@
+<pdd-reason>Deterministic, marker-traceable pytest oracle linking user stories to the regression tests that claim them.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "story_id", "signature": "(path: str | Path)", "returns": "str"},
+      {"name": "tests_for_story", "signature": "(story_id: str)", "returns": "set[str]"},
+      {"name": "story_for_test", "signature": "(nodeid: str)", "returns": "str | set[str] | None"},
+      {"name": "has_regression_test", "signature": "(story_id: str)", "returns": "bool"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+% You are an expert Python engineer. Your goal is to implement
+% `pdd/story_regression.py`, the deterministic, marker-traceable pytest
+% story↔test traceability foundation for PDD.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+Implement the **deterministic, runnable-pytest** oracle that links a user story
+(`user_stories/story__<slug>.md`) to the pytest regression tests that claim it via
+the `@pytest.mark.story` marker. This module performs **collection only** — it
+never runs an LLM, never executes test bodies, and never triggers `e2e`/`real`
+collection side effects.
+
+It is intentionally separate from the LLM oracle in `pdd/user_story_tests.py`:
+that module links stories to *prompts* and validates them with `detect_change`
+(an LLM call). This module is a *deterministic* story↔test map. The only shared
+concept is the `story_id` identity, which is reused from `user_story_tests`'s
+public `story_id` helper so both systems share one identity space.
+
+% Requirements
+1. **One identity space.** Reuse the public `story_id` helper exposed by
+   `.user_story_tests` (`story__<slug>.md` -> `<slug>`) as the single `story_id`
+   convention. Do NOT introduce a second slug convention.
+2. **Build the bidirectional map by collection, not execution.** Construct the
+   `story_id <-> {nodeid}` map with a `pytest --collect-only` plugin —
+   e.g. `pytest.main(["--collect-only", "-q", str(tests_dir)], plugins=[collector])`
+   with a `pytest_collection_modifyitems` hook that records `item.nodeid` against
+   the story ids read from `item.iter_markers(name="story")`. Scope collection to
+   the `tests/` tree.
+3. **Accept both marker forms.** Normalize `@pytest.mark.story(story_id="x")`
+   (keyword) and `@pytest.mark.story("x")` (positional `args[0]`) to one resolved
+   `story_id`.
+4. **Two resolvers over one map.** Expose `tests_for_story(story_id) -> set[str]`
+   (node ids that claim the story) and `story_for_test(nodeid)` returning the
+   owning story id(s) (a test may claim more than one story). Both directions MUST
+   be backed by the **same** collected map so they cannot drift.
+5. **Cardinality.** Support one story -> many tests and one test -> >=1 story
+   (`iter_markers` yields one `Mark` per decorator application).
+6. **Orphan detection (both directions).** Detect a `story_id` with no claiming
+   test, and a marker referencing a `story_id` with no matching
+   `story__<slug>.md` (surface the latter as a validation warning, distinct from
+   the no-test gap).
+7. **Coverage predicate.** Provide `has_regression_test(story_id) -> bool` (true
+   when >=1 collected test claims the story) for `coverage_contracts` to consume.
+8. **MUST NOT:** invoke an LLM, execute test bodies, or trigger `e2e`/`real`
+   collection side effects — rely on `--collect-only`.
+9. **Graceful degradation.** If a test module is unparseable, skip it and continue
+   rather than crashing; an absent `tests/` directory yields an empty map without
+   error.
+
+% Inputs and Outputs
+- `story_id(path) -> str` — re-exported/reused from `.user_story_tests`.
+- `tests_for_story(story_id: str) -> set[str]` — node ids claiming the story.
+- `story_for_test(nodeid: str) -> str | set[str] | None` — owning story id(s).
+- `has_regression_test(story_id: str) -> bool` — convenience predicate.
+- Orphan diagnostics (stories with no test; markers naming a nonexistent story).
+
+% Dependencies
+<pdd.user_story_tests><include>context/user_story_tests_example.py</include></pdd.user_story_tests>
+- `pytest` — used purely for `--collect-only` collection (a `pytest_collection_modifyitems` plugin).
+
+% Deliverables
+- Code: `pdd/story_regression.py`
+- Exports: `story_id`, `tests_for_story`, `story_for_test`, `has_regression_test`
+
+% Verification
+```bash
+pytest -q tests/test_story_regression.py
+pylint pdd/story_regression.py
+```
