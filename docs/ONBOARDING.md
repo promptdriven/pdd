@@ -118,9 +118,14 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 GEMINI_API_KEY=your-google-api-key
 
 # Optional: For Vertex AI (Gemini via GCP)
-VERTEX_CREDENTIALS=/path/to/service-account.json
+# Simplest: use Application Default Credentials (ADC) — run
+#   gcloud auth application-default login
+# and leave VERTEX_CREDENTIALS unset (set only the project/location below).
 VERTEXAI_PROJECT=your-gcp-project-id
 VERTEXAI_LOCATION=us-central1
+# Only if NOT using ADC, point this at a REAL local service-account JSON.
+# A placeholder path breaks auth — leave it unset to use ADC:
+# VERTEX_CREDENTIALS=/absolute/path/to/service-account.json
 # Legacy aliases also work:
 # VERTEX_PROJECT=your-gcp-project-id
 # VERTEX_LOCATION=us-central1
@@ -132,11 +137,22 @@ login flow once, such as `claude auth login`, `gemini` interactive login, or
 
 **To use Vertex AI (optional):**
 
+The simplest path is Application Default Credentials (ADC):
+
+1. Run `gcloud auth application-default login`
+2. Ensure your Google account (or its service account) has the "Vertex AI User" role on the project
+3. Set `VERTEXAI_PROJECT` / `VERTEXAI_LOCATION` and leave `VERTEX_CREDENTIALS` unset — PDD authenticates via ADC
+
+Or, with a service-account key file instead of ADC:
+
 1. Go to [GCP Console &gt; IAM &gt; Service Accounts](https://console.cloud.google.com/iam-admin/serviceaccounts)
 2. Create a service account with the "Vertex AI User" role
 3. Create and download a JSON key file
 4. Save it securely (e.g., `~/.gcp/pdd-service-account.json`)
-5. Set `VERTEX_CREDENTIALS` to the file path in your `.env`
+5. Set `VERTEX_CREDENTIALS` to that file path in your `.env`
+
+> Don't set `VERTEX_CREDENTIALS` to a placeholder path. Any value there is
+> treated as a real credential and disables the ADC fallback.
 
 See `.env.example` for a complete list of supported environment variables.
 
