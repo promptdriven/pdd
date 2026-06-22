@@ -23,6 +23,7 @@ help:
 	@echo "  make coverage                - Run tests with coverage"
 	@echo "  make regression [TEST_NUM=n] - Run regression tests (optionally specific test number)"
 	@echo "  make regression-public       - Run public-safe CLI regressions without LLM/cloud credentials"
+	@echo "  make regression-stories      - Run public-safe user-story regression lane (pytest -m story)"
 	@echo "  make sync-regression [TEST_NUM=n] - Run sync regression tests (optionally specific test number)"
 	@echo "  make all-regression 		  - Run all regression test suites"
 	@echo "  make cloud-regression [TEST_NUM=n] - Run cloud regression tests (no --local flag)"
@@ -546,6 +547,12 @@ regression-public:
 	@echo "Running public-safe CLI regression tests"
 	@mkdir -p staging
 	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/regression_public.sh
+
+.PHONY: regression-stories
+regression-stories:
+	@echo "Running public-safe user-story regression lane"
+	@mkdir -p staging
+	@PYTHONPATH=$(PDD_DIR):$$PYTHONPATH bash tests/story_regression.sh
 
 SYNC_PARALLEL ?= 1
 
