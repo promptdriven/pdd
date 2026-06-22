@@ -1158,7 +1158,7 @@ const App: React.FC = () => {
                 </div>
                 <div>
                   <h2 className="text-lg sm:text-xl font-semibold text-white">Dev Units</h2>
-                  <p className="text-xs sm:text-sm text-surface-400">Manage your development modules and architecture</p>
+                  <p className="text-xs sm:text-sm text-surface-400">Your prompts are the source. Manage every module and its architecture in one place.</p>
                 </div>
               </div>
               {/* Graph/List toggle */}
@@ -1193,7 +1193,7 @@ const App: React.FC = () => {
               </div>
               <div>
                 <h2 className="text-lg sm:text-xl font-semibold text-white">Bug Investigation Agent</h2>
-                <p className="text-xs sm:text-sm text-surface-400">Automatically investigate GitHub issues and generate failing test cases</p>
+                <p className="text-xs sm:text-sm text-surface-400">Point it at a GitHub issue. It reproduces the bug and writes the failing test.</p>
               </div>
             </div>
           )}
@@ -1206,7 +1206,7 @@ const App: React.FC = () => {
               </div>
               <div>
                 <h2 className="text-lg sm:text-xl font-semibold text-white">PR Fix Agent</h2>
-                <p className="text-xs sm:text-sm text-surface-400">Automatically fix code issues based on PR review comments</p>
+                <p className="text-xs sm:text-sm text-surface-400">Turns PR review comments into committed fixes — no manual round-trips.</p>
               </div>
             </div>
           )}
@@ -1219,7 +1219,7 @@ const App: React.FC = () => {
               </div>
               <div>
                 <h2 className="text-lg sm:text-xl font-semibold text-white">Change Request Agent</h2>
-                <p className="text-xs sm:text-sm text-surface-400">Automatically implement feature requests and changes from GitHub issues</p>
+                <p className="text-xs sm:text-sm text-surface-400">Describe the change in a GitHub issue. Ship the implementation as a reviewable PR.</p>
               </div>
             </div>
           )}
@@ -1230,7 +1230,7 @@ const App: React.FC = () => {
               </div>
               <div>
                 <h2 className="text-lg sm:text-xl font-semibold text-white">Settings</h2>
-                <p className="text-xs sm:text-sm text-surface-400">Configure project settings and preferences</p>
+                <p className="text-xs sm:text-sm text-surface-400">Configure your project, models, and workflow preferences.</p>
               </div>
             </div>
           )}
