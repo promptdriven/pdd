@@ -673,3 +673,492 @@ class TestCacheKeyPathConsistency:
             f"not on CWD. Got inside={key_from_inside[:16]}..., "
             f"outside={key_from_outside[:16]}..."
         )
+
+
+# ---------------------------------------------------------------------------
+# Req 10: Session-level extraction guard (issue #1711)
+# ---------------------------------------------------------------------------
+#
+# pdd sync repeatedly issued the same <include query="..."> LLM extraction
+# call because IncludeQueryExtractor.extract() had no session-level guard.
+# The disk cache is the only deduplication mechanism, but its validity check
+# requires an exact source_hash match. When pdd sync operations (generate,
+# fix, update) modify the referenced source file, the hash changes, the disk
+# cache is invalidated, and a fresh LLM call fires unconditionally — up to
+# 6+ times in a single run, burning ~$1.70 with no useful output.
+#
+# The fix adds:
+#   MAX_SESSION_EXTRACTIONS = 2                                (constant)
+#   IncludeQueryExtractor._session_extraction_counts: dict    (class-level)
+#   IncludeQueryExtractor.reset_session()                     (classmethod)
+#   RepeatedRetrievalQueryError                               (exception)
+#
+# All tests in TestSessionExtractionGuard FAIL on current buggy code and
+# PASS after the fix. Tests in TestIssue1711BugDocumentation document the
+# current behavior and PASS on both old and new code.
+
+# The reported query string from issue #1711
+_ISSUE_1711_QUERY = (
+    "implementation of the multi-step orchestrator pipeline and error handling"
+)
+
+# Maximum LLM calls allowed per (file, query) pair per session.
+# Must match the constant the fix adds to include_query_extractor.py.
+_MAX_SESSION_EXTRACTIONS = 2
+
+# How many times the bug caused the query to fire in the reported incident
+_REPORTED_REPEAT_COUNT = 6
+
+
+@pytest.fixture
+def issue_1711_source_file(tmp_path, monkeypatch):
+    """Temporary project with orchestrator.py as the source file (matches issue #1711)."""
+    monkeypatch.setattr(
+        "pdd.path_resolution.find_project_root_from_path",
+        lambda *args, **kwargs: str(tmp_path),
+    )
+    monkeypatch.setenv(_ENV_CACHE_ENABLE, "true")
+    source_file = tmp_path / "orchestrator.py"
+    source_file.write_text(
+        "# initial content\ndef orchestrate(): pass",
+        encoding="utf-8",
+    )
+    return tmp_path, source_file
+
+
+class TestSessionExtractionGuard:
+    """Req 10: session-level guard prevents repeated identical (file, query) LLM calls.
+
+    All tests FAIL on the current (buggy) code (no guard exists) and PASS
+    after the fix adds MAX_SESSION_EXTRACTIONS, _session_extraction_counts,
+    reset_session(), and RepeatedRetrievalQueryError.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_session_state(self):
+        """Clear session extraction counts before and after each test.
+
+        Safe to call when reset_session() does not yet exist (pre-fix code):
+        the fixture is a no-op in that case.
+        """
+        reset = getattr(IncludeQueryExtractor, "reset_session", None)
+        if reset is not None:
+            reset()
+        yield
+        reset = getattr(IncludeQueryExtractor, "reset_session", None)
+        if reset is not None:
+            reset()
+
+    def test_session_guard_caps_llm_calls_same_instance(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """Session guard caps LLM calls when source file changes between iterations (same instance).
+
+        Reproduces the exact scenario from issue #1711: pdd sync modifies the
+        source file (via generate/fix/update) between iterations. Each modification
+        causes a cache miss and a fresh LLM call with no upper bound.
+
+        FAILS on current buggy code: llm_invoke fires 6 times, no guard exists.
+        PASSES after fix: guard fires at or before MAX_SESSION_EXTRACTIONS calls.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+
+        try:
+            for i in range(_REPORTED_REPEAT_COUNT):
+                # Simulate generate/fix/update modifying the source file.
+                source_file.write_text(
+                    f"# version {i}\ndef orchestrate_v{i}(): pass",
+                    encoding="utf-8",
+                )
+                extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+        except Exception:
+            # Fail-fast guard raising an exception is an acceptable implementation.
+            pass
+
+        assert mock_llm["llm_invoke"].call_count <= _MAX_SESSION_EXTRACTIONS, (
+            f"Bug #1711: session guard missing — llm_invoke fired "
+            f"{mock_llm['llm_invoke'].call_count} times "
+            f"(expected ≤ {_MAX_SESSION_EXTRACTIONS}) when the source file changed "
+            "on every sync iteration."
+        )
+
+    def test_session_guard_works_across_new_instances(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """Session guard enforces limit when a new IncludeQueryExtractor is created per call.
+
+        Production pattern: preprocess.py:712 creates a new IncludeQueryExtractor()
+        on every process_include_tags() call. A guard that lives only in instance
+        state would be discarded on every call and never fire. The guard MUST be
+        class-level or module-level to survive instance turnover.
+
+        FAILS on current buggy code: every new instance has no session memory.
+        PASSES after fix: class-level counter spans instance boundaries.
+        """
+        _, source_file = issue_1711_source_file
+
+        try:
+            for i in range(_REPORTED_REPEAT_COUNT):
+                source_file.write_text(
+                    f"# version {i}\ndef orchestrate_v{i}(): pass",
+                    encoding="utf-8",
+                )
+                # New instance per call — same as the real sync loop via preprocess.py:712
+                IncludeQueryExtractor().extract(str(source_file), _ISSUE_1711_QUERY)
+        except Exception:
+            pass
+
+        assert mock_llm["llm_invoke"].call_count <= _MAX_SESSION_EXTRACTIONS, (
+            f"Bug #1711: session guard must be class/module-level. "
+            f"Got {mock_llm['llm_invoke'].call_count} LLM calls across "
+            f"{_REPORTED_REPEAT_COUNT} new IncludeQueryExtractor instances "
+            f"(expected ≤ {_MAX_SESSION_EXTRACTIONS})."
+        )
+
+    def test_guard_does_not_make_extra_llm_call_after_limit(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """After the session limit is reached, llm_invoke is not called again.
+
+        Whether the guard raises an exception (fail-fast) or returns a stale
+        result (tolerant), the LLM must NOT be called beyond MAX_SESSION_EXTRACTIONS.
+        Both valid implementations satisfy this test.
+
+        FAILS on current buggy code: no guard exists, so the LLM is called
+        unconditionally on every cache miss.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+
+        try:
+            for i in range(_MAX_SESSION_EXTRACTIONS + 1):
+                source_file.write_text(
+                    f"# version {i}\ndef orchestrate_v{i}(): pass",
+                    encoding="utf-8",
+                )
+                extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+        except Exception:
+            # Fail-fast guard: exception at or before the limit is acceptable.
+            pass
+
+        assert mock_llm["llm_invoke"].call_count <= _MAX_SESSION_EXTRACTIONS, (
+            f"Bug #1711: guard must prevent LLM call #{_MAX_SESSION_EXTRACTIONS + 1}. "
+            f"Got {mock_llm['llm_invoke'].call_count} calls."
+        )
+
+    def test_session_guard_tracks_per_file_query_pair_independently(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """Session guard counts independently for each (file, query) pair.
+
+        Different queries on the same file each get their own counter keyed on
+        cache_key = sha256(rel_path + '\\n' + query). A global counter would
+        incorrectly block legitimate new queries after another is exhausted.
+
+        FAILS on current buggy code: no guard at all, so all calls go through
+        (3 queries × 6 iterations = 18 calls > expected maximum of 6).
+        PASSES after fix: each query capped independently at MAX_SESSION_EXTRACTIONS.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+
+        queries = [
+            "orchestrator pipeline implementation",
+            "error handling strategy",
+            "retry logic",
+        ]
+        try:
+            for query in queries:
+                for i in range(_REPORTED_REPEAT_COUNT):
+                    source_file.write_text(
+                        f"# version {i} for {query[:10]}", encoding="utf-8"
+                    )
+                    extractor.extract(str(source_file), query)
+        except Exception:
+            pass
+
+        # Each query may trigger at most _MAX_SESSION_EXTRACTIONS LLM calls.
+        expected_max = len(queries) * _MAX_SESSION_EXTRACTIONS
+        assert mock_llm["llm_invoke"].call_count <= expected_max, (
+            f"Bug #1711: per-(file, query) guard must allow independent queries. "
+            f"Expected ≤ {expected_max} calls for {len(queries)} distinct queries "
+            f"× {_MAX_SESSION_EXTRACTIONS} allowed each. "
+            f"Got {mock_llm['llm_invoke'].call_count}."
+        )
+
+    def test_reset_session_allows_re_extraction_after_limit(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """reset_session() clears the counter so fresh extractions are permitted.
+
+        Tests and sync_orchestration.py can call reset_session() at the start
+        of each top-level pdd sync run to allow the full quota again.
+
+        FAILS on current buggy code: IncludeQueryExtractor.reset_session() does
+        not exist (raises AttributeError).
+        PASSES after fix: reset_session() clears _session_extraction_counts.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+
+        # Exhaust the session limit
+        try:
+            for i in range(_MAX_SESSION_EXTRACTIONS + 1):
+                source_file.write_text(f"# version {i}", encoding="utf-8")
+                extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+        except Exception:
+            pass
+
+        calls_before_reset = mock_llm["llm_invoke"].call_count
+
+        # This raises AttributeError on buggy code (reset_session doesn't exist),
+        # which correctly marks this test as failing until the fix is applied.
+        IncludeQueryExtractor.reset_session()
+
+        # After reset, a further call on a freshly-changed file should invoke the LLM.
+        source_file.write_text("# version after reset\ndef orchestrate_reset(): pass", encoding="utf-8")
+        extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+
+        assert mock_llm["llm_invoke"].call_count > calls_before_reset, (
+            "Bug #1711: After reset_session(), extract() should permit a new LLM call "
+            "for the same (file, query) pair on a freshly-changed file."
+        )
+
+    def test_querying_console_output_bounded_by_session_guard(
+        self, issue_1711_source_file, mock_llm, monkeypatch
+    ):
+        """The 'Querying...' Rich message is emitted ≤ MAX_SESSION_EXTRACTIONS times.
+
+        This directly covers the user-visible symptom from issue #1711: the same
+        \"query='implementation of the multi-step orchestrator pipeline and error\"
+        line was printed 6× to the user before the run exited 1 with
+        \"Overall status: Failed\".
+
+        FAILS on current buggy code: the message is printed once per LLM call,
+        with no session bound, so it appears 6 times.
+        PASSES after fix: guard fires before the 3rd print.
+        """
+        _, source_file = issue_1711_source_file
+
+        console_prints: list[str] = []
+        mock_console = MagicMock()
+        mock_console.print.side_effect = lambda *args, **kwargs: console_prints.append(
+            args[0] if args else ""
+        )
+        monkeypatch.setattr("pdd.include_query_extractor._console", mock_console)
+
+        extractor = IncludeQueryExtractor()
+
+        try:
+            for i in range(_REPORTED_REPEAT_COUNT):
+                source_file.write_text(
+                    f"# version {i}\ndef orchestrate_v{i}(): pass",
+                    encoding="utf-8",
+                )
+                extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+        except Exception:
+            pass
+
+        querying_prints = [
+            msg for msg in console_prints
+            if isinstance(msg, str) and "Querying" in msg
+        ]
+
+        assert len(querying_prints) <= _MAX_SESSION_EXTRACTIONS, (
+            f"Bug #1711: 'Querying...' was printed {len(querying_prints)} times — "
+            "this is the exact repeated output users saw. "
+            f"Session guard should cap it at {_MAX_SESSION_EXTRACTIONS}."
+        )
+
+    def test_session_guard_applies_when_cache_disabled(
+        self, issue_1711_source_file, mock_llm, monkeypatch
+    ):
+        """Session guard must apply even when EXTRACTS_CACHE_ENABLE=false.
+
+        With no disk cache, the session guard is the ONLY deduplication mechanism.
+        If the guard lives inside the `if _cache_enabled():` branch, it would be
+        bypassed entirely when the cache is disabled, leaving the LLM unguarded.
+
+        FAILS on current buggy code: no guard exists anywhere.
+        PASSES after fix: guard sits in the unconditional extraction path.
+        """
+        _, source_file = issue_1711_source_file
+        monkeypatch.setenv(_ENV_CACHE_ENABLE, "false")
+
+        extractor = IncludeQueryExtractor()
+
+        try:
+            for i in range(_REPORTED_REPEAT_COUNT):
+                source_file.write_text(
+                    f"# version {i}\ndef orchestrate_v{i}(): pass",
+                    encoding="utf-8",
+                )
+                extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+        except Exception:
+            pass
+
+        assert mock_llm["llm_invoke"].call_count <= _MAX_SESSION_EXTRACTIONS, (
+            f"Bug #1711: session guard must apply even when disk cache is disabled. "
+            f"Got {mock_llm['llm_invoke'].call_count} LLM calls with "
+            f"EXTRACTS_CACHE_ENABLE=false (expected ≤ {_MAX_SESSION_EXTRACTIONS})."
+        )
+
+    def test_process_include_tags_integration_bounded_by_session_guard(
+        self, issue_1711_source_file, mock_llm, monkeypatch
+    ):
+        """Session guard propagates through the full process_include_tags() call chain.
+
+        preprocess.py:712 creates a new IncludeQueryExtractor() on every
+        process_include_tags() call. The guard must cap total LLM calls even
+        through this real integration path, mirroring the actual pdd sync loop
+        where preprocess() is invoked for every operation (generate, fix, update).
+
+        FAILS on current buggy code: 6 LLM calls, one per sync iteration.
+        PASSES after fix: class-level guard caps calls at MAX_SESSION_EXTRACTIONS.
+        """
+        from pdd.preprocess import process_include_tags
+
+        _, source_file = issue_1711_source_file
+
+        prompt_template = (
+            f'<include query="{_ISSUE_1711_QUERY}">'
+            f"{source_file}</include>"
+        )
+
+        monkeypatch.setattr(
+            "pdd.preprocess.get_file_path",
+            lambda p: str(source_file),
+        )
+
+        try:
+            for i in range(_REPORTED_REPEAT_COUNT):
+                source_file.write_text(
+                    f"# orchestrator version {i}", encoding="utf-8"
+                )
+                process_include_tags(prompt_template, recursive=False)
+        except Exception:
+            pass
+
+        assert mock_llm["llm_invoke"].call_count <= _MAX_SESSION_EXTRACTIONS, (
+            f"Bug #1711: process_include_tags fired the LLM "
+            f"{mock_llm['llm_invoke'].call_count} times across "
+            f"{_REPORTED_REPEAT_COUNT} sync iterations "
+            f"(expected ≤ {_MAX_SESSION_EXTRACTIONS}). "
+            "Session guard must survive the new-instance-per-call pattern in preprocess.py."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Reproduction tests from Step 5 — issue #1711
+# ---------------------------------------------------------------------------
+# These tests document the current (buggy) behavior and verify the existing
+# disk-cache behavior that must not regress after the fix.
+
+class TestIssue1711BugDocumentation:
+    """Document bug #1711 behavior — these tests PASS on current (buggy) code.
+
+    test_file_change_triggers_cache_miss_and_repeated_llm_call asserts the
+    buggy call count (6). After the fix is applied, this assertion should be
+    updated to assert call_count <= _MAX_SESSION_EXTRACTIONS.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_session_state(self):
+        reset = getattr(IncludeQueryExtractor, "reset_session", None)
+        if reset is not None:
+            reset()
+        yield
+        reset = getattr(IncludeQueryExtractor, "reset_session", None)
+        if reset is not None:
+            reset()
+
+    def test_file_change_triggers_cache_miss_and_repeated_llm_call(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """DOCUMENTS BUG #1711: each file-content change causes a fresh LLM call.
+
+        When pdd sync modifies the source file between iterations, the disk
+        cache's source_hash check fails, the stale cache is deleted, and
+        llm_invoke fires unconditionally — 6 times in the reported incident.
+
+        This test PASSES on the current (buggy) code to document the observed
+        behavior. See TestSessionExtractionGuard for the post-fix assertions.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+
+        for i in range(_REPORTED_REPEAT_COUNT):
+            source_file.write_text(
+                f"# version {i}\ndef orchestrate_v{i}(): pass",
+                encoding="utf-8",
+            )
+            extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+
+        # Documents the bug: N calls for N file versions with no guard.
+        # After the fix, update this to: call_count <= _MAX_SESSION_EXTRACTIONS
+        assert mock_llm["llm_invoke"].call_count == _REPORTED_REPEAT_COUNT, (
+            f"Bug #1711 documented: the same query fired {_REPORTED_REPEAT_COUNT} "
+            "times when the source file changed between each sync iteration. "
+            "This is a documentation test — see TestSessionExtractionGuard for "
+            "the assertions that verify the fix."
+        )
+
+
+class TestIssue1711BaselineCacheBehavior:
+    """Confirm existing disk-cache behavior when the file does NOT change.
+
+    These tests pass today and must continue passing after the fix is applied.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_session_state(self):
+        reset = getattr(IncludeQueryExtractor, "reset_session", None)
+        if reset is not None:
+            reset()
+        yield
+        reset = getattr(IncludeQueryExtractor, "reset_session", None)
+        if reset is not None:
+            reset()
+
+    def test_cache_hit_prevents_repeated_llm_call_same_content(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """Unchanged file across N calls → only 1 LLM call (disk cache hit).
+
+        The disk cache is keyed on (rel_path, query) and validated against the
+        file's SHA-256 content hash. When the file does not change, the cache
+        hit path returns early with no LLM call.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+
+        for _ in range(_REPORTED_REPEAT_COUNT):
+            extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+
+        assert mock_llm["llm_invoke"].call_count == 1, (
+            "Disk cache should prevent repeated LLM calls when the file is unchanged. "
+            f"Got {mock_llm['llm_invoke'].call_count} calls."
+        )
+
+    def test_new_extractor_instance_still_hits_cache_for_unchanged_file(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """Fresh IncludeQueryExtractor instance on the same unchanged file uses disk cache.
+
+        Critical: process_include_tags() creates a new IncludeQueryExtractor()
+        on every call (preprocess.py:712). The disk cache must serve subsequent
+        calls even when instance state is discarded between calls.
+        """
+        _, source_file = issue_1711_source_file
+
+        # First call populates disk cache
+        IncludeQueryExtractor().extract(str(source_file), _ISSUE_1711_QUERY)
+
+        # Subsequent calls with new instances — same as the real sync loop
+        for _ in range(_REPORTED_REPEAT_COUNT - 1):
+            IncludeQueryExtractor().extract(str(source_file), _ISSUE_1711_QUERY)
+
+        assert mock_llm["llm_invoke"].call_count == 1, (
+            "Disk cache should serve subsequent calls even with new extractor instances."
+        )

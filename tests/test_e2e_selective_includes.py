@@ -3025,3 +3025,240 @@ class TestCrossDirectoryPipelineE2E:
         assert "cli.py" in directives, (
             f"cli.py should appear in directives. Got:\n{directives}"
         )
+
+
+# ===========================================================================
+# 17. SESSION-LEVEL EXTRACTION GUARD — pdd sync repeated preprocess() calls
+#     (issue #1711)
+# ===========================================================================
+#
+# When pdd sync runs, sync_main.py:545 calls:
+#
+#   processed_prompt = preprocess(prompt_content, recursive=False,
+#                                 double_curly_brackets=True)
+#
+# once per sync iteration (generate, fix, update …).  If the prompt contains
+# an <include query="..."> tag, each preprocess() call goes through:
+#
+#   preprocess()
+#     └── process_xml_tags() → process_include_tags()
+#           └── IncludeQueryExtractor().extract()
+#                 └── llm_invoke()  ← the external LLM call
+#
+# The disk cache in .pdd/extracts/ is validated by source_hash.  Every sync
+# operation modifies the referenced source file (e.g. orchestrator.py), so
+# the hash changes, the cache is invalidated, and llm_invoke fires again with
+# no upper bound.  In the reported incident the same query fired 6 times before
+# the run exited 1 with "Overall status: Failed" and ~$1.70 in wasted spend.
+#
+# The fix adds a class-level session counter in IncludeQueryExtractor that caps
+# the number of live LLM calls per (file, query) pair per process lifetime at
+# MAX_SESSION_EXTRACTIONS (= 2).
+#
+# All tests in TestSessionGuardPreprocessE2E:
+#   FAIL on current buggy code  — llm_invoke fires 6 times, no guard
+#   PASS after the fix           — guard caps calls at ≤ 2
+
+_E2E_1711_QUERY = (
+    "implementation of the multi-step orchestrator pipeline and error handling"
+)
+_E2E_1711_REPEAT_COUNT = 6
+_E2E_1711_MAX_EXTRACTIONS = 2
+
+
+class TestSessionGuardPreprocessE2E:
+    """E2E: session guard through the real preprocess() → IncludeQueryExtractor chain.
+
+    These tests exercise the exact call path that pdd sync uses (sync_main.py:545)
+    rather than calling process_include_tags() or IncludeQueryExtractor.extract()
+    directly.  IncludeQueryExtractor is NOT mocked — these tests verify the
+    session-guard behavior through the full integration boundary.
+    """
+
+    @pytest.fixture(autouse=True)
+    def reset_session_and_setup(self, tmp_path, monkeypatch):
+        """Per-test setup: isolated project root, mocked LLM, clean session state."""
+        # Point the project-root finder at the temp directory so the disk cache
+        # lands in tmp_path/.pdd/extracts/ and not in the real repo.
+        monkeypatch.setattr(
+            "pdd.path_resolution.find_project_root_from_path",
+            lambda *args, **kwargs: str(tmp_path),
+        )
+        # Suppress the Rich "Starting prompt preprocessing" panel in test output.
+        monkeypatch.setenv("PDD_QUIET", "1")
+
+        # Clear the class-level session counter if the fix has already been applied.
+        from pdd.include_query_extractor import IncludeQueryExtractor
+        reset = getattr(IncludeQueryExtractor, "reset_session", None)
+        if reset is not None:
+            reset()
+        yield
+        reset = getattr(IncludeQueryExtractor, "reset_session", None)
+        if reset is not None:
+            reset()
+
+    def test_preprocess_session_guard_caps_llm_calls_on_changing_source(
+        self, tmp_path, monkeypatch
+    ):
+        """preprocess() session guard bounds LLM calls when source changes each iteration.
+
+        Exercises the exact call path from sync_main.py:545 — preprocess() →
+        process_include_tags() → IncludeQueryExtractor().extract() → llm_invoke().
+
+        pdd sync modifies orchestrator.py between each call (generate/fix/update).
+        Each modification changes the source_hash, invalidating the disk cache and
+        causing a cache miss on every iteration.
+
+        FAILS on current buggy code: 6 LLM calls across 6 iterations, no guard.
+        PASSES after fix: class-level session counter caps calls at
+        MAX_SESSION_EXTRACTIONS (≤ 2).
+        """
+        source_file = tmp_path / "orchestrator.py"
+        source_file.write_text(
+            "# initial content\ndef orchestrate(): pass",
+            encoding="utf-8",
+        )
+
+        # Prompt template with the exact query string from the incident report.
+        prompt_template = (
+            f'<include query="{_E2E_1711_QUERY}">'
+            f"{source_file.name}</include>"
+        )
+
+        llm_call_count = [0]
+
+        def mock_llm_invoke(**kwargs):
+            llm_call_count[0] += 1
+            return {
+                "result": f"Extracted content v{llm_call_count[0]}",
+                "cost": 0.0,
+                "model_name": "mock-model",
+            }
+
+        # Mock only the lowest-level LLM dependencies inside include_query_extractor.
+        # IncludeQueryExtractor itself is NOT mocked — it is the component under test.
+        monkeypatch.setattr("pdd.include_query_extractor.llm_invoke", mock_llm_invoke)
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.load_prompt_template",
+            lambda *args, **kwargs: "TEMPLATE_STUB",
+        )
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.preprocess",
+            lambda *args, **kwargs: "PROCESSED_TEMPLATE_STUB",
+        )
+        # get_file_path resolves the tag's file reference; point it at our temp file.
+        monkeypatch.setattr(
+            "pdd.preprocess.get_file_path",
+            lambda p: str(source_file),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        from pdd.preprocess import preprocess as pdd_preprocess
+
+        try:
+            for i in range(_E2E_1711_REPEAT_COUNT):
+                # Simulate generate/fix/update writing a new version of the source file.
+                source_file.write_text(
+                    f"# orchestrator version {i}\ndef orchestrate_v{i}(): pass",
+                    encoding="utf-8",
+                )
+                pdd_preprocess(
+                    prompt_template,
+                    recursive=False,
+                    double_curly_brackets=False,
+                )
+        except Exception:
+            # A fail-fast guard raising RepeatedRetrievalQueryError is an acceptable
+            # implementation — catching it here lets us assert the call count.
+            pass
+
+        assert llm_call_count[0] <= _E2E_1711_MAX_EXTRACTIONS, (
+            f"Bug #1711 (E2E via preprocess()): llm_invoke fired {llm_call_count[0]} "
+            f"times across {_E2E_1711_REPEAT_COUNT} preprocess() calls where the "
+            f"source file changed on every iteration (expected ≤ {_E2E_1711_MAX_EXTRACTIONS}). "
+            "The session guard in IncludeQueryExtractor must cap repeated LLM calls "
+            "when pdd sync modifies source files between preprocessing steps."
+        )
+
+    def test_preprocess_querying_console_output_bounded_by_session_guard(
+        self, tmp_path, monkeypatch
+    ):
+        """'Querying...' console output is bounded through the full preprocess() path.
+
+        The user-visible symptom from issue #1711 was the same
+        "query='implementation of the multi-step orchestrator pipeline and error'"
+        line printed 6× in a row before exit code 1.  This test verifies that the
+        Rich 'Querying...' message (emitted inside IncludeQueryExtractor.extract())
+        is capped at MAX_SESSION_EXTRACTIONS even when going through the full
+        preprocess() → process_include_tags() → IncludeQueryExtractor chain.
+
+        FAILS on current buggy code: message printed 6 times.
+        PASSES after fix: message printed at most MAX_SESSION_EXTRACTIONS times.
+        """
+        source_file = tmp_path / "orchestrator.py"
+        source_file.write_text(
+            "# initial content\ndef orchestrate(): pass",
+            encoding="utf-8",
+        )
+
+        prompt_template = (
+            f'<include query="{_E2E_1711_QUERY}">'
+            f"{source_file.name}</include>"
+        )
+
+        querying_prints: list[str] = []
+        mock_console = MagicMock()
+        mock_console.print.side_effect = lambda *args, **kwargs: (
+            querying_prints.append(args[0] if args else "")
+        )
+        monkeypatch.setattr("pdd.include_query_extractor._console", mock_console)
+
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.llm_invoke",
+            lambda **kwargs: {
+                "result": "extracted",
+                "cost": 0.0,
+                "model_name": "mock",
+            },
+        )
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.load_prompt_template",
+            lambda *a, **kw: "TEMPLATE_STUB",
+        )
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.preprocess",
+            lambda *a, **kw: "PROCESSED_STUB",
+        )
+        monkeypatch.setattr(
+            "pdd.preprocess.get_file_path",
+            lambda p: str(source_file),
+        )
+        monkeypatch.chdir(tmp_path)
+
+        from pdd.preprocess import preprocess as pdd_preprocess
+
+        try:
+            for i in range(_E2E_1711_REPEAT_COUNT):
+                source_file.write_text(
+                    f"# version {i}\ndef orchestrate_v{i}(): pass",
+                    encoding="utf-8",
+                )
+                pdd_preprocess(
+                    prompt_template,
+                    recursive=False,
+                    double_curly_brackets=False,
+                )
+        except Exception:
+            pass
+
+        querying_count = sum(
+            1 for msg in querying_prints
+            if isinstance(msg, str) and "Querying" in msg
+        )
+
+        assert querying_count <= _E2E_1711_MAX_EXTRACTIONS, (
+            f"Bug #1711 (E2E console output): 'Querying...' was printed "
+            f"{querying_count} times through the preprocess() call chain — "
+            "this is the exact repeated output users saw in the issue report. "
+            f"Session guard should cap it at {_E2E_1711_MAX_EXTRACTIONS}."
+        )

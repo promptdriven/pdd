@@ -42,10 +42,19 @@ When a PDD prompt contains `<include query="...">file</include>`, the system nee
 9. Freshness: on cache lookup, verify `source_hash` against current file content hash
    - Match → return cached content
    - Stale or corrupted → delete both cache files and re-extract
-10. `EXTRACTS_CACHE_ENABLE` env var (default `true`) controls all cache I/O
-11. Show status updates via `rich` (e.g., "Querying...", "Using cached extract...")
-12. Imports of `llm_invoke`, `preprocess`, `load_prompt_template`, and `find_project_root_from_path` must not happen at module load time — this module is imported by those modules' consumers, so top-level imports would create circular dependencies. A missing dependency should raise a real error, not silently fall back.
-13. Use `find_project_root_from_path` (from `path_resolution`) instead of `get_config()["project_root"]` for determining the project root for cache directory location and project-relative path computation
+10. Session-level extraction guard: add a class-level dict `_session_extraction_counts: dict[str, int] = {}` keyed on `cache_key`.
+    Before any LLM call (after a cache miss), increment the count and raise `RepeatedRetrievalQueryError`
+    if the count exceeds `MAX_SESSION_EXTRACTIONS = 2` (matching the `MAX_CYCLE_REPEATS` pattern in
+    `sync_orchestration.py`). This prevents cost-runaway when a sync workflow continuously modifies
+    the source file, invalidating the disk cache on every iteration.
+    - Expose a `reset_session()` classmethod that clears `_session_extraction_counts`; tests and
+      `sync_orchestration.py` may call it at the start of each top-level sync run.
+    - `RepeatedRetrievalQueryError` should be a public exception class in this module so that
+      `sync_orchestration.py` can catch it specifically.
+11. `EXTRACTS_CACHE_ENABLE` env var (default `true`) controls all cache I/O
+12. Show status updates via `rich` (e.g., "Querying...", "Using cached extract...")
+13. Imports of `llm_invoke`, `preprocess`, `load_prompt_template`, and `find_project_root_from_path` must not happen at module load time — this module is imported by those modules' consumers, so top-level imports would create circular dependencies. A missing dependency should raise a real error, not silently fall back.
+14. Use `find_project_root_from_path` (from `path_resolution`) instead of `get_config()["project_root"]` for determining the project root for cache directory location and project-relative path computation
 
 % Dependencies
 <internal_modules>
