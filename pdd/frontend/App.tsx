@@ -859,12 +859,12 @@ const App: React.FC = () => {
 
             {/* CENTER: Main workflow buttons with gold border */}
             <div className="flex-1 flex justify-center">
-              <div className="flex gap-1 sm:gap-1.5 p-1.5 rounded-xl border-2 border-[#FDCE49]/60 bg-surface-800/40 max-w-fit overflow-x-auto scrollbar-hide">
+              <div className="flex gap-1 sm:gap-1.5 p-1.5 rounded-xl border-2 border-pdd-gold/60 bg-surface-800/40 max-w-fit overflow-x-auto scrollbar-hide">
                 <button
                   onClick={() => setView('devunits')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'devunits'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      ? 'bg-pdd-goldActive text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
@@ -874,7 +874,7 @@ const App: React.FC = () => {
                   onClick={() => setView('bug')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'bug'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      ? 'bg-pdd-goldActive text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
@@ -884,7 +884,7 @@ const App: React.FC = () => {
                   onClick={() => setView('fix')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'fix'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      ? 'bg-pdd-goldActive text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
@@ -896,7 +896,7 @@ const App: React.FC = () => {
                   onClick={() => setView('change')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'change'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      ? 'bg-pdd-goldActive text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
@@ -908,7 +908,7 @@ const App: React.FC = () => {
                   onClick={() => setView('settings')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-medium transition-all duration-200 ${
                     view === 'settings'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-lg'
+                      ? 'bg-pdd-goldActive text-surface-900 shadow-lg'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(253,206,73,0.3)]'
                   }`}
                 >
@@ -1056,7 +1056,7 @@ const App: React.FC = () => {
               <div className="px-4 py-3 border-t border-surface-700/50 bg-surface-800/30">
                 <button
                   onClick={() => setShowRemotePanel(false)}
-                  className="w-full px-4 py-2 bg-[#DFA84A] hover:bg-[#FDCE49] text-surface-900 rounded-lg text-sm font-medium transition-colors"
+                  className="w-full px-4 py-2 bg-pdd-goldActive hover:bg-pdd-gold text-surface-900 rounded-lg text-sm font-medium transition-colors"
                 >
                   Done
                 </button>
@@ -1152,8 +1152,8 @@ const App: React.FC = () => {
           {view === 'devunits' && (
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-[#FDCE49]/20 flex items-center justify-center">
-                  <Squares2X2Icon className="w-5 h-5 text-[#FDCE49]" />
+                <div className="w-10 h-10 rounded-xl bg-pdd-gold/20 flex items-center justify-center">
+                  <Squares2X2Icon className="w-5 h-5 text-pdd-gold" />
                 </div>
                 <div>
                   <h2 className="text-lg sm:text-xl font-semibold text-white">Dev Units</h2>
@@ -1166,7 +1166,7 @@ const App: React.FC = () => {
                   onClick={() => setDevUnitsSubView('graph')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
                     devUnitsSubView === 'graph'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-md'
+                      ? 'bg-pdd-goldActive text-surface-900 shadow-md'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
                   }`}
                 >
@@ -1176,7 +1176,7 @@ const App: React.FC = () => {
                   onClick={() => setDevUnitsSubView('list')}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md text-xs sm:text-sm font-medium transition-all duration-200 ${
                     devUnitsSubView === 'list'
-                      ? 'bg-[#DFA84A] text-surface-900 shadow-md'
+                      ? 'bg-pdd-goldActive text-surface-900 shadow-md'
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/50'
                   }`}
                 >

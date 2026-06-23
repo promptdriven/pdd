@@ -150,7 +150,7 @@ const ModuleNode: React.FC<NodeProps<ModuleNodeData>> = ({ data, selected, xPos,
           {hasPrompt && onRunSync && !editMode && (
             <button
               onClick={handleSyncClick}
-              className="absolute -top-2 -right-2 w-6 h-6 bg-gradient-to-br from-[#FDCE49] to-[#DFA84A] hover:from-[#FFD966] hover:to-[#FDCE49] rounded-full flex items-center justify-center shadow-lg z-20 transition-all hover:scale-110"
+              className="absolute -top-2 -right-2 w-6 h-6 bg-gradient-to-br from-pdd-gold to-pdd-goldActive hover:from-pdd-goldHover hover:to-pdd-gold rounded-full flex items-center justify-center shadow-lg z-20 transition-all hover:scale-110"
               title="Run pdd sync (prompt → code)"
             >
               <svg className="w-3 h-3 text-surface-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">

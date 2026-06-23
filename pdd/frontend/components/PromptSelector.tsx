@@ -68,7 +68,7 @@ const PromptCard: React.FC<{
             {onSyncClick && (
               <button
                 onClick={handleSyncClick}
-                className="flex-shrink-0 w-7 h-7 bg-gradient-to-br from-[#FDCE49] to-[#DFA84A] hover:from-[#FFD966] hover:to-[#FDCE49] rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-110"
+                className="flex-shrink-0 w-7 h-7 bg-gradient-to-br from-pdd-gold to-pdd-goldActive hover:from-pdd-goldHover hover:to-pdd-gold rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-110"
                 title="Run pdd sync (prompt → code)"
               >
                 <svg className="w-3.5 h-3.5 text-surface-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">

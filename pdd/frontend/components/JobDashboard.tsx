@@ -86,7 +86,7 @@ const JobDashboard: React.FC<JobDashboardProps> = ({
             {/* Toggle icon with gold accent when jobs active */}
             <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
               activeJobs.length > 0
-                ? 'bg-[#FDCE49]/20 text-[#FDCE49]'
+                ? 'bg-pdd-gold/20 text-pdd-gold'
                 : isCollapsed
                   ? 'bg-accent-500/20 text-accent-400'
                   : 'bg-surface-700 text-white'
@@ -118,8 +118,8 @@ const JobDashboard: React.FC<JobDashboardProps> = ({
 
             {/* Active jobs badge with gold styling */}
             {activeJobs.length > 0 && (
-              <span className="px-2.5 py-0.5 text-xs font-medium bg-[#FDCE49]/20 text-[#FDCE49] rounded-full flex items-center gap-1.5 animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#FDCE49]" />
+              <span className="px-2.5 py-0.5 text-xs font-medium bg-pdd-gold/20 text-pdd-gold rounded-full flex items-center gap-1.5 animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-pdd-gold" />
                 {activeJobs.length} running
               </span>
             )}
@@ -194,8 +194,8 @@ const JobDashboard: React.FC<JobDashboardProps> = ({
             {/* Active jobs section - Expandable cards */}
             {activeJobs.length > 0 && (
               <div className="mb-4">
-                <h3 className="text-xs font-medium text-[#FDCE49] uppercase tracking-wider mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-[#FDCE49] animate-pulse" />
+                <h3 className="text-xs font-medium text-pdd-gold uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-pdd-gold animate-pulse" />
                   Active Jobs
                 </h3>
                 <div className="space-y-2">
