@@ -22,6 +22,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
@@ -68,6 +69,25 @@ TOTAL_STEPS = 8
 
 # Ordered list of all steps (including fractional sub-steps).
 STEP_ORDER: List[Union[int, float]] = [1, 2, 3, 4, 5, 6.1, 6.2, 6.3, 7, 8]
+
+# Stable, consumer-facing string id per internal step number (issue #1709).
+# pdd_cloud durable runs harvest the workflow-state ``step_telemetry`` and key
+# off these ids, so they MUST NOT be renumbered or renamed after release. The
+# slugs mirror the ``steps`` table (``discover``/``deps``/``build``/...): the
+# step's own stable slug IS its telemetry id, so there is no second naming
+# table to drift. ``STEP_ORDER`` numbering may change freely; these ids stay.
+STEP_ID_MAP: Dict[Union[int, float], str] = {
+    1: "discover",
+    2: "deps",
+    3: "build",
+    4: "interfaces",
+    5: "test",
+    6.1: "fix",
+    6.2: "regression_tests",
+    6.3: "e2e_tests",
+    7: "verify",
+    8: "create_pr",
+}
 
 # Maximum number of build-fix-verify loop iterations before giving up.
 MAX_FIX_VERIFY_ITERATIONS = 3
@@ -2889,6 +2909,10 @@ def _run_agentic_checkup_orchestrator_inner(
     last_completed_step = 0
     fix_verify_iteration = 0
     previous_fixes = ""
+    # Per-step telemetry for pdd_cloud durable runs (issue #1709). Seeded from
+    # a resumed state below so already-completed step entries are preserved
+    # across restarts without duplication or zeroing.
+    step_telemetry: List[Dict[str, Any]] = []
 
     # Round-5 Finding 4: accumulates a suffix when the canonical PR-mode
     # final report could not be posted to GitHub. The gate outcome stays
@@ -3094,6 +3118,10 @@ def _run_agentic_checkup_orchestrator_inner(
         github_comment_id = loaded_gh_id
         fix_verify_iteration = state.get("fix_verify_iteration", 0)
         previous_fixes = state.get("previous_fixes", "")
+        # Preserve telemetry already recorded for completed steps (issue #1709).
+        # A pre-telemetry state file (no ``step_telemetry`` key) loads as [];
+        # only the resumed portion is then re-accumulated (backward-compatible).
+        step_telemetry = list(state.get("step_telemetry", []))
 
         # Restore worktree path from state
         wt_path_str = state.get("worktree_path")
@@ -3227,6 +3255,7 @@ def _run_agentic_checkup_orchestrator_inner(
             pr_head_sha=current_pr_head_sha if pr_mode else None,
             pr_test_scope=pr_test_scope if pr_mode else None,
             step_comments=sorted(step_comments_set),
+            step_telemetry=step_telemetry,
         )
         for _steer_key in STEER_STATE_KEYS:
             if _steer_key in steer_state:
@@ -3313,6 +3342,24 @@ def _run_agentic_checkup_orchestrator_inner(
 
         total_cost += cost
         last_model_used = model
+
+        # Per-step telemetry for pdd_cloud durable runs (issue #1709). Appended
+        # once per logical step here — before any ``_save_state()`` in this
+        # function (including the provider-abort save below) — so every
+        # persistence surface carries the entry, and ``sum(cost_usd)``
+        # reconciles with ``total_cost`` (each call adds the same ``cost`` to
+        # both). One entry per ``_handle_step_result`` call; fix-verify loop
+        # re-runs append a fresh entry tagged with their ``iteration``.
+        step_telemetry.append({
+            "step_id": STEP_ID_MAP.get(step_num, str(step_num)),
+            "internal_step": step_num,
+            "name": description or "",
+            "status": "completed" if success else "failed",
+            "cost_usd": cost or 0.0,
+            "model": model or "",
+            "iteration": iteration or 1,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
 
         # Use underscore-based key for fractional steps: 6.1 -> "6_1"
         step_key = str(step_num).replace(".", "_")
@@ -3839,6 +3886,18 @@ def _run_agentic_checkup_orchestrator_inner(
                 step_outputs[sub_key] = skipped_output
                 context[f"step{sub_key}_output"] = skipped_output
                 last_completed_step_to_save = sub_step
+                # --no-fix bypasses _handle_step_result for 6.1/6.2/6.3, so
+                # record the skip telemetry inline (issue #1709).
+                step_telemetry.append({
+                    "step_id": STEP_ID_MAP.get(sub_step, str(sub_step)),
+                    "internal_step": sub_step,
+                    "name": step_map[sub_step][1],
+                    "status": "skipped",
+                    "cost_usd": 0.0,
+                    "model": "",
+                    "iteration": 1,
+                    "completed_at": datetime.now(timezone.utc).isoformat(),
+                })
         if any(s >= start_step for s in (6.1, 6.2, 6.3)):
             _save_state()
 
@@ -3891,6 +3950,18 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs["8"] = skipped_output
             context["step8_output"] = skipped_output
             last_completed_step_to_save = 8
+            # --no-fix skips step 8 without _handle_step_result; record the
+            # skip telemetry inline before persisting (issue #1709).
+            step_telemetry.append({
+                "step_id": STEP_ID_MAP.get(8, "8"),
+                "internal_step": 8,
+                "name": step_map[8][1],
+                "status": "skipped",
+                "cost_usd": 0.0,
+                "model": "",
+                "iteration": 1,
+                "completed_at": datetime.now(timezone.utc).isoformat(),
+            })
             _save_state()
 
         if not nofix_gate_passed:
@@ -5518,6 +5589,7 @@ def _build_state(
     pr_head_sha: Optional[str] = None,
     pr_test_scope: Optional[str] = None,
     step_comments: Optional[List[int]] = None,
+    step_telemetry: Optional[List[dict]] = None,
 ) -> Dict:
     """Build a serialisable state dict for persistence.
 
@@ -5559,4 +5631,11 @@ def _build_state(
         "pr_head_sha": pr_head_sha,
         "pr_test_scope": pr_test_scope,
         "step_comments": list(step_comments) if step_comments else [],
+        # Per-step telemetry for pdd_cloud durable runs (issue #1709). Purely
+        # additive — every existing key above is unchanged, so older state
+        # files (no ``step_telemetry``) still load and resume. For a fresh run,
+        # ``sum(entry["cost_usd"]) == total_cost`` (±float rounding); when
+        # resumed from a pre-telemetry state file this covers only the resumed
+        # portion (accepted as backward-compatible).
+        "step_telemetry": list(step_telemetry) if step_telemetry is not None else [],
     }

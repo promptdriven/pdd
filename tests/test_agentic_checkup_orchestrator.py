@@ -13,8 +13,10 @@ import pytest
 from pdd.agentic_checkup_orchestrator import (
     CHECKUP_STEP_TIMEOUTS,
     MAX_FIX_VERIFY_ITERATIONS,
+    STEP_ID_MAP,
     STEP_ORDER,
     TOTAL_STEPS,
+    _build_state,
     _copy_uncommitted_changes,
     _discard_clean_run_side_effects,
     _format_pr_changed_files_for_prompt,
@@ -7286,3 +7288,174 @@ class TestCompanionSourceOfTruthPaths2047:
 
         monkeypatch.setattr(orch, "_load_prompt_source_map", lambda _wt: None)
         assert orch._companion_source_of_truth_paths(Path("/x"), {"pdd/foo.py"}) == set()
+
+
+# ---------------------------------------------------------------------------
+# Per-step telemetry (issue #1709) — step_telemetry persisted in workflow state
+# so pdd_cloud durable runs can attribute cost/status/model to each CLI step.
+# ---------------------------------------------------------------------------
+
+
+def _capture_saved_states(default_args, **extra_args):
+    """Run the orchestrator, capturing every persisted workflow-state dict.
+
+    Patches ``save_workflow_state`` (called on every ``_save_state``) and
+    deep-copies each state via a JSON round-trip, because the live
+    ``step_telemetry`` list is mutated in place across saves.
+    """
+    captured: List[dict] = []
+
+    def _capture(**kwargs):
+        captured.append(json.loads(json.dumps(kwargs["state"])))
+        return kwargs.get("github_comment_id")
+
+    args = {**default_args, **extra_args}
+    with patch(
+        "pdd.agentic_checkup_orchestrator.save_workflow_state", side_effect=_capture
+    ):
+        result = run_agentic_checkup_orchestrator(**args)
+    return result, captured
+
+
+def _final_telemetry(captured: List[dict]) -> List[dict]:
+    """Return the telemetry list from the captured state with the most entries."""
+    if not captured:
+        return []
+    richest = max(captured, key=lambda s: len(s.get("step_telemetry", [])))
+    return richest.get("step_telemetry", [])
+
+
+class TestStepTelemetry:
+    def test_step_id_map_is_corrected_and_stable(self):
+        """STEP_ID_MAP mirrors the real ``steps`` slugs, not pdd-change names."""
+        # Keys cover exactly STEP_ORDER (no extra/missing internal numbers).
+        assert set(STEP_ID_MAP.keys()) == set(STEP_ORDER)
+        # Issue #1709's correction: steps 1-4 are discover/deps/build/interfaces,
+        # NOT request_resolved/plan_built/research/requirements_clear.
+        assert STEP_ID_MAP[1] == "discover"
+        assert STEP_ID_MAP[2] == "deps"
+        assert STEP_ID_MAP[3] == "build"
+        assert STEP_ID_MAP[4] == "interfaces"
+        assert STEP_ID_MAP[5] == "test"
+        assert STEP_ID_MAP[6.1] == "fix"
+        assert STEP_ID_MAP[6.2] == "regression_tests"
+        assert STEP_ID_MAP[6.3] == "e2e_tests"
+        assert STEP_ID_MAP[7] == "verify"
+        assert STEP_ID_MAP[8] == "create_pr"
+        # No id encodes a STEP_ORDER float position (e.g. "5", "6_1", "6.1").
+        for slug in STEP_ID_MAP.values():
+            assert not slug.replace("_", "").replace(".", "").isdigit()
+
+    def test_build_state_round_trips_step_telemetry(self):
+        """``_build_state`` surfaces the param and defaults to [] when None."""
+        entry = {
+            "step_id": "fix",
+            "internal_step": 6.1,
+            "name": "Fixing discovered issues",
+            "status": "completed",
+            "cost_usd": 0.1842,
+            "model": "claude-opus-4-8",
+            "iteration": 1,
+            "completed_at": "2026-06-22T20:12:20+00:00",
+        }
+        state = _build_state(
+            1, "url", 6.1, {"6_1": "out"}, 0.1842, "claude-opus-4-8", None,
+            step_telemetry=[entry],
+        )
+        assert state["step_telemetry"] == [entry]
+        # Existing keys are untouched (purely additive).
+        assert state["total_cost"] == 0.1842
+        assert state["last_completed_step"] == 6.1
+        assert state["step_outputs"] == {"6_1": "out"}
+
+        # Omitting the param yields an empty list, not a missing key — so a
+        # consumer can always read ``state["step_telemetry"]``.
+        bare = _build_state(1, "url", 0, {}, 0.0, "unknown", None)
+        assert bare["step_telemetry"] == []
+
+    def test_completed_run_records_per_step_telemetry(self, mock_dependencies, default_args):
+        """A full run writes a telemetry entry per reached step with stable ids,
+        and ``sum(cost_usd)`` reconciles with the persisted ``total_cost``."""
+        _result, captured = _capture_saved_states(default_args)
+        telemetry = _final_telemetry(captured)
+        assert telemetry, "expected step_telemetry to be persisted"
+
+        valid_ids = set(STEP_ID_MAP.values())
+        for entry in telemetry:
+            assert entry["step_id"] in valid_ids
+            assert entry["status"] in {"completed", "failed", "skipped"}
+            assert isinstance(entry["cost_usd"], (int, float))
+            assert isinstance(entry["model"], str)
+            assert "completed_at" in entry
+
+        # Every once-only linear step is recorded as completed.
+        recorded = {e["step_id"] for e in telemetry}
+        for slug in ("discover", "deps", "build", "interfaces", "test", "verify", "create_pr"):
+            assert slug in recorded
+
+        # Reconciliation invariant (issue #1709 AC): the telemetry costs sum to
+        # the persisted cumulative total for a fresh (non-resumed) run.
+        richest = max(captured, key=lambda s: len(s.get("step_telemetry", [])))
+        assert sum(e["cost_usd"] for e in telemetry) == pytest.approx(
+            richest["total_cost"]
+        )
+
+    def test_no_fix_records_skipped_steps(self, mock_dependencies, default_args):
+        """--no-fix bypass sites record status='skipped', cost_usd=0 entries."""
+        _result, captured = _capture_saved_states(default_args, no_fix=True)
+        telemetry = _final_telemetry(captured)
+        assert telemetry, "expected step_telemetry even in --no-fix mode"
+
+        by_id = {}
+        for entry in telemetry:
+            by_id[entry["step_id"]] = entry
+
+        # Fix sub-steps and PR creation are skipped, not run.
+        for slug in ("fix", "regression_tests", "e2e_tests", "create_pr"):
+            assert slug in by_id, f"missing skipped entry for {slug}"
+            assert by_id[slug]["status"] == "skipped"
+            assert by_id[slug]["cost_usd"] == 0.0
+            assert by_id[slug]["model"] == ""
+
+    def test_resume_preserves_prior_telemetry_without_duplication(
+        self, mock_dependencies, default_args
+    ):
+        """A state file with partial telemetry is preserved across a re-run —
+        already-completed entries are neither dropped nor duplicated."""
+        cwd = default_args["cwd"]
+        state_dir = _get_state_dir(cwd)
+        state_dir.mkdir(parents=True, exist_ok=True)
+        seed = _build_state(
+            default_args["issue_number"],
+            default_args["issue_url"],
+            2,  # last_completed_step: discover + deps done
+            {"1": "discovered", "2": "audited"},
+            0.2,
+            "gpt-4",
+            None,
+            mode="issue",
+            step_telemetry=[
+                {
+                    "step_id": "discover", "internal_step": 1, "name": "Discover",
+                    "status": "completed", "cost_usd": 0.1, "model": "gpt-4",
+                    "iteration": 1, "completed_at": "2026-06-22T20:10:00+00:00",
+                },
+                {
+                    "step_id": "deps", "internal_step": 2, "name": "Deps",
+                    "status": "completed", "cost_usd": 0.1, "model": "gpt-4",
+                    "iteration": 1, "completed_at": "2026-06-22T20:10:30+00:00",
+                },
+            ],
+        )
+        state_file = state_dir / f"checkup_state_{default_args['issue_number']}.json"
+        state_file.write_text(json.dumps(seed), encoding="utf-8")
+
+        _result, captured = _capture_saved_states(default_args)
+        telemetry = _final_telemetry(captured)
+
+        # The two seeded entries survive resume — exactly once each.
+        discover = [e for e in telemetry if e["step_id"] == "discover"]
+        deps = [e for e in telemetry if e["step_id"] == "deps"]
+        assert len(discover) == 1
+        assert len(deps) == 1
+        assert discover[0]["completed_at"] == "2026-06-22T20:10:00+00:00"
