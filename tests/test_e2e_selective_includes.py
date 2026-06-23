@@ -3262,3 +3262,117 @@ class TestSessionGuardPreprocessE2E:
             "this is the exact repeated output users saw in the issue report. "
             f"Session guard should cap it at {_E2E_1711_MAX_EXTRACTIONS}."
         )
+
+    def test_preprocess_fails_fast_instead_of_swallowing_guard_error(
+        self, tmp_path, monkeypatch
+    ):
+        """The guard error must PROPAGATE out of preprocess(), not be swallowed.
+
+        Regression for the gap where preprocess()'s broad ``except Exception``
+        caught ``RepeatedRetrievalQueryError`` (a RuntimeError subclass) and
+        replaced the include with an ``[Error in semantic query ...]`` placeholder,
+        letting sync silently continue on degraded content. After the fix,
+        preprocess() re-raises the guard error so sync fails fast with the
+        actionable message naming the offending file and query.
+        """
+        from pdd.include_query_extractor import RepeatedRetrievalQueryError
+
+        source_file = tmp_path / "orchestrator.py"
+        source_file.write_text("# v0\ndef orchestrate(): pass", encoding="utf-8")
+
+        prompt_template = (
+            f'<include query="{_E2E_1711_QUERY}">{source_file.name}</include>'
+        )
+
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.llm_invoke",
+            lambda **kwargs: {"result": "extracted", "cost": 0.0, "model_name": "mock"},
+        )
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.load_prompt_template",
+            lambda *a, **kw: "TEMPLATE_STUB",
+        )
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.preprocess",
+            lambda *a, **kw: "PROCESSED_STUB",
+        )
+        monkeypatch.setattr("pdd.preprocess.get_file_path", lambda p: str(source_file))
+        monkeypatch.chdir(tmp_path)
+
+        from pdd.preprocess import preprocess as pdd_preprocess
+
+        # Drive repeated cache-miss extractions (source changes each iteration).
+        # The guard must eventually fail fast by PROPAGATING the error out of
+        # preprocess(), and no within-quota call may degrade to a placeholder.
+        raised = False
+        results: list[str] = []
+        for i in range(_E2E_1711_REPEAT_COUNT):
+            source_file.write_text(f"# v{i}\ndef orch_v{i}(): pass", encoding="utf-8")
+            try:
+                results.append(
+                    pdd_preprocess(
+                        prompt_template, recursive=False, double_curly_brackets=False
+                    )
+                )
+            except RepeatedRetrievalQueryError:
+                raised = True
+                break
+
+        assert raised, (
+            "Bug #1711: once the session quota is exhausted, the guard error "
+            "must propagate out of preprocess() (fail fast) rather than being "
+            "swallowed into an '[Error in semantic query ...]' placeholder."
+        )
+        assert all("[Error in semantic query" not in r for r in results), (
+            "Bug #1711: within-quota extractions must return real content, not "
+            f"a swallowed placeholder. Got: {results!r}"
+        )
+
+    def test_env_override_raises_session_extraction_cap(self, tmp_path, monkeypatch):
+        """PDD_MAX_SESSION_EXTRACTIONS lets a run legitimately re-extract more.
+
+        Guards against the default cap of 2 being too aggressive for workflows
+        that genuinely re-extract a frequently-changing file within one run.
+        """
+        monkeypatch.setenv("PDD_MAX_SESSION_EXTRACTIONS", "4")
+
+        source_file = tmp_path / "orchestrator.py"
+        source_file.write_text("# v0\ndef orchestrate(): pass", encoding="utf-8")
+        prompt_template = (
+            f'<include query="{_E2E_1711_QUERY}">{source_file.name}</include>'
+        )
+
+        llm_call_count = [0]
+
+        def mock_llm_invoke(**kwargs):
+            llm_call_count[0] += 1
+            return {"result": f"v{llm_call_count[0]}", "cost": 0.0, "model_name": "mock"}
+
+        monkeypatch.setattr("pdd.include_query_extractor.llm_invoke", mock_llm_invoke)
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.load_prompt_template",
+            lambda *a, **kw: "TEMPLATE_STUB",
+        )
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.preprocess",
+            lambda *a, **kw: "PROCESSED_STUB",
+        )
+        monkeypatch.setattr("pdd.preprocess.get_file_path", lambda p: str(source_file))
+        monkeypatch.chdir(tmp_path)
+
+        from pdd.preprocess import preprocess as pdd_preprocess
+
+        try:
+            for i in range(_E2E_1711_REPEAT_COUNT):
+                source_file.write_text(f"# v{i}\ndef orch_v{i}(): pass", encoding="utf-8")
+                pdd_preprocess(
+                    prompt_template, recursive=False, double_curly_brackets=False
+                )
+        except Exception:
+            pass
+
+        # Cap is now 4, not the default 2 — the override must be honored.
+        assert llm_call_count[0] == 4, (
+            "PDD_MAX_SESSION_EXTRACTIONS=4 should permit exactly 4 live LLM "
+            f"extractions before the guard trips; got {llm_call_count[0]}."
+        )

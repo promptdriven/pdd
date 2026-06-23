@@ -1315,42 +1315,56 @@ class TestIssue1711FailFastDiagnostics:
 # IncludeQueryExtractor (a fresh one per call, preprocess.py:712) and calls
 # extract(). They verify three cross-module guarantees the unit tests cannot:
 #
-#   1. Data flow: when the session guard trips deep inside extract(), the
-#      RepeatedRetrievalQueryError is caught by preprocess.py's broad
-#      `except Exception` (line 733) and surfaced as a *placeholder string* in
-#      the returned prompt — and that placeholder still names the offending
-#      query and file (AC #3 must survive the boundary, not be swallowed into
-#      an opaque message).
+#   1. Data flow / fail-fast: when the session guard trips deep inside extract(),
+#      the RepeatedRetrievalQueryError must PROPAGATE out of preprocess() —
+#      neither the inner `except Exception` in replace_include nor preprocess()'s
+#      best-effort "return the partial prompt" handler may swallow it into an
+#      `[Error in semantic query ...]` placeholder. The raised error names the
+#      offending query and file so sync fails fast with an actionable message
+#      (AC #3 "exit with a clear, actionable error message") rather than
+#      continuing on degraded include content.
 #   2. Conservative matching propagates across the boundary: a near-miss
 #      (truncated) query — the exact shape #1711 showed the query in — is a
 #      different (file, query) pair and is STILL expanded to real content
-#      through the full pipeline while the exhausted exact query is blocked.
+#      through the full pipeline while the exhausted exact query fails fast.
 #      A guard that keyed on a substring/prefix would corrupt the near-miss
 #      output here.
 #   3. The reset_session() hook restores the per-(file, query) quota across two
 #      simulated top-level pdd sync runs driven through preprocess().
 
+# Marker for the legacy swallowed placeholder. The fail-fast contract asserts
+# this string NEVER appears: a tripped guard raises instead of rendering it.
 _ERROR_PLACEHOLDER_MARK = "Error in semantic query"
 
 
 @pytest.mark.usefixtures("reset_session_state")
 class TestIssue1711PreprocessIntegration:
     """E2E: the session guard works through the real preprocess -> extractor
-    boundary, surfacing an actionable placeholder and keying on the exact
-    (file, query) pair, not a substring/prefix."""
+    boundary, *failing fast* with the typed RepeatedRetrievalQueryError and
+    keying on the exact (file, query) pair, not a substring/prefix.
 
-    def test_preprocess_pipeline_bounds_loop_and_surfaces_actionable_placeholder(
+    Contract note (changed from the original placeholder design): when the guard
+    trips, the typed error must PROPAGATE out of preprocess()/process_include_tags()
+    rather than be swallowed into an ``[Error in semantic query ...]`` placeholder.
+    Fail-fast matches AC #3's literal "exit with a clear, actionable error
+    message", avoids running generate/fix on degraded include content, and
+    integrates with sync_orchestration's per-operation ``except Exception``
+    handler (sync_orchestration.py:3487), which converts it into a clean
+    ``Exception during '<op>': <message>`` failure — not a traceback.
+    """
+
+    def test_preprocess_pipeline_bounds_loop_and_fails_fast_with_actionable_error(
         self, issue_1711_source_file, mock_llm, monkeypatch
     ):
         """Full pipeline: top-level preprocess() expanding `<include query=...>`
         across mutating sync iterations fires the LLM at most
-        MAX_SESSION_EXTRACTIONS times, and once the guard trips the returned
-        prompt carries a placeholder that names the offending query and file.
+        MAX_SESSION_EXTRACTIONS times, and once the guard trips preprocess()
+        raises RepeatedRetrievalQueryError naming the offending query and file.
 
         This is the cross-module half of AC #2/#3: the typed error raised inside
-        extract() is caught by preprocess.py's broad `except Exception` and must
-        still surface an actionable message (which query, which file) at the
-        user-visible boundary — not a silent stale return or an opaque dump.
+        extract() must NOT be swallowed by preprocess.py's broad
+        ``except Exception`` (or its best-effort "return partial prompt" path) —
+        it must reach the caller so sync fails fast with an actionable message.
         """
         from pdd.preprocess import preprocess
 
@@ -1359,12 +1373,19 @@ class TestIssue1711PreprocessIntegration:
 
         prompt = f'<include query="{_ISSUE_1711_QUERY}">{source_file}</include>'
 
-        final_output = ""
+        raised: RepeatedRetrievalQueryError | None = None
+        outputs: list[str] = []
         for i in range(_REPORTED_REPEAT_COUNT):
             # Each sync operation (generate/fix/update) mutates the source file,
             # invalidating the disk cache and forcing a real extraction attempt.
             source_file.write_text(f"# orchestrator v{i}\ndef o{i}(): pass", encoding="utf-8")
-            final_output = preprocess(prompt, recursive=False, double_curly_brackets=False)
+            try:
+                outputs.append(
+                    preprocess(prompt, recursive=False, double_curly_brackets=False)
+                )
+            except RepeatedRetrievalQueryError as exc:
+                raised = exc
+                break
 
         # The loop is bounded end-to-end, not just at the extractor unit.
         assert mock_llm["llm_invoke"].call_count <= _MAX_SESSION_EXTRACTIONS, (
@@ -1374,22 +1395,28 @@ class TestIssue1711PreprocessIntegration:
             f"{_MAX_SESSION_EXTRACTIONS})."
         )
 
-        # Once tripped, the guard's actionable message must reach the rendered
-        # prompt through preprocess.py's exception handling — not vanish.
-        assert _ERROR_PLACEHOLDER_MARK in final_output, (
-            "After the guard trips, preprocess() must surface an error "
-            f"placeholder in the prompt. Got: {final_output!r}"
+        # Fail-fast: the guard error must propagate out of preprocess(), not be
+        # swallowed into a best-effort partial prompt / placeholder.
+        assert raised is not None, (
+            "After the guard trips, preprocess() must FAIL FAST by raising "
+            "RepeatedRetrievalQueryError — not return a swallowed "
+            f"'{_ERROR_PLACEHOLDER_MARK}' placeholder. Outputs: {outputs!r}"
         )
-        assert _ISSUE_1711_QUERY in final_output, (
-            "The surfaced placeholder must name the offending retrieval query "
-            f"(AC #3) across the module boundary. Got: {final_output!r}"
+        assert all(_ERROR_PLACEHOLDER_MARK not in out for out in outputs), (
+            "Within-quota preprocess() calls must render real content, never a "
+            f"degraded placeholder. Outputs: {outputs!r}"
         )
-        assert source_file.name in final_output, (
-            "The surfaced placeholder must name the offending source file "
-            f"(AC #3) across the module boundary. Got: {final_output!r}"
+        message = str(raised)
+        assert _ISSUE_1711_QUERY in message, (
+            "The raised error must name the offending retrieval query (AC #3) "
+            f"across the module boundary. Got: {message!r}"
+        )
+        assert source_file.name in message, (
+            "The raised error must name the offending source file (AC #3) "
+            f"across the module boundary. Got: {message!r}"
         )
 
-    def test_preprocess_serves_near_miss_query_while_exact_is_blocked(
+    def test_preprocess_serves_near_miss_query_while_exact_fails_fast(
         self, issue_1711_source_file, mock_llm, monkeypatch
     ):
         """Adversarial near-miss through the full include pipeline.
@@ -1397,10 +1424,10 @@ class TestIssue1711PreprocessIntegration:
         Production-like trap: the issue query truncated by one character (the
         exact way #1711 displayed it, `output[-500:]`-clipped) is a DIFFERENT
         (file, query) pair. Driven through process_include_tags() it must still
-        expand to real extracted content while the exhausted exact query renders
-        the error placeholder. A guard that matched by substring/prefix would
-        corrupt this near-miss output across the boundary — this test fails if
-        the conservative exact-(file, query) keying does not propagate.
+        expand to real extracted content while the exhausted exact query fails
+        fast. A guard that matched by substring/prefix would corrupt this
+        near-miss output — this test fails if the conservative exact-(file,
+        query) keying does not hold across the boundary.
         """
         from pdd.preprocess import process_include_tags
 
@@ -1410,14 +1437,19 @@ class TestIssue1711PreprocessIntegration:
         exact_prompt = f'<include query="{_ISSUE_1711_QUERY}">{source_file}</include>'
 
         # Exhaust then trip the exact query through the real include pipeline.
+        exact_raised: RepeatedRetrievalQueryError | None = None
         for i in range(_MAX_SESSION_EXTRACTIONS + 1):
             source_file.write_text(f"# exact v{i}\ndef e{i}(): pass", encoding="utf-8")
-            tripped_output = process_include_tags(exact_prompt, recursive=False)
+            try:
+                process_include_tags(exact_prompt, recursive=False)
+            except RepeatedRetrievalQueryError as exc:
+                exact_raised = exc
+                break
 
-        # Exact query is now blocked → placeholder, no real content.
-        assert _ERROR_PLACEHOLDER_MARK in tripped_output, (
-            f"Exhausted exact query should render the error placeholder. "
-            f"Got: {tripped_output!r}"
+        # Exact query is now blocked → fail fast, not a swallowed placeholder.
+        assert exact_raised is not None, (
+            "Exhausted exact query should fail fast with "
+            "RepeatedRetrievalQueryError."
         )
 
         calls_before = mock_llm["llm_invoke"].call_count
@@ -1430,15 +1462,15 @@ class TestIssue1711PreprocessIntegration:
         near_miss_output = process_include_tags(look_alike_prompt, recursive=False)
 
         # The near-miss must reach the LLM exactly once and render real content,
-        # NOT inherit the exact query's exhausted block.
+        # NOT inherit the exact query's exhausted quota.
         assert mock_llm["llm_invoke"].call_count == calls_before + 1, (
             "Near-miss (truncated) query must get its own quota and reach the LLM "
             "once through the full preprocess pipeline — exact (file, query) "
             "keying must propagate across the module boundary."
         )
         assert "Extracted content from LLM" in near_miss_output, (
-            "Near-miss query must expand to real extracted content, not the "
-            f"error placeholder. Got: {near_miss_output!r}"
+            "Near-miss query must expand to real extracted content. "
+            f"Got: {near_miss_output!r}"
         )
         assert _ERROR_PLACEHOLDER_MARK not in near_miss_output, (
             "Near-miss query must NOT be blocked by the exhausted exact query. "
@@ -1448,16 +1480,16 @@ class TestIssue1711PreprocessIntegration:
     def test_reset_session_restores_quota_across_preprocess_runs(
         self, issue_1711_source_file, mock_llm, monkeypatch
     ):
-        """reset_session() (the documented top-of-run hook) restores the
-        per-(file, query) quota across two simulated pdd sync runs driven
-        through the real preprocess pipeline.
+        """reset_session() (the top-of-run hook now called by sync_orchestration)
+        restores the per-(file, query) quota across two simulated pdd sync runs
+        driven through the real preprocess pipeline.
 
-        Run 1 exhausts and trips the guard via preprocess(); reset_session()
-        clears the process-global counter; Run 2's preprocess() then reaches the
-        LLM again for the same (file, query) pair and renders real content. This
-        pins the cross-run contract end-to-end (the orphaned-integration-point
-        risk flagged in Step 4): if reset_session ever stops clearing the
-        counter, a fresh sync run would falsely inherit the prior run's block.
+        Run 1 exhausts and trips the guard via preprocess() (fail fast);
+        reset_session() clears the process-global counter; Run 2's preprocess()
+        then reaches the LLM again for the same (file, query) pair and renders
+        real content. This pins the cross-run contract end-to-end: if
+        reset_session ever stops clearing the counter, a fresh sync run would
+        falsely inherit the prior run's block.
         """
         from pdd.preprocess import preprocess
 
@@ -1466,12 +1498,17 @@ class TestIssue1711PreprocessIntegration:
 
         prompt = f'<include query="{_ISSUE_1711_QUERY}">{source_file}</include>'
 
-        # --- Run 1: drive the loop until the guard trips. ---
+        # --- Run 1: drive the loop until the guard trips (fail fast). ---
+        run1_raised: RepeatedRetrievalQueryError | None = None
         for i in range(_MAX_SESSION_EXTRACTIONS + 1):
             source_file.write_text(f"# run1 v{i}\ndef r1_{i}(): pass", encoding="utf-8")
-            run1_output = preprocess(prompt, recursive=False, double_curly_brackets=False)
-        assert _ERROR_PLACEHOLDER_MARK in run1_output, (
-            "Run 1 should trip the guard and render the placeholder."
+            try:
+                preprocess(prompt, recursive=False, double_curly_brackets=False)
+            except RepeatedRetrievalQueryError as exc:
+                run1_raised = exc
+                break
+        assert run1_raised is not None, (
+            "Run 1 should trip the guard and fail fast."
         )
         calls_after_run1 = mock_llm["llm_invoke"].call_count
         assert calls_after_run1 <= _MAX_SESSION_EXTRACTIONS
@@ -1489,6 +1526,6 @@ class TestIssue1711PreprocessIntegration:
         )
         assert "Extracted content from LLM" in run2_output, (
             "Run 2 must render freshly extracted content, not the prior run's "
-            f"error placeholder. Got: {run2_output!r}"
+            f"error. Got: {run2_output!r}"
         )
         assert _ERROR_PLACEHOLDER_MARK not in run2_output

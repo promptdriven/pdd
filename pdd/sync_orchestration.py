@@ -2018,6 +2018,15 @@ def sync_orchestration(
     if max_attempts is None:
         max_attempts = 3
 
+    # Issue #1711: clear the per-(file, query) include-extraction guard counters
+    # at the start of every top-level sync run. The counters live on the
+    # IncludeQueryExtractor class so they survive the fresh instance preprocess.py
+    # creates each cycle; without an explicit reset here they would also leak
+    # across separate runs in a long-lived process (e.g. the server running sync
+    # in-process), falsely tripping the guard on later legitimate runs.
+    from .include_query_extractor import IncludeQueryExtractor
+    IncludeQueryExtractor.reset_session()
+
     # Import get_extension at function scope
     from .sync_determine_operation import get_extension
     

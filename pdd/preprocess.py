@@ -389,6 +389,14 @@ def preprocess(
 
         if isinstance(e, CompressionFallbackError):
             raise
+        # Issue #1711: a stuck retrieval loop must fail fast with the guard's
+        # actionable message. The best-effort "return the partial prompt" path
+        # below would otherwise swallow it and let sync continue on degraded
+        # include content — defeating the guard.
+        from pdd.include_query_extractor import RepeatedRetrievalQueryError
+
+        if isinstance(e, RepeatedRetrievalQueryError):
+            raise
         console.print(f"[bold red]Error during preprocessing:[/bold red] {str(e)}")
         console.print(Panel(traceback.format_exc(), title="Error Details", style="red"))
         _dbg(f"Exception: {str(e)}")
@@ -707,8 +715,23 @@ def process_include_tags(
             if recursive:
                 return match.group(0)
             try:
+                from pdd.include_query_extractor import (
+                    IncludeQueryExtractor,
+                    RepeatedRetrievalQueryError,
+                )
+            except ImportError:
+                console.print("[yellow]Warning: pdd.include_query_extractor not found. Cannot perform semantic query.[/yellow]")
+                error_msg = f"[Error: pdd.include_query_extractor not found. Cannot query from {file_path}]"
+                if snapshot_recorder is not None:
+                    snapshot_recorder.record_include(
+                        source_path=file_path,
+                        content=error_msg,
+                        query=query,
+                        output=error_msg,
+                    )
+                return error_msg
+            try:
                 resolved_path = get_file_path(file_path)
-                from pdd.include_query_extractor import IncludeQueryExtractor
                 extractor = IncludeQueryExtractor()
                 extracted = extractor.extract(file_path=resolved_path, query=query)
                 if snapshot_recorder is not None:
@@ -719,17 +742,12 @@ def process_include_tags(
                         output=extracted,
                     )
                 return extracted
-            except ImportError:
-                console.print("[yellow]Warning: pdd.include_query_extractor not found. Cannot perform semantic query.[/yellow]")
-                error_msg = f"[Error: pdd.include_query_extractor not found. Cannot query from {file_path}]"
-                if snapshot_recorder is not None:
-                    snapshot_recorder.record_include(
-                        source_path=resolved_path,
-                        content=error_msg,
-                        query=query,
-                        output=error_msg,
-                    )
-                return error_msg
+            except RepeatedRetrievalQueryError:
+                # Issue #1711: a stuck retrieval loop must fail fast with the
+                # guard's actionable message. Swallowing it into a placeholder
+                # (as the broad handler below does) would let sync silently
+                # continue on degraded include content instead of stopping.
+                raise
             except Exception as e:
                 console.print(f"[bold red]Error in semantic query:[/bold red] {e}")
                 error_msg = f"[Error in semantic query from {file_path}: {e}]"

@@ -69,6 +69,26 @@ _ENV_CACHE_ENABLE = "EXTRACTS_CACHE_ENABLE"
 # every iteration and re-issuing the same retrieval query unbounded. This
 # caps the damage and fails fast instead of looping.
 MAX_SESSION_EXTRACTIONS = 2
+_ENV_MAX_SESSION_EXTRACTIONS = "PDD_MAX_SESSION_EXTRACTIONS"
+
+
+def _max_session_extractions() -> int:
+    """Return the per-(file, query) session extraction cap (issue #1711).
+
+    Defaults to ``MAX_SESSION_EXTRACTIONS`` but can be raised via the
+    ``PDD_MAX_SESSION_EXTRACTIONS`` environment variable for workflows that
+    legitimately re-extract a frequently-changing file more than the default
+    cap within a single run. Non-positive or non-integer values fall back to
+    the default.
+    """
+    raw = os.environ.get(_ENV_MAX_SESSION_EXTRACTIONS)
+    if raw is None:
+        return MAX_SESSION_EXTRACTIONS
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return MAX_SESSION_EXTRACTIONS
+    return value if value > 0 else MAX_SESSION_EXTRACTIONS
 
 
 class RepeatedRetrievalQueryError(RuntimeError):
@@ -228,16 +248,18 @@ class IncludeQueryExtractor:
         # query unbounded (~$1.70, exit 1). This guard lives in the
         # unconditional path so it applies even when the disk cache is disabled.
         session_key = f"{resolved}\n{query}"
+        max_extractions = _max_session_extractions()
         prior_extractions = self._session_extraction_counts.get(session_key, 0)
-        if prior_extractions >= MAX_SESSION_EXTRACTIONS:
+        if prior_extractions >= max_extractions:
             raise RepeatedRetrievalQueryError(
                 f"Refusing to re-issue retrieval query={query!r} for "
                 f"'{resolved.name}': reached the session limit of "
-                f"{MAX_SESSION_EXTRACTIONS} extractions for this (file, query) "
+                f"{max_extractions} extractions for this (file, query) "
                 "pair without forward progress. The source file changed between "
                 "iterations, invalidating the extract cache each time (issue "
-                "#1711). Call IncludeQueryExtractor.reset_session() to start a "
-                "new session."
+                "#1711). Raise PDD_MAX_SESSION_EXTRACTIONS if this run "
+                "legitimately needs more, or call "
+                "IncludeQueryExtractor.reset_session() to start a new session."
             )
         self._session_extraction_counts[session_key] = prior_extractions + 1
 
