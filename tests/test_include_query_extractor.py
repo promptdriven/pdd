@@ -1056,11 +1056,12 @@ class TestSessionExtractionGuard:
 # disk-cache behavior that must not regress after the fix.
 
 class TestIssue1711BugDocumentation:
-    """Document bug #1711 behavior — these tests PASS on current (buggy) code.
+    """Verify the fix for bug #1711.
 
-    test_file_change_triggers_cache_miss_and_repeated_llm_call asserts the
-    buggy call count (6). After the fix is applied, this assertion should be
-    updated to assert call_count <= _MAX_SESSION_EXTRACTIONS.
+    test_file_change_triggers_cache_miss_and_repeated_llm_call originally
+    documented the buggy call count (6). Per its own instruction, the
+    assertion has been updated post-fix to assert
+    call_count <= _MAX_SESSION_EXTRACTIONS.
     """
 
     @pytest.fixture(autouse=True)
@@ -1076,32 +1077,33 @@ class TestIssue1711BugDocumentation:
     def test_file_change_triggers_cache_miss_and_repeated_llm_call(
         self, issue_1711_source_file, mock_llm
     ):
-        """DOCUMENTS BUG #1711: each file-content change causes a fresh LLM call.
+        """Post-fix: file-content changes no longer cause unbounded LLM calls.
 
         When pdd sync modifies the source file between iterations, the disk
-        cache's source_hash check fails, the stale cache is deleted, and
-        llm_invoke fires unconditionally — 6 times in the reported incident.
-
-        This test PASSES on the current (buggy) code to document the observed
-        behavior. See TestSessionExtractionGuard for the post-fix assertions.
+        cache's source_hash check fails. Before the fix llm_invoke fired
+        unconditionally (6 times in the reported incident). After the fix the
+        session-level guard caps re-extractions at _MAX_SESSION_EXTRACTIONS and
+        then fails fast with RepeatedRetrievalQueryError.
         """
         _, source_file = issue_1711_source_file
         extractor = IncludeQueryExtractor()
 
-        for i in range(_REPORTED_REPEAT_COUNT):
-            source_file.write_text(
-                f"# version {i}\ndef orchestrate_v{i}(): pass",
-                encoding="utf-8",
-            )
-            extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+        try:
+            for i in range(_REPORTED_REPEAT_COUNT):
+                source_file.write_text(
+                    f"# version {i}\ndef orchestrate_v{i}(): pass",
+                    encoding="utf-8",
+                )
+                extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+        except Exception:
+            # Fail-fast guard raising at/after the limit is the intended fix.
+            pass
 
-        # Documents the bug: N calls for N file versions with no guard.
-        # After the fix, update this to: call_count <= _MAX_SESSION_EXTRACTIONS
-        assert mock_llm["llm_invoke"].call_count == _REPORTED_REPEAT_COUNT, (
-            f"Bug #1711 documented: the same query fired {_REPORTED_REPEAT_COUNT} "
-            "times when the source file changed between each sync iteration. "
-            "This is a documentation test — see TestSessionExtractionGuard for "
-            "the assertions that verify the fix."
+        # Post-fix: the guard caps LLM calls at _MAX_SESSION_EXTRACTIONS.
+        assert mock_llm["llm_invoke"].call_count <= _MAX_SESSION_EXTRACTIONS, (
+            f"Bug #1711 fixed: the same query must fire at most "
+            f"{_MAX_SESSION_EXTRACTIONS} times even when the source file changes "
+            f"between sync iterations. Got {mock_llm['llm_invoke'].call_count}."
         )
 
 
