@@ -718,6 +718,14 @@ def _reset_session_extraction_counts():
 
 
 @pytest.fixture
+def reset_session_state():
+    """Clear session extraction counts before and after each test."""
+    _reset_session_extraction_counts()
+    yield
+    _reset_session_extraction_counts()
+
+
+@pytest.fixture
 def issue_1711_source_file(tmp_path, monkeypatch):
     """Temporary project with orchestrator.py as the source file (matches issue #1711)."""
     monkeypatch.setattr(
@@ -733,6 +741,7 @@ def issue_1711_source_file(tmp_path, monkeypatch):
     return tmp_path, source_file
 
 
+@pytest.mark.usefixtures("reset_session_state")
 class TestSessionExtractionGuard:
     """Req 10: session-level guard prevents repeated identical (file, query) LLM calls.
 
@@ -740,13 +749,6 @@ class TestSessionExtractionGuard:
     after the fix adds MAX_SESSION_EXTRACTIONS, _session_extraction_counts,
     reset_session(), and RepeatedRetrievalQueryError.
     """
-
-    @pytest.fixture(autouse=True)
-    def reset_session_state(self):
-        """Clear session extraction counts before and after each test."""
-        _reset_session_extraction_counts()
-        yield
-        _reset_session_extraction_counts()
 
     def test_session_guard_caps_llm_calls_same_instance(
         self, issue_1711_source_file, mock_llm
@@ -1054,6 +1056,7 @@ class TestSessionExtractionGuard:
 # These tests document the current (buggy) behavior and verify the existing
 # disk-cache behavior that must not regress after the fix.
 
+@pytest.mark.usefixtures("reset_session_state")
 class TestIssue1711BugDocumentation:
     """Verify the fix for bug #1711.
 
@@ -1062,12 +1065,6 @@ class TestIssue1711BugDocumentation:
     assertion has been updated post-fix to assert
     call_count <= _MAX_SESSION_EXTRACTIONS.
     """
-
-    @pytest.fixture(autouse=True)
-    def reset_session_state(self):
-        _reset_session_extraction_counts()
-        yield
-        _reset_session_extraction_counts()
 
     def test_file_change_triggers_cache_miss_and_repeated_llm_call(
         self, issue_1711_source_file, mock_llm
@@ -1102,17 +1099,12 @@ class TestIssue1711BugDocumentation:
         )
 
 
+@pytest.mark.usefixtures("reset_session_state")
 class TestIssue1711BaselineCacheBehavior:
     """Confirm existing disk-cache behavior when the file does NOT change.
 
     These tests pass today and must continue passing after the fix is applied.
     """
-
-    @pytest.fixture(autouse=True)
-    def reset_session_state(self):
-        _reset_session_extraction_counts()
-        yield
-        _reset_session_extraction_counts()
 
     def test_cache_hit_prevents_repeated_llm_call_same_content(
         self, issue_1711_source_file, mock_llm
