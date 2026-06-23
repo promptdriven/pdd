@@ -62,6 +62,55 @@ def _warn_selector_fallback(
     if not _is_quiet_mode():
         console.print(f"[yellow]Warning: {message}[/yellow]")
 
+
+def _query_fallback_extract(full_path, fallback_query, snapshot_recorder):
+    """Shared ``select=`` → ``query=`` fallback extraction (Issue #1711).
+
+    Used by all three selector-failure routes in ``process_include_tags``
+    (ImportError, SelectorError, and the generic selector/compression failure).
+    Returns the extracted content on success, or ``None`` when there is no
+    ``query=`` to fall back to or the extraction failed for a non-guard reason
+    (recorded as a ``[query_include failed: ...]`` placeholder in the snapshot).
+
+    ``RepeatedRetrievalQueryError`` — the per-``(file, query)`` session guard — is
+    intentionally NOT caught here: it propagates so a stuck retrieval loop fails
+    fast instead of silently continuing on degraded include content. Centralizing
+    the re-raise in a single helper (rather than copying ``except
+    RepeatedRetrievalQueryError: raise`` into each branch) stops a future edit
+    from re-introducing the swallow on one of the fallback paths.
+    """
+    if not fallback_query:
+        return None
+    from pdd.include_query_extractor import (
+        IncludeQueryExtractor,
+        RepeatedRetrievalQueryError,
+    )
+    try:
+        extracted = IncludeQueryExtractor().extract(
+            file_path=full_path, query=fallback_query
+        )
+    except RepeatedRetrievalQueryError:
+        raise
+    except Exception as inner_e:
+        if snapshot_recorder is not None:
+            placeholder = f"[query_include failed: {inner_e}]"
+            snapshot_recorder.record_include(
+                source_path=full_path,
+                content=placeholder,
+                query=fallback_query,
+                output=placeholder,
+            )
+        return None
+    if snapshot_recorder is not None:
+        snapshot_recorder.record_include(
+            source_path=full_path,
+            content=extracted,
+            query=fallback_query,
+            output=extracted,
+        )
+    return extracted
+
+
 def _dbg(msg: str) -> None:
     if _is_debug():
         console.print(f"[dim][PPD][preprocess][/dim] {escape(msg)}")
@@ -888,70 +937,24 @@ def process_include_tags(
                                 if fallback_query and _is_context_audit_no_query_fallback():
                                     _dbg(f"Deferred query fallback during context audit for {file_path}")
                                     return match.group(0)
-                                if fallback_query:
-                                    try:
-                                        from pdd.include_query_extractor import (
-                                            IncludeQueryExtractor,
-                                            RepeatedRetrievalQueryError,
-                                        )
-                                        extracted = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
-                                        if snapshot_recorder is not None:
-                                            snapshot_recorder.record_include(
-                                                source_path=full_path,
-                                                content=extracted,
-                                                query=fallback_query,
-                                                output=extracted,
-                                            )
-                                        return extracted
-                                    except RepeatedRetrievalQueryError:
-                                        # Issue #1711: the session guard must fail fast even on
-                                        # the select= fallback routes. Swallowing it into a
-                                        # placeholder (as the broad handler below does) would let
-                                        # sync silently continue on degraded include content.
-                                        raise
-                                    except Exception as inner_e:
-                                        if snapshot_recorder is not None:
-                                            snapshot_recorder.record_include(
-                                                source_path=full_path,
-                                                content=f"[query_include failed: {inner_e}]",
-                                                query=fallback_query,
-                                                output=f"[query_include failed: {inner_e}]",
-                                            )
+                                # Issue #1711: _query_fallback_extract re-raises the
+                                # session guard (fail fast); only non-guard failures
+                                # fall through to the full-content fallback below.
+                                extracted = _query_fallback_extract(full_path, fallback_query, snapshot_recorder)
+                                if extracted is not None:
+                                    return extracted
                                 _warn_selector_fallback(file_path, mode, e, selectors=selectors_str)
                             except SelectorError as e:
                                 fallback_query = attrs.get('query')
                                 if fallback_query and _is_context_audit_no_query_fallback():
                                     _dbg(f"Deferred query fallback during context audit for {file_path}")
                                     return match.group(0)
-                                if fallback_query:
-                                    try:
-                                        from pdd.include_query_extractor import (
-                                            IncludeQueryExtractor,
-                                            RepeatedRetrievalQueryError,
-                                        )
-                                        extracted = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
-                                        if snapshot_recorder is not None:
-                                            snapshot_recorder.record_include(
-                                                source_path=full_path,
-                                                content=extracted,
-                                                query=fallback_query,
-                                                output=extracted,
-                                            )
-                                        return extracted
-                                    except RepeatedRetrievalQueryError:
-                                        # Issue #1711: the session guard must fail fast even on
-                                        # the select= fallback routes. Swallowing it into a
-                                        # placeholder (as the broad handler below does) would let
-                                        # sync silently continue on degraded include content.
-                                        raise
-                                    except Exception as inner_e:
-                                        if snapshot_recorder is not None:
-                                            snapshot_recorder.record_include(
-                                                source_path=full_path,
-                                                content=f"[query_include failed: {inner_e}]",
-                                                query=fallback_query,
-                                                output=f"[query_include failed: {inner_e}]",
-                                            )
+                                # Issue #1711: _query_fallback_extract re-raises the
+                                # session guard (fail fast); only non-guard failures
+                                # fall through to the full-content fallback below.
+                                extracted = _query_fallback_extract(full_path, fallback_query, snapshot_recorder)
+                                if extracted is not None:
+                                    return extracted
                                 _warn_selector_fallback(file_path, mode, e, selectors=selectors_str)
                             except Exception as e:
                                 fallback_strategy = os.environ.get("PDD_COMPRESSION_FALLBACK", "full").lower()
@@ -961,35 +964,12 @@ def process_include_tags(
                                 if fallback_query and _is_context_audit_no_query_fallback():
                                     _dbg(f"Deferred query fallback during context audit for {file_path}")
                                     return match.group(0)
-                                if fallback_query:
-                                    try:
-                                        from pdd.include_query_extractor import (
-                                            IncludeQueryExtractor,
-                                            RepeatedRetrievalQueryError,
-                                        )
-                                        extracted = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
-                                        if snapshot_recorder is not None:
-                                            snapshot_recorder.record_include(
-                                                source_path=full_path,
-                                                content=extracted,
-                                                query=fallback_query,
-                                                output=extracted,
-                                            )
-                                        return extracted
-                                    except RepeatedRetrievalQueryError:
-                                        # Issue #1711: the session guard must fail fast even on
-                                        # the select= fallback routes. Swallowing it into a
-                                        # placeholder (as the broad handler below does) would let
-                                        # sync silently continue on degraded include content.
-                                        raise
-                                    except Exception as inner_e:
-                                        if snapshot_recorder is not None:
-                                            snapshot_recorder.record_include(
-                                                source_path=full_path,
-                                                content=f"[query_include failed: {inner_e}]",
-                                                query=fallback_query,
-                                                output=f"[query_include failed: {inner_e}]",
-                                            )
+                                # Issue #1711: _query_fallback_extract re-raises the
+                                # session guard (fail fast); only non-guard failures
+                                # fall through to the full-content fallback below.
+                                extracted = _query_fallback_extract(full_path, fallback_query, snapshot_recorder)
+                                if extracted is not None:
+                                    return extracted
                                 _warn_selector_fallback(file_path, mode, e, selectors=selectors_str)
 
                     if recursive:
