@@ -257,6 +257,25 @@ def _render_check_summary(checks: List[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _render_stale_head_summary(
+    *,
+    pr_number: int,
+    expected_head_sha: str,
+    live_head_sha: str,
+    checks: List[Dict[str, str]],
+) -> str:
+    """Render a clear diagnostic when the expected PR head never became live."""
+    expected = expected_head_sha or "<unknown>"
+    live = live_head_sha or "<unknown>"
+    summary = _render_check_summary(checks)
+    return (
+        f"PR #{pr_number} head did not match the expected CI validation head.\n"
+        f"- expected head: `{expected}`\n"
+        f"- live PR head: `{live}`\n"
+        f"- last known checks:\n{summary}"
+    )
+
+
 def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str:
     """Classify `gh pr checks` output using both exit code and bucket values."""
     buckets = [check.get("bucket", "").lower() for check in checks if check.get("bucket")]
@@ -289,20 +308,23 @@ def _poll_required_checks(
     saw_checks = False
     saw_ambiguous_error = False
     matched_expected_head = not bool(expected_head_sha)
+    last_remote_head_sha = ""
     latest_checks: List[Dict[str, str]] = []
     start = time.monotonic()
 
     while time.monotonic() - start < MAX_POLL_SECONDS:
         remote_head_sha = _get_pr_head_sha(repo_owner, repo_name, pr_number, cwd)
+        if remote_head_sha:
+            last_remote_head_sha = remote_head_sha
         if expected_head_sha and remote_head_sha:
             matched_expected_head = remote_head_sha == expected_head_sha
             if not matched_expected_head:
                 if not quiet:
                     console.print(
-                        f"[dim]Waiting for PR #{pr_number} to update to head {expected_head_sha[:7]}...[/dim]"
+                        f"[dim]PR #{pr_number} live head is {remote_head_sha[:7]}, "
+                        f"not expected head {expected_head_sha[:7]}; checking "
+                        "live-head status before waiting...[/dim]"
                     )
-                time.sleep(POLL_INTERVAL_SECONDS)
-                continue
 
         check_args = ["pr", "checks", str(pr_number)]
         if required_only:
@@ -363,7 +385,9 @@ def _poll_required_checks(
 
         status = _classify_check_result(result.returncode, latest_checks)
 
-        if status in {"passed", "failed"}:
+        if status == "failed":
+            return status, latest_checks
+        if status == "passed" and matched_expected_head:
             return status, latest_checks
 
         if result.returncode not in {0, 1, 8} and not quiet:
@@ -375,6 +399,21 @@ def _poll_required_checks(
 
     if not saw_checks and matched_expected_head and not saw_ambiguous_error:
         return "no_checks", []
+    if expected_head_sha and not matched_expected_head:
+        stale_summary = _render_stale_head_summary(
+            pr_number=pr_number,
+            expected_head_sha=expected_head_sha,
+            live_head_sha=last_remote_head_sha,
+            checks=latest_checks,
+        )
+        return "stale_head", [
+            {
+                "name": "PR head mismatch",
+                "state": stale_summary,
+                "bucket": "fail",
+                "link": "",
+            }
+        ]
     return "timeout", latest_checks
 
 
@@ -544,6 +583,8 @@ def run_github_checks_gate(
             ),
             head_sha,
         )
+    if status == "stale_head":
+        return False, summary, head_sha
     return (
         False,
         f"{source_name} returned unexpected status {status!r} on PR head {head_sha[:8]}:\n{summary}",
@@ -852,7 +893,11 @@ def run_ci_validation_loop(
     last_summary = "No required CI checks were reported."
 
     while True:
-        head_sha = expected_head_sha_override or _get_head_sha(cwd)
+        head_sha = (
+            expected_head_sha_override
+            or _get_pr_head_sha(repo_owner, repo_name, pr_number, cwd)
+            or _get_head_sha(cwd)
+        )
         status, checks = _poll_required_checks(
             repo_owner,
             repo_name,
@@ -931,6 +976,18 @@ def run_ci_validation_loop(
                 cwd=cwd,
             )
             return False, "Timed out waiting for required CI checks to complete", total_cost
+        if status == "stale_head":
+            last_failures = checks
+            last_summary = _render_check_summary(last_failures)
+            post_ci_failure_comment(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                pr_number=pr_number,
+                failures=last_summary.splitlines(),
+                attempts=fix_attempt,
+                cwd=cwd,
+            )
+            return False, last_summary, total_cost
 
         last_failures = checks
         last_summary = _render_check_summary(last_failures)
