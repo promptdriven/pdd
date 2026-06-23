@@ -34,7 +34,7 @@ interface PromptCodeDiffModalProps {
 // Color scheme for different statuses
 const STATUS_COLORS = {
   matched: { bg: 'bg-emerald-500/10', border: 'border-emerald-500/30', text: 'text-emerald-400', headerBg: 'bg-emerald-500/20' },
-  partial: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', text: 'text-yellow-400', headerBg: 'bg-yellow-500/20' },
+  partial: { bg: 'bg-cyan-500/10', border: 'border-cyan-500/30', text: 'text-cyan-400', headerBg: 'bg-cyan-500/20' },
   missing: { bg: 'bg-red-500/15', border: 'border-red-500/50', text: 'text-red-400', headerBg: 'bg-red-500/30' },
   extra: { bg: 'bg-red-500/15', border: 'border-red-500/50', text: 'text-red-400', headerBg: 'bg-red-500/30' },
 };
@@ -285,14 +285,14 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                     {/* Regeneration Risk Badge */}
                     <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg ${
                       diffResult.result.regenerationRisk === 'critical' ? 'bg-red-500/20 border border-red-500/50' :
-                      diffResult.result.regenerationRisk === 'high' ? 'bg-orange-500/20 border border-orange-500/50' :
-                      diffResult.result.regenerationRisk === 'medium' ? 'bg-yellow-500/20 border border-yellow-500/50' :
+                      diffResult.result.regenerationRisk === 'high' ? 'bg-sky-500/20 border border-sky-500/50' :
+                      diffResult.result.regenerationRisk === 'medium' ? 'bg-cyan-500/20 border border-cyan-500/50' :
                       'bg-emerald-500/20 border border-emerald-500/50'
                     }`}>
                       <span className={`text-xs font-medium ${
                         diffResult.result.regenerationRisk === 'critical' ? 'text-red-400' :
-                        diffResult.result.regenerationRisk === 'high' ? 'text-orange-400' :
-                        diffResult.result.regenerationRisk === 'medium' ? 'text-yellow-400' :
+                        diffResult.result.regenerationRisk === 'high' ? 'text-sky-400' :
+                        diffResult.result.regenerationRisk === 'medium' ? 'text-cyan-400' :
                         'text-emerald-400'
                       }`}>
                         {diffResult.result.regenerationRisk === 'critical' ? 'CRITICAL RISK' :
@@ -317,7 +317,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                         className="text-lg font-bold"
                         style={{
                           color: diffResult.result.overallScore >= 80 ? '#10b981' :
-                                 diffResult.result.overallScore >= 50 ? '#f59e0b' : '#ef4444'
+                                 diffResult.result.overallScore >= 50 ? '#00d8ff' : '#ef4444'
                         }}
                       >
                         {diffResult.result.overallScore}%
@@ -487,7 +487,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                         {diffResult.result.stats.documentedFeatures}/{diffResult.result.stats.totalCodeFeatures} documented
                       </span>
                       {diffResult.result.hiddenKnowledge && diffResult.result.hiddenKnowledge.length > 0 && (
-                        <span className="text-orange-400">
+                        <span className="text-sky-400">
                           {diffResult.result.hiddenKnowledge.length} hidden
                         </span>
                       )}
@@ -547,7 +547,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                           <div className="flex items-start gap-3">
                             <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
                               section.status === 'matched' ? 'bg-emerald-500' :
-                              section.status === 'partial' ? 'bg-yellow-500' : 'bg-red-500'
+                              section.status === 'partial' ? 'bg-cyan-500' : 'bg-red-500'
                             }`} />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between gap-2">
@@ -620,7 +620,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                           <div className="flex items-start gap-3">
                             <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${
                               section.status === 'matched' ? 'bg-emerald-500' :
-                              section.status === 'partial' ? 'bg-yellow-500' : 'bg-red-500'
+                              section.status === 'partial' ? 'bg-cyan-500' : 'bg-red-500'
                             }`} />
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center justify-between gap-2">
@@ -860,7 +860,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                     <h3 className="text-sm font-medium text-white mb-3">
                       Version History ({historyResponse.versions.length} commits)
                       {historyResponse.has_uncommitted_changes && (
-                        <span className="ml-2 text-xs text-yellow-400">(uncommitted changes)</span>
+                        <span className="ml-2 text-xs text-cyan-400">(uncommitted changes)</span>
                       )}
                     </h3>
                     <div className="space-y-2">
@@ -968,7 +968,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                               <div className={`w-2.5 h-2.5 rounded-full mt-1 flex-shrink-0 ${
                                 change.change_type === 'added' ? 'bg-emerald-500' :
                                 change.change_type === 'removed' ? 'bg-red-500' :
-                                'bg-yellow-500'
+                                'bg-cyan-500'
                               }`} />
                               <div className="flex-1 min-w-0">
                                 {/* Short summary when collapsed, full when expanded */}
@@ -985,7 +985,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                               <span className={`text-xs px-2 py-0.5 rounded-full ${
                                 change.change_type === 'added' ? 'bg-emerald-500/20 text-emerald-400' :
                                 change.change_type === 'removed' ? 'bg-red-500/20 text-red-400' :
-                                'bg-yellow-500/20 text-yellow-400'
+                                'bg-cyan-500/20 text-cyan-400'
                               }`}>
                                 {change.change_type}
                               </span>
@@ -1144,8 +1144,8 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
                     </span>
                   )}
                   {diffResult.result.stats.hiddenKnowledgeCount > 0 && (
-                    <span className="text-orange-400 flex items-center gap-1">
-                      <span className="w-2 h-2 rounded-full bg-orange-500" />
+                    <span className="text-sky-400 flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-sky-500" />
                       {diffResult.result.stats.hiddenKnowledgeCount} hidden knowledge
                     </span>
                   )}
@@ -1179,7 +1179,7 @@ export const PromptCodeDiffModal: React.FC<PromptCodeDiffModalProps> = ({
               <div className="text-sm text-surface-300">
                 {historyResponse.versions.length} version{historyResponse.versions.length !== 1 ? 's' : ''} found
                 {historyResponse.has_uncommitted_changes && (
-                  <span className="text-yellow-400 ml-2">• Uncommitted changes present</span>
+                  <span className="text-cyan-400 ml-2">• Uncommitted changes present</span>
                 )}
               </div>
             )}

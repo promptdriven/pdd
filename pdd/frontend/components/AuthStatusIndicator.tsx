@@ -47,7 +47,7 @@ const AuthStatusIndicator: React.FC<AuthStatusIndicatorProps> = ({ onReauth }) =
       className={`flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm px-2 sm:px-3 py-1.5 rounded-full transition-colors ${
         isAuthenticated
           ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20'
-          : 'bg-yellow-500/10 text-yellow-400 border border-yellow-500/20 hover:bg-yellow-500/20'
+          : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 hover:bg-cyan-500/20'
       }`}
       title={isAuthenticated ? 'Cloud Authenticated - Click to manage authentication' : 'Not authenticated - Click to login'}
     >
@@ -64,7 +64,7 @@ const AuthStatusIndicator: React.FC<AuthStatusIndicatorProps> = ({ onReauth }) =
       </span>
       {/* Status dot */}
       <span className={`w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full ${
-        isAuthenticated ? 'bg-blue-400' : 'bg-yellow-400 animate-pulse'
+        isAuthenticated ? 'bg-blue-400' : 'bg-cyan-400 animate-pulse'
       }`} />
     </button>
   );

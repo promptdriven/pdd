@@ -50,7 +50,7 @@ function getStatusStyle(status: TaskStatus): { bg: string; text: string; icon: s
     case 'failed':
       return { bg: 'bg-red-500/20', text: 'text-red-400', icon: 'x' };
     case 'skipped':
-      return { bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: 'skip' };
+      return { bg: 'bg-cyan-500/20', text: 'text-cyan-400', icon: 'skip' };
     default:
       return { bg: 'bg-surface-500/20', text: 'text-surface-400', icon: 'question' };
   }
@@ -200,7 +200,7 @@ const TaskQueueItem: React.FC<TaskQueueItemProps> = ({
                   e.stopPropagation();
                   onSkip();
                 }}
-                className="p-1.5 text-yellow-400 hover:bg-yellow-500/20 rounded transition-colors"
+                className="p-1.5 text-cyan-400 hover:bg-cyan-500/20 rounded transition-colors"
                 title="Skip this task"
               >
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -245,7 +245,7 @@ const TaskQueueItem: React.FC<TaskQueueItemProps> = ({
       {/* Running indicator */}
       {isActive && (
         <div className="mt-2 h-1 bg-surface-700 rounded-full overflow-hidden">
-          <div className="h-full w-1/3 bg-gradient-to-r from-accent-600 to-accent-400 rounded-full animate-indeterminate" />
+          <div className="h-full w-1/3 bg-gradient-to-r from-accent-500 to-accent-400 rounded-full animate-indeterminate" />
         </div>
       )}
     </div>

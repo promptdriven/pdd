@@ -255,7 +255,7 @@ const AddToQueueModal: React.FC<AddToQueueModalProps> = ({
                   className={`
                     flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm text-left transition-all
                     ${selectedCommand === cmd.name
-                      ? 'bg-accent-600 text-white border border-accent-500'
+                      ? 'bg-accent-500 text-white border border-accent-500'
                       : 'bg-surface-800/50 text-surface-300 border border-surface-700 hover:bg-surface-700/50'
                     }
                   `}

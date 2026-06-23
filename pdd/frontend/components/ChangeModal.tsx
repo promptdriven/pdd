@@ -58,7 +58,7 @@ const ChangeModal: React.FC<ChangeModalProps> = ({ onClose, onSubmit, onDetect }
                 <p className="font-mono text-lg text-blue-400">{suggestedFile}</p>
               </div>
               <p className="text-sm text-gray-300">
-                Do you want to proceed with this suggestion? This will set up the <code className="bg-gray-700 px-1 py-0.5 rounded text-xs text-amber-400">pdd change</code> command for you in the builder.
+                Do you want to proceed with this suggestion? This will set up the <code className="bg-gray-700 px-1 py-0.5 rounded text-xs text-cyan-400">pdd change</code> command for you in the builder.
               </p>
             </main>
             <footer className="px-6 py-4 bg-gray-800/50 border-t border-gray-700 flex justify-end space-x-3 rounded-b-lg">
@@ -72,7 +72,7 @@ const ChangeModal: React.FC<ChangeModalProps> = ({ onClose, onSubmit, onDetect }
               <button
                 type="button"
                 onClick={handleConfirmSubmit}
-                className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors"
+                className="px-4 py-2 rounded-md text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors"
               >
                 Confirm & Proceed
               </button>
@@ -136,7 +136,7 @@ const ChangeModal: React.FC<ChangeModalProps> = ({ onClose, onSubmit, onDetect }
               </button>
               <button
                 type="submit"
-                className="px-4 py-2 rounded-md text-sm font-medium bg-blue-600 text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors disabled:opacity-50"
+                className="px-4 py-2 rounded-md text-sm font-medium bg-blue-500 text-white hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-blue-500 transition-colors disabled:opacity-50"
                 disabled={!changeRequest.trim()}
               >
                 Find Prompt

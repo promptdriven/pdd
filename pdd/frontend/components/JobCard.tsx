@@ -75,7 +75,7 @@ function extractDevUnitName(displayCommand: string): string | null {
 function getStatusStyle(status: JobStatus): { bg: string; text: string; icon: string } {
   switch (status) {
     case 'queued':
-      return { bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: 'clock' };
+      return { bg: 'bg-cyan-500/20', text: 'text-cyan-400', icon: 'clock' };
     case 'running':
       return { bg: 'bg-accent-500/20', text: 'text-accent-400', icon: 'spinner' };
     case 'completed':
@@ -193,7 +193,7 @@ const JobCard: React.FC<JobCardProps> = ({
           </div>
           <div className="h-1.5 bg-surface-700 rounded-full overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-accent-600 to-accent-400 rounded-full transition-all duration-300"
+              className="h-full bg-gradient-to-r from-accent-500 to-accent-400 rounded-full transition-all duration-300"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
@@ -204,7 +204,7 @@ const JobCard: React.FC<JobCardProps> = ({
       {job.status === 'running' && progressPercent === null && (
         <div className="mb-3">
           <div className="h-1.5 bg-surface-700 rounded-full overflow-hidden">
-            <div className="h-full w-1/3 bg-gradient-to-r from-accent-600 to-accent-400 rounded-full animate-indeterminate" />
+            <div className="h-full w-1/3 bg-gradient-to-r from-accent-500 to-accent-400 rounded-full animate-indeterminate" />
           </div>
         </div>
       )}

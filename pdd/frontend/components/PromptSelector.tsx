@@ -15,8 +15,8 @@ interface PromptSelectorProps {
 const LANGUAGE_COLORS: Record<string, string> = {
   python: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
   typescript: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
-  javascript: 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30',
-  java: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
+  javascript: 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30',
+  java: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
   go: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
   rust: 'bg-red-500/15 text-red-300 border-red-500/30',
 };
@@ -68,7 +68,7 @@ const PromptCard: React.FC<{
             {onSyncClick && (
               <button
                 onClick={handleSyncClick}
-                className="flex-shrink-0 w-7 h-7 bg-gradient-to-br from-pdd-gold to-pdd-goldActive hover:from-pdd-goldHover hover:to-pdd-gold rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-110"
+                className="flex-shrink-0 w-7 h-7 bg-gradient-to-br from-[#18c07a] to-[#00d8ff] hover:from-[#5ce3ff] hover:to-[#18c07a] rounded-full flex items-center justify-center shadow-lg transition-all hover:scale-110"
                 title="Run pdd sync (prompt → code)"
               >
                 <svg className="w-3.5 h-3.5 text-surface-900" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -102,7 +102,7 @@ const FileTag: React.FC<{
   const colorClasses = {
     purple: exists ? 'bg-purple-500/15 text-purple-300 border-purple-500/30' : 'bg-surface-800/50 text-surface-500 border-surface-700/50',
     green: exists ? 'bg-green-500/15 text-green-300 border-green-500/30' : 'bg-surface-800/50 text-surface-500 border-surface-700/50',
-    yellow: exists ? 'bg-yellow-500/15 text-yellow-300 border-yellow-500/30' : 'bg-surface-800/50 text-surface-500 border-surface-700/50',
+    yellow: exists ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30' : 'bg-surface-800/50 text-surface-500 border-surface-700/50',
     blue: exists ? 'bg-blue-500/15 text-blue-300 border-blue-500/30' : 'bg-surface-800/50 text-surface-500 border-surface-700/50',
   };
 
@@ -257,7 +257,7 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
         </p>
         <button
           onClick={() => setShowCreateModal(true)}
-          className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-accent-600 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white rounded-xl font-medium shadow-lg shadow-accent-500/25 transition-all"
+          className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-accent-500 to-accent-500 hover:from-accent-500 hover:to-accent-400 text-white rounded-xl font-medium shadow-lg shadow-accent-500/25 transition-all"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -319,7 +319,7 @@ const PromptSelector: React.FC<PromptSelectorProps> = ({
           </button>
           <button
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm bg-accent-600 hover:bg-accent-500 text-white rounded-lg transition-colors"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs sm:text-sm bg-accent-500 hover:bg-accent-500 text-white rounded-lg transition-colors"
             title="Create new prompt"
           >
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

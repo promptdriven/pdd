@@ -89,7 +89,7 @@ const GroupNode: React.FC<NodeProps<GroupNodeData>> = ({ data }) => {
         {editMode && onEditGroup && (
           <button
             onClick={handleEdit}
-            className="absolute -top-2 -left-2 w-6 h-6 bg-accent-600 hover:bg-accent-500 rounded-full flex items-center justify-center shadow-lg z-20 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="absolute -top-2 -left-2 w-6 h-6 bg-accent-500 hover:bg-accent-500 rounded-full flex items-center justify-center shadow-lg z-20 opacity-0 group-hover:opacity-100 transition-opacity"
             title="Edit group"
           >
             <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -300,7 +300,7 @@ const PromptOrderModal: React.FC<PromptOrderModalProps> = ({
                   item.module.priority === 'high'
                     ? 'bg-red-500/20 text-red-300'
                     : item.module.priority === 'medium'
-                    ? 'bg-yellow-500/20 text-yellow-300'
+                    ? 'bg-cyan-500/20 text-cyan-300'
                     : 'bg-green-500/20 text-green-300'
                 }`}>
                   {item.module.priority || 'normal'}

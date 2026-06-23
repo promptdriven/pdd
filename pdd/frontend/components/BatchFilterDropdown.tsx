@@ -85,7 +85,7 @@ const BatchFilterDropdown: React.FC<BatchFilterDropdownProps> = ({
             className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors ${
               disabled || selectedRemaining === 0
                 ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
-                : 'bg-gradient-to-r from-pdd-gold to-pdd-goldActive hover:from-pdd-goldHover hover:to-pdd-gold text-surface-900'
+                : 'bg-gradient-to-r from-[#18c07a] to-[#00d8ff] hover:from-[#5ce3ff] hover:to-[#18c07a] text-surface-900'
             }`}
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -177,7 +177,7 @@ const BatchFilterDropdown: React.FC<BatchFilterDropdownProps> = ({
                     className={`mt-2 w-full px-3 py-1.5 rounded-lg text-xs font-medium flex items-center justify-center gap-1.5 transition-colors ${
                       disabled || remaining === 0
                         ? 'bg-surface-700 text-surface-500 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-pdd-gold to-pdd-goldActive hover:from-pdd-goldHover hover:to-pdd-gold text-surface-900'
+                        : 'bg-gradient-to-r from-[#18c07a] to-[#00d8ff] hover:from-[#5ce3ff] hover:to-[#18c07a] text-surface-900'
                     }`}
                   >
                     <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">

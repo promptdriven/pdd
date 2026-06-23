@@ -133,7 +133,7 @@ const ModelSliders: React.FC<ModelSlidersProps> = ({
                 step="0.1"
                 value={temperature}
                 onChange={(e) => onTemperatureChange(parseFloat(e.target.value))}
-                className="w-full h-1.5 bg-surface-700 rounded-full appearance-none cursor-pointer accent-orange-500"
+                className="w-full h-1.5 bg-surface-700 rounded-full appearance-none cursor-pointer accent-sky-500"
               />
             </div>
           </div>
