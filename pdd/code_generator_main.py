@@ -4027,6 +4027,25 @@ def code_generator_main(
         )
         can_attempt_incremental = False
 
+    # Conformance repair must bypass incremental generation. When
+    # PDD_REPAIR_DIRECTIVE is active, the directive was appended to
+    # prompt_content above, which makes the in-memory prompt look "changed"
+    # relative to HEAD and would otherwise satisfy the incremental-eligibility
+    # logic. Routing a repair retry through incremental_code_generator's
+    # diff-analysis (patch-vs-regenerate) step can silently swallow the named
+    # repair if that analysis fails or misclassifies. Force a clean full
+    # regeneration so the <architecture_repair_directive> block reaches the
+    # full generator directly. Normal incremental generation is unaffected when
+    # no repair directive is set (#1724).
+    repair_directive_active = bool(repair_directive_env and repair_directive_env.strip())
+    if repair_directive_active and can_attempt_incremental:
+        if verbose:
+            console.print(
+                "[blue]PDD_REPAIR_DIRECTIVE active: bypassing incremental generation "
+                "and performing full generation with the repair directive.[/blue]"
+            )
+        can_attempt_incremental = False
+
     try:
         # Resolve post-process script from env/CLI override, then front matter, then sensible default per template
         post_process_script: Optional[str] = None
