@@ -710,6 +710,13 @@ _MAX_SESSION_EXTRACTIONS = 2
 _REPORTED_REPEAT_COUNT = 6
 
 
+def _reset_session_extraction_counts():
+    """Clear session-level extraction counts if the guard is present (no-op pre-fix)."""
+    reset = getattr(IncludeQueryExtractor, "reset_session", None)
+    if reset is not None:
+        reset()
+
+
 @pytest.fixture
 def issue_1711_source_file(tmp_path, monkeypatch):
     """Temporary project with orchestrator.py as the source file (matches issue #1711)."""
@@ -736,18 +743,10 @@ class TestSessionExtractionGuard:
 
     @pytest.fixture(autouse=True)
     def reset_session_state(self):
-        """Clear session extraction counts before and after each test.
-
-        Safe to call when reset_session() does not yet exist (pre-fix code):
-        the fixture is a no-op in that case.
-        """
-        reset = getattr(IncludeQueryExtractor, "reset_session", None)
-        if reset is not None:
-            reset()
+        """Clear session extraction counts before and after each test."""
+        _reset_session_extraction_counts()
         yield
-        reset = getattr(IncludeQueryExtractor, "reset_session", None)
-        if reset is not None:
-            reset()
+        _reset_session_extraction_counts()
 
     def test_session_guard_caps_llm_calls_same_instance(
         self, issue_1711_source_file, mock_llm
@@ -1066,13 +1065,9 @@ class TestIssue1711BugDocumentation:
 
     @pytest.fixture(autouse=True)
     def reset_session_state(self):
-        reset = getattr(IncludeQueryExtractor, "reset_session", None)
-        if reset is not None:
-            reset()
+        _reset_session_extraction_counts()
         yield
-        reset = getattr(IncludeQueryExtractor, "reset_session", None)
-        if reset is not None:
-            reset()
+        _reset_session_extraction_counts()
 
     def test_file_change_triggers_cache_miss_and_repeated_llm_call(
         self, issue_1711_source_file, mock_llm
@@ -1115,13 +1110,9 @@ class TestIssue1711BaselineCacheBehavior:
 
     @pytest.fixture(autouse=True)
     def reset_session_state(self):
-        reset = getattr(IncludeQueryExtractor, "reset_session", None)
-        if reset is not None:
-            reset()
+        _reset_session_extraction_counts()
         yield
-        reset = getattr(IncludeQueryExtractor, "reset_session", None)
-        if reset is not None:
-            reset()
+        _reset_session_extraction_counts()
 
     def test_cache_hit_prevents_repeated_llm_call_same_content(
         self, issue_1711_source_file, mock_llm
