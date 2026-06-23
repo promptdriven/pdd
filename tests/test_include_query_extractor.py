@@ -21,7 +21,9 @@ import pytest
 
 from pdd.include_query_extractor import (
     IncludeQueryExtractor,
+    RepeatedRetrievalQueryError,
     compute_cache_key,
+    MAX_SESSION_EXTRACTIONS,
     _ENV_CACHE_ENABLE,
     _ENV_EXTRACTION_STRENGTH,
 )
@@ -1147,3 +1149,346 @@ class TestIssue1711BaselineCacheBehavior:
         assert mock_llm["llm_invoke"].call_count == 1, (
             "Disk cache should serve subsequent calls even with new extractor instances."
         )
+
+
+# ---------------------------------------------------------------------------
+# Req 11: Fail-fast diagnostics + conservative (exact-match) guard keying
+# (issue #1711, acceptance criteria #2 and #3)
+# ---------------------------------------------------------------------------
+#
+# The guard tests above swallow the raised exception with ``except Exception``
+# and only assert the LLM call count. That happy-/bounded-path coverage proves
+# the loop is *capped*, but NOT that the failure is surfaced the way the issue
+# demands:
+#
+#   AC #2: "A looping/stuck retrieval is bounded and fails fast ... with a
+#           clear error naming the stage and query."
+#   AC #3: "exit with a clear, actionable error message (which stage, which
+#           query, why it gave up) rather than a repetitive dump."
+#
+# These regressions assert the *typed* RepeatedRetrievalQueryError is raised
+# (not a bare RuntimeError / silent stale return) and that its message actually
+# names the offending query and file. They also add the adversarial near-match
+# case the task requires: a look-alike query (the same string minus its final
+# character — exactly how issue #1711 showed the query truncated) MUST get its
+# own fresh quota and must NOT inherit another query's exhausted block. This
+# fails if the guard ever keys on a substring / family-prefix instead of the
+# exact (file, query) pair.
+
+@pytest.mark.usefixtures("reset_session_state")
+class TestIssue1711FailFastDiagnostics:
+    """Verify the bounded guard fails fast with an actionable, typed error
+    and keys strictly on the exact (file, query) pair."""
+
+    def _exhaust_quota(self, extractor, source_file):
+        """Consume exactly MAX_SESSION_EXTRACTIONS extractions (each a cache
+        miss via a file change). Returns without triggering the guard."""
+        for i in range(MAX_SESSION_EXTRACTIONS):
+            source_file.write_text(f"# quota {i}\ndef f{i}(): pass", encoding="utf-8")
+            extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+
+    def test_exceeding_limit_raises_typed_error(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """The (MAX_SESSION_EXTRACTIONS + 1)-th re-extraction raises the
+        specific RepeatedRetrievalQueryError — not a silent stale return and
+        not a bare RuntimeError.
+
+        FAILS if the guard is reverted (no exception) or weakened to a generic
+        error / tolerant fallback.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+        self._exhaust_quota(extractor, source_file)
+
+        # One more cache-missing extraction must fail fast.
+        source_file.write_text("# over-limit\ndef final(): pass", encoding="utf-8")
+        with pytest.raises(RepeatedRetrievalQueryError):
+            extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+
+    def test_repeated_retrieval_error_is_subclass_of_runtimeerror(self):
+        """RepeatedRetrievalQueryError stays a RuntimeError subclass so callers
+        that catch RuntimeError keep working, while callers that want the
+        precise failure can target the subclass."""
+        assert issubclass(RepeatedRetrievalQueryError, RuntimeError)
+
+    def test_error_message_names_offending_query_and_file(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """AC #3: the failure message must be actionable — it names *which
+        query* and *which file* gave up, not a repetitive query dump.
+
+        FAILS if the message is reverted to something opaque that omits the
+        query or filename.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+        self._exhaust_quota(extractor, source_file)
+
+        source_file.write_text("# over-limit\ndef final(): pass", encoding="utf-8")
+        with pytest.raises(RepeatedRetrievalQueryError) as exc_info:
+            extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+
+        message = str(exc_info.value)
+        assert _ISSUE_1711_QUERY in message, (
+            "Error message must name the offending retrieval query (AC #3). "
+            f"Got: {message!r}"
+        )
+        assert source_file.name in message, (
+            "Error message must name the offending source file (AC #3). "
+            f"Got: {message!r}"
+        )
+
+    def test_look_alike_query_gets_independent_quota(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """Adversarial near-match: a query that is the issue query minus its
+        final character (the exact way #1711 showed it truncated) is a DIFFERENT
+        query and must get its own fresh quota — it must NOT be blocked by the
+        exhausted full query.
+
+        This proves the guard keys on the exact (file, query) pair, not a
+        substring / family-prefix. A guard that matched by prefix/substring
+        would wrongly raise here.
+
+        FAILS if the guard over-blocks near-match queries.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+
+        # Exhaust *and* trip the guard for the full issue query.
+        self._exhaust_quota(extractor, source_file)
+        source_file.write_text("# tripped\ndef tripped(): pass", encoding="utf-8")
+        with pytest.raises(RepeatedRetrievalQueryError):
+            extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+
+        calls_before = mock_llm["llm_invoke"].call_count
+
+        # A look-alike (truncated) query — must be served, not blocked.
+        look_alike = _ISSUE_1711_QUERY[:-1]
+        assert look_alike != _ISSUE_1711_QUERY
+        source_file.write_text("# look-alike\ndef la(): pass", encoding="utf-8")
+        result = extractor.extract(str(source_file), look_alike)
+
+        assert isinstance(result, str)
+        assert mock_llm["llm_invoke"].call_count == calls_before + 1, (
+            "A near-match (truncated) query must get its own quota and reach the "
+            "LLM exactly once — the guard must key on the exact (file, query) pair, "
+            "not a substring/prefix of an already-exhausted query."
+        )
+
+    def test_exact_query_is_blocked_while_look_alike_is_not(
+        self, issue_1711_source_file, mock_llm
+    ):
+        """Two-sided guarantee in one fixture: the exact exhausted query keeps
+        raising, while the look-alike continues to succeed. Prevents a guard
+        that is either too loose (blocks the near-match) or too tight (lets the
+        exact repeat through) from passing by accident.
+        """
+        _, source_file = issue_1711_source_file
+        extractor = IncludeQueryExtractor()
+
+        self._exhaust_quota(extractor, source_file)
+
+        look_alike = _ISSUE_1711_QUERY[:-1]
+
+        # Exact query: blocked.
+        source_file.write_text("# exact-again\ndef ea(): pass", encoding="utf-8")
+        with pytest.raises(RepeatedRetrievalQueryError):
+            extractor.extract(str(source_file), _ISSUE_1711_QUERY)
+
+        # Look-alike query: allowed (fresh counter).
+        source_file.write_text("# la-1\ndef la1(): pass", encoding="utf-8")
+        assert isinstance(extractor.extract(str(source_file), look_alike), str)
+
+
+# ---------------------------------------------------------------------------
+# Req 12: E2E / cross-module integration through the real preprocess pipeline
+# (issue #1711, Step 6c)
+# ---------------------------------------------------------------------------
+#
+# The regression tests above drive IncludeQueryExtractor.extract() (and one
+# process_include_tags() call) directly and assert on LLM *call counts*. These
+# integration tests exercise the *full module boundary* that pdd sync actually
+# travels — pdd.preprocess.preprocess() / process_include_tags() expanding a
+# real `<include query="...">` tag, which in turn instantiates
+# IncludeQueryExtractor (a fresh one per call, preprocess.py:712) and calls
+# extract(). They verify three cross-module guarantees the unit tests cannot:
+#
+#   1. Data flow: when the session guard trips deep inside extract(), the
+#      RepeatedRetrievalQueryError is caught by preprocess.py's broad
+#      `except Exception` (line 733) and surfaced as a *placeholder string* in
+#      the returned prompt — and that placeholder still names the offending
+#      query and file (AC #3 must survive the boundary, not be swallowed into
+#      an opaque message).
+#   2. Conservative matching propagates across the boundary: a near-miss
+#      (truncated) query — the exact shape #1711 showed the query in — is a
+#      different (file, query) pair and is STILL expanded to real content
+#      through the full pipeline while the exhausted exact query is blocked.
+#      A guard that keyed on a substring/prefix would corrupt the near-miss
+#      output here.
+#   3. The reset_session() hook restores the per-(file, query) quota across two
+#      simulated top-level pdd sync runs driven through preprocess().
+
+_ERROR_PLACEHOLDER_MARK = "Error in semantic query"
+
+
+@pytest.mark.usefixtures("reset_session_state")
+class TestIssue1711PreprocessIntegration:
+    """E2E: the session guard works through the real preprocess -> extractor
+    boundary, surfacing an actionable placeholder and keying on the exact
+    (file, query) pair, not a substring/prefix."""
+
+    def test_preprocess_pipeline_bounds_loop_and_surfaces_actionable_placeholder(
+        self, issue_1711_source_file, mock_llm, monkeypatch
+    ):
+        """Full pipeline: top-level preprocess() expanding `<include query=...>`
+        across mutating sync iterations fires the LLM at most
+        MAX_SESSION_EXTRACTIONS times, and once the guard trips the returned
+        prompt carries a placeholder that names the offending query and file.
+
+        This is the cross-module half of AC #2/#3: the typed error raised inside
+        extract() is caught by preprocess.py's broad `except Exception` and must
+        still surface an actionable message (which query, which file) at the
+        user-visible boundary — not a silent stale return or an opaque dump.
+        """
+        from pdd.preprocess import preprocess
+
+        _, source_file = issue_1711_source_file
+        monkeypatch.setattr("pdd.preprocess.get_file_path", lambda p: str(source_file))
+
+        prompt = f'<include query="{_ISSUE_1711_QUERY}">{source_file}</include>'
+
+        final_output = ""
+        for i in range(_REPORTED_REPEAT_COUNT):
+            # Each sync operation (generate/fix/update) mutates the source file,
+            # invalidating the disk cache and forcing a real extraction attempt.
+            source_file.write_text(f"# orchestrator v{i}\ndef o{i}(): pass", encoding="utf-8")
+            final_output = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        # The loop is bounded end-to-end, not just at the extractor unit.
+        assert mock_llm["llm_invoke"].call_count <= _MAX_SESSION_EXTRACTIONS, (
+            f"Bug #1711: full preprocess() pipeline fired the LLM "
+            f"{mock_llm['llm_invoke'].call_count} times across "
+            f"{_REPORTED_REPEAT_COUNT} sync iterations (expected ≤ "
+            f"{_MAX_SESSION_EXTRACTIONS})."
+        )
+
+        # Once tripped, the guard's actionable message must reach the rendered
+        # prompt through preprocess.py's exception handling — not vanish.
+        assert _ERROR_PLACEHOLDER_MARK in final_output, (
+            "After the guard trips, preprocess() must surface an error "
+            f"placeholder in the prompt. Got: {final_output!r}"
+        )
+        assert _ISSUE_1711_QUERY in final_output, (
+            "The surfaced placeholder must name the offending retrieval query "
+            f"(AC #3) across the module boundary. Got: {final_output!r}"
+        )
+        assert source_file.name in final_output, (
+            "The surfaced placeholder must name the offending source file "
+            f"(AC #3) across the module boundary. Got: {final_output!r}"
+        )
+
+    def test_preprocess_serves_near_miss_query_while_exact_is_blocked(
+        self, issue_1711_source_file, mock_llm, monkeypatch
+    ):
+        """Adversarial near-miss through the full include pipeline.
+
+        Production-like trap: the issue query truncated by one character (the
+        exact way #1711 displayed it, `output[-500:]`-clipped) is a DIFFERENT
+        (file, query) pair. Driven through process_include_tags() it must still
+        expand to real extracted content while the exhausted exact query renders
+        the error placeholder. A guard that matched by substring/prefix would
+        corrupt this near-miss output across the boundary — this test fails if
+        the conservative exact-(file, query) keying does not propagate.
+        """
+        from pdd.preprocess import process_include_tags
+
+        _, source_file = issue_1711_source_file
+        monkeypatch.setattr("pdd.preprocess.get_file_path", lambda p: str(source_file))
+
+        exact_prompt = f'<include query="{_ISSUE_1711_QUERY}">{source_file}</include>'
+
+        # Exhaust then trip the exact query through the real include pipeline.
+        for i in range(_MAX_SESSION_EXTRACTIONS + 1):
+            source_file.write_text(f"# exact v{i}\ndef e{i}(): pass", encoding="utf-8")
+            tripped_output = process_include_tags(exact_prompt, recursive=False)
+
+        # Exact query is now blocked → placeholder, no real content.
+        assert _ERROR_PLACEHOLDER_MARK in tripped_output, (
+            f"Exhausted exact query should render the error placeholder. "
+            f"Got: {tripped_output!r}"
+        )
+
+        calls_before = mock_llm["llm_invoke"].call_count
+
+        # Near-miss (truncated) query — a distinct pair that must be served.
+        look_alike = _ISSUE_1711_QUERY[:-1]
+        assert look_alike != _ISSUE_1711_QUERY
+        look_alike_prompt = f'<include query="{look_alike}">{source_file}</include>'
+        source_file.write_text("# look-alike\ndef la(): pass", encoding="utf-8")
+        near_miss_output = process_include_tags(look_alike_prompt, recursive=False)
+
+        # The near-miss must reach the LLM exactly once and render real content,
+        # NOT inherit the exact query's exhausted block.
+        assert mock_llm["llm_invoke"].call_count == calls_before + 1, (
+            "Near-miss (truncated) query must get its own quota and reach the LLM "
+            "once through the full preprocess pipeline — exact (file, query) "
+            "keying must propagate across the module boundary."
+        )
+        assert "Extracted content from LLM" in near_miss_output, (
+            "Near-miss query must expand to real extracted content, not the "
+            f"error placeholder. Got: {near_miss_output!r}"
+        )
+        assert _ERROR_PLACEHOLDER_MARK not in near_miss_output, (
+            "Near-miss query must NOT be blocked by the exhausted exact query. "
+            f"Got: {near_miss_output!r}"
+        )
+
+    def test_reset_session_restores_quota_across_preprocess_runs(
+        self, issue_1711_source_file, mock_llm, monkeypatch
+    ):
+        """reset_session() (the documented top-of-run hook) restores the
+        per-(file, query) quota across two simulated pdd sync runs driven
+        through the real preprocess pipeline.
+
+        Run 1 exhausts and trips the guard via preprocess(); reset_session()
+        clears the process-global counter; Run 2's preprocess() then reaches the
+        LLM again for the same (file, query) pair and renders real content. This
+        pins the cross-run contract end-to-end (the orphaned-integration-point
+        risk flagged in Step 4): if reset_session ever stops clearing the
+        counter, a fresh sync run would falsely inherit the prior run's block.
+        """
+        from pdd.preprocess import preprocess
+
+        _, source_file = issue_1711_source_file
+        monkeypatch.setattr("pdd.preprocess.get_file_path", lambda p: str(source_file))
+
+        prompt = f'<include query="{_ISSUE_1711_QUERY}">{source_file}</include>'
+
+        # --- Run 1: drive the loop until the guard trips. ---
+        for i in range(_MAX_SESSION_EXTRACTIONS + 1):
+            source_file.write_text(f"# run1 v{i}\ndef r1_{i}(): pass", encoding="utf-8")
+            run1_output = preprocess(prompt, recursive=False, double_curly_brackets=False)
+        assert _ERROR_PLACEHOLDER_MARK in run1_output, (
+            "Run 1 should trip the guard and render the placeholder."
+        )
+        calls_after_run1 = mock_llm["llm_invoke"].call_count
+        assert calls_after_run1 <= _MAX_SESSION_EXTRACTIONS
+
+        # --- New top-level run begins: fresh quota. ---
+        IncludeQueryExtractor.reset_session()
+
+        # --- Run 2: same (file, query) pair must extract again. ---
+        source_file.write_text("# run2\ndef r2(): pass", encoding="utf-8")
+        run2_output = preprocess(prompt, recursive=False, double_curly_brackets=False)
+
+        assert mock_llm["llm_invoke"].call_count == calls_after_run1 + 1, (
+            "After reset_session(), a new pdd sync run's preprocess() must be "
+            "allowed to extract the same (file, query) pair again."
+        )
+        assert "Extracted content from LLM" in run2_output, (
+            "Run 2 must render freshly extracted content, not the prior run's "
+            f"error placeholder. Got: {run2_output!r}"
+        )
+        assert _ERROR_PLACEHOLDER_MARK not in run2_output
