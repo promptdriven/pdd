@@ -332,7 +332,7 @@ const App: React.FC = () => {
 
   const handleRunCommand = async (command: CommandType, prompt: PromptInfo, commandOptions?: Record<string, any>) => {
     if (!serverConnected) {
-      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      addToast('Server not connected. Run "pdd connect" in your terminal first.', 'error', 5000);
       return;
     }
 
@@ -440,12 +440,12 @@ const App: React.FC = () => {
 
   const handleRunBugCommand = async () => {
     if (!serverConnected) {
-      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      addToast('Server not connected. Run "pdd connect" in your terminal first.', 'error', 5000);
       return;
     }
 
     if (!bugIssueUrl.trim()) {
-      alert('Please enter a GitHub issue URL');
+      addToast('Please enter a GitHub issue URL', 'error', 5000);
       return;
     }
 
@@ -537,12 +537,12 @@ const App: React.FC = () => {
 
   const handleRunFixCommand = async () => {
     if (!serverConnected) {
-      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      addToast('Server not connected. Run "pdd connect" in your terminal first.', 'error', 5000);
       return;
     }
 
     if (!fixPrUrl.trim()) {
-      alert('Please enter a GitHub PR URL');
+      addToast('Please enter a GitHub PR URL', 'error', 5000);
       return;
     }
 
@@ -634,12 +634,12 @@ const App: React.FC = () => {
 
   const handleRunChangeCommand = async () => {
     if (!serverConnected) {
-      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      addToast('Server not connected. Run "pdd connect" in your terminal first.', 'error', 5000);
       return;
     }
 
     if (!changeIssueUrl.trim()) {
-      alert('Please enter a GitHub issue URL');
+      addToast('Please enter a GitHub issue URL', 'error', 5000);
       return;
     }
 
