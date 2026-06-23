@@ -137,11 +137,20 @@ login flow once, such as `claude auth login`, `gemini` interactive login, or
 
 **To use Vertex AI (optional):**
 
-The simplest path is Application Default Credentials (ADC):
+The simplest path is Application Default Credentials (ADC). With the [`gcloud`
+CLI](https://cloud.google.com/sdk/docs/install) installed, authenticate it and
+point it at your project:
 
-1. Run `gcloud auth application-default login`
-2. Ensure your Google account (or its service account) has the "Vertex AI User" role on the project
-3. Set `VERTEXAI_PROJECT` / `VERTEXAI_LOCATION` and leave `VERTEX_CREDENTIALS` unset — PDD authenticates via ADC
+```bash
+gcloud auth login                              # authenticate the gcloud CLI itself
+gcloud auth application-default login          # create ADC that PDD/libraries use
+gcloud config set project YOUR_GCP_PROJECT_ID  # set your default GCP project
+```
+
+Then:
+
+1. Ensure your Google account (or its service account) has the "Vertex AI User" role on the project
+2. Set `VERTEXAI_PROJECT` / `VERTEXAI_LOCATION` and leave `VERTEX_CREDENTIALS` unset — PDD authenticates via ADC
 
 Or, with a service-account key file instead of ADC:
 
@@ -161,13 +170,18 @@ See `.env.example` for a complete list of supported environment variables.
 These final steps configure the local repository to ensure the application can find its resources correctly.
 
 **1. Set the `PDD_PATH` Environment Variable:**
-The application needs the absolute path to the `pdd/` source directory to function correctly.
+The application needs the absolute path to the `pdd/` **package** directory — the
+one that contains `cli.py` and the `pdd_completion.*` scripts. Because the
+repository and the package share the name `pdd`, this is the *inner* directory:
+the path ends in `…/pdd/pdd`, **not** the repository root. Pointing `PDD_PATH` at
+the repo root makes `pdd setup` fail with "Completion script not found" and
+breaks resource lookups.
 
 - **Step 1: Get the path.**
-  From the project root, run:
+  From the project root (the cloned `pdd` repo), run:
   ```bash
   cd pdd
-  pwd  # Copy the full path output by this command
+  pwd  # Copy the full path — it should end in /pdd/pdd
   cd ..
   ```
 - **Step 2: Create a local `.env` file.**
@@ -196,10 +210,11 @@ This is the most robust method to ensure `PDD_PATH` is always set correctly when
   conda activate pdd
   ```
 - **Step 3: Verify the change.**
-  You can now check if the path is set correctly.
+  Check that the path is set and points at the package directory:
   ```bash
   echo $PDD_PATH
-  # It should print the correct path: /path/to/your/project/pdd
+  # Should end in /pdd/pdd
+  ls "$PDD_PATH/cli.py"   # must exist — confirms PDD_PATH is the package dir, not the repo root
   ```
 
 ---
