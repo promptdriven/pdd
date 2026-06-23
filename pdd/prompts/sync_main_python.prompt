@@ -53,6 +53,7 @@
 % Key Implementation Details:
 
 1. **Parameter Resolution**:
+    - Include-extraction guard reset (Issue #1711): at the very top of `sync_main()`, before any prompt preprocessing and before the `one_session`/orchestration branch, call `IncludeQueryExtractor.reset_session()` (import from `.include_query_extractor`). `sync_main()` is the shared top-level sync entry point: it dispatches either to `sync_orchestration()` (which also resets) or, when `one_session=True`, directly to `run_one_session_sync()` (which never calls `sync_orchestration()`). Resetting here covers BOTH branches so the extractor's per-`(file, query)` guard counters — which live on the class and survive the fresh `IncludeQueryExtractor` instances `preprocess.py` creates each cycle — never leak across top-level sync runs in a long-lived process (e.g. an in-process server running one-session sync more than once), which would otherwise falsely raise `RepeatedRetrievalQueryError` on later legitimate runs.
     - Use `ctx.obj.get(key, default)` pattern for ctx.obj parameters
     - Import DEFAULT_STRENGTH, DEFAULT_TIME from package root
     - Import `DEFAULT_STEER_TIMEOUT_S` from `sync_tui`
