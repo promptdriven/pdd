@@ -6,7 +6,14 @@
   "module": {
     "functions": [
       {"name": "IncludeQueryExtractor.extract", "signature": "(file_path: str, query: str)", "returns": "str"},
+      {"name": "IncludeQueryExtractor.reset_session", "signature": "()", "returns": "None"},
       {"name": "compute_cache_key", "signature": "(file_path: str, query: str)", "returns": "str"}
+    ],
+    "exceptions": [
+      {"name": "RepeatedRetrievalQueryError", "base": "RuntimeError", "description": "Raised by extract() when the per-(file, query) session guard cap is reached; callers must let it propagate (fail fast) rather than swallow it."}
+    ],
+    "constants": [
+      {"name": "MAX_SESSION_EXTRACTIONS", "type": "int", "value": 2, "description": "Default per-(file, query) extraction cap per session; overridable via the PDD_MAX_SESSION_EXTRACTIONS env var."}
     ]
   }
 }

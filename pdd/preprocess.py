@@ -890,7 +890,10 @@ def process_include_tags(
                                     return match.group(0)
                                 if fallback_query:
                                     try:
-                                        from pdd.include_query_extractor import IncludeQueryExtractor
+                                        from pdd.include_query_extractor import (
+                                            IncludeQueryExtractor,
+                                            RepeatedRetrievalQueryError,
+                                        )
                                         extracted = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
                                         if snapshot_recorder is not None:
                                             snapshot_recorder.record_include(
@@ -900,6 +903,12 @@ def process_include_tags(
                                                 output=extracted,
                                             )
                                         return extracted
+                                    except RepeatedRetrievalQueryError:
+                                        # Issue #1711: the session guard must fail fast even on
+                                        # the select= fallback routes. Swallowing it into a
+                                        # placeholder (as the broad handler below does) would let
+                                        # sync silently continue on degraded include content.
+                                        raise
                                     except Exception as inner_e:
                                         if snapshot_recorder is not None:
                                             snapshot_recorder.record_include(
@@ -916,7 +925,10 @@ def process_include_tags(
                                     return match.group(0)
                                 if fallback_query:
                                     try:
-                                        from pdd.include_query_extractor import IncludeQueryExtractor
+                                        from pdd.include_query_extractor import (
+                                            IncludeQueryExtractor,
+                                            RepeatedRetrievalQueryError,
+                                        )
                                         extracted = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
                                         if snapshot_recorder is not None:
                                             snapshot_recorder.record_include(
@@ -926,6 +938,12 @@ def process_include_tags(
                                                 output=extracted,
                                             )
                                         return extracted
+                                    except RepeatedRetrievalQueryError:
+                                        # Issue #1711: the session guard must fail fast even on
+                                        # the select= fallback routes. Swallowing it into a
+                                        # placeholder (as the broad handler below does) would let
+                                        # sync silently continue on degraded include content.
+                                        raise
                                     except Exception as inner_e:
                                         if snapshot_recorder is not None:
                                             snapshot_recorder.record_include(
@@ -945,7 +963,10 @@ def process_include_tags(
                                     return match.group(0)
                                 if fallback_query:
                                     try:
-                                        from pdd.include_query_extractor import IncludeQueryExtractor
+                                        from pdd.include_query_extractor import (
+                                            IncludeQueryExtractor,
+                                            RepeatedRetrievalQueryError,
+                                        )
                                         extracted = IncludeQueryExtractor().extract(file_path=full_path, query=fallback_query)
                                         if snapshot_recorder is not None:
                                             snapshot_recorder.record_include(
@@ -955,6 +976,12 @@ def process_include_tags(
                                                 output=extracted,
                                             )
                                         return extracted
+                                    except RepeatedRetrievalQueryError:
+                                        # Issue #1711: the session guard must fail fast even on
+                                        # the select= fallback routes. Swallowing it into a
+                                        # placeholder (as the broad handler below does) would let
+                                        # sync silently continue on degraded include content.
+                                        raise
                                     except Exception as inner_e:
                                         if snapshot_recorder is not None:
                                             snapshot_recorder.record_include(
@@ -1061,8 +1088,14 @@ def process_include_tags(
             return match.group(0)
         except Exception as e:
             from pdd.compression_reporting import CompressionFallbackError
+            from pdd.include_query_extractor import RepeatedRetrievalQueryError
 
             if isinstance(e, CompressionFallbackError):
+                raise
+            # Issue #1711: the session guard re-raised from a select= query fallback
+            # must keep propagating. This broad handler would otherwise turn it into
+            # an "[Error processing include]" placeholder and let sync continue.
+            if isinstance(e, RepeatedRetrievalQueryError):
                 raise
             console.print(f"[bold red]Error processing include:[/bold red] {str(e)}")
             _dbg(f"Error processing XML include {file_path}: {e}")

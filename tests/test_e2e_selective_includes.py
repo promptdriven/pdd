@@ -3376,3 +3376,106 @@ class TestSessionGuardPreprocessE2E:
             "PDD_MAX_SESSION_EXTRACTIONS=4 should permit exactly 4 live LLM "
             f"extractions before the guard trips; got {llm_call_count[0]}."
         )
+
+    @pytest.mark.parametrize(
+        "failure_mode, force_selector_failure",
+        [
+            ("selector_error", None),   # natural SelectorError from select="def:missing"
+            ("import_error", "import"),  # ContentSelector backend ImportError
+            ("generic_error", "generic"),  # unexpected selector/compression failure
+        ],
+    )
+    def test_select_query_fallback_propagates_guard_error(
+        self, tmp_path, monkeypatch, failure_mode, force_selector_failure
+    ):
+        """select=→query= fallback routes must fail fast on the session guard (#1711).
+
+        Reviewer repro:
+            <include select="def:missing" query="...">orchestrator.py</include>
+
+        ``select=`` is preferred and tried first; when it fails preprocess()
+        falls back to ``IncludeQueryExtractor().extract()``. That fallback runs
+        through three distinct except-clauses — ImportError, SelectorError, and a
+        generic selector/compression failure — each of which previously wrapped
+        the extractor call in a broad ``except Exception`` that swallowed
+        ``RepeatedRetrievalQueryError`` into a ``[query_include failed: ...]``
+        placeholder, letting a stuck retrieval loop continue on degraded context.
+        After the fix every branch re-raises the guard error so it propagates out
+        of preprocess() and sync fails fast.
+        """
+        from pdd.include_query_extractor import RepeatedRetrievalQueryError
+
+        source_file = tmp_path / "orchestrator.py"
+        source_file.write_text("# v0\ndef orchestrate(): pass", encoding="utf-8")
+
+        # Combined tag: select= is preferred, query= is used only as the fallback.
+        prompt_template = (
+            f'<include select="def:missing" query="{_E2E_1711_QUERY}">'
+            f"{source_file.name}</include>"
+        )
+
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.llm_invoke",
+            lambda **kwargs: {"result": "extracted", "cost": 0.0, "model_name": "mock"},
+        )
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.load_prompt_template",
+            lambda *a, **kw: "TEMPLATE_STUB",
+        )
+        monkeypatch.setattr(
+            "pdd.include_query_extractor.preprocess",
+            lambda *a, **kw: "PROCESSED_STUB",
+        )
+        monkeypatch.setattr("pdd.preprocess.get_file_path", lambda p: str(source_file))
+
+        # The selector_error branch uses a real missing selector (no monkeypatch)
+        # so the natural SelectorError path is exercised end to end. The import /
+        # generic branches force ContentSelector.select() to raise the matching
+        # error so the corresponding except-clause runs.
+        if force_selector_failure == "import":
+            class _ImportErrorSelector:
+                def select(self, *a, **kw):
+                    raise ImportError("forced: selector backend unavailable")
+            monkeypatch.setattr(
+                "pdd.content_selector.ContentSelector", _ImportErrorSelector
+            )
+        elif force_selector_failure == "generic":
+            class _GenericErrorSelector:
+                def select(self, *a, **kw):
+                    raise RuntimeError("forced: unexpected selector failure")
+            monkeypatch.setattr(
+                "pdd.content_selector.ContentSelector", _GenericErrorSelector
+            )
+
+        monkeypatch.chdir(tmp_path)
+
+        from pdd.preprocess import preprocess as pdd_preprocess
+
+        raised = False
+        results: list[str] = []
+        for i in range(_E2E_1711_REPEAT_COUNT):
+            source_file.write_text(f"# v{i}\ndef orch_v{i}(): pass", encoding="utf-8")
+            try:
+                results.append(
+                    pdd_preprocess(
+                        prompt_template, recursive=False, double_curly_brackets=False
+                    )
+                )
+            except RepeatedRetrievalQueryError:
+                raised = True
+                break
+
+        assert raised, (
+            f"Bug #1711 ({failure_mode} fallback): once the session quota is "
+            "exhausted the guard error must propagate out of preprocess() via the "
+            "select=→query= fallback path, not be swallowed into a placeholder."
+        )
+        assert all(
+            "[query_include failed" not in r
+            and "[Error in semantic query" not in r
+            and "[Error processing include" not in r
+            for r in results
+        ), (
+            f"Bug #1711 ({failure_mode} fallback): within-quota extractions must "
+            f"return real content, not a swallowed placeholder. Got: {results!r}"
+        )
