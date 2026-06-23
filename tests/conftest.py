@@ -212,54 +212,6 @@ def preserve_cwd():
         os.chdir(Path(__file__).resolve().parents[1])
 
 
-@pytest.fixture(scope="session")
-def _repo_architecture_baseline():
-    """Capture the committed repo-root ``architecture.json`` once per session."""
-    arch_path = Path(__file__).resolve().parents[1] / "architecture.json"
-    try:
-        return arch_path, arch_path.read_bytes()
-    except OSError:
-        return arch_path, None
-
-
-@pytest.fixture(autouse=True)
-def preserve_repo_architecture_json(_repo_architecture_baseline):
-    """Restore the repo-root ``architecture.json`` if a test leaks a mutation.
-
-    Several contract tests assert against the committed ``architecture.json``
-    (e.g. ``test_architecture_records_checkup_orchestrator_pr_mode_contract``).
-    Any test that regenerates/syncs architecture against the *real* repo — pytest
-    runs with cwd at the repo root, so a stray relative ``architecture.json``
-    write or an un-isolated ``pdd sync`` rewrites the committed file — would
-    leave a truncated (public-API-only) file behind, making those readers fail
-    order-dependently under xdist. This guard snapshots the file once per
-    session and restores it on teardown whenever a test changed it on disk.
-
-    Per-test cost is two ``stat()`` calls; only a leaking test pays a
-    read+compare+write. Within-test writes/reads are untouched (restore happens
-    at teardown only).
-    """
-    arch_path, baseline = _repo_architecture_baseline
-    if baseline is None:
-        yield
-        return
-    try:
-        before = arch_path.stat().st_mtime_ns
-    except OSError:
-        before = None
-    yield
-    try:
-        after = arch_path.stat().st_mtime_ns
-    except OSError:
-        after = None
-    if before is None or after != before:
-        try:
-            if arch_path.read_bytes() != baseline:
-                arch_path.write_bytes(baseline)
-        except OSError:
-            pass
-
-
 @pytest.fixture(autouse=True)
 def preserve_git_work_tree():
     """Clear GIT_WORK_TREE during tests to avoid interfering with git init in temp dirs."""
