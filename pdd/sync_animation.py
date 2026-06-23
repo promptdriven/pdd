@@ -14,19 +14,32 @@ from rich.table import Table
 from rich.progress_bar import ProgressBar # For cost/budget display if needed
 
 from . import logo_animation
+# Brand palette is owned by the central CLI color system (cli_theme.py, the
+# Phase 1 design-refresh deliverable). Import it so every surface shares one
+# palette rather than hand-defining hex values. Fall back to the same brand hex
+# values when that module is absent (e.g. an integration branch that predates
+# Phase 1), so the animation never hard-depends on it. The names are re-exported
+# here, since sync_tui imports DEEP_NAVY / ELECTRIC_CYAN from this module.
+try:
+    from .cli_theme import (
+        DEEP_NAVY,
+        ELECTRIC_CYAN,
+        LUMEN_PURPLE,
+        PROMPT_MAGENTA,
+        BUILD_GREEN,
+        DIFF_YELLOW,
+        BREAK_RED,
+    )
+except ImportError:  # pragma: no cover - palette fallback for pre-Phase-1 trees
+    DEEP_NAVY = "#0A0A23"
+    ELECTRIC_CYAN = "#00D8FF"
+    LUMEN_PURPLE = "#8C47FF"
+    PROMPT_MAGENTA = "#FF2AA6"
+    BUILD_GREEN = "#18C07A"
+    DIFF_YELLOW = "#FBBB35"
+    BREAK_RED = "#F34842"
 
-# Assuming these might be in pdd/__init__.py or a constants module
-# For this example, defining them locally based on the branding document
-# Primary Colors
-DEEP_NAVY = "#0A0A23"
-ELECTRIC_CYAN = "#00D8FF"
-
-# Accent Colors (can be used for boxes if specific inputs are not good)
-LUMEN_PURPLE = "#8C47FF"
-PROMPT_MAGENTA = "#FF2AA6"
-BUILD_GREEN = "#18C07A" # Success, good for 'example' or 'tests'
-
-# Default colors for boxes if not provided or invalid
+# Default colors for the four artifact boxes if not provided or invalid.
 DEFAULT_PROMPT_COLOR = LUMEN_PURPLE
 DEFAULT_CODE_COLOR = ELECTRIC_CYAN
 DEFAULT_EXAMPLE_COLOR = BUILD_GREEN
@@ -62,6 +75,7 @@ EMOJIS = {
     "verify_code": "🔍",
     "verify_example": "🔍",
     "test": "🧪",
+    "test_extend": "🧪",
     "fix_code": "🔧",
     "fix_tests": "🔧",
     "update": "⬆️",
@@ -71,6 +85,88 @@ EMOJIS = {
 
 CONSOLE_WIDTH = 80  # Target console width for layout
 ANIMATION_BOX_HEIGHT = 18 # Target height for the main animation box
+
+# ---------------------------------------------------------------------------
+# Execution pipeline model.
+#
+# The sync system flow (see the Mermaid diagram in issue #1560) is a pipeline:
+# the CLI parses options, inspects on-disk state, the planner picks the next
+# operation, the command-execution loop runs it, and outputs are written.
+# Subgraphs 1, 2, 3, 4 and 6 are *runtime* stages; subgraph 5 ("validation
+# seams") is test-only and never animated. The animation mirrors this: the front
+# and back stages stay high-level boxes, while the command-execution stage —
+# where the user actually spends time and money — is expanded in detail.
+#
+# The orchestrator drives the animation through a single mutable string
+# (current_function_name) that takes the values below. We map each onto a stage
+# so the visuals follow real execution rather than a decorative script.
+# ---------------------------------------------------------------------------
+STAGE_ENTRY = "entry"
+STAGE_INSPECT = "inspect"
+STAGE_PLAN = "plan"
+STAGE_EXECUTE = "execute"
+STAGE_OUTPUT = "output"
+
+# Ordered stages with the short label and the sub-steps each one performs
+# (sourced verbatim from the diagram's subgraph contents).
+PIPELINE_STAGES: List[Tuple[str, str, str]] = [
+    (STAGE_ENTRY,   "Entry",   "args · config · paths · budget"),
+    (STAGE_INSPECT, "Inspect", "lock · fingerprint · files · hashes"),
+    (STAGE_PLAN,    "Plan",    "determine next operation"),
+    (STAGE_EXECUTE, "Execute", "run command"),
+    (STAGE_OUTPUT,  "Output",  "artifacts · fingerprint · report"),
+]
+_STAGE_INDEX = {stage_id: i for i, (stage_id, _label, _sub) in enumerate(PIPELINE_STAGES)}
+
+# The canonical order the planner walks the command-execution loop in. Shown as
+# a step strip during Execute so the user can see intermediate steps and where
+# the current operation sits in the overall workflow. 'crash' is the failure
+# face of 'verify' and 'test_extend' the continuation of 'test', so they map
+# onto the same strip slot (see _STEP_ALIASES).
+COMMAND_SEQUENCE: List[str] = [
+    "auto-deps", "generate", "example", "verify", "test", "fix", "update",
+]
+_STEP_ALIASES = {"crash": "verify", "test_extend": "test"}
+
+# Probe operations run an artifact and inspect the result rather than producing
+# a new artifact — the "check" behavior in the diagram. They get a distinct
+# probe glyph and pulse so check steps read differently from build steps.
+PROBE_OPERATIONS = {"verify", "crash", "test", "test_extend"}
+
+# Operations that constitute the command-execution stage.
+EXECUTE_OPERATIONS = {
+    "auto-deps", "generate", "example", "verify", "crash",
+    "test", "test_extend", "fix", "update",
+}
+
+# Terminal function names the orchestrator emits when the loop ends.
+_OUTPUT_NAMES = {"synced", "nothing", "all_synced", "conflict", "done", "error",
+                 "fail_and_request_manual_merge"}
+_PLAN_NAMES = {"checking", "planning", "analyze", "analyze_conflict", "deciding"}
+_ENTRY_NAMES = {"initializing", "init", "startup", ""}
+
+
+def stage_for_function(function_name: Optional[str]) -> str:
+    """Map an orchestrator function name onto a pipeline stage id.
+
+    This is the single source of truth tying the animation to real execution:
+    every value the orchestrator writes into ``current_function_name_ref`` is
+    classified here, so the rail and body never show a stage the run is not
+    actually in.
+    """
+    fn = (function_name or "").strip().lower()
+    if fn in _ENTRY_NAMES:
+        # Entry (arg parse) happens before/while the logo plays; by the time the
+        # main frame renders we are reading on-disk state, so show Inspect.
+        return STAGE_INSPECT
+    if fn in _PLAN_NAMES:
+        return STAGE_PLAN
+    if fn in _OUTPUT_NAMES:
+        return STAGE_OUTPUT
+    if fn in EXECUTE_OPERATIONS:
+        return STAGE_EXECUTE
+    # Unknown / future operation names are still command execution.
+    return STAGE_EXECUTE
 
 def _get_valid_color(color_str: Optional[str], default_color: str) -> str:
     """Validates a color string or returns default."""
@@ -113,19 +209,44 @@ class AnimationState:
             "example": DEFAULT_EXAMPLE_COLOR, "tests": DEFAULT_TESTS_COLOR
         }
         self.scroll_offsets: Dict[str, int] = {"prompt": 0, "code": 0, "example": 0, "tests": 0}
+        # Horizontal marquee offset for the command step strip, used only when
+        # the fully-spelt-out strip is too wide for the terminal (see
+        # _render_step_strip). Advances one cell per rendered frame.
+        self.step_scroll_offset: int = 0
         self.path_box_content_width = 16 # Base chars for path inside its small box (will be dynamic)
         self.auto_deps_progress: int = 0  # Progress counter for auto-deps border thickening
+
+        # Pipeline-stage tracking (see PIPELINE_STAGES). current_stage is derived
+        # from current_function_name every update so it always matches reality.
+        self.current_stage: str = stage_for_function(self.current_function_name)
+        # Execute-loop steps that have already run this session, used to mark the
+        # command step strip. Only populated as real operations are observed.
+        self.executed_steps: List[str] = []
+        self._last_op: Optional[str] = None
 
     def update_dynamic_state(self, function_name: str, cost: float,
                              prompt_path: str, code_path: str, example_path: str, tests_path: str):
         self.current_function_name = function_name.lower() if function_name else "checking"
         self.cost = cost if cost is not None else self.cost
-        
+        self.current_stage = stage_for_function(self.current_function_name)
+
+        # Record completed execute-loop steps as the operation changes, so the
+        # step strip can show what has already run. We normalize aliases (crash
+        # -> verify, test_extend -> test) onto their canonical strip slot.
+        op = self.current_function_name
+        if op != self._last_op:
+            prev = self._last_op
+            if prev in EXECUTE_OPERATIONS:
+                slot = _STEP_ALIASES.get(prev, prev)
+                if slot not in self.executed_steps:
+                    self.executed_steps.append(slot)
+            self._last_op = op
+
         self.paths["prompt"] = prompt_path or ""
         self.paths["code"] = code_path or ""
         self.paths["example"] = example_path or ""
         self.paths["tests"] = tests_path or ""
-        
+
         # Update auto-deps progress for border thickening animation
         if self.current_function_name == "auto-deps":
             self.auto_deps_progress = (self.auto_deps_progress + 1) % 120  # Cycle every 12 seconds at 10fps
@@ -432,50 +553,196 @@ def _draw_connecting_lines_and_arrows(state: AnimationState, console_width: int)
     return lines
 
 
-def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
-    """Renders a single frame of the main animation box."""
-    layout = Layout(name="root")
-    layout.split_column(
-        Layout(name="header", size=1),
-        Layout(name="body", ratio=1, minimum_size=10), 
-        Layout(name="footer", size=1)
-    )
+# Full stage titles for the high-level cards (the diagram's subgraph names).
+_STAGE_TITLES = {
+    STAGE_ENTRY:   "CLI entry & options",
+    STAGE_INSPECT: "State inspection",
+    STAGE_PLAN:    "Operation planner",
+    STAGE_EXECUTE: "Command execution",
+    STAGE_OUTPUT:  "Outputs",
+}
 
-    blink_on = (state.frame_count // 5) % 2 == 0
+# Labels for the command step strip. The execute sub-commands are spelt out in
+# full (issue #1560) — `auto-deps`, `generate`, … rather than `deps`, `gen`, …
+# — so the strip reads as the real CLI commands the loop runs. When the full
+# strip is too wide for the terminal it is first tightened (a compact separator)
+# and, failing that, rotated as a marquee so every step still scrolls past; see
+# _render_step_strip.
+_STEP_LABELS = {
+    "auto-deps": "auto-deps",
+    "generate": "generate",
+    "example": "example",
+    "verify": "verify",
+    "test": "test",
+    "fix": "fix",
+    "update": "update",
+}
+_PROBE_SLOTS = {"verify", "test"}  # canonical strip slots that are checks, not builds
 
-    header_table = Table.grid(expand=True, padding=(0,1))
-    header_table.add_column(justify="left", ratio=1)
-    header_table.add_column(justify="right", ratio=1)
-    # Make command blink in top right corner
-    command_text = state.current_function_name.capitalize() if blink_on else ""
-    header_table.add_row(
-        Text("Prompt Driven Development", style=f"bold {ELECTRIC_CYAN}"),
-        Text(command_text, style=f"bold {ELECTRIC_CYAN}")
-    )
-    layout["header"].update(header_table)
+# Separators tried in order when fitting the strip to the available width: the
+# roomy one first, then a compact one. If neither fits the strip rotates.
+_STRIP_SEPARATORS = ("  ·  ", " · ")
 
-    footer_table = Table.grid(expand=True, padding=(0,1))
-    footer_table.add_column(justify="left", ratio=1)      
-    footer_table.add_column(justify="center", ratio=1) 
-    footer_table.add_column(justify="right", ratio=1)     
-    
-    cost_str = f"${state.cost:.2f}"
-    budget_str = f"${state.budget:.2f}" if state.budget != float('inf') else "N/A"
-    
-    footer_table.add_row(
-        Text(state.basename, style=ELECTRIC_CYAN),
-        Text(f"Elapsed: {state.get_elapsed_time_str()}", style=ELECTRIC_CYAN),
-        Text(f"{cost_str} / {budget_str}", style=ELECTRIC_CYAN)
-    )
-    layout["footer"].update(footer_table) 
-    
+
+def _render_phase_rail(state: AnimationState, blink_on: bool) -> Text:
+    """One-line rail showing pipeline progression Entry → … → Output.
+
+    Completed stages are filled and green, the current stage pulses in accent,
+    and pending stages stay dim. This is the always-on orientation strip that
+    maps directly onto the diagram's top-level subgraphs.
+    """
+    cur_idx = _STAGE_INDEX.get(state.current_stage, _STAGE_INDEX[STAGE_INSPECT])
+    rail = Text(justify="center")
+    for i, (_stage_id, label, _sub) in enumerate(PIPELINE_STAGES):
+        if i > 0:
+            rail.append(" ─▶ ", style="dim " + ELECTRIC_CYAN)
+        if i < cur_idx:
+            rail.append("● ", style=BUILD_GREEN)
+            rail.append(label, style=BUILD_GREEN)
+        elif i == cur_idx:
+            glyph = "◆ " if blink_on else "◇ "
+            rail.append(glyph, style=f"bold {PROMPT_MAGENTA}")
+            rail.append(label, style=f"bold {ELECTRIC_CYAN}")
+        else:
+            rail.append("○ ", style="dim " + ELECTRIC_CYAN)
+            rail.append(label, style="dim " + ELECTRIC_CYAN)
+    return rail
+
+
+def _step_strip_cells(state: AnimationState, blink_on: bool,
+                      separator: str) -> List[Tuple[str, str]]:
+    """Build the command-execution strip as a flat list of (char, style) cells.
+
+    Working in cells lets the renderer measure the strip's true width, choose a
+    separator that fits, and — when nothing fits — take a styled marquee window
+    without re-deriving any of the per-step coloring. Done steps get a check,
+    the active step pulses (probe steps carry a probe glyph and turn red on a
+    crash), and upcoming steps stay dim.
+    """
+    cur_op = state.current_function_name
+    cur_slot = _STEP_ALIASES.get(cur_op, cur_op)
+    is_crash = cur_op == "crash"
+    cells: List[Tuple[str, str]] = []
+
+    def add(segment: str, style: str) -> None:
+        cells.extend((ch, style) for ch in segment)
+
+    for i, step in enumerate(COMMAND_SEQUENCE):
+        if i > 0:
+            add(separator, "dim " + ELECTRIC_CYAN)
+        label = _STEP_LABELS.get(step, step)
+        if step == cur_slot:
+            if step in _PROBE_SLOTS:
+                marker = "◈" if blink_on else "◇"
+                style = f"bold {BREAK_RED}" if is_crash else f"bold {DIFF_YELLOW}"
+                add(f"{marker} ", style)
+                add(label, style)
+            else:
+                glyph = "▸ " if blink_on else "▹ "
+                style = f"bold {ELECTRIC_CYAN}"
+                add(glyph, style)
+                add(label, style)
+        elif step in state.executed_steps:
+            add("✓ ", BUILD_GREEN)
+            add(label, BUILD_GREEN)
+        else:
+            add(label, "dim " + ELECTRIC_CYAN)
+    return cells
+
+
+def _cells_to_text(cells: List[Tuple[str, str]]) -> Text:
+    """Reassemble (char, style) cells into a single-line, crop-safe Text."""
+    text = Text(justify="center", no_wrap=True, overflow="crop")
+    for ch, style in cells:
+        text.append(ch, style=style or None)
+    return text
+
+
+def _render_step_strip(state: AnimationState, blink_on: bool,
+                       content_width: Optional[int] = None) -> Text:
+    """One-line strip of the command-execution loop with the active step lit.
+
+    The execute sub-commands are spelt out in full, so the user sees the real
+    commands the loop runs and where the current operation sits among them. The
+    strip adapts to the terminal so the full names stay legible at any width:
+
+    1. render it with the roomy separator if it fits;
+    2. otherwise tighten the separator (resize) and render if *that* fits;
+    3. otherwise rotate it as a marquee — a fixed-width window that scrolls one
+       cell per frame, looping through a small gap — so every step still
+       scrolls past on a narrow terminal instead of being silently cropped.
+
+    ``content_width`` is the cell budget for the strip; when omitted (e.g. unit
+    tests) the full strip is rendered untruncated.
+    """
+    if content_width is None or content_width <= 0:
+        return _cells_to_text(_step_strip_cells(state, blink_on, _STRIP_SEPARATORS[0]))
+
+    cells: List[Tuple[str, str]] = []
+    for separator in _STRIP_SEPARATORS:
+        cells = _step_strip_cells(state, blink_on, separator)
+        if len(cells) <= content_width:
+            return _cells_to_text(cells)
+
+    # Still too wide even tightened: rotate the (compact) strip as a marquee.
+    gap = [(" ", "")] * 4  # blank run so the loop seam reads as a gap, not a join
+    loop = cells + gap
+    offset = state.step_scroll_offset % len(loop)
+    window = (loop + loop)[offset:offset + content_width]
+    state.step_scroll_offset = (offset + 1) % len(loop)
+    return _cells_to_text(window)
+
+
+def _render_stage_card(state: AnimationState, console_width: int, blink_on: bool) -> Align:
+    """High-level box for a non-execution stage (entry / inspect / plan / output).
+
+    Keeps the early and late stages clean and box-based: a titled panel naming
+    the stage, the sub-steps it performs, and a short live status line.
+    """
+    stage = state.current_stage
+    title = _STAGE_TITLES.get(stage, stage.capitalize())
+    sub = next((s for sid, _l, s in PIPELINE_STAGES if sid == stage), "")
+
+    border = ELECTRIC_CYAN
+    if stage == STAGE_OUTPUT:
+        fn = state.current_function_name
+        if fn in ("synced", "nothing", "all_synced", "done"):
+            border = BUILD_GREEN
+            status = "✓ workflow complete"
+        elif fn in ("conflict", "fail_and_request_manual_merge"):
+            border = DIFF_YELLOW
+            status = "manual merge required"
+        else:  # error
+            border = BREAK_RED
+            status = "✗ sync failed"
+    else:
+        ellipsis = "." * (1 + (state.frame_count // 4) % 3)
+        verb = {STAGE_INSPECT: "reading last-known state",
+                STAGE_PLAN: "choosing next operation",
+                STAGE_ENTRY: "resolving configuration"}.get(stage, "working")
+        status = f"{verb}{ellipsis}"
+
+    card = Text(justify="center")
+    card.append(sub + "\n", style=ELECTRIC_CYAN)
+    card.append(status, style=f"bold {border}")
+
+    inner_w = min(56, max(28, console_width - 8))
+    panel = Panel(Align.center(card, vertical="middle"),
+                  title=Text(title, style=f"bold {border}"),
+                  border_style=border, width=inner_w, height=5)
+    return Align.center(panel, vertical="middle")
+
+
+def _build_artifact_graph(state: AnimationState, console_width: int, blink_on: bool) -> Layout:
+    """Detailed command-execution view: the four artifact boxes plus the live
+    arrow/probe flow between them. This is the expanded heart of the animation."""
     # Calculate dynamic box width based on console width
     # Leave space for margins and spacing between boxes
     margin_space = 8  # Total margin space
     inter_box_space = 4  # Space between boxes (2 spaces each side)
     available_width = console_width - margin_space - inter_box_space
     box_width = max(state.path_box_content_width + 4, available_width // 3)
-    
+
     # Calculate the actual content width inside each panel (excluding borders)
     panel_content_width = box_width - 4  # Account for panel borders (2 chars each side)
 
@@ -500,7 +767,7 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
         else:
             # Final level: reverse colors for maximum thickness effect
             prompt_border_style = f"bold black on {state.colors['prompt']}"
-    
+
     prompt_panel = Panel(Align.center(state._render_scrolling_path("prompt", panel_content_width)),
                          title=Text.assemble(state.get_emoji_for_box("prompt", blink_on), "Prompt"),
                          border_style=prompt_border_style, width=box_width, height=3)
@@ -516,32 +783,21 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
 
     org_chart_layout = Layout(name="org_chart_area")
     org_chart_layout.split_column(
-        Layout(Text(" "), size=1),
         Layout(Align.center(prompt_panel), name="prompt_row", size=3),
-        Layout(name="lines_row_1", size=1), 
+        Layout(name="lines_row_1", size=1),
         Layout(name="lines_row_2", size=1),
         Layout(name="lines_row_3", size=1),
         Layout(name="lines_row_4", size=1),
         Layout(name="lines_row_5", size=1),
         Layout(name="lines_row_6", size=1),
-        Layout(name="bottom_boxes_row", size=3) 
+        Layout(name="bottom_boxes_row", size=3)
     )
 
     # Use full console width since we're no longer centering the lines
     connecting_lines = _draw_connecting_lines_and_arrows(state, console_width)
-    if len(connecting_lines) > 0:
-        org_chart_layout["lines_row_1"].update(connecting_lines[0])
-    if len(connecting_lines) > 1:
-        org_chart_layout["lines_row_2"].update(connecting_lines[1])
-    if len(connecting_lines) > 2:
-        org_chart_layout["lines_row_3"].update(connecting_lines[2])
-    if len(connecting_lines) > 3:
-        org_chart_layout["lines_row_4"].update(connecting_lines[3])
-    if len(connecting_lines) > 4:
-        org_chart_layout["lines_row_5"].update(connecting_lines[4])
-    if len(connecting_lines) > 5:
-        org_chart_layout["lines_row_6"].update(connecting_lines[5])
-
+    for idx in range(6):
+        if idx < len(connecting_lines):
+            org_chart_layout[f"lines_row_{idx + 1}"].update(connecting_lines[idx])
 
     bottom_boxes_table = Table.grid(expand=True)
     bottom_boxes_table.add_column()
@@ -549,12 +805,78 @@ def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
     bottom_boxes_table.add_column()
     bottom_boxes_table.add_row(code_panel, example_panel, tests_panel)
     org_chart_layout["bottom_boxes_row"].update(Align.center(bottom_boxes_table))
-    
-    layout["body"].update(org_chart_layout)
+    return org_chart_layout
+
+
+def _render_animation_frame(state: AnimationState, console_width: int) -> Panel:
+    """Renders a single frame of the main animation box.
+
+    The frame is a fixed-height panel with three regions: a header, a body, and
+    a footer. The body always carries the phase rail (pipeline progression). The
+    rest of the body switches on the current stage: high-level command-execution
+    detail (artifact graph + step strip) while a command runs, and a clean
+    high-level stage card for the entry / inspect / plan / output stages.
+    """
+    layout = Layout(name="root")
+    layout.split_column(
+        Layout(name="header", size=1),
+        Layout(name="body", ratio=1, minimum_size=10),
+        Layout(name="footer", size=1)
+    )
+
+    blink_on = (state.frame_count // 5) % 2 == 0
+
+    header_table = Table.grid(expand=True, padding=(0,1))
+    header_table.add_column(justify="left", ratio=1)
+    header_table.add_column(justify="right", ratio=1)
+    # Make command blink in top right corner
+    command_text = state.current_function_name.capitalize() if blink_on else ""
+    header_table.add_row(
+        Text("Prompt Driven Development", style=f"bold {ELECTRIC_CYAN}"),
+        Text(command_text, style=f"bold {ELECTRIC_CYAN}")
+    )
+    layout["header"].update(header_table)
+
+    footer_table = Table.grid(expand=True, padding=(0,1))
+    footer_table.add_column(justify="left", ratio=1)
+    footer_table.add_column(justify="center", ratio=1)
+    footer_table.add_column(justify="right", ratio=1)
+
+    cost_str = f"${state.cost:.2f}"
+    budget_str = f"${state.budget:.2f}" if state.budget != float('inf') else "N/A"
+
+    footer_table.add_row(
+        Text(state.basename, style=ELECTRIC_CYAN),
+        Text(f"Elapsed: {state.get_elapsed_time_str()}", style=ELECTRIC_CYAN),
+        Text(f"{cost_str} / {budget_str}", style=ELECTRIC_CYAN)
+    )
+    layout["footer"].update(footer_table)
+
+    # Body: always show the phase rail, then either the detailed execution view
+    # or the high-level stage card depending on the current pipeline stage.
+    body_layout = Layout(name="body_inner")
+    rail = _render_phase_rail(state, blink_on)
+
+    if state.current_stage == STAGE_EXECUTE:
+        # The strip lives inside the framed panel: subtract its border (2 cells)
+        # and horizontal padding (2 cells) to get the real cell budget.
+        strip_width = max(10, console_width - 4)
+        body_layout.split_column(
+            Layout(rail, name="rail", size=1),
+            Layout(_render_step_strip(state, blink_on, strip_width), name="step_strip", size=1),
+            Layout(_build_artifact_graph(state, console_width, blink_on), name="graph", ratio=1),
+        )
+    else:
+        body_layout.split_column(
+            Layout(rail, name="rail", size=1),
+            Layout(_render_stage_card(state, console_width, blink_on), name="card", ratio=1),
+        )
+
+    layout["body"].update(body_layout)
     state.frame_count += 1
-    
-    return Panel(layout, style=f"{ELECTRIC_CYAN} on {DEEP_NAVY}", 
-                 border_style=ELECTRIC_CYAN, height=ANIMATION_BOX_HEIGHT, 
+
+    return Panel(layout, style=f"{ELECTRIC_CYAN} on {DEEP_NAVY}",
+                 border_style=ELECTRIC_CYAN, height=ANIMATION_BOX_HEIGHT,
                  width=console_width)
 
 

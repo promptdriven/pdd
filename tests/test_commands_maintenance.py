@@ -512,6 +512,7 @@ def test_setup_handles_none_ctx_obj(mock_auto_update, mock_install, mock_run, _m
     mock_install.assert_called_once_with(quiet=False)
 
 
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update') # Patch auto_update
 @patch('pdd.cli.construct_paths') # Now this patch should work
 @patch('pdd.commands.maintenance.auto_deps_main')
@@ -548,6 +549,7 @@ def test_cli_auto_deps_strips_quotes(mock_main, mock_construct, mock_auto_update
 @patch('pdd.core.utils._should_show_onboarding_reminder', return_value=False)
 @patch('pdd.core.utils.subprocess.run')
 @patch('pdd.cli.install_completion')  # Patch the actual function, not cli_module
+@patch.dict(os.environ, {"PDD_AUTO_UPDATE": "true"})
 @patch('pdd.core.cli.auto_update')
 def test_cli_setup_command(mock_auto_update, mock_install, mock_run, _mock_reminder, runner):
     """`pdd setup` should install completions and run the setup utility."""
@@ -824,7 +826,7 @@ def test_llm_invoke_resolves_model_from_env_at_call_time(monkeypatch):
     monkeypatch.setenv("PDD_MODEL_DEFAULT", "vertex_ai/gemini-3-flash-preview")
     captured = {}
 
-    def _spy(strength, base, df):
+    def _spy(strength, base, df, manifest_by_model=None):
         captured["base"] = base
         # Short-circuit before llm_invoke enters the candidate loop. We only need
         # to assert the base model resolved at CALL time; letting the call proceed

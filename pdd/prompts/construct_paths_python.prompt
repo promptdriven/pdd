@@ -195,3 +195,10 @@
    - `_default_examples_project_root(pddrc_path)` returns `pddrc_path.parent` when a
      `.pddrc` was found, otherwise `Path.cwd()`, so subdirectory invocations inspect the
      same project root that configuration discovery used.
+
+10. Console: build the module-level Rich `console` through `get_console` imported from
+    `pdd.cli_theme` (EPIC #1540) rather than constructing `rich.console.Console` directly,
+    e.g. `console = get_console(theme=Theme({"info": "cyan", "warning": "yellow", "error": "bold red"}))`.
+    Routing through `get_console` keeps the user-facing output this module prints on the
+    central, color-preference-aware console system (honoring the global `--color/--no-color`
+    flag) while preserving its existing custom theme.

@@ -332,7 +332,7 @@ const App: React.FC = () => {
 
   const handleRunCommand = async (command: CommandType, prompt: PromptInfo, commandOptions?: Record<string, any>) => {
     if (!serverConnected) {
-      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      addToast('Server not connected. Run "pdd connect" in your terminal first.', 'error', 5000);
       return;
     }
 
@@ -440,12 +440,12 @@ const App: React.FC = () => {
 
   const handleRunBugCommand = async () => {
     if (!serverConnected) {
-      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      addToast('Server not connected. Run "pdd connect" in your terminal first.', 'error', 5000);
       return;
     }
 
     if (!bugIssueUrl.trim()) {
-      alert('Please enter a GitHub issue URL');
+      addToast('Please enter a GitHub issue URL', 'error', 5000);
       return;
     }
 
@@ -537,12 +537,12 @@ const App: React.FC = () => {
 
   const handleRunFixCommand = async () => {
     if (!serverConnected) {
-      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      addToast('Server not connected. Run "pdd connect" in your terminal first.', 'error', 5000);
       return;
     }
 
     if (!fixPrUrl.trim()) {
-      alert('Please enter a GitHub PR URL');
+      addToast('Please enter a GitHub PR URL', 'error', 5000);
       return;
     }
 
@@ -634,12 +634,12 @@ const App: React.FC = () => {
 
   const handleRunChangeCommand = async () => {
     if (!serverConnected) {
-      alert('Server not connected. Run "pdd connect" in your terminal first.');
+      addToast('Server not connected. Run "pdd connect" in your terminal first.', 'error', 5000);
       return;
     }
 
     if (!changeIssueUrl.trim()) {
-      alert('Please enter a GitHub issue URL');
+      addToast('Please enter a GitHub issue URL', 'error', 5000);
       return;
     }
 
@@ -836,7 +836,7 @@ const App: React.FC = () => {
             {/* LEFT: Branding */}
             <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
               <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-surface-800/80 flex items-center justify-center shadow-glow p-1">
-                <svg viewBox="0 0 1024 1024" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
+                <svg role="img" aria-label="Prompt Driven" viewBox="0 0 1024 1024" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
                   <defs>
                     <filter id="glow-header" x="-60%" y="-60%" width="220%" height="220%">
                       <feGaussianBlur in="SourceGraphic" stdDeviation="40" result="blur"/>
@@ -889,7 +889,7 @@ const App: React.FC = () => {
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(0, 216, 255,0.3)]'
                   }`}
                 >
-                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg aria-hidden="true" className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                   </svg>Fix
                 </button>
@@ -901,7 +901,7 @@ const App: React.FC = () => {
                       : 'text-surface-300 hover:text-white hover:bg-surface-700/80 hover:shadow-[0_0_10px_rgba(0, 216, 255,0.3)]'
                   }`}
                 >
-                  <svg className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg aria-hidden="true" className="hidden sm:inline w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                   </svg>Change
                 </button>
@@ -981,7 +981,7 @@ const App: React.FC = () => {
                 }`}
                 title={audioEnabled ? 'Sound notifications on' : 'Sound notifications off'}
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   {audioEnabled ? (
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" />
                   ) : (
@@ -1077,7 +1077,7 @@ const App: React.FC = () => {
         `}>
           {executionStatus === 'running' && (
             <span className="flex items-center justify-center gap-2 flex-wrap">
-              <svg className="animate-spin h-4 w-4 flex-shrink-0" viewBox="0 0 24 24">
+              <svg aria-hidden="true" className="animate-spin h-4 w-4 flex-shrink-0" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
               </svg>
@@ -1105,7 +1105,7 @@ const App: React.FC = () => {
           )}
           {executionStatus === 'success' && (
             <span className="flex items-center justify-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
               Command completed successfully
@@ -1113,7 +1113,7 @@ const App: React.FC = () => {
           )}
           {executionStatus === 'failed' && (
             <span className="flex items-center justify-center gap-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
               <span className="hidden sm:inline">Command failed or cancelled - check terminal</span>
@@ -1132,7 +1132,7 @@ const App: React.FC = () => {
                 onClick={handleBackFromPromptSpace}
                 className="flex items-center gap-1.5 text-surface-400 hover:text-white transition-colors px-2 py-1.5 rounded-lg hover:bg-surface-700/50"
               >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                 </svg>
                 <span className="text-sm">Back</span>
@@ -1200,7 +1200,7 @@ const App: React.FC = () => {
           {view === 'fix' && (
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center">
-                <svg className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg aria-hidden="true" className="w-5 h-5 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                 </svg>
               </div>
@@ -1213,7 +1213,7 @@ const App: React.FC = () => {
           {view === 'change' && (
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center">
-                <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg aria-hidden="true" className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                 </svg>
               </div>
@@ -1261,7 +1261,7 @@ const App: React.FC = () => {
           <div className="mb-4 sm:mb-6 p-3 sm:p-4 glass-light rounded-xl border border-cyan-500/20 animate-fade-in">
             <div className="flex items-start gap-3">
               <div className="w-8 h-8 rounded-lg bg-cyan-500/20 flex items-center justify-center flex-shrink-0">
-                <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg aria-hidden="true" className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               </div>
@@ -1352,7 +1352,7 @@ const App: React.FC = () => {
                 {/* Prerequisites card */}
                 <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                   <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg aria-hidden="true" className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     Prerequisites
@@ -1376,7 +1376,7 @@ const App: React.FC = () => {
                 {/* After investigation card */}
                 <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                   <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg aria-hidden="true" className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     After Investigation
@@ -1401,7 +1401,7 @@ const App: React.FC = () => {
               {/* Right column: Workflow steps */}
               <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                 <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg aria-hidden="true" className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
                   Agent Workflow (10 Steps)
@@ -1468,7 +1468,7 @@ const App: React.FC = () => {
                         : 'bg-gradient-to-r from-blue-500 to-blue-500 hover:from-blue-500 hover:to-blue-400 text-white shadow-lg shadow-blue-500/25 hover:shadow-blue-500/40'}
                     `}
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                     </svg>
                     <span>Start Fix</span>
@@ -1478,7 +1478,7 @@ const App: React.FC = () => {
                 {/* Prerequisites card */}
                 <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                   <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg aria-hidden="true" className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     Prerequisites
@@ -1502,7 +1502,7 @@ const App: React.FC = () => {
                 {/* After fix card */}
                 <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                   <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg aria-hidden="true" className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     After Fix
@@ -1527,7 +1527,7 @@ const App: React.FC = () => {
               {/* Right column: Workflow steps */}
               <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                 <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg aria-hidden="true" className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
                   Agent Workflow
@@ -1591,7 +1591,7 @@ const App: React.FC = () => {
                         : 'bg-gradient-to-r from-purple-600 to-purple-500 hover:from-purple-500 hover:to-purple-400 text-white shadow-lg shadow-purple-500/25 hover:shadow-purple-500/40'}
                     `}
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg aria-hidden="true" className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
                     </svg>
                     <span>Start Implementation</span>
@@ -1601,7 +1601,7 @@ const App: React.FC = () => {
                 {/* Prerequisites card */}
                 <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                   <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg aria-hidden="true" className="w-4 h-4 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     Prerequisites
@@ -1625,7 +1625,7 @@ const App: React.FC = () => {
                 {/* After change card */}
                 <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                   <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-                    <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg aria-hidden="true" className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
                     After Implementation
@@ -1650,7 +1650,7 @@ const App: React.FC = () => {
               {/* Right column: Workflow steps */}
               <div className="glass rounded-2xl p-4 sm:p-5 border border-surface-700/50">
                 <h3 className="text-sm font-semibold text-white mb-4 flex items-center gap-2">
-                  <svg className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg aria-hidden="true" className="w-4 h-4 text-accent-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
                   Agent Workflow
@@ -1742,7 +1742,7 @@ const App: React.FC = () => {
       <footer className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-surface-700/50 px-4 sm:px-6 py-2.5 sm:py-3">
         <div className="mx-auto px-4 sm:px-6 lg:px-8 2xl:px-12 flex items-center justify-center gap-2 text-xs text-surface-500">
           <span className="w-4 h-4 rounded bg-surface-800/80 flex items-center justify-center p-0.5">
-            <svg viewBox="0 0 1024 1024" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
+            <svg role="img" aria-label="Prompt Driven" viewBox="0 0 1024 1024" className="w-full h-full" xmlns="http://www.w3.org/2000/svg">
               <g stroke="#00e3ff" strokeWidth="70" strokeLinecap="round" strokeLinejoin="round" fill="none">
                 <path d="M 260 180 H 600 A 230 230 0 0 1 600 660 H 480 L 260 880 V 180 Z"/>
                 <polyline points="505 340 585 420 505 500"/>

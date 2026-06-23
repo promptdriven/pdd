@@ -76,12 +76,12 @@ class ReleaseVideoError(RuntimeError):
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    if args.preflight:
-        return preflight_release_video(args)
-
-    repo = Path(args.repo).resolve()
-
     try:
+        validate_release_video_idempotency_options(args)
+        if args.preflight:
+            return preflight_release_video(args)
+
+        repo = Path(args.repo).resolve()
         tag = resolve_release_tag(repo, args.tag or os.environ.get("RELEASE_TAG"))
         git_sha = args.git_sha or os.environ.get("RELEASE_GIT_SHA") or git(
             repo,
@@ -204,12 +204,36 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=os.environ.get("RELEASE_VIDEO_PROJECT_ID", ""),
         help="Existing PDS project id to use instead of creating a release project.",
     )
+    parser.add_argument(
+        "--bootstrap-selected-project",
+        action="store_true",
+        default=env_flag("RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT"),
+        help="Pass --bootstrap-selected-project to PDS for selected-project recovery.",
+    )
+    parser.add_argument(
+        "--force-regenerate",
+        action="store_true",
+        default=env_flag("RELEASE_VIDEO_FORCE_REGENERATE"),
+        help="Pass --force-regenerate to PDS for release-video recovery.",
+    )
     parser.add_argument("--project-name", help="PDS project name. Defaults to 'PDD <tag> release'.")
     parser.add_argument("--preset", default=os.environ.get("RELEASE_VIDEO_PRESET", "release-notes"))
     parser.add_argument("--target", default=os.environ.get("RELEASE_VIDEO_TARGET", "publish"))
     parser.add_argument("--platform", default=os.environ.get("RELEASE_VIDEO_PLATFORM", "youtube"))
     parser.add_argument("--privacy", default=os.environ.get("RELEASE_VIDEO_PRIVACY", "unlisted"))
-    parser.add_argument("--idempotency-key", help="PDS idempotency key.")
+    parser.add_argument(
+        "--idempotency-key",
+        default=os.environ.get("RELEASE_VIDEO_IDEMPOTENCY_KEY", ""),
+        help="Full PDS idempotency key. Defaults to RELEASE_VIDEO_IDEMPOTENCY_KEY.",
+    )
+    parser.add_argument(
+        "--idempotency-attempt-id",
+        default=os.environ.get("RELEASE_VIDEO_ATTEMPT_ID", ""),
+        help=(
+            "Retry attempt label appended to the default release-video idempotency key. "
+            "Defaults to RELEASE_VIDEO_ATTEMPT_ID."
+        ),
+    )
     parser.add_argument("--dry-run", action="store_true", help="Plan without creating video or uploading.")
     parser.add_argument(
         "--preflight",
@@ -217,6 +241,19 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Check local release-video configuration without creating artifacts.",
     )
     return parser.parse_args(argv)
+
+
+def env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def validate_release_video_idempotency_options(args: argparse.Namespace) -> None:
+    full_key = str(args.idempotency_key or "").strip()
+    attempt_id = str(args.idempotency_attempt_id or "").strip()
+    if full_key and attempt_id:
+        raise ReleaseVideoError(
+            "Use either a full release-video idempotency key or an attempt id, not both."
+        )
 
 
 def preflight_release_video(args: argparse.Namespace) -> int:
@@ -317,12 +354,14 @@ def run(
     cwd: Path,
     input_text: str | None = None,
     timeout: float | None = None,
+    env: dict[str, str] | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     try:
         completed = subprocess.run(
             command,
             cwd=str(cwd),
+            env=env,
             input=input_text,
             text=True,
             capture_output=True,
@@ -545,8 +584,17 @@ def generate_script_with_claude(
     if claude_tools.strip():
         command.extend(["--allowedTools", claude_tools.strip()])
     prompt = render_release_video_prompt(context, prompt_template, cwd)
+    claude_env = os.environ.copy()
+    strip_anthropic_creds_for_claude_subprocess(claude_env)
     try:
-        completed = run(command, cwd=cwd, input_text=prompt, timeout=timeout, check=False)
+        completed = run(
+            command,
+            cwd=cwd,
+            input_text=prompt,
+            timeout=timeout,
+            env=claude_env,
+            check=False,
+        )
     except ReleaseVideoError as exc:
         raise ReleaseVideoError(
             "Claude Code script generation failed before PDS publish; "
@@ -558,6 +606,37 @@ def generate_script_with_claude(
     if len(script) < 200:
         raise ReleaseVideoError("Claude Code produced an unexpectedly short release video script.")
     return script.rstrip() + "\n"
+
+
+def strip_anthropic_creds_for_claude_subprocess(env: dict[str, str]) -> bool:
+    """Keep release-video Claude generation on OAuth when both auth paths exist."""
+    if env.get("CLAUDE_CODE_USE_BEDROCK") or env.get("CLAUDE_CODE_USE_VERTEX"):
+        return False
+
+    if (env.get("PDD_KEEP_ANTHROPIC_API_KEY") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        return False
+
+    if not (env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")):
+        return False
+
+    if env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        env.pop("ANTHROPIC_API_KEY", None)
+        env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        return True
+
+    try:
+        if str(REPO_ROOT) not in sys.path:
+            sys.path.insert(0, str(REPO_ROOT))
+        from pdd.agentic_common import _strip_anthropic_creds_for_claude_subprocess
+    except ModuleNotFoundError:
+        return False
+
+    return _strip_anthropic_creds_for_claude_subprocess(env, quiet=True)
 
 
 def classify_claude_quota_auth_failure(output: str) -> str | None:
@@ -681,7 +760,12 @@ def create_release_video(
     if project_id:
         command.extend(["--project", project_id])
     project_name = args.project_name or ("" if project_id else f"PDD {tag} release")
-    idempotency_key = args.idempotency_key or f"pdd-release-video:{tag}:{git_sha}"
+    idempotency_key = release_video_idempotency_key(
+        tag=tag,
+        git_sha=git_sha,
+        full_key=args.idempotency_key,
+        attempt_id=args.idempotency_attempt_id,
+    )
     pds_args = [
         "release-video",
         "create",
@@ -715,6 +799,10 @@ def create_release_video(
     changelog_full_path = repo / changelog_path
     if changelog_full_path.exists():
         pds_args.extend(["--changelog", str(changelog_full_path)])
+    if args.bootstrap_selected_project:
+        pds_args.append("--bootstrap-selected-project")
+    if args.force_regenerate:
+        pds_args.append("--force-regenerate")
     if args.dry_run:
         pds_args.append("--dry-run")
 
@@ -728,6 +816,28 @@ def create_release_video(
     if not isinstance(parsed, dict):
         raise ReleaseVideoError("PDS CLI returned JSON that was not an object.")
     return parsed
+
+
+def release_video_idempotency_key(
+    *,
+    tag: str,
+    git_sha: str,
+    full_key: str | None,
+    attempt_id: str | None,
+) -> str:
+    full_key = str(full_key or "").strip()
+    attempt_id = str(attempt_id or "").strip()
+    if full_key and attempt_id:
+        raise ReleaseVideoError(
+            "Use either a full release-video idempotency key or an attempt id, not both."
+        )
+
+    default_key = f"pdd-release-video:{tag}:{git_sha}"
+    if full_key:
+        return full_key
+    if attempt_id:
+        return f"{default_key}:retry-{attempt_id}"
+    return default_key
 
 
 def find_youtube_url(value: Any) -> str | None:

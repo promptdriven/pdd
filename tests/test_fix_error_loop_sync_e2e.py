@@ -121,7 +121,7 @@ def test_agentic_issue_dry_run_reaches_sync_stage_without_self_include(
     mocker.patch("pdd.agentic_sync.run_agentic_task", side_effect=AssertionError)
     mocker.patch(
         "pdd.agentic_sync._filter_already_synced",
-        side_effect=lambda modules, module_cwds, quiet=False: modules,
+        side_effect=lambda modules, module_cwds, quiet=False, module_targets=None: modules,
     )
 
     success, message, cost, model = run_agentic_sync(

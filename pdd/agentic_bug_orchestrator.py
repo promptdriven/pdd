@@ -435,6 +435,63 @@ def _count_generated_tests(file_paths: List[str], cwd: Path) -> Tuple[int, int]:
     return total, stubs
 
 
+def _build_step8_fallback_test_plan(step8_output: str) -> str:
+    """Build the default plan Step 9 should use when Step 8 fails recoverably."""
+    failure_detail = _sanitize_comment_body(
+        step8_output or "No Step 8 failure output was captured.",
+        max_chars=1000,
+    )
+    return (
+        "Step 8 test strategy failed before producing a structured plan.\n\n"
+        "### Fallback/default test planning\n"
+        "- Derive regression tests from the issue, Step 5 reproduction, "
+        "Step 6 root cause, and changed files.\n"
+        "- Prefer an existing nearby test file; create a focused regression "
+        "test file when none exists.\n"
+        "- Cover the root cause and any confirmed Step 6 expansion/sibling "
+        "items.\n\n"
+        "PLANNED_TEST_COUNT: 1\n\n"
+        "### Step 8 failure detail\n"
+        f"{failure_detail}"
+    )
+
+
+def _has_later_completed_step(
+    step_outputs: Dict[str, str],
+    ordered_steps: List[Union[int, float]],
+    after_step: Union[int, float],
+) -> bool:
+    """Return True if any step ordered after ``after_step`` completed successfully.
+
+    A completed step is one whose persisted output is present and does not carry
+    the ``FAILED:`` recoverable-failure sentinel. Resume validation uses this to
+    tell a non-blocking degraded step (the workflow moved on and produced later
+    results) from the point where the run actually stopped.
+    """
+    for s in ordered_steps:
+        if s <= after_step:
+            continue
+        out = step_outputs.get(str(s))
+        if isinstance(out, str) and not out.startswith("FAILED:"):
+            return True
+    return False
+
+
+def _step_failure_detail(step_num: Union[int, float]) -> Optional[str]:
+    """Recovery detail for a recoverable step's degraded fallback comment.
+
+    Single source of truth so the live post and any resume re-post share the
+    same wording. Step 8 (test strategy) hands Step 9 a fallback plan; surface
+    that so the degraded comment explains the recovery.
+    """
+    if step_num == 8:
+        return (
+            "Test strategy failed; later test generation will use "
+            "fallback/default planning."
+        )
+    return None
+
+
 def _parse_changed_files(output: str, marker: str) -> List[str]:
     """Extract file paths from marker lines (multiple lines and comma-separated)."""
     files = []
@@ -1241,6 +1298,12 @@ def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: 
 # Step 3 clarification hard-stop: resume must re-run triage with new user comments.
 _CLARIFICATION_STEPS = {3}
 
+# Steps whose recoverable soft-failure hands downstream work a deterministic
+# fallback (Step 8 test strategy → Step 9 fallback test plan). Their persisted
+# FAILED: sentinel must NOT downgrade resume state when a later step already
+# completed — unlike ordinary failed steps, which still re-run.
+_RECOVERABLE_FALLBACK_STEPS = {8}
+
 
 def _state_safe_step_output(output: str) -> str:
     """Redact secrets before persisting step output to resumable/GitHub state."""
@@ -1280,6 +1343,8 @@ def _maybe_post_step_comment(
     repo_name: str,
     use_github_state: bool,
     github_comment_id: Optional[str],
+    failure_mode: Optional[str] = None,
+    failure_detail: Optional[str] = None,
 ) -> Optional[str]:
     """Post a per-step visible comment via trusted credentials (issue #964).
 
@@ -1313,6 +1378,8 @@ def _maybe_post_step_comment(
             description=description,
             output=step_output,
             cwd=cwd,
+            failure_mode=failure_mode or "recoverable",
+            failure_detail=failure_detail,
         )
         state["step_comments"][str(step_num)] = {
             "failed_posted": bool(posted),
@@ -2122,10 +2189,26 @@ def run_agentic_bug_orchestrator(
     actual_last: Union[int, float] = 0
     for s in ordered_steps:
         key = str(s)
-        if key in step_outputs and not step_outputs[key].startswith("FAILED:"):
-            actual_last = s
-        else:
+        if key not in step_outputs:
+            # Genuine gap: this step never ran — resume must restart here.
             break
+        if step_outputs[key].startswith("FAILED:"):
+            # A recoverable soft-failure on a step that hands downstream work a
+            # deterministic fallback (Step 8 → Step 9 fallback test plan) is
+            # persisted with the FAILED: sentinel but is NOT a gap: the
+            # workflow continued past it and produced valid later results. When a
+            # later step completed, skip it instead of downgrading
+            # last_completed_step and rerunning already-completed, side-effectful
+            # steps (Step 9 test-gen … Step 12 PR creation). Ordinary failed
+            # steps (and a fallback step with nothing completed after it) remain
+            # the resume point and re-run.
+            if (
+                s in _RECOVERABLE_FALLBACK_STEPS
+                and _has_later_completed_step(step_outputs, ordered_steps, s)
+            ):
+                continue
+            break
+        actual_last = s
     if actual_last < last_completed_step:
         if not quiet:
             console.print(f"[yellow]State validation: correcting last_completed_step from {last_completed_step} to {actual_last}[/yellow]")
@@ -2200,9 +2283,46 @@ def run_agentic_bug_orchestrator(
                 break
             s_key = str(s_num)
             s_out = step_outputs_map.get(s_key)
-            if not isinstance(s_out, str) or s_out.startswith("FAILED:"):
+            if not isinstance(s_out, str):
                 continue
             entry = raw_sc.get(s_key)
+            if s_out.startswith("FAILED:"):
+                # Retry a degraded fallback comment whose initial post failed
+                # transiently (_maybe_post_step_comment persists
+                # failed_pending=True). The success backfill below never reaches
+                # a FAILED: output, and a recoverable-fallback step is not rerun,
+                # so this sweep is the only path that can re-post it.
+                failed_pending = (
+                    isinstance(entry, dict)
+                    and entry.get("failed_pending") is True
+                    and entry.get("failed_posted") is not True
+                )
+                if failed_pending:
+                    try:
+                        s_num_int = int(float(s_key))
+                    except (TypeError, ValueError):
+                        continue
+                    desc = next(
+                        (d for (n, _name, d) in steps_config if n == s_num_int),
+                        str(s_key),
+                    )
+                    github_comment_id = _maybe_post_step_comment(
+                        step_success=False,
+                        step_num=s_num_int,
+                        description=desc,
+                        step_output=s_out,
+                        state=state,
+                        state_dir=state_dir,
+                        cwd=cwd,
+                        issue_number=issue_number,
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        use_github_state=use_github_state,
+                        github_comment_id=github_comment_id,
+                        failure_mode="recoverable",
+                        failure_detail=_step_failure_detail(s_num_int),
+                    )
+                continue
             if isinstance(entry, dict) and entry.get("posted") is True:
                 continue
             fallback_pending = (
@@ -2536,6 +2656,7 @@ def run_agentic_bug_orchestrator(
                     repo_name=repo_name,
                     use_github_state=use_github_state,
                     github_comment_id=github_comment_id,
+                    failure_mode="fatal",
                 )
                 return False, "Aborting: 3 consecutive steps failed — agent providers unavailable", total_cost, model_used, changed_files
         else:
@@ -2937,8 +3058,14 @@ def run_agentic_bug_orchestrator(
                         console.print("[yellow]Warning: DEFECT_TYPE is 'prompt' but no .prompt files detected in changed_files[/yellow]")
 
         if step_num == 8:
-            # Parse planned test count for Step 9 prompt injection
-            planned = _count_planned_tests(step_output)
+            # Parse planned test count for Step 9 prompt injection. If Step 8
+            # failed recoverably, give Step 9 a deterministic fallback plan
+            # instead of only the provider error text.
+            step8_plan = step_output
+            if not step_success:
+                step8_plan = _build_step8_fallback_test_plan(step_output)
+                context["step8_output"] = step8_plan
+            planned = _count_planned_tests(step8_plan)
             context["planned_test_count"] = str(planned) if planned > 0 else "all"
 
         if step_num == 9:
@@ -3377,6 +3504,10 @@ def run_agentic_bug_orchestrator(
             repo_name=repo_name,
             use_github_state=use_github_state,
             github_comment_id=github_comment_id,
+            failure_mode="fatal" if step_num == 12 else "recoverable",
+            failure_detail=(
+                _step_failure_detail(step_num) if not step_success else None
+            ),
         )
 
         # Print step completion marker (required for credential waterfall detection)

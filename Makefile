@@ -58,6 +58,7 @@ help:
 	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make release-video           - Generate and upload a YouTube video for the current release tag"
+	@echo "  make release-video-discord-backfill RELEASE_TAG=vX.Y.Z RELEASE_VIDEO_YOUTUBE_URL=url - Post recovered video follow-up to Discord"
 	@echo "  make release-local           - Run release with local Infisical PDS release token"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
 	@echo "  make release                 - On main: tag HEAD with next vN.N.N and push (BUMP=patch|minor|major; default patch)"
@@ -91,6 +92,11 @@ RELEASE_VIDEO_PRIVACY ?= unlisted
 RELEASE_VIDEO_DRY_RUN ?= 0
 RELEASE_VIDEO_PROJECT_ID ?=
 RELEASE_VIDEO_SCRIPT_PATH ?=
+RELEASE_VIDEO_IDEMPOTENCY_KEY ?=
+RELEASE_VIDEO_ATTEMPT_ID ?=
+RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0
+RELEASE_VIDEO_FORCE_REGENERATE ?= 0
+RELEASE_VIDEO_YOUTUBE_URL ?=
 CLAUDE_CLI ?= claude
 PDS_CLI ?= pds
 PDS_API_URL ?= https://video.promptdriven.ai
@@ -112,7 +118,7 @@ ifeq ($(CI),true)
 SKIP_MAKEFILE_REGEN := 1
 endif
 
-RELEASE_MAKE_GOALS := release release-video release-local release-infisical check-release-video-config check-release-video-config-local check-release-video-config-infisical
+RELEASE_MAKE_GOALS := release release-video release-video-discord-backfill release-local release-infisical check-release-video-config check-release-video-config-local check-release-video-config-infisical
 ifneq ($(filter $(RELEASE_MAKE_GOALS),$(MAKECMDGOALS)),)
 SKIP_MAKEFILE_REGEN := 1
 endif
@@ -133,7 +139,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-infisical release-video check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-infisical
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-infisical release-video release-video-discord-backfill check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-infisical
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -782,6 +788,10 @@ release-video:
 	if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
 	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
 	RELEASE_TAG="$(RELEASE_TAG)" RELEASE_GIT_SHA="$(RELEASE_GIT_SHA)" \
+	RELEASE_VIDEO_IDEMPOTENCY_KEY="$(RELEASE_VIDEO_IDEMPOTENCY_KEY)" \
+	RELEASE_VIDEO_ATTEMPT_ID="$(RELEASE_VIDEO_ATTEMPT_ID)" \
+	RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)" \
+	RELEASE_VIDEO_FORCE_REGENERATE="$(RELEASE_VIDEO_FORCE_REGENERATE)" \
 	python scripts/release_video.py \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
 		--claude-cli "$(CLAUDE_CLI)" \
@@ -793,6 +803,12 @@ release-video:
 		--platform "$(RELEASE_VIDEO_PLATFORM)" \
 		--privacy "$(RELEASE_VIDEO_PRIVACY)" \
 		$$DRY_RUN_FLAG
+
+release-video-discord-backfill:
+	@python scripts/backfill_release_video_discord.py \
+		--tag "$(RELEASE_TAG)" \
+		--youtube-url "$(RELEASE_VIDEO_YOUTUBE_URL)" \
+		--repo "$${GITHUB_REPOSITORY:-promptdriven/pdd}"
 
 release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean check-release-video-config
 	@echo "Preparing release"

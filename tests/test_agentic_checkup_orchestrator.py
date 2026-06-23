@@ -6277,6 +6277,10 @@ class TestIssue1215Round10Step5SkippedEdgeCases:
             "pr_owner": "o",
             "pr_repo": "r",
             "pr_head_sha": "abc123deadbeef",
+            # Match the run's targeted scope so the #1574 pr_test_scope identity
+            # check (added alongside the Step-7 gate) doesn't discard this resume
+            # cache — sibling resume fixtures set this too; this one was missed.
+            "pr_test_scope": "targeted",
             "last_completed_step": 6.3,
             "current_step": 7,
             "step_outputs": {
@@ -6792,6 +6796,43 @@ class TestStep7PassedMeritReview:
         '"changed_files": ["docs/checkup.md"]}\n'
         '```'
     )
+    TARGETED_OUT_OF_DIFF_NONBLOCKING_NO_REASON_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "frontend/src/ missing; TS18003 no inputs found", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"scope": "out-of-scope"}], '
+        '"changed_files": ["README.md"]}\n'
+        '```'
+    )
+    TARGETED_BLOCKING_FALSE_NO_REASON_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "pre-existing baseline failure", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"blocking": false}], '
+        '"changed_files": ["README.md"]}\n'
+        '```'
+    )
+    FULL_ATTEMPT_OUT_OF_SCOPE_NONBLOCKING_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: full suite attempted — Python passed; '
+        'frontend TS18003 is pre-existing and outside the PR diff.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "frontend/src/ missing; TS18003 no inputs found", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"scope": "out-of-scope", "blocking": false}], '
+        '"changed_files": ["README.md"]}\n'
+        '```'
+    )
     TARGETED_CHANGED_FILE_CRITICAL_VERDICT = (
         '```json\n'
         '{"success": true, '
@@ -6801,6 +6842,55 @@ class TestStep7PassedMeritReview:
         '"description": "package is invalid", '
         '"module": "frontend", "file": "frontend/package.json"}], '
         '"changed_files": ["frontend/package.json"]}\n'
+        '```'
+    )
+    # An in-scope PR critical with only a *generic* ``reason`` field (ordinary
+    # explanatory text, not a non-blocking declaration) must still block.
+    TARGETED_IN_SCOPE_CRITICAL_GENERIC_REASON_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "introduced token leak", '
+        '"module": "auth", "file": "auth.py", '
+        '"scope": "pr-diff", "in_scope": true, '
+        '"reason": "introduced token leak"}], '
+        '"changed_files": ["auth.py"]}\n'
+        '```'
+    )
+    # A critical that lives in the PR diff (its file is a changed file) with
+    # only a blocking:false flag and NO out-of-scope signal must still block —
+    # a self-reported non-blocking flag cannot wave through a PR-introduced
+    # critical (#1574 review, fail-closed).
+    TARGETED_CHANGED_FILE_BLOCKING_FALSE_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "PR-introduced token leak", '
+        '"module": "auth", "file": "auth.py", '
+        '"blocking": false}], '
+        '"changed_files": ["auth.py"]}\n'
+        '```'
+    )
+    # A pre-existing, out-of-scope critical located by a coarse ``module`` label
+    # ("frontend") whose precise ``file`` is NOT in the diff must still pass when
+    # the PR only changes a doc that happens to live *under* that module dir
+    # (``frontend/README.md``). The module label must not prefix-match the
+    # changed file and re-block a baseline critical the PR cannot fix (#1574
+    # review follow-up).
+    TARGETED_OUT_OF_SCOPE_MODULE_DIR_DOC_CHANGE_VERDICT = (
+        '```json\n'
+        '{"success": true, '
+        '"message": "Verification scope: targeted — full suite not run.", '
+        '"issue_aligned": true, '
+        '"issues": [{"severity": "critical", "fixed": false, '
+        '"description": "frontend/src/ missing; TS18003 no inputs found", '
+        '"module": "frontend", "file": "frontend/tsconfig.json", '
+        '"scope": "out-of-scope"}], '
+        '"changed_files": ["frontend/README.md"]}\n'
         '```'
     )
 
@@ -6849,6 +6939,24 @@ class TestStep7PassedMeritReview:
         assert not passed
         assert "critical" in reason.lower()
 
+    def test_targeted_pr_blocks_in_scope_critical_with_generic_reason(self):
+        """A generic ``reason`` field must not bypass an in-scope PR critical.
+
+        Regression for the #1574 review: a critical with ``scope: "pr-diff"``,
+        ``in_scope: true`` and only an explanatory ``reason`` (no non-blocking
+        flag/scope/``*_reason``) must still block the PR.
+        """
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_IN_SCOPE_CRITICAL_GENERIC_REASON_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
+
     def test_targeted_pr_allows_explicit_nonblocking_out_of_scope_critical(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
@@ -6859,6 +6967,106 @@ class TestStep7PassedMeritReview:
             pr_test_scope="targeted",
         )
         assert passed, reason
+
+    def test_targeted_pr_allows_out_of_scope_critical_without_reason(self):
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_DIFF_NONBLOCKING_NO_REASON_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed, reason
+
+    def test_targeted_pr_module_dir_doc_change_does_not_block_out_of_scope_critical(self):
+        """A doc change under a finding's module dir must not re-block it.
+
+        Regression for the #1574 review follow-up: the coarse ``module`` label
+        ("frontend") must match a changed file only on an exact path hit, never
+        by directory-prefix containment. A README under ``frontend/`` must not
+        wave the pre-existing, out-of-scope ``TS18003`` critical back into the
+        blocking path.
+        """
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_OUT_OF_SCOPE_MODULE_DIR_DOC_CHANGE_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert passed, reason
+
+    def test_targeted_pr_blocks_blocking_false_critical_without_out_of_scope_signal(self):
+        """A bare ``blocking: false`` is not a scope claim and must not bypass.
+
+        Fail-closed regression (#1574 review): an unfixed critical tagged only
+        ``blocking: false`` — with no non-blocking ``scope``, no
+        ``in_scope: false``, and no explicit ``*_reason`` — still blocks even in
+        a targeted run. Trusting a self-reported severity downgrade alone would
+        fail open on a real PR-introduced critical.
+        """
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_BLOCKING_FALSE_NO_REASON_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
+
+    def test_full_pr_scope_blocks_out_of_scope_critical(self):
+        """Full PR mode is the comprehensive gate — no out-of-scope carveout.
+
+        The #1574 carveout is scoped to targeted runs. Under a full-suite
+        attempt, even an explicitly out-of-scope / ``blocking: false`` critical
+        blocks: the full suite is authoritative, so an unfixed critical is a
+        real failure.
+        """
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.FULL_ATTEMPT_OUT_OF_SCOPE_NONBLOCKING_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="full",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
+
+    def test_targeted_pr_blocks_changed_file_critical_with_blocking_false(self):
+        """A blocking:false flag must not wave through a PR-introduced critical.
+
+        Fail-closed regression (#1574 review): a critical whose file is in the
+        PR diff blocks even when tagged ``blocking: false``, because there is no
+        out-of-scope signal and the finding touches a changed file.
+        """
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_CHANGED_FILE_BLOCKING_FALSE_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="targeted",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
+
+    def test_full_pr_scope_blocks_changed_file_critical_with_blocking_false(self):
+        """The fail-closed rule also holds in full PR scope."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            self.TARGETED_CHANGED_FILE_BLOCKING_FALSE_VERDICT,
+            pr_mode=True,
+            has_issue=True,
+            pr_test_scope="full",
+        )
+        assert not passed
+        assert "critical" in reason.lower()
 
     def test_targeted_pr_still_blocks_changed_file_critical(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
@@ -6872,7 +7080,7 @@ class TestStep7PassedMeritReview:
         assert not passed
         assert "package is invalid" in reason
 
-    def test_full_pr_scope_still_blocks_out_of_diff_critical(self):
+    def test_full_pr_scope_still_blocks_critical_without_nonblocking_signal(self):
         from pdd.agentic_checkup_orchestrator import _step7_passed
 
         passed, reason = _step7_passed(

@@ -214,6 +214,10 @@ jobs:
       #   vars.PDS_CLI_PACKAGE         install spec for the @promptdriven/pds
       #                                CLI, for example @promptdriven/pds@latest
       #                                or a pinned version.
+      #   vars.PDS_CLI                 optional pds command. Defaults to a
+      #                                longer timeout because release-video
+      #                                create can exceed the CLI's 30s default
+      #                                before returning a run handle.
       #   vars.PDS_API_URL             PDS backend. Defaults to production when
       #                                the repo variable is unset.
       #   vars.RELEASE_VIDEO_PROJECT_ID  optional stable PDS project to reuse
@@ -230,9 +234,14 @@ jobs:
           PDS_TOKEN: ${{ secrets.PDS_TOKEN }}
           PDS_API_URL: ${{ vars.PDS_API_URL || 'https://video.promptdriven.ai' }}
           PDS_CLI_PACKAGE: ${{ vars.PDS_CLI_PACKAGE }}
+          PDS_CLI: ${{ vars.PDS_CLI || 'pds --timeout 120s' }}
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           RELEASE_VIDEO_PROJECT_ID: ${{ vars.RELEASE_VIDEO_PROJECT_ID }}
           RELEASE_VIDEO_SCRIPT_PATH: ${{ vars.RELEASE_VIDEO_SCRIPT_PATH }}
+          RELEASE_VIDEO_IDEMPOTENCY_KEY: ${{ vars.RELEASE_VIDEO_IDEMPOTENCY_KEY }}
+          RELEASE_VIDEO_ATTEMPT_ID: ${{ vars.RELEASE_VIDEO_ATTEMPT_ID }}
+          RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT: ${{ vars.RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT }}
+          RELEASE_VIDEO_FORCE_REGENERATE: ${{ vars.RELEASE_VIDEO_FORCE_REGENERATE }}
         run: |
           set -uo pipefail
           tag="${{ github.ref_name }}"
