@@ -67,26 +67,35 @@ CHECKUP_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 
 TOTAL_STEPS = 8
 
-# Ordered list of all steps (including fractional sub-steps).
-STEP_ORDER: List[Union[int, float]] = [1, 2, 3, 4, 5, 6.1, 6.2, 6.3, 7, 8]
+# Canonical checkup step table — the single source of truth for the step
+# dispatch order, the fix-verify loop subset, and the stable telemetry id. Each
+# entry is ``(internal_step_number, stable_slug, human_description)``. The slug
+# is the consumer-facing id (issue #1709): pdd_cloud durable runs harvest the
+# workflow-state ``step_telemetry`` and key off it, so slugs MUST NOT be
+# renamed after release. ``STEP_ORDER`` numbering may change freely; the slugs
+# stay. ``STEP_ORDER``, ``STEP_ID_MAP``, ``steps``/``step_map`` and
+# ``loop_steps`` are all derived from this one table so they cannot drift apart.
+_CHECKUP_STEPS: Tuple[Tuple[Union[int, float], str, str], ...] = (
+    (1,   "discover",         "Discovering project structure and tech stack"),
+    (2,   "deps",             "Auditing dependencies"),
+    (3,   "build",            "Running build/compile checks"),
+    (4,   "interfaces",       "Checking cross-module interfaces"),
+    (5,   "test",             "Running tests"),
+    (6.1, "fix",              "Fixing discovered issues"),
+    (6.2, "regression_tests", "Writing regression tests"),
+    (6.3, "e2e_tests",        "Writing e2e/integration tests"),
+    (7,   "verify",           "Verifying fixes and generating report"),
+    (8,   "create_pr",        "Creating pull request"),
+)
 
-# Stable, consumer-facing string id per internal step number (issue #1709).
-# pdd_cloud durable runs harvest the workflow-state ``step_telemetry`` and key
-# off these ids, so they MUST NOT be renumbered or renamed after release. The
-# slugs mirror the ``steps`` table (``discover``/``deps``/``build``/...): the
-# step's own stable slug IS its telemetry id, so there is no second naming
-# table to drift. ``STEP_ORDER`` numbering may change freely; these ids stay.
+# Ordered list of all steps (including fractional sub-steps).
+STEP_ORDER: List[Union[int, float]] = [num for num, _slug, _desc in _CHECKUP_STEPS]
+
+# Stable, consumer-facing string id per internal step number (issue #1709),
+# derived from the canonical table so it can never drift from the slugs used
+# for display and dispatch.
 STEP_ID_MAP: Dict[Union[int, float], str] = {
-    1: "discover",
-    2: "deps",
-    3: "build",
-    4: "interfaces",
-    5: "test",
-    6.1: "fix",
-    6.2: "regression_tests",
-    6.3: "e2e_tests",
-    7: "verify",
-    8: "create_pr",
+    num: slug for num, slug, _desc in _CHECKUP_STEPS
 }
 
 # Maximum number of build-fix-verify loop iterations before giving up.
@@ -3198,25 +3207,48 @@ def _run_agentic_checkup_orchestrator_inner(
     else:
         step_comments_set = normalize_step_comments_state(state.get("step_comments"))
 
-    # Step definitions (step 6 split into 6.1/6.2/6.3 sub-steps).
-    steps: List[Tuple[Union[int, float], str, str]] = [
-        (1,   "discover",         "Discovering project structure and tech stack"),
-        (2,   "deps",             "Auditing dependencies"),
-        (3,   "build",            "Running build/compile checks"),
-        (4,   "interfaces",       "Checking cross-module interfaces"),
-        (5,   "test",             "Running tests"),
-        (6.1, "fix",              "Fixing discovered issues"),
-        (6.2, "regression_tests", "Writing regression tests"),
-        (6.3, "e2e_tests",       "Writing e2e/integration tests"),
-        (7,   "verify",           "Verifying fixes and generating report"),
-        (8,   "create_pr",        "Creating pull request"),
-    ]
+    # Step definitions (step 6 split into 6.1/6.2/6.3 sub-steps), from the
+    # module-level canonical table.
+    steps: List[Tuple[Union[int, float], str, str]] = list(_CHECKUP_STEPS)
     step_map: Dict[Union[int, float], Tuple[str, str]] = {
         s[0]: (s[1], s[2]) for s in steps
     }
 
     # Display mapping for fractional steps (user-facing console).
     _display_step: Dict[float, str] = {6.1: "6a", 6.2: "6b", 6.3: "6c"}
+
+    def _record_step_telemetry(
+        step_num: Union[int, float],
+        status: str,
+        *,
+        name: str = "",
+        cost: float = 0.0,
+        model: str = "",
+        iteration: int = 1,
+    ) -> None:
+        """Append one per-step telemetry entry to ``step_telemetry`` (issue #1709).
+
+        The single recorder for every step outcome — completed, failed, and
+        skipped — so all persistence surfaces share one schema and no skip or
+        early-return path can silently drop a step. ``name`` falls back to the
+        step's canonical description, keeping the field consistent regardless of
+        which code path recorded it. Appended once per call; ``sum(cost_usd)``
+        reconciles with ``total_cost`` because the only cost-bearing caller
+        (``_handle_step_result``) bumps ``total_cost`` by the same ``cost`` it
+        records here. Fix-verify re-runs intentionally append one entry per
+        iteration, distinguished by ``iteration``.
+        """
+        _slug, _desc = step_map.get(step_num, (str(step_num), ""))
+        step_telemetry.append({
+            "step_id": STEP_ID_MAP.get(step_num, str(step_num)),
+            "internal_step": step_num,
+            "name": name or _desc,
+            "status": status,
+            "cost_usd": cost,
+            "model": model or "",
+            "iteration": iteration,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+        })
 
     start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
     if start_step_override is not None:
@@ -3343,23 +3375,20 @@ def _run_agentic_checkup_orchestrator_inner(
         total_cost += cost
         last_model_used = model
 
-        # Per-step telemetry for pdd_cloud durable runs (issue #1709). Appended
-        # once per logical step here — before any ``_save_state()`` in this
-        # function (including the provider-abort save below) — so every
-        # persistence surface carries the entry, and ``sum(cost_usd)``
-        # reconciles with ``total_cost`` (each call adds the same ``cost`` to
-        # both). One entry per ``_handle_step_result`` call; fix-verify loop
+        # Per-step telemetry for pdd_cloud durable runs (issue #1709). Recorded
+        # before any ``_save_state()`` in this function (including the
+        # provider-abort save below) so every persistence surface carries the
+        # entry, and ``sum(cost_usd)`` reconciles with ``total_cost`` (the same
+        # ``cost`` is added to both, just above). One entry per call; fix-verify
         # re-runs append a fresh entry tagged with their ``iteration``.
-        step_telemetry.append({
-            "step_id": STEP_ID_MAP.get(step_num, str(step_num)),
-            "internal_step": step_num,
-            "name": description or "",
-            "status": "completed" if success else "failed",
-            "cost_usd": cost or 0.0,
-            "model": model or "",
-            "iteration": iteration or 1,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
-        })
+        _record_step_telemetry(
+            step_num,
+            "completed" if success else "failed",
+            name=description,
+            cost=cost,
+            model=model,
+            iteration=iteration,
+        )
 
         # Use underscore-based key for fractional steps: 6.1 -> "6_1"
         step_key = str(step_num).replace(".", "_")
@@ -3719,14 +3748,10 @@ def _run_agentic_checkup_orchestrator_inner(
     # Section 2: Steps 3-7 (iterative loop or linear for --no-fix)
     # ==================================================================
 
+    # Steps 3-7 form the build-fix-verify loop body (drops discovery/deps and
+    # PR creation from the canonical table).
     loop_steps: List[Tuple[Union[int, float], str, str]] = [
-        (3,   "build",            "Running build/compile checks"),
-        (4,   "interfaces",       "Checking cross-module interfaces"),
-        (5,   "test",             "Running tests"),
-        (6.1, "fix",              "Fixing discovered issues"),
-        (6.2, "regression_tests", "Writing regression tests"),
-        (6.3, "e2e_tests",       "Writing e2e/integration tests"),
-        (7,   "verify",           "Verifying fixes and generating report"),
+        s for s in _CHECKUP_STEPS if 3 <= s[0] <= 7
     ]
 
     if no_fix:
@@ -3886,18 +3911,8 @@ def _run_agentic_checkup_orchestrator_inner(
                 step_outputs[sub_key] = skipped_output
                 context[f"step{sub_key}_output"] = skipped_output
                 last_completed_step_to_save = sub_step
-                # --no-fix bypasses _handle_step_result for 6.1/6.2/6.3, so
-                # record the skip telemetry inline (issue #1709).
-                step_telemetry.append({
-                    "step_id": STEP_ID_MAP.get(sub_step, str(sub_step)),
-                    "internal_step": sub_step,
-                    "name": step_map[sub_step][1],
-                    "status": "skipped",
-                    "cost_usd": 0.0,
-                    "model": "",
-                    "iteration": 1,
-                    "completed_at": datetime.now(timezone.utc).isoformat(),
-                })
+                # --no-fix bypasses _handle_step_result for 6.1/6.2/6.3.
+                _record_step_telemetry(sub_step, "skipped")
         if any(s >= start_step for s in (6.1, 6.2, 6.3)):
             _save_state()
 
@@ -3950,18 +3965,8 @@ def _run_agentic_checkup_orchestrator_inner(
             step_outputs["8"] = skipped_output
             context["step8_output"] = skipped_output
             last_completed_step_to_save = 8
-            # --no-fix skips step 8 without _handle_step_result; record the
-            # skip telemetry inline before persisting (issue #1709).
-            step_telemetry.append({
-                "step_id": STEP_ID_MAP.get(8, "8"),
-                "internal_step": 8,
-                "name": step_map[8][1],
-                "status": "skipped",
-                "cost_usd": 0.0,
-                "model": "",
-                "iteration": 1,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            })
+            # --no-fix skips step 8 without _handle_step_result.
+            _record_step_telemetry(8, "skipped")
             _save_state()
 
         if not nofix_gate_passed:
@@ -4473,6 +4478,9 @@ def _run_agentic_checkup_orchestrator_inner(
             else:
                 step_outputs["8"] = f"Skipped step 8 because: {max_reason}"
                 context["step8_output"] = step_outputs["8"]
+            # Step 8 (create_pr / PR push) did not happen — record the skip so
+            # telemetry has an entry for every reached step (issue #1709).
+            _record_step_telemetry(8, "skipped")
             _save_state()
             # Step 7's PR-mode prompt suppresses agent commenting because
             # the orchestrator owns the canonical report. Post it here so
@@ -4514,6 +4522,9 @@ def _run_agentic_checkup_orchestrator_inner(
                 skip_msg = f"Skipped step 8 because: {gate_reason}"
                 step_outputs["8"] = skip_msg
                 context["step8_output"] = skip_msg
+            # Step 8 (create_pr / PR push) did not happen — record the skip so
+            # telemetry has an entry for every reached step (issue #1709).
+            _record_step_telemetry(8, "skipped")
             # Persist the gate signal but do NOT clear workflow state — an
             # operator may want to resume after fixing the underlying
             # issue. Return failure so callers (pdd-issue, pdd_cloud,
@@ -5318,6 +5329,10 @@ def _run_agentic_checkup_orchestrator_inner(
                 step_outputs["8"] = f"Skipped: PR-mode verification of PR #{pr_number}"
                 context["step8_output"] = step_outputs["8"]
                 last_completed_step_to_save = 8
+                # PR-mode verifies an existing PR, so create_pr is skipped;
+                # record it so 'create_pr' isn't absent from telemetry on the
+                # common PR path (issue #1709).
+                _record_step_telemetry(8, "skipped")
                 _save_state()
         elif 8 >= start_step or fix_verify_iteration > 0:
             name8, desc8 = step_map[8]

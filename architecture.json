@@ -8173,7 +8173,7 @@
           },
           {
             "name": "_build_state",
-            "signature": "(issue_number: int, issue_url: str, last_completed_step: Union[int, float], step_outputs: Dict[str, str], total_cost: float, model_used: str, github_comment_id: Optional[int], changed_files: Optional[List[str]] = None, worktree_path: Optional[Path] = None, fix_verify_iteration: int = 0, previous_fixes: str = \"\", mode: str = \"issue\", pr_number: Optional[int] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_head_sha: Optional[str] = None, pr_test_scope: Optional[str] = None, step_telemetry: Optional[List[dict]] = None) -> Dict",
+            "signature": "(issue_number: int, issue_url: str, last_completed_step: Union[int, float], step_outputs: Dict[str, str], total_cost: float, model_used: str, github_comment_id: Optional[int], changed_files: Optional[List[str]] = None, worktree_path: Optional[Path] = None, fix_verify_iteration: int = 0, previous_fixes: str = \"\", mode: str = \"issue\", pr_number: Optional[int] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_head_sha: Optional[str] = None, pr_test_scope: Optional[str] = None, step_comments: Optional[List[int]] = None, step_telemetry: Optional[List[dict]] = None) -> Dict",
             "returns": "Dict",
             "sideEffects": [
               "None"

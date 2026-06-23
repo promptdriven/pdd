@@ -16,6 +16,7 @@ from pdd.agentic_checkup_orchestrator import (
     STEP_ID_MAP,
     STEP_ORDER,
     TOTAL_STEPS,
+    _CHECKUP_STEPS,
     _build_state,
     _copy_uncommitted_changes,
     _discard_clean_run_side_effects,
@@ -7345,6 +7346,19 @@ class TestStepTelemetry:
         # No id encodes a STEP_ORDER float position (e.g. "5", "6_1", "6.1").
         for slug in STEP_ID_MAP.values():
             assert not slug.replace("_", "").replace(".", "").isdigit()
+
+    def test_step_order_and_id_map_derive_from_single_table(self):
+        """STEP_ORDER and STEP_ID_MAP derive from _CHECKUP_STEPS, so the step
+        number/slug/description triple has exactly one source of truth and the
+        derived structures cannot drift from it."""
+        assert STEP_ORDER == [num for num, _slug, _desc in _CHECKUP_STEPS]
+        assert STEP_ID_MAP == {num: slug for num, slug, _desc in _CHECKUP_STEPS}
+        # Slugs are unique (a duplicate would collide telemetry step_ids).
+        slugs = [slug for _num, slug, _desc in _CHECKUP_STEPS]
+        assert len(slugs) == len(set(slugs))
+        # Every step carries a non-empty human description for the telemetry
+        # ``name`` fallback.
+        assert all(desc for _num, _slug, desc in _CHECKUP_STEPS)
 
     def test_build_state_round_trips_step_telemetry(self):
         """``_build_state`` surfaces the param and defaults to [] when None."""

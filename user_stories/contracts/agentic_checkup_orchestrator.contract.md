@@ -22,7 +22,7 @@ A `pdd checkup` run has been invoked against a PR (with or without an associated
 1. Given a fresh `pdd checkup` run that completes all steps, when the run finishes, then the persisted state file contains a `step_telemetry` list with one entry per reached step, each entry having a stable string `step_id`, a `status` of `"completed"`, a `cost_usd` number, and a `model` string.
 2. Given a `pdd checkup` run where some steps are skipped (e.g. `--no-fix`), when the run finishes, then the skipped steps appear in `step_telemetry` with `status: "skipped"` and `cost_usd: 0`.
 3. Given a completed run with `step_telemetry` present, when the `cost_usd` values across all entries are summed, then the sum equals the persisted `total_cost` within a rounding tolerance of ±0.01 USD.
-4. Given a state file from a prior partial run that already contains `step_telemetry` entries for steps 1–3, when the run resumes and completes steps 4–8, then the final state file contains exactly one entry per step (no duplicates for steps 1–3) and the pre-existing entries retain their original `started_at`, `completed_at`, `cost_usd`, and `model` values.
+4. Given a state file from a prior partial run that already contains `step_telemetry` entries for steps 1–3, when the run resumes and completes steps 4–8, then the pre-existing entries for steps 1–3 are retained unchanged (not re-emitted or zeroed) — the resume does not re-run already-completed steps — and they keep their original `completed_at`, `cost_usd`, and `model` values. (Within a single run, the fix-verify loop may record multiple entries for a re-run step, each tagged with its own `iteration`; that is expected, not duplication.)
 5. Given a state file that lacks a `step_telemetry` key (legacy format), when `pdd checkup` loads and resumes from it, then the run proceeds without error and the final state file includes the new `step_telemetry` key alongside all original keys.
 
 ## Oracle
@@ -32,7 +32,8 @@ These details matter for pass/fail:
 - The `step_id` values are stable strings (e.g. `"fix"`, `"verdict"`, `"validate_1"`) — not floats or strings derived from `STEP_ORDER` numbers like `"5"` or `"6_1"`.
 - `sum(entry.cost_usd for entry in step_telemetry)` is within 0.01 of the persisted `total_cost`.
 - The existing keys `total_cost`, `step_outputs`, `last_completed_step`, `pr_head_sha`, `model_used`, `mode`, `pr_*`, and `step_comments` are present and unchanged in structure.
-- On resume, the number of entries in `step_telemetry` equals the number of distinct steps that have been reached (no duplicate `step_id` values).
+- Telemetry entries are unique per (`step_id`, `iteration`), NOT per `step_id` alone: the build-fix-verify loop legitimately records the same `step_id` once per iteration, so multiple entries sharing a `step_id` with differing `iteration` are expected, not an error.
+- On resume, telemetry entries recorded by prior invocations are preserved (retained, not zeroed or dropped), and the resume does not re-emit entries for steps that already completed in an earlier invocation.
 
 ## Non-Oracle
 These details should not matter:
@@ -47,7 +48,7 @@ These details should not matter:
 - A completed run produces a state file with `step_telemetry` missing entirely.
 - A step that ran and incurred cost is recorded with `cost_usd: 0` or `status: "skipped"`.
 - A skipped step is recorded with `status: "completed"` or a non-zero `cost_usd`.
-- On resume, previously completed steps are duplicated in `step_telemetry` (two entries with the same `step_id`).
+- On resume, previously recorded entries for already-completed steps are dropped, re-emitted, or zeroed (lost or corrupted across the restart).
 - On resume, previously recorded `cost_usd` or `model` values are overwritten with `null` or zero.
 - The `step_id` values are floats or strings that encode `STEP_ORDER` positions (e.g. `"5"`, `"6.1"`), coupling consumers to internal numbering.
 - Adding `step_telemetry` removes or renames any existing top-level key in the state file.
