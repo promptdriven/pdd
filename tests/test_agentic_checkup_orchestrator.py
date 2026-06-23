@@ -1814,6 +1814,39 @@ class TestProviderFailureAbort:
         assert success is True
         assert mock_run.call_count == 10
 
+    def test_backoff_sleep_called_before_each_provider_failure_increment(
+        self, mock_dependencies, default_args
+    ):
+        """time.sleep(PROVIDER_FAILURE_BACKOFF_SECONDS) must be called before each
+        consecutive_provider_failures increment so transient outages get a recovery window.
+
+        On the current (buggy) code this fails: the counter increments immediately
+        with no wait, so time.sleep is never called (call_count == 0). After the fix
+        adds PROVIDER_FAILURE_BACKOFF_SECONDS = 30 and inserts time.sleep(30) before
+        each increment, call_count equals the number of provider-failure steps (≥ 3).
+        """
+        mock_run, _, _, _ = mock_dependencies
+        mock_run.side_effect = None
+        mock_run.return_value = (False, "All agent providers failed", 0.0, "")
+
+        with patch("time.sleep") as mock_sleep:
+            success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is False
+        assert "Aborting" in msg or "consecutive" in msg.lower()
+        # The fix requires time.sleep to be called once per provider-failure step
+        # before the abort counter is incremented.
+        assert mock_sleep.call_count >= 3, (
+            f"Expected time.sleep to be called at least 3 times (once per provider "
+            f"failure before incrementing the abort counter), got {mock_sleep.call_count}"
+        )
+        # Each call must pass PROVIDER_FAILURE_BACKOFF_SECONDS (= 30 seconds)
+        for call_args in mock_sleep.call_args_list:
+            assert call_args.args[0] == 30, (
+                f"Expected time.sleep(30) per provider failure, "
+                f"got time.sleep({call_args.args[0]})"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Resume Functionality
