@@ -81,6 +81,8 @@ def sync_orchestration(
 
 Defense in depth: at the top of `sync_orchestration()`, replace `None` values for `target_coverage`, `budget`, and `max_attempts` with their defaults (CLI may pass None).
 
+Include-extraction guard reset (Issue #1711): also at the top of every top-level `sync_orchestration()` run, call `IncludeQueryExtractor.reset_session()` (import from `.include_query_extractor`). The extractor's per-`(file, query)` guard counters live on the class so they survive the fresh `IncludeQueryExtractor` instance that `preprocess.py` creates each cycle; resetting them here gives every run a fresh `MAX_SESSION_EXTRACTIONS` quota and prevents the counters from leaking across separate runs in a long-lived process (e.g. an in-process server), which would otherwise falsely trip `RepeatedRetrievalQueryError` on later legitimate runs.
+
 ### Return Value
 
 Returns a dictionary containing:

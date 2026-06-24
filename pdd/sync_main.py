@@ -634,6 +634,16 @@ def sync_main(
     console = Console()
     start_time = time.time()
 
+    # Issue #1711: reset the per-(file, query) include-extraction guard counters
+    # at the shared top-level sync entry point. sync_main() dispatches to either
+    # sync_orchestration() (which also resets) or, for one_session=True, directly
+    # to run_one_session_sync() (which does not). Resetting here covers BOTH
+    # branches so the class-level counters never leak across top-level sync runs
+    # in a long-lived process (e.g. the server running one-session sync more than
+    # once), which would otherwise falsely raise RepeatedRetrievalQueryError.
+    from .include_query_extractor import IncludeQueryExtractor
+    IncludeQueryExtractor.reset_session()
+
     # 1. Retrieve global parameters from context
     strength = ctx.obj.get("strength", DEFAULT_STRENGTH)
     temperature = ctx.obj.get("temperature", 0.0)
