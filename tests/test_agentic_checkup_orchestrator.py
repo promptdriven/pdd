@@ -1,6 +1,7 @@
 """Tests for pdd.agentic_checkup_orchestrator module."""
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import subprocess
@@ -7473,3 +7474,150 @@ class TestStepTelemetry:
         assert len(discover) == 1
         assert len(deps) == 1
         assert discover[0]["completed_at"] == "2026-06-22T20:10:00+00:00"
+
+    # -- issue #1709 item 1: started_at on every entry --------------------
+
+    def test_every_entry_has_ordered_started_and_completed_at(
+        self, mock_dependencies, default_args
+    ):
+        """Every telemetry entry from a full run carries both timestamps,
+        with ``started_at <= completed_at`` (issue #1709 item 1)."""
+        _result, captured = _capture_saved_states(default_args)
+        telemetry = _final_telemetry(captured)
+        assert telemetry, "expected step_telemetry to be persisted"
+
+        for entry in telemetry:
+            assert "started_at" in entry, f"missing started_at: {entry}"
+            assert "completed_at" in entry
+            # ISO-8601 strings are lexically orderable when same offset/format.
+            started = _dt.datetime.fromisoformat(entry["started_at"])
+            completed = _dt.datetime.fromisoformat(entry["completed_at"])
+            assert started <= completed, (
+                f"started_at must not be after completed_at: {entry}"
+            )
+
+    def test_skipped_entry_started_equals_completed(
+        self, mock_dependencies, default_args
+    ):
+        """Skipped steps never begin, so ``started_at == completed_at``
+        (zero-duration marker rather than a missing field)."""
+        _result, captured = _capture_saved_states(default_args, no_fix=True)
+        telemetry = _final_telemetry(captured)
+        skipped = [e for e in telemetry if e["status"] == "skipped"]
+        assert skipped, "expected skipped entries in --no-fix mode"
+        for entry in skipped:
+            assert "started_at" in entry
+            assert entry["started_at"] == entry["completed_at"]
+
+    def test_started_at_backward_compatible_load(self):
+        """A pre-follow-up entry (no ``started_at``) still round-trips through
+        ``_build_state`` unchanged — old state files must keep loading."""
+        legacy = {
+            "step_id": "discover", "internal_step": 1, "name": "Discover",
+            "status": "completed", "cost_usd": 0.1, "model": "gpt-4",
+            "iteration": 1, "completed_at": "2026-06-22T20:10:00+00:00",
+        }
+        state = _build_state(
+            1, "url", 1, {}, 0.1, "gpt-4", None, step_telemetry=[legacy],
+        )
+        assert state["step_telemetry"] == [legacy]
+        assert "started_at" not in state["step_telemetry"][0]
+
+
+# ---------------------------------------------------------------------------
+# Per-step telemetry embedded into the Step-7 final report (issue #1709 item 3)
+# ---------------------------------------------------------------------------
+
+
+def _sample_telemetry() -> List[dict]:
+    return [
+        {
+            "step_id": "discover", "internal_step": 1, "name": "Discover",
+            "status": "completed", "cost_usd": 0.1234, "model": "gpt-4",
+            "iteration": 1, "started_at": "2026-06-22T20:10:00+00:00",
+            "completed_at": "2026-06-22T20:10:05+00:00",
+        },
+        {
+            "step_id": "verify", "internal_step": 7, "name": "Verify",
+            "status": "completed", "cost_usd": 0.5, "model": "claude-opus-4-8",
+            "iteration": 1, "started_at": "2026-06-22T20:12:00+00:00",
+            "completed_at": "2026-06-22T20:12:30+00:00",
+        },
+    ]
+
+
+class TestReportTelemetryEmbedding:
+    def test_json_report_block_gains_step_telemetry(self):
+        """The structured JSON report in step7_output gets a top-level
+        ``step_telemetry`` array (issue #1709 item 3)."""
+        from pdd.agentic_checkup_orchestrator import _format_pr_mode_final_report
+
+        step7_output = (
+            "Verification complete.\n"
+            "```json\n"
+            '{"success": true, "issue_aligned": true, "issues": []}\n'
+            "```"
+        )
+        telemetry = _sample_telemetry()
+        body = _format_pr_mode_final_report(
+            step7_output, "", step_telemetry=telemetry
+        )
+        # The embedded JSON block now parses with the telemetry array.
+        from pdd.agentic_checkup import _extract_json_from_text
+        payload = _extract_json_from_text(body)
+        assert payload is not None
+        assert payload["success"] is True
+        assert payload["step_telemetry"] == telemetry
+        # Original keys are preserved (purely additive).
+        assert payload["issue_aligned"] is True
+
+    def test_markdown_section_present(self):
+        """A compact per-step telemetry table is appended to the report."""
+        from pdd.agentic_checkup_orchestrator import _format_pr_mode_final_report
+
+        step7_output = (
+            "All Issues Fixed\n"
+            "```json\n"
+            '{"success": true, "issues": []}\n'
+            "```"
+        )
+        body = _format_pr_mode_final_report(
+            step7_output, "", step_telemetry=_sample_telemetry()
+        )
+        assert "Per-Step Telemetry" in body
+        # Slug, status, model, and a timestamp all surface in the table.
+        assert "discover" in body
+        assert "claude-opus-4-8" in body
+        assert "2026-06-22T20:12:30+00:00" in body
+        assert "0.1234" in body
+
+    def test_report_unchanged_without_telemetry(self):
+        """Omitting telemetry reproduces the legacy report verbatim
+        (backward-compatible)."""
+        from pdd.agentic_checkup_orchestrator import _format_pr_mode_final_report
+
+        step7_output = (
+            "All Issues Fixed\n"
+            "```json\n"
+            '{"success": true, "issues": []}\n'
+            "```"
+        )
+        legacy = _format_pr_mode_final_report(step7_output, "")
+        with_empty = _format_pr_mode_final_report(
+            step7_output, "", step_telemetry=[]
+        )
+        assert legacy == with_empty
+        assert "Per-Step Telemetry" not in legacy
+
+    def test_report_without_json_block_still_gets_markdown(self):
+        """A Step-7 output with no parseable JSON block keeps its body and
+        still gains the markdown telemetry table (JSON injection is a no-op,
+        the human-readable surface still carries the data)."""
+        from pdd.agentic_checkup_orchestrator import _format_pr_mode_final_report
+
+        step7_output = "Plain-text verdict with no JSON block."
+        body = _format_pr_mode_final_report(
+            step7_output, "", step_telemetry=_sample_telemetry()
+        )
+        assert "Plain-text verdict" in body
+        assert "Per-Step Telemetry" in body

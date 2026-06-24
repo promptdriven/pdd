@@ -1204,12 +1204,120 @@ def _step7_passed(
     return True, ""
 
 
-def _format_pr_mode_final_report(step7_output: str, push_message: str) -> str:
-    """Build the trusted post-push PR/issue comment body."""
-    body = step7_output.strip()
+def _embed_telemetry_in_report_json(
+    step7_output: str,
+    step_telemetry: List[dict],
+) -> str:
+    """Inject ``step_telemetry`` into the Step-7 JSON report block (issue #1709).
+
+    Issue #1709 item 3: a consumer reading only the report — not the
+    ``checkup_state_<issue>.json`` state file — must still see per-step
+    cost/status/model. Step 7's prompt emits a structured JSON object as the
+    last fenced ```json block of its output; this finds that block, adds a
+    top-level ``step_telemetry`` array (matching the state-file schema), and
+    re-serialises it in place. Purely additive: every existing report key is
+    preserved, and a report without a parseable JSON block is returned
+    unchanged (the markdown telemetry section still carries the data).
+    """
+    if not step_telemetry:
+        return step7_output
+
+    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+        _extract_json_from_text,
+    )
+
+    payload = _extract_json_from_text(step7_output)
+    if not isinstance(payload, dict):
+        return step7_output
+
+    # Locate the exact fenced ```json block we re-serialise. Mirror the
+    # extraction order in agentic_checkup (last json fence wins) so we rewrite
+    # the same object the gate parses.
+    fence_pattern = re.compile(
+        r"```(?:json)?\s*\n(.*?)\n```",
+        re.DOTALL | re.IGNORECASE,
+    )
+    matches = list(fence_pattern.finditer(step7_output))
+    target = None
+    for match in reversed(matches):
+        try:
+            if isinstance(json.loads(match.group(1)), dict):
+                target = match
+                break
+        except (json.JSONDecodeError, ValueError):
+            continue
+    if target is None:
+        return step7_output
+
+    payload["step_telemetry"] = list(step_telemetry)
+    rewritten = json.dumps(payload, indent=2)
+    return (
+        step7_output[: target.start(1)]
+        + rewritten
+        + step7_output[target.end(1):]
+    )
+
+
+def _format_step_telemetry_markdown(step_telemetry: List[dict]) -> str:
+    """Render a compact per-step telemetry table for the report (issue #1709).
+
+    Item 3 of issue #1709: a human reading the final report — not the state
+    file — should see each step's status/cost/model/timing. Compact GitHub
+    Markdown table; one row per recorded telemetry entry, in record order.
+    """
+    if not step_telemetry:
+        return ""
+
+    header = (
+        "### Per-Step Telemetry\n\n"
+        "| Step | Status | Iter | Cost (USD) | Model | Started | Completed |\n"
+        "| --- | --- | --- | --- | --- | --- | --- |"
+    )
+    rows: List[str] = []
+    for entry in step_telemetry:
+        step_id = entry.get("step_id", entry.get("internal_step", "?"))
+        status = entry.get("status", "")
+        iteration = entry.get("iteration", "")
+        cost = entry.get("cost_usd", 0.0)
+        try:
+            cost_str = f"{float(cost):.4f}"
+        except (TypeError, ValueError):
+            cost_str = str(cost)
+        model = entry.get("model", "") or "—"
+        started = entry.get("started_at", "") or "—"
+        completed = entry.get("completed_at", "") or "—"
+        rows.append(
+            f"| {step_id} | {status} | {iteration} | {cost_str} | "
+            f"{model} | {started} | {completed} |"
+        )
+    return header + "\n" + "\n".join(rows)
+
+
+def _format_pr_mode_final_report(
+    step7_output: str,
+    push_message: str,
+    step_telemetry: Optional[List[dict]] = None,
+) -> str:
+    """Build the trusted post-push PR/issue comment body.
+
+    When ``step_telemetry`` is supplied (issue #1709 item 3), the per-step
+    telemetry array is embedded into BOTH the Step-7 JSON report block (so a
+    machine reading only the report sees it) AND a compact markdown table
+    appended below the body (so a human reviewer sees it). Both are additive;
+    omitting the argument reproduces the legacy report verbatim.
+    """
+    telemetry = list(step_telemetry) if step_telemetry else []
+    body = step7_output
+    if telemetry:
+        body = _embed_telemetry_in_report_json(body, telemetry)
+    body = body.strip()
     push_message = push_message.strip()
     if push_message:
         body = f"{body}\n\n### PR Push Status\n{push_message}"
+    if telemetry:
+        telemetry_md = _format_step_telemetry_markdown(telemetry)
+        if telemetry_md:
+            body = f"{body}\n\n{telemetry_md}"
     return _sanitize_comment_body(body)
 
 
@@ -3217,6 +3325,24 @@ def _run_agentic_checkup_orchestrator_inner(
     # Display mapping for fractional steps (user-facing console).
     _display_step: Dict[float, str] = {6.1: "6a", 6.2: "6b", 6.3: "6c"}
 
+    # Per-step start timestamps (issue #1709 item 1 — deferred follow-up).
+    # ``_mark_step_start`` records an ISO-8601 UTC timestamp keyed by
+    # ``(step_num, iteration)`` just before a step begins executing; the
+    # matching ``_record_step_telemetry`` call pops it so every entry carries
+    # both ``started_at`` and ``completed_at``. Steps that never begin
+    # (skipped) carry ``started_at == completed_at`` (set at record time),
+    # giving a zero-duration marker rather than a missing field.
+    _step_start_times: Dict[Tuple[Union[int, float], int], str] = {}
+
+    def _mark_step_start(
+        step_num: Union[int, float],
+        iteration: int = 1,
+    ) -> None:
+        """Record the wall-clock start of a step before it runs (issue #1709)."""
+        _step_start_times[(step_num, iteration)] = (
+            datetime.now(timezone.utc).isoformat()
+        )
+
     def _record_step_telemetry(
         step_num: Union[int, float],
         status: str,
@@ -3237,8 +3363,17 @@ def _run_agentic_checkup_orchestrator_inner(
         (``_handle_step_result``) bumps ``total_cost`` by the same ``cost`` it
         records here. Fix-verify re-runs intentionally append one entry per
         iteration, distinguished by ``iteration``.
+
+        Each entry carries both ``started_at`` (issue #1709 item 1, recorded by
+        ``_mark_step_start`` when the step begins) and ``completed_at`` (set
+        here when it ends). When no start was marked — every skip site, plus
+        any future caller that records without a preceding ``_mark_step_start``
+        — ``started_at`` falls back to ``completed_at`` so the field is always
+        present and ``started_at <= completed_at`` holds.
         """
         _slug, _desc = step_map.get(step_num, (str(step_num), ""))
+        completed_at = datetime.now(timezone.utc).isoformat()
+        started_at = _step_start_times.pop((step_num, iteration), completed_at)
         step_telemetry.append({
             "step_id": STEP_ID_MAP.get(step_num, str(step_num)),
             "internal_step": step_num,
@@ -3247,7 +3382,8 @@ def _run_agentic_checkup_orchestrator_inner(
             "cost_usd": cost,
             "model": model or "",
             "iteration": iteration,
-            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": started_at,
+            "completed_at": completed_at,
         })
 
     start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
@@ -3497,6 +3633,7 @@ def _run_agentic_checkup_orchestrator_inner(
                 f"(post-push reverify)..."
             )
 
+        _mark_step_start(7)
         result = _run_single_step(
             7,
             name7,
@@ -3587,6 +3724,7 @@ def _run_agentic_checkup_orchestrator_inner(
         body = _format_pr_mode_final_report(
             final_step7_output,
             context.get("pr_push_output", ""),
+            step_telemetry=step_telemetry,
         )
         pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
         if has_issue:
@@ -3724,6 +3862,7 @@ def _run_agentic_checkup_orchestrator_inner(
         # the PR's code (e.g. new files appear, deleted files don't).
         step_cwd_12 = current_cwd if pr_mode and worktree_path else cwd
 
+        _mark_step_start(step_num)
         result = _run_single_step(
             step_num, name, context,
             cwd=cwd, step_cwd=step_cwd_12,
@@ -3768,6 +3907,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     f"{description}..."
                 )
 
+            _mark_step_start(step_num)
             result = (
                 _targeted_non_code_step5_result(
                     context,
@@ -3923,6 +4063,7 @@ def _run_agentic_checkup_orchestrator_inner(
             if not quiet:
                 console.print(f"[bold][Step 7/{TOTAL_STEPS}][/bold] {desc7}...")
 
+            _mark_step_start(7)
             result = _run_single_step(
                 7, name7, context,
                 cwd=cwd, step_cwd=nofix_step_cwd,
@@ -4226,6 +4367,7 @@ def _run_agentic_checkup_orchestrator_inner(
                         quiet=quiet,
                     )
 
+                _mark_step_start(step_num, fix_verify_iteration)
                 result = (
                     _targeted_non_code_step5_result(
                         context,
@@ -5341,6 +5483,7 @@ def _run_agentic_checkup_orchestrator_inner(
             if not quiet:
                 console.print(f"[bold][Step 8/{TOTAL_STEPS}][/bold] {desc8}...")
 
+            _mark_step_start(8)
             result = _run_single_step(
                 8, name8, context,
                 cwd=cwd, step_cwd=step_cwd_8,
