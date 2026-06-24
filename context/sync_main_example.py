@@ -1,163 +1,102 @@
-import json
-import shutil
+from __future__ import annotations
+
+import os
+import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from typing import Any, Dict, Tuple
 
 import click
-from rich.console import Console
 
-# The sync_main function is designed to be called by the Click framework.
-# We import it to demonstrate its use in a controlled, programmatic way.
+# Import sync_main dynamically using the exact module name
 from pdd.sync_main import sync_main
 
 
-def setup_mock_project(base_dir: Path) -> None:
-    """
-    Creates a mock project structure with prompt files for multiple languages.
-    This setup is required for the `sync_main` language detection to work.
+def setup_mock_environment(base_dir: Path) -> None:
+    """Creates the directories and prompt files required for sync_main to discover the module.
 
     Args:
-        base_dir (Path): The root directory for the mock project (e.g., './output').
+        base_dir: The directory acting as the project workspace root.
     """
     prompts_dir = base_dir / "prompts"
-    src_dir = base_dir / "src"
-    tests_dir = base_dir / "tests"
-    examples_dir = base_dir / "examples"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
 
-    # Clean up previous runs
-    if base_dir.exists():
-        shutil.rmtree(base_dir)
-
-    # Create project directories
-    for dir_path in [prompts_dir, src_dir, tests_dir, examples_dir]:
-        dir_path.mkdir(parents=True, exist_ok=True)
-
-    # Create prompt files for the 'greeting' basename in two different languages
-    (prompts_dir / "greeting_python.prompt").write_text(
-        "Create a Python function `greet()` that returns 'Hello, Python!'"
+    # Write a mock prompt file for a 'math_utils' Python module
+    prompt_path = prompts_dir / "math_utils_python.prompt"
+    prompt_path.write_text(
+        "Create a Python function `add(a: int, b: int) -> int` that returns the sum.",
+        encoding="utf-8",
     )
-    (prompts_dir / "greeting_javascript.prompt").write_text(
-        "Create a JavaScript function `greet()` that returns 'Hello, JavaScript!'"
-    )
-    (prompts_dir / "unrelated_file.txt").write_text("This file should be ignored.")
-
-    print(f"Mock project created in: {base_dir.resolve()}")
-    print("  - prompts/greeting_python.prompt")
-    print("  - prompts/greeting_javascript.prompt")
 
 
-def main() -> None:
+def run_sync_example() -> Tuple[Dict[str, Any], float, str]:
+    """Demonstrates how to programmatically invoke sync_main.
+
+    This function configures a simulated Click Context with options, sets up
+    the mock workspace environment under './output', and executes sync_main
+    in dry_run mode to safely demonstrate orchestration without billing LLM APIs.
+
+    Returns:
+        A tuple containing:
+            - results (Dict[str, Any]): A dictionary mapping synchronized
+              languages to their execution results.
+            - total_cost (float): Accumulated run cost in USD.
+            - primary_model (str): Name of the primary AI model resolved/used.
     """
-    A concise example demonstrating the `sync_main` function.
+    # 1. Setup mock workspace in './output'
+    output_dir = Path("./output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    setup_mock_environment(output_dir)
 
-    This script simulates a `pdd sync greeting` command by:
-    1.  Setting up a mock project with prompt files for Python and JavaScript.
-    2.  Creating a mock `click.Context` object to pass global options.
-    3.  Mocking the `construct_paths` and `sync_orchestration` functions to
-        simulate their behavior without external dependencies (like LLM calls).
-    4.  Calling `sync_main` and printing its aggregated results.
-    """
-    console = Console()
-    output_directory = Path("./output")
-
-    console.rule("[bold green]1. Setting up Mock Project[/bold green]")
-    setup_mock_project(output_directory)
-
-    # --- Create a mock Click context ---
-    # In a real CLI, Click creates and populates this object automatically.
-    # We create it manually to simulate the environment for sync_main.
+    # 2. Configure a programmatic Click context
+    # sync_main retrieves global execution options from ctx.obj.
     ctx = click.Context(click.Command("sync"))
     ctx.obj = {
-        "strength": 0.5,
-        "temperature": 0.1,
-        "time": 0.25,
-        "verbose": False,
-        "force": False,
-        "quiet": False,
-        "output_cost": None,
-        "review_examples": False,
-        "local": False,
-        "context": None,
+        "strength": 0.5,           # Default model strength capability setting (0.0 to 1.0)
+        "temperature": 0.0,        # Model temperature for predictable code output
+        "time": 0.25,              # Allocated thinking/reasoning budget (0.0 to 1.0)
+        "verbose": True,           # Enable detailed diagnostics log printing
+        "force": True,             # Suppress interactive confirmation prompts
+        "quiet": False,            # Let stdout output show progress animations
+        "local": True,             # Instruct execution to run locally
+        "context": None,           # Optional specific context override name from .pddrc
+        "output_cost": None,       # CSV file path for audit logs
+        "review_examples": False,  # Skip interactive few-shot example selection
     }
-    # Mock the method that checks if a parameter was passed on the command line
-    mock_source = MagicMock()
-    mock_source.name = "DEFAULT"  # Simulate parameters coming from defaults
-    ctx.get_parameter_source = MagicMock(return_value=mock_source)
 
-    # --- Mock internal dependencies ---
-    # We replace the real functions with mocks to control their output for this example.
+    # Avoid Click errors when resolving parameter sources programmatically
+    ctx.get_parameter_source = lambda name: click.core.ParameterSource.DEFAULT
 
-    # This mock simulates the behavior of `construct_paths`.
-    def mock_construct_paths(*args, **kwargs):
-        command_options = kwargs.get("command_options", {})
-        lang = command_options.get("language")
-        # First call: General setup to find the prompts directory
-        if not lang:
-            return (
-                {},
-                {"prompts_dir": str(output_directory / "prompts")},
-                None,
-            )
-        # Second call (in loop): Return paths for a specific language
-        else:
-            ext = "py" if lang == "python" else "js"
-            return (
-                {},
-                {
-                    "generate_output_path": f"{output_directory}/src/greeting.{ext}",
-                    "test_output_path": f"{output_directory}/tests/test_greeting.{ext}",
-                    "example_output_path": f"{output_directory}/examples/ex_greeting.{ext}",
-                },
-                lang,
-            )
+    # 3. Pivot working directory to './output' so the sync scanner detects files relatively
+    original_cwd = os.getcwd()
+    os.chdir(output_dir)
 
-    # This mock simulates the behavior of `sync_orchestration`.
-    def mock_sync_orchestration(*args, **kwargs):
-        language = kwargs.get("language")
-        if language == "python":
-            return {
-                "success": True,
-                "total_cost": 0.025,
-                "summary": "Code generated, 2/2 tests passed.",
-                "model_name": "test-model-v1",
-            }
-        if language == "javascript":
-            return {
-                "success": False,
-                "total_cost": 0.015,
-                "error": "Test execution failed: ReferenceError.",
-                "summary": "Code generated, 0/1 tests passed.",
-                "model_name": "test-model-v1",
-            }
-        return {"success": False, "error": "Unknown language"}
-
-    console.rule("[bold green]2. Calling `sync_main`[/bold green]")
-    print("`sync_main` will now run, using mocks for internal logic.")
-    print("It will detect both 'python' and 'javascript' and process them sequentially.")
-
-    # Use patch to temporarily replace real functions with our mocks
-    with patch("pdd.sync_main.construct_paths", side_effect=mock_construct_paths), patch(
-        "pdd.sync_main.sync_orchestration", side_effect=mock_sync_orchestration
-    ):
-        # Call the function with typical parameters
-        results, total_cost, model = sync_main(
+    try:
+        print("Invoking sync_main in dry_run mode...")
+        results, total_cost, primary_model = sync_main(
             ctx=ctx,
-            basename="greeting",
+            basename="math_utils",
             max_attempts=3,
-            budget=1.0,  # Budget in USD
-            skip_verify=False,
-            skip_tests=False,
+            budget=5.00,
+            skip_verify=True,
+            skip_tests=True,
             target_coverage=90.0,
-            dry_run=False,
+            dry_run=True,  # Keeps execution non-interactive and free of LLM costs
+            no_steer=True,
+            one_session=False,
+            compress=False,
+            evidence=False,
+            snapshot_context=False,
+            compressed_context=False,
         )
+    finally:
+        os.chdir(original_cwd)
 
-    console.rule("[bold blue]3. Results from `sync_main`[/bold blue]")
-    print(f"Overall Success: {results.get('overall_success')}")
-    print(f"Total Cost: ${total_cost:.4f} USD")
-    print(f"Primary Model: {model}")
-    print("\nDetailed Results (JSON):")
-    print(json.dumps(results, indent=2))
+    return results, total_cost, primary_model
 
 
 if __name__ == "__main__":
-    main()
+    results, cost, model = run_sync_example()
+    print("\n--- Orchestration Dry-Run Summary ---")
+    print(f"Results Dictionary: {results}")
+    print(f"Total USD Billed: ${cost:.4f}")
+    print(f"Resolved Model Name: {model}")
