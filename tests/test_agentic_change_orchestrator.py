@@ -7586,3 +7586,76 @@ class TestSetupWorktreeCleanRestart:
         assert err and "clean restart" in err.lower(), (
             f"Expected a clean-restart-refusal error; got {err!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1728 sibling: agentic_change_orchestrator inline credential-limit check
+# Scope addition: covers expansion item
+#   "pdd/agentic_change_orchestrator.py:2317 inline 'All agent providers failed'
+#    check burns 3 strikes on credential-limit steps instead of rotating immediately"
+# identified by Step 6 but absent from Step 8's original plan.
+# ---------------------------------------------------------------------------
+
+# Exact credential-limit message emitted by _interactive_credential_limit_message
+# in agentic_common.py — also the string from the prod incident (job xS9G6DdGEMXyaNuZ6xzE).
+_CRED_LIMIT_DETAIL_CHANGE = (
+    "Claude Code interactive session reached its Claude subscription cap — "
+    "you've hit your limit · resets at a provider-set time (PDD credential-limit). "
+    "PDD detected a synthetic credential-limit turn in the session transcript with no "
+    "usable reply; fast-failing so the caller rotates to the next OAuth credential "
+    "instead of waiting for the full interactive step timeout."
+)
+_ALL_PROVIDERS_FAILED_CRED_LIMIT_CHANGE = (
+    f"All agent providers failed: anthropic: {_CRED_LIMIT_DETAIL_CHANGE}"
+)
+
+
+def test_change_orchestrator_rotates_on_first_credential_limit_not_third(
+    mock_dependencies, temp_cwd
+):
+    """When every step fails with a credential-limit message, the change orchestrator
+    must abort after the FIRST step, not after three.
+
+    Current (buggy) behavior: the inline 'All agent providers failed' check at
+    agentic_change_orchestrator.py:2317 increments consecutive_provider_failures for
+    credential-limit events — burning 3 steps before the abort fires.
+    run_agentic_task is called 3 times.
+
+    After the fix: the credential-limit guard detects the 'PDD credential-limit' token
+    on the first step and rotates immediately (call_count == 1).
+
+    Sibling bug location: pdd/agentic_change_orchestrator.py:2317 — inline
+    'All agent providers failed' check without credential-limit exclusion.
+
+    Note: mock_pre_checkup_gate_default and _default_story_policy_and_validation
+    autouse fixtures from this file stub the gate and story policy checks.
+    """
+    mocks = mock_dependencies
+    mock_run = mocks["run"]
+    mock_run.return_value = (False, _ALL_PROVIDERS_FAILED_CRED_LIMIT_CHANGE, 0.0, "claude")
+
+    success, msg, cost, model, files = run_agentic_change_orchestrator(
+        issue_url="https://github.com/owner/repo/issues/1",
+        issue_content="Implement feature",
+        repo_owner="owner",
+        repo_name="repo",
+        issue_number=1,
+        issue_author="user",
+        issue_title="Feature Title",
+        cwd=temp_cwd,
+        verbose=False,
+        quiet=True,
+        use_github_state=False,
+    )
+
+    assert success is False
+    assert mock_run.call_count == 1, (
+        f"Change orchestrator must abort on the FIRST credential-limit step "
+        f"(rotate signal), but run_agentic_task was called {mock_run.call_count} "
+        "time(s). The 3-strikes counter at agentic_change_orchestrator.py:2317 "
+        "must not apply to credential-limit events."
+    )
+    assert "agent providers unavailable" not in msg, (
+        f"Change orchestrator abort message must not say 'agent providers unavailable' "
+        f"for a single rate-limited credential; got: {msg!r}."
+    )
