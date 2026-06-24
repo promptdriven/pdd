@@ -1,5 +1,5 @@
 <include>context/python_preamble.prompt</include>
-<pdd-reason>Orchestrates the 12-step agentic E2E fix workflow including post-push CI validation and code cleanup.</pdd-reason>
+<pdd-reason>Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and code cleanup.</pdd-reason>
 
 <pdd-interface>
 {
@@ -40,7 +40,7 @@
 </pdd.change.fix_error_loop>
 
 % Goal
-Design `agentic_e2e_fix_orchestrator` for the 12-step E2E-fix workflow:
+Design `agentic_e2e_fix_orchestrator` for the 11-step E2E-fix workflow:
 Steps 1-9 form the inner cycle (loop up to `max_cycles`); Step 10 is post-push
 CI validation/remediation; Step 11 is a code-cleanup pass that runs BEFORE
 Step 10 so cleanup is itself CI-validated. After Step 10 succeeds, the
