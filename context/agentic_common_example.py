@@ -17,10 +17,10 @@ from pdd.agentic_common import (
     SteerEntry,
     AgenticTaskResult,
     EffortCapability,
-    run_agentic_task,
-    load_workflow_state,
+    run_agentic_task as _run_agentic_task,
+    load_workflow_state as _load_workflow_state,
     save_workflow_state,
-    clear_workflow_state,
+    clear_workflow_state as _clear_workflow_state,
     get_agent_provider_preference,
     get_available_agents,
     get_agentic_capabilities,
@@ -48,6 +48,54 @@ console = Console()
 # Ensure output directory exists
 OUTPUT_DIR = Path("./output")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def run_agentic_task(*args: Any, **kwargs: Any) -> AgenticTaskResult:
+    """Delegate to the public agentic task runner for selector-based prompts."""
+    return _run_agentic_task(*args, **kwargs)
+
+
+def load_workflow_state(
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool = True,
+) -> Tuple[Optional[Dict], Optional[int]]:
+    """Delegate to the shared workflow-state loader."""
+    return _load_workflow_state(
+        cwd,
+        issue_number,
+        workflow_type,
+        state_dir,
+        repo_owner,
+        repo_name,
+        use_github_state,
+    )
+
+
+def clear_workflow_state(
+    cwd: Path,
+    issue_number: int,
+    workflow_type: str,
+    state_dir: Path,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool = True,
+) -> bool:
+    """Delegate to the shared workflow-state clearer."""
+    return _clear_workflow_state(
+        cwd,
+        issue_number,
+        workflow_type,
+        state_dir,
+        repo_owner,
+        repo_name,
+        use_github_state,
+    )
+
 
 # Helper to simulate fetching comments internally
 def _fetch_comments(repo_owner: str, repo_name: str, issue_number: int) -> List[Dict[str, Any]]:
@@ -234,7 +282,7 @@ More trailing output metadata."""
     console.print(f"Rehydrated sets from state object: {rehydrated_set}\n")
 
 
-def example_post_pr_comment() -> None:
+def example_post_pr_comment():
     """Demonstrate posting standard PR validation status comments."""
     console.print("[bold blue]--- Post PR Comment Example ---[/bold blue]")
     
@@ -330,6 +378,17 @@ def example_github_state_helpers() -> None:
     console.print(f"State files purged: {cleared}\n")
 
 
+def example_consecutive_provider_failures_guard() -> None:
+    """Show the provider-failure counter used by agentic orchestrators."""
+    consecutive_provider_failures = 0
+    for step_success in [False, False, True]:
+        if step_success:
+            consecutive_provider_failures = 0
+        else:
+            consecutive_provider_failures += 1
+    console.print(f"Consecutive provider failures: {consecutive_provider_failures}")
+
+
 def main() -> None: 
     """Run all agentic infrastructure usage examples sequentially."""
     console.print("[bold green]=== PDD Agentic Common Infrastructure Demonstration ===[/bold green]\n")
@@ -340,6 +399,7 @@ def main() -> None:
     example_post_pr_comment()
     example_post_final_comment()
     example_github_state_helpers()
+    example_consecutive_provider_failures_guard()
     console.print("[bold green]=== Demonstration Finished Successfully ===[/bold green]")
 
 
