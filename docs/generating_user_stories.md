@@ -358,3 +358,7 @@ coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
   lint.
 - [`docs/prompt_lint.md`](prompt_lint.md) — pre-merge prompt and user-story
   quality checks.
+- [`docs/evidence_manifest.md`](evidence_manifest.md) — the **executable** story
+  regression suite (`@pytest.mark.story`) and its machine-readable coverage
+  artifact (`.pdd/evidence/stories/coverage.latest.json`). This is distinct from
+  the LLM-backed `pdd detect --stories` validation described in this guide.
