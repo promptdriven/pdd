@@ -6304,11 +6304,10 @@
     }
   },
   {
-    "reason": "Orchestrates the 12-step agentic E2E fix workflow including post-push CI validation, code cleanup, and a final PR-mode checkup gate that re-validates CI when it pushes additional fixes.",
-    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and final full PR-mode checkup.",
+    "reason": "Orchestrates the 12-step agentic E2E fix workflow including post-push CI validation and code cleanup.",
+    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and a deterministic pre-checkup drift-sync gate.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt",
-      "agentic_checkup_python.prompt",
       "ci_validation_python.prompt",
       "pre_checkup_gate_python.prompt"
     ],
@@ -6336,47 +6335,6 @@
             "sideEffects": [
               "Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward only when force_with_lease_on_non_fast_forward is true",
               "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"
-            ]
-          },
-          {
-            "name": "_fetch_pr_head_sha",
-            "signature": "(repo_owner: str, repo_name: str, pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "Calls gh api repos/{owner}/{repo}/pulls/{n} via the shared _fetch_pr_metadata helper",
-              "Best-effort: returns empty string on any failure so callers can fail closed"
-            ]
-          },
-          {
-            "name": "_read_checkup_worktree_head_sha",
-            "signature": "(cwd: Path, pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "Locates .pdd/worktrees/checkup-pr-{N}/ relative to cwd's git root and runs git rev-parse HEAD inside it",
-              "Returns the SHA the checkup last verified or pushed; comparing against the live PR remote SHA is what distinguishes a checkup self-push from an external party advancing the PR during the checkup",
-              "Best-effort: returns empty string when the worktree is missing or the rev-parse fails"
-            ]
-          },
-          {
-            "name": "_read_review_loop_verified_head_sha",
-            "signature": "(cwd: Path, issue_number: int, pr_number: int) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "Reads verified_head_sha from the final gate's Layer-2 (review-loop) final-state.json via checkup_review_loop.load_final_state(cwd, issue_number, pr_number)",
-              "The review-loop pushes Layer-2 fixes from its OWN worktree, so a Layer-2 push advances the remote PR head past the Layer-1 checkup worktree head; this SHA is the second authoritative 'last verified/pushed' head the provenance check accepts as 'ours'",
-              "Best-effort: returns empty string when no review-loop verdict exists (Layer 2 not run or errored before finalizing)"
-            ]
-          },
-          {
-            "name": "_run_final_checkup_on_pr",
-            "signature": "(*, issue_url: str, issue_number: int, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], ci_step_template: str, ci_validation_timeout: float) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "Runs the canonical two-layer final gate (issue #1406) by calling run_agentic_checkup(..., final_gate=True): Layer 1 = PR-scoped checkup, Layer 2 = review-loop on the resulting head; the returned success is a real ship verdict, not 'report produced'",
-              "Snapshots PR remote head SHA before/after the gate",
-              "When pre and post SHAs differ, the post head is 'ours' (and safe to CI-revalidate) when it equals EITHER the Layer-1 checkup worktree HEAD (_read_checkup_worktree_head_sha) OR the Layer-2 review-loop verified head (_read_review_loop_verified_head_sha); if it matches neither, an external push raced the gate — fail closed without re-validating CI because no reviewer saw the new code",
-              "When the post head matches a verified head, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post head>",
-              "Fails closed when the pre/post head SHAs cannot be fetched, or when NEITHER verified head (checkup worktree, review-loop) is available — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
             ]
           }
         ]
@@ -8259,7 +8217,7 @@
             "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)",
             "returns": "Tuple[bool, str, float]",
             "sideEffects": [
-              "expected_head_sha_override forces the poll to wait for a specific PR head SHA instead of _get_head_sha(cwd); used by the post-checkup CI re-validation gate where cwd's local HEAD is stale relative to the PR remote because the checkup pushed from its own worktree"
+              "expected_head_sha_override forces the poll to wait for a specific pushed PR head SHA instead of _get_head_sha(cwd); used by a caller that must validate CI against a specific PR head rather than cwd's local HEAD (e.g. when the head was pushed from a different worktree, so cwd's local HEAD is stale relative to the PR remote)"
             ]
           },
           {

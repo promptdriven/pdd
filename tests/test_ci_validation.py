@@ -640,11 +640,10 @@ def test_run_ci_validation_loop_returns_failure_summary_after_retry_budget(tmp_p
 # ---------------------------------------------------------------------------
 # Codex round-4 Finding 1: expected_head_sha_override
 #
-# The post-CI final-checkup gate pushes from a SEPARATE worktree
-# (``.pdd/worktrees/checkup-pr-N``). Without an override, the loop would
-# compare the remote PR head to ``_get_head_sha(cwd)`` — the pdd-issue
-# worktree's local HEAD, which is stale. The override forces the loop to
-# wait for the actual post-checkup remote head SHA.
+# When the head being validated was pushed from a SEPARATE worktree, the
+# loop must not compare the remote PR head to ``_get_head_sha(cwd)`` — that
+# worktree's local HEAD is stale. The override forces the loop to wait for
+# the exact remote head SHA the caller supplies.
 # ---------------------------------------------------------------------------
 
 
@@ -1363,16 +1362,20 @@ def test_loop_ready_when_no_required_and_live_head_genuinely_has_no_checks(
 
 # --- Test 4: required poll no_checks + live head PENDING (checks present but not
 # completed within the poll window) -> fail closed. ---
-def test_loop_not_ready_when_required_no_checks_but_live_head_pending(
+def test_loop_inconclusive_when_required_no_checks_but_live_head_pending(
     tmp_path: Path,
 ) -> None:
-    """If the ``--required`` poll returns ``no_checks`` but the live head's real
-    check runs are still pending / not yet reported (the REST cross-check reports
-    ``timeout`` because the checks never completed), the loop must fail closed —
-    not treat the PR as ready.
+    """When the ``--required`` poll returns ``no_checks`` and the
+    live head's real check runs are still pending / not yet reported (the REST
+    cross-check reports ``timeout`` because the checks never completed within the
+    window), the loop must treat CI as INCONCLUSIVE and fail OPEN — the bot
+    cannot trigger a manually-run / external required check, and a pending check
+    is not a failing one. It must NOT post a CI-failure comment and must NOT
+    drive the LLM fix loop.
 
-    On the buggy code the loop returns ``(True, "No CI checks detected")`` without
-    ever consulting the live head.
+    This reverses the prior fail-closed-on-pending behavior. FAILING live
+    heads still fail closed (covered by the failing-head tests above), because a
+    failing cross-check returns ``failed`` and never reaches the timeout branch.
     """
     pending_run = {
         "name": "pr-tests (prompt-driven-development-stg)",
@@ -1380,6 +1383,12 @@ def test_loop_not_ready_when_required_no_checks_but_live_head_pending(
         "bucket": "pending",
         "link": "https://github.com/promptdriven/pdd_cloud/runs/1",
     }
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock"
 
     with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
          patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
@@ -1387,7 +1396,8 @@ def test_loop_not_ready_when_required_no_checks_but_live_head_pending(
          patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
          patch("pdd.ci_validation._poll_required_checks", return_value=("no_checks", [])), \
          patch("pdd.ci_validation._poll_check_runs_for_head", return_value=("timeout", [pending_run])), \
-         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True), \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
          patch("pdd.ci_validation.time.sleep", return_value=None):
         success, message, _cost = run_ci_validation_loop(
             cwd=tmp_path,
@@ -1396,19 +1406,22 @@ def test_loop_not_ready_when_required_no_checks_but_live_head_pending(
             issue_number=2107,
             max_retries=1,
             step_template="unused",
-            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            run_agentic_task_fn=fail_if_called,
             timeout=60.0,
             quiet=True,
         )
 
-    assert success is False, (
-        "The live head still has pending/not-yet-completed checks; the loop must "
-        f"fail closed rather than treat the PR as ready. Got success={success!r}, "
+    assert success is True, (
+        "A pending (non-failing) live head the bot cannot advance must be "
+        f"inconclusive (fail-open), not a hard failure. Got success={success!r}, "
         f"message={message!r}."
     )
-    assert "No CI checks detected" not in message, (
-        "Loop claimed 'No CI checks detected' while the live head had pending checks."
+    assert "inconclusive" in message.lower()
+    assert "No CI checks detected" not in message
+    assert not fix_was_called, (
+        "An inconclusive pending head must not drive the LLM CI-fix loop."
     )
+    failure_comment.assert_not_called()
 
 
 # --- Test 5: caller-boundary — the loop must route the no_checks case through
@@ -1567,3 +1580,111 @@ def test_loop_not_ready_when_live_head_cross_check_is_unreadable(
     assert success is False
     assert "unreadable" in message
     assert "No CI checks detected" not in message
+
+
+# ---------------------------------------------------------------------------
+# A required CI check that never completes within the poll window
+# (manually-triggered / external CI the bot structurally cannot run, e.g.
+# pdd_cloud's /gcbrun-gated build, or simply a slow check) is INCONCLUSIVE, not
+# a failure. The fix is already committed to the PR; a pending required check
+# must not retroactively hard-fail an otherwise-correct fix. A genuine check
+# FAILURE returns "failed" and never reaches the timeout branch, so failing
+# open here cannot mask a real CI failure.
+# ---------------------------------------------------------------------------
+def test_loop_inconclusive_when_required_checks_time_out(tmp_path: Path) -> None:
+    """A poll timeout on still-pending required checks must fail OPEN as
+    inconclusive (success=True with a best-effort note), not hard-fail the run,
+    and must not drive the LLM CI-fix loop or post a CI-failure comment."""
+    pending_run = {
+        "name": "build (manual /gcbrun)",
+        "state": "PENDING",
+        "bucket": "pending",
+        "link": "https://github.com/promptdriven/pdd_cloud/runs/1",
+    }
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             return_value=("timeout", [pending_run]),
+         ), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True), \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, _cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd_cloud",
+            issue_number=2107,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is True, (
+        "A pending/timed-out required check the bot cannot trigger must be "
+        f"treated as inconclusive (fail-open), not a hard failure. Got "
+        f"success={success!r}, message={message!r}."
+    )
+    assert "inconclusive" in message.lower(), (
+        f"The message must signal the result is inconclusive, got {message!r}."
+    )
+    assert not fix_was_called, (
+        "An inconclusive timeout must not drive the LLM CI-fix loop."
+    )
+    assert "Timed out waiting for required CI checks to complete" not in message, (
+        "The inconclusive-timeout path must not reuse the old hard-fail message."
+    )
+    failure_comment.assert_not_called()
+
+
+def test_loop_fails_closed_when_timeout_without_any_checks_read(tmp_path: Path) -> None:
+    """Guard (the other half of fail-open): a poll timeout where NO
+    required checks were ever read — the PR head never matched the expected SHA,
+    or the rollup was unreadable for the whole window, so ``_poll_required_checks``
+    returns ``("timeout", [])`` — must FAIL CLOSED, not fail open. With an empty
+    check set we cannot prove the checks are merely pending rather than failing,
+    so we must not green-light a head whose real status was never observed."""
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=1997), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value=LIVE_HEAD_SHA), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value=STALE_HEAD_SHA), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("timeout", [])), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, _cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="promptdriven",
+            repo_name="pdd_cloud",
+            issue_number=2107,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            timeout=60.0,
+            quiet=True,
+        )
+
+    assert success is False, (
+        "A timeout where no required checks were ever read must fail closed "
+        f"(real status unknown), not fail open. Got success={success!r}, "
+        f"message={message!r}."
+    )
+    assert "inconclusive" not in message.lower(), (
+        "The unread-checks timeout is a real fail-closed, not an inconclusive "
+        f"fail-open. Got message={message!r}."
+    )
+    # The inconclusive best-effort note is for the pending-checks case only;
+    # the unread case posts a CI-failure comment instead.
+    info_comment.assert_not_called()
+    failure_comment.assert_called_once()
