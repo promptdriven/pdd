@@ -11104,3 +11104,382 @@ class TestFrontMatterStripping:
             )
 
         assert "old_helper" in excinfo.value.removed_symbols
+
+
+# =============================================================================
+# Issue #1724: conformance repair retries must bypass incremental generation
+# =============================================================================
+#
+# Bug: When `pdd sync` fails architecture conformance it sets PDD_REPAIR_DIRECTIVE
+#      and `code_generator_main` appends an <architecture_repair_directive> block
+#      to the in-memory prompt_content (pdd/code_generator_main.py:3734-3740).
+#      That append makes the prompt look "changed" vs HEAD (or vs an explicit
+#      original prompt), so the incremental-eligibility logic flips
+#      can_attempt_incremental=True. The incremental dispatch guard at
+#      pdd/code_generator_main.py:4120 has NO check for an active repair
+#      directive, so the conformance-repair retry is routed through
+#      incremental_code_generator_func (:4169) — a diff-analysis (patch-vs-
+#      regenerate) LLM — BEFORE full generation. In staging that diff-analysis
+#      call returned a raw error string, producing the secondary
+#      "'str' object has no attribute ..." crash, so the named repair
+#      (add missing `extract_step_report`) never reached the full generator.
+#
+# Fix: when PDD_REPAIR_DIRECTIVE is non-empty (after .strip()), force
+#      can_attempt_incremental=False so the repair retry falls straight to full
+#      generation with the <architecture_repair_directive> block visible. Normal
+#      incremental generation (no directive) must remain unchanged.
+#
+# These tests exercise the caller→callee routing boundary. They mock the
+# incremental callee (the only production dispatch site,
+# code_generator_main.incremental_code_generator_func) and assert that during a
+# repair it is NOT called and the full local/cloud generator receives the
+# directive-bearing prompt instead. All assertions are behavioral (mock
+# call/no-call + prompt/payload contents), never signature/source introspection.
+# =============================================================================
+
+# The real staging repair directive named the missing public wrapper. We keep
+# the symbol name for fidelity but phrase it as plain prose (no <pdd-interface>
+# block) so only the routing behavior under test is exercised — a bare
+# <pdd-interface> mention would otherwise feed the prompt-interface conformance
+# parser.
+ISSUE_1724_REPAIR_DIRECTIVE = (
+    "Architecture conformance repair required. The prompt declares a public "
+    "function missing from the generated code: extract_step_report. Add the "
+    "missing public wrapper extract_step_report so the interface conforms."
+)
+
+# Public-surface-preserving bodies. The existing output file and every
+# generation result expose the same single public symbol `existing`, so the
+# post-generation public-surface regression gate (which fires whenever an
+# existing output file is present) never produces a false failure that would
+# mask the routing assertion under test.
+ISSUE_1724_EXISTING_CODE = "def existing():\n    return 42\n"
+ISSUE_1724_REPAIRED_CODE = "def existing():\n    return 99\n"
+
+
+def test_issue_1724_repair_via_git_change_bypasses_incremental(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """Primary repro: a conformance-repair retry whose incremental eligibility
+    comes from the git-detected "prompt looks changed vs HEAD" path must NOT be
+    routed through incremental generation.
+
+    On buggy code the directive append makes prompt_content differ from HEAD,
+    flipping can_attempt_incremental=True, and the dispatch guard (no repair
+    check) sends the retry through incremental_code_generator_func. After the
+    fix the active repair directive forces full generation, and the local
+    generator receives the <architecture_repair_directive> block.
+    """
+    mock_ctx.obj['local'] = True
+
+    # Unique prompt name so the post-generation architecture-conformance gate
+    # (which loads the repo's real architecture.json by default) finds no entry
+    # and the test fails on the routing assertion, not on an unrelated
+    # conformance mismatch. The staging repro used agentic_common; the routing
+    # behavior under test is identical regardless of module name.
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "issue_1724_git_python.prompt"
+    base_prompt = "Generate the agentic_common module."
+    create_file(prompt_file_path, base_prompt)
+
+    output_file_path = temp_dir_setup["output_dir"] / "issue_1724_git.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", ISSUE_1724_REPAIR_DIRECTIVE)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        # No "original_prompt_file" key -> eligibility is decided by the git path.
+        {"prompt_file": base_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    # Generation results preserve the public surface so the compatibility gates
+    # pass regardless of which path is taken (keeps the no-call assertion clean).
+    mock_local_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, DEFAULT_MOCK_COST, "local_model",
+    )
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, DEFAULT_MOCK_COST, "inc_model",
+    )
+
+    # Make the on-disk prompt look identical to HEAD *before* the directive is
+    # appended: the only reason the prompt differs from HEAD is the directive.
+    with patch("pdd.code_generator_main.is_git_repository", return_value=True), \
+         patch("pdd.code_generator_main.get_git_content_at_ref", return_value=base_prompt):
+        code, incremental, _cost, _model = code_generator_main(
+            mock_ctx, str(prompt_file_path), str(output_file_path), None, False,
+        )
+
+    # Routing assertion: repair must NOT touch the incremental diff-analysis path.
+    mock_incremental_generator_fixture.assert_not_called()
+    # Full generation must run and receive the directive-bearing prompt.
+    mock_local_generator_fixture.assert_called_once()
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert "<architecture_repair_directive>" in called_prompt
+    assert "extract_step_report" in called_prompt
+    assert "</architecture_repair_directive>" in called_prompt
+    assert incremental is False
+
+
+def test_issue_1724_repair_via_explicit_original_prompt_bypasses_incremental(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """A conformance-repair retry whose incremental eligibility comes from an
+    explicit original_prompt_file must still bypass incremental generation."""
+    mock_ctx.obj['local'] = True
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_explicit.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "repair_explicit.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_explicit_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", ISSUE_1724_REPAIR_DIRECTIVE)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_local_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, DEFAULT_MOCK_COST, "local_model",
+    )
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, DEFAULT_MOCK_COST, "inc_model",
+    )
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    mock_incremental_generator_fixture.assert_not_called()
+    mock_local_generator_fixture.assert_called_once()
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert "<architecture_repair_directive>" in called_prompt
+    assert "extract_step_report" in called_prompt
+    assert incremental is False
+
+
+def test_issue_1724_force_incremental_flag_cannot_reenable_during_repair(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """Even with force_incremental_flag=True, an active repair directive must
+    keep the retry on the full-generation path (the force flag must not be able
+    to re-enable incremental when PDD_REPAIR_DIRECTIVE is set)."""
+    mock_ctx.obj['local'] = True
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_force.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "repair_force.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_force_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", ISSUE_1724_REPAIR_DIRECTIVE)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_local_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, DEFAULT_MOCK_COST, "local_model",
+    )
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, DEFAULT_MOCK_COST, "inc_model",
+    )
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path),
+        True,  # force_incremental_flag
+    )
+
+    mock_incremental_generator_fixture.assert_not_called()
+    mock_local_generator_fixture.assert_called_once()
+    called_prompt = mock_local_generator_fixture.call_args.kwargs["prompt"]
+    assert "<architecture_repair_directive>" in called_prompt
+    assert "extract_step_report" in called_prompt
+    assert incremental is False
+
+
+def test_issue_1724_cloud_channel_bypasses_incremental_and_carries_directive(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_requests_post_fixture,
+    mock_get_jwt_token_fixture, monkeypatch, mock_env_vars,
+):
+    """The cloud generation channel must also bypass incremental during a repair
+    and send the full generator a prompt containing the repair directive.
+
+    K_SERVICE/FUNCTIONS_EMULATOR are cleared by the autouse _clear_cloud_runtime_env
+    fixture, so the mocked cloud call is actually reached.
+    """
+    mock_ctx.obj['local'] = False  # cloud path
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_cloud.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "repair_cloud.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "repair_cloud_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", ISSUE_1724_REPAIR_DIRECTIVE)
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, DEFAULT_MOCK_COST, "inc_model",
+    )
+    # Cloud full-generation returns public-surface-preserving code.
+    cloud_response = MagicMock(spec=requests.Response)
+    cloud_response.json.return_value = {
+        "generatedCode": ISSUE_1724_REPAIRED_CODE,
+        "totalCost": DEFAULT_MOCK_COST,
+        "modelName": "cloud_model",
+    }
+    cloud_response.status_code = 200
+    cloud_response.raise_for_status = MagicMock()
+    mock_requests_post_fixture.return_value = cloud_response
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    # Repair must not enter incremental, and the cloud full generator must be hit.
+    mock_incremental_generator_fixture.assert_not_called()
+    mock_requests_post_fixture.assert_called_once()
+    payload = mock_requests_post_fixture.call_args.kwargs["json"]
+    # searchInput carries the raw prompt_content (with the directive appended);
+    # promptContent is the preprocessed prompt. Both must carry the directive.
+    assert "<architecture_repair_directive>" in payload["searchInput"]
+    assert "extract_step_report" in payload["searchInput"]
+    assert "<architecture_repair_directive>" in payload["promptContent"]
+    assert incremental is False
+
+
+def test_issue_1724_normal_incremental_still_works_without_directive(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """Regression guard: with NO repair directive active, ordinary incremental
+    generation must still run (the fix gates strictly on the directive, it is
+    not a blanket disable of incremental)."""
+    mock_ctx.obj['local'] = True
+    monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "normal_incremental.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "normal_incremental.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "normal_incremental_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    # Incremental returns a valid patched result that preserves the public surface.
+    mock_incremental_generator_fixture.return_value = (
+        ISSUE_1724_REPAIRED_CODE, True, 0.002, "inc_model",
+    )
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    mock_incremental_generator_fixture.assert_called_once()
+    assert incremental is True
+    # No directive set -> the full local generator is not used for this path.
+    mock_local_generator_fixture.assert_not_called()
+
+
+def test_issue_1724_whitespace_only_directive_is_inactive(
+    mock_ctx, temp_dir_setup, mock_construct_paths_fixture,
+    mock_incremental_generator_fixture, mock_local_generator_fixture,
+    monkeypatch, mock_env_vars,
+):
+    """Edge case (.strip() symmetry): a whitespace-only PDD_REPAIR_DIRECTIVE must
+    behave exactly like "no directive" — incremental runs, and no
+    <architecture_repair_directive> block is injected. This proves the bypass
+    keys off the same .strip()-non-empty condition the directive injection uses.
+    """
+    mock_ctx.obj['local'] = True
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "   \n\t  ")
+
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "ws_directive.prompt"
+    create_file(prompt_file_path, "New prompt content")
+
+    output_file_path = temp_dir_setup["output_dir"] / "ws_directive.py"
+    create_file(output_file_path, ISSUE_1724_EXISTING_CODE)
+
+    original_prompt_file_path = temp_dir_setup["prompts_dir"] / "ws_directive_orig.prompt"
+    create_file(original_prompt_file_path, "Original prompt content")
+
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {
+            "prompt_file": "New prompt content",
+            "original_prompt_file": "Original prompt content",
+        },
+        {"output": str(output_file_path)},
+        "python",
+    )
+    captured = {}
+
+    def _incremental_side_effect(*args, **kwargs):
+        captured["new_prompt"] = kwargs.get("new_prompt")
+        return (ISSUE_1724_REPAIRED_CODE, True, 0.002, "inc_model")
+
+    mock_incremental_generator_fixture.side_effect = _incremental_side_effect
+
+    code, incremental, _cost, _model = code_generator_main(
+        mock_ctx, str(prompt_file_path), str(output_file_path),
+        str(original_prompt_file_path), False,
+    )
+
+    # Whitespace directive is inactive: incremental still runs.
+    mock_incremental_generator_fixture.assert_called_once()
+    assert incremental is True
+    mock_local_generator_fixture.assert_not_called()
+    # And no repair-directive block was injected into the prompt.
+    assert "<architecture_repair_directive>" not in (captured.get("new_prompt") or "")

@@ -315,6 +315,29 @@ def test_sync_invalid_basename(invalid_name):
         )
 
 
+@pytest.mark.parametrize("one_session", [False, True])
+def test_sync_main_resets_retrieval_guard_at_shared_entry(one_session):
+    """Issue #1711: sync_main() resets the per-(file, query) include-extraction
+    guard at the shared entry point, for BOTH the orchestration branch and the
+    one_session branch (which dispatches to run_one_session_sync and never calls
+    sync_orchestration). Without this, the class-level counter leaks across
+    top-level sync runs in a long-lived process and falsely raises
+    RepeatedRetrievalQueryError. An invalid basename bails early via UsageError —
+    but only after the entry-point reset, which sync_main does first.
+    """
+    from pdd.include_query_extractor import IncludeQueryExtractor
+
+    ctx = create_mock_context({})
+    with patch.object(IncludeQueryExtractor, "reset_session") as mock_reset:
+        with pytest.raises(click.UsageError):
+            sync_main(
+                ctx, "bad!name", max_attempts=3, budget=10.0, skip_verify=False,
+                skip_tests=False, target_coverage=90.0, dry_run=False,
+                one_session=one_session,
+            )
+    mock_reset.assert_called_once()
+
+
 def test_validate_basename_with_subdirectory(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
     """Should accept subdirectory basenames like 'core/cloud'.
 
