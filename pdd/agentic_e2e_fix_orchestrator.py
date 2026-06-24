@@ -77,7 +77,7 @@ STEP_DESCRIPTIONS = {
     11: "Code cleanup",
 }
 
-# Per-step timeouts for the 12-step agentic e2e fix workflow
+# Per-step timeouts for the 11-step agentic e2e fix workflow
 E2E_FIX_STEP_TIMEOUTS: Dict[int, float] = {
     1: 340.0,   # Run unit tests from issue, pdd fix failures
     2: 240.0,   # Run e2e tests, check completion (early exit)
@@ -1967,7 +1967,7 @@ def run_agentic_e2e_fix_orchestrator(
     clean_restart: bool = False,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrator for the 12-step agentic e2e fix workflow.
+    Orchestrator for the 11-step agentic e2e fix workflow.
     
     Returns:
         Tuple[bool, str, float, str, List[str]]: 
