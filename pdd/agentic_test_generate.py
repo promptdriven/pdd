@@ -16,7 +16,12 @@ from typing import Any, Iterable
 
 from rich.console import Console
 
-from .agentic_common import run_agentic_task, get_available_agents, DEFAULT_MAX_RETRIES
+from .agentic_common import (
+    run_agentic_task,
+    get_available_agents,
+    DEFAULT_MAX_RETRIES,
+    AGENTIC_STEP_TIMEOUT_SECONDS,
+)
 from .load_prompt_template import load_prompt_template
 from .test_result import TestResult
 
@@ -326,6 +331,7 @@ def run_agentic_test_generate(
         verbose=verbose,
         quiet=quiet,
         label="test-generate",
+        timeout=AGENTIC_STEP_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
         max_retries=DEFAULT_MAX_RETRIES,
     )
 

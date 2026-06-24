@@ -3,6 +3,7 @@ import glob
 import os
 import re
 import time
+import traceback
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -1296,9 +1297,27 @@ def sync_main(
             raise
         except Exception as e:
             if not quiet:
-                rprint(f"[bold red]An unexpected error occurred during sync for '{lang}':[/bold red] {e}")
+                rprint(
+                    f"[bold red]An unexpected error occurred during sync for '{lang}' "
+                    f"({type(e).__name__}):[/bold red] {e}"
+                )
                 if verbose:
                     console.print_exception(show_locals=True)
+            # Issue #1714 (Bug 2): record a core dump so pdd_cloud can harvest the
+            # real exception type, stage, and traceback instead of surfacing an
+            # opaque "An unexpected error occurred during sync". Mirrors the
+            # budget-exhaustion handler above.
+            record_core_dump_error(
+                command="sync",
+                type=type(e).__name__,
+                message=str(e),
+                details={
+                    "basename": basename,
+                    "language": lang,
+                    "stage": "sync_orchestration",
+                },
+                traceback_text=traceback.format_exc(),
+            )
             exc_cost = float(getattr(e, "total_cost", 0.0) or 0.0)
             exc_model = getattr(e, "model_name", "") or ""
             if exc_cost:
