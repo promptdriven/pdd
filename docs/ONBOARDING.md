@@ -120,9 +120,9 @@ GEMINI_API_KEY=your-google-api-key
 # Optional: For Vertex AI (Gemini via GCP)
 # Simplest: use Application Default Credentials (ADC) — run
 #   gcloud auth application-default login
-# and leave GOOGLE_APPLICATION_CREDENTIALS unset (set only the project/location below).
-VERTEXAI_PROJECT=your-gcp-project-id
-VERTEXAI_LOCATION=us-central1
+# and leave GOOGLE_APPLICATION_CREDENTIALS unset, then uncomment and set the project/location:
+# VERTEXAI_PROJECT=your-gcp-project-id
+# VERTEXAI_LOCATION=us-central1
 # Only if NOT using ADC, point this at a REAL local service-account JSON.
 # A placeholder path breaks auth — leave it unset to use ADC:
 # GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
