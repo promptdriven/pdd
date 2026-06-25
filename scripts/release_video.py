@@ -20,6 +20,12 @@ YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
+CLAUDE_OAUTH_TOKEN_ENV_VARS = (
+    "CLAUDE_CODE_OAUTH_TOKEN_1",
+    "CLAUDE_CODE_OAUTH_TOKEN_2",
+    "CLAUDE_CODE_OAUTH_TOKEN_3",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+)
 CLAUDE_FAILURE_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "credential-limit",
@@ -586,26 +592,79 @@ def generate_script_with_claude(
     prompt = render_release_video_prompt(context, prompt_template, cwd)
     claude_env = os.environ.copy()
     strip_anthropic_creds_for_claude_subprocess(claude_env)
-    try:
-        completed = run(
-            command,
-            cwd=cwd,
-            input_text=prompt,
-            timeout=timeout,
-            env=claude_env,
-            check=False,
+
+    token_attempts = claude_oauth_token_attempts(claude_env)
+    attempts: list[tuple[str | None, dict[str, str]]] = []
+    if token_attempts:
+        for token_name, token in token_attempts:
+            attempt_env = claude_env.copy()
+            attempt_env["CLAUDE_CODE_OAUTH_TOKEN"] = token
+            attempts.append((token_name, attempt_env))
+    else:
+        attempts.append((None, claude_env))
+
+    failed_quota_auth_slots: list[str] = []
+    for attempt_label, attempt_env in attempts:
+        try:
+            completed = run(
+                command,
+                cwd=cwd,
+                input_text=prompt,
+                timeout=timeout,
+                env=attempt_env,
+                check=False,
+            )
+        except ReleaseVideoError as exc:
+            raise ReleaseVideoError(
+                "Claude Code script generation failed before PDS publish; "
+                f"PDS was not invoked. {exc}"
+            ) from exc
+        if completed.returncode == 0:
+            break
+
+        classification = classify_claude_quota_auth_failure(
+            "\n".join(
+                text for text in (completed.stderr.strip(), completed.stdout.strip()) if text
+            )
         )
-    except ReleaseVideoError as exc:
+        if attempt_label and classification:
+            failed_quota_auth_slots.append(f"{attempt_label}:{classification}")
+            print(
+                "release-video: Claude Code OAuth token slot "
+                f"{attempt_label} failed with quota/auth class {classification!r}; "
+                "trying next token.",
+                file=sys.stderr,
+            )
+            continue
+
         raise ReleaseVideoError(
-            "Claude Code script generation failed before PDS publish; "
-            f"PDS was not invoked. {exc}"
-        ) from exc
-    if completed.returncode != 0:
-        raise ReleaseVideoError(format_claude_script_generation_failure(command, completed))
+            format_claude_script_generation_failure(command, completed, attempt_label)
+        )
+    else:
+        failed = ", ".join(failed_quota_auth_slots) or "none"
+        raise ReleaseVideoError(
+            "Claude Code script generation failed before PDS publish; PDS was not invoked. "
+            f"All configured Claude Code OAuth token slots failed ({failed}). "
+            "Set a fresh CLAUDE_CODE_OAUTH_TOKEN_1/2/3 secret or use "
+            "RELEASE_VIDEO_SCRIPT_PATH pointing at a previously generated script."
+        )
+
     script = normalize_release_video_script(strip_markdown_fence(completed.stdout.strip()))
     if len(script) < 200:
         raise ReleaseVideoError("Claude Code produced an unexpectedly short release video script.")
     return script.rstrip() + "\n"
+
+
+def claude_oauth_token_attempts(env: dict[str, str]) -> list[tuple[str, str]]:
+    attempts: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for name in CLAUDE_OAUTH_TOKEN_ENV_VARS:
+        token = env.get(name, "").strip()
+        if not token or token in seen:
+            continue
+        attempts.append((name, token))
+        seen.add(token)
+    return attempts
 
 
 def strip_anthropic_creds_for_claude_subprocess(env: dict[str, str]) -> bool:
@@ -624,7 +683,7 @@ def strip_anthropic_creds_for_claude_subprocess(env: dict[str, str]) -> bool:
     if not (env.get("ANTHROPIC_API_KEY") or env.get("ANTHROPIC_AUTH_TOKEN")):
         return False
 
-    if env.get("CLAUDE_CODE_OAUTH_TOKEN"):
+    if claude_oauth_token_attempts(env):
         env.pop("ANTHROPIC_API_KEY", None)
         env.pop("ANTHROPIC_AUTH_TOKEN", None)
         return True
@@ -650,6 +709,7 @@ def classify_claude_quota_auth_failure(output: str) -> str | None:
 def format_claude_script_generation_failure(
     command: list[str],
     completed: subprocess.CompletedProcess[str],
+    attempt_label: str | None = None,
 ) -> str:
     combined_output = "\n".join(
         text for text in (completed.stderr.strip(), completed.stdout.strip()) if text
@@ -667,6 +727,8 @@ def format_claude_script_generation_failure(
         )
     else:
         message += " This is a script-generation failure, not a PDS publish failure."
+    if attempt_label:
+        message += f" OAuth token slot: {attempt_label}."
     return f"{message} Command: {shlex.join(command)}. Details: {process_details(completed)}"
 
 
