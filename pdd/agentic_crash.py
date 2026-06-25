@@ -8,7 +8,13 @@ from typing import Any, Iterable, Mapping
 
 from rich.console import Console
 
-from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES, _revert_out_of_scope_changes
+from .agentic_common import (
+    get_available_agents,
+    run_agentic_task,
+    DEFAULT_MAX_RETRIES,
+    AGENTIC_STEP_TIMEOUT_SECONDS,
+    _revert_out_of_scope_changes,
+)
 from .get_run_command import get_run_command_for_file
 from .load_prompt_template import load_prompt_template
 
@@ -467,6 +473,7 @@ def run_agentic_crash(
             verbose=verbose,
             quiet=quiet,
             label="agentic_crash_explore",
+            timeout=AGENTIC_STEP_TIMEOUT_SECONDS,  # Issue #1714: fail fast on stalls
             max_retries=DEFAULT_MAX_RETRIES,
         )
     except Exception as exc:  # noqa: BLE001
