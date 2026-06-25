@@ -60,7 +60,7 @@ def test_post_ci_failure_comment_uses_shared_helper(tmp_path: Path) -> None:
 
 
 def test_poll_required_checks_waits_for_matching_head(tmp_path: Path) -> None:
-    """Polling should ignore stale checks until GitHub reports the new PR head SHA."""
+    """Polling should wait for passing checks on the expected PR head SHA."""
     check_result = subprocess.CompletedProcess(
         args=[],
         returncode=0,
@@ -90,7 +90,73 @@ def test_poll_required_checks_waits_for_matching_head(tmp_path: Path) -> None:
             "link": "https://example.test/lint",
         }
     ]
-    assert mock_run_gh.call_count == 1
+    assert mock_run_gh.call_count == 2
+
+
+def test_poll_required_checks_reads_terminal_failure_on_stale_live_head(tmp_path: Path) -> None:
+    """A stale expected head must not hide terminal live-head check failures."""
+    check_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=1,
+        stdout=(
+            '[{"name":"auto-heal-pr","state":"ACTION_REQUIRED",'
+            '"bucket":"fail","link":"https://example.test/manual"}]'
+        ),
+        stderr="",
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="livehead"), \
+         patch("pdd.ci_validation._run_gh", return_value=check_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="stalehead",
+            quiet=True,
+        )
+
+    assert status == "failed"
+    assert checks == [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "fail",
+            "link": "https://example.test/manual",
+        }
+    ]
+
+
+def test_poll_required_checks_reports_stale_head_after_timeout(tmp_path: Path) -> None:
+    """If the expected head never becomes live, return an actionable diagnostic."""
+    check_result = subprocess.CompletedProcess(
+        args=[],
+        returncode=0,
+        stdout='[{"name":"lint","state":"SUCCESS","bucket":"pass","link":"https://example.test/lint"}]',
+        stderr="",
+    )
+
+    with patch("pdd.ci_validation._get_pr_head_sha", return_value="livehead"), \
+         patch("pdd.ci_validation._run_gh", return_value=check_result), \
+         patch("pdd.ci_validation.time.sleep", return_value=None), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0, 9999.0]):
+        status, checks = _poll_required_checks(
+            repo_owner="owner",
+            repo_name="repo",
+            pr_number=42,
+            cwd=tmp_path,
+            expected_head_sha="stalehead",
+            quiet=True,
+        )
+
+    assert status == "stale_head"
+    summary = checks[0]["state"]
+    assert "PR #42 head did not match" in summary
+    assert "stalehead" in summary
+    assert "livehead" in summary
+    assert "lint" in summary
 
 
 def test_collect_failure_logs_uses_zip_api_fallback(tmp_path: Path) -> None:
@@ -617,7 +683,7 @@ def test_run_ci_validation_loop_uses_override_when_provided(tmp_path: Path) -> N
     )
 
 
-def test_run_ci_validation_loop_falls_back_to_local_head_without_override(
+def test_run_ci_validation_loop_uses_live_pr_head_without_override(
     tmp_path: Path,
 ) -> None:
     captured: dict[str, object] = {}
@@ -629,6 +695,7 @@ def test_run_ci_validation_loop_falls_back_to_local_head_without_override(
     with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
          patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
          patch("pdd.ci_validation._get_head_sha", return_value="local_cwd_head"), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="live_pr_head"), \
          patch("pdd.ci_validation._poll_required_checks", side_effect=fake_poll), \
          patch("pdd.ci_validation.time.sleep", return_value=None):
         run_ci_validation_loop(
@@ -643,9 +710,55 @@ def test_run_ci_validation_loop_falls_back_to_local_head_without_override(
             quiet=True,
         )
 
-    assert captured["expected_head_sha"] == "local_cwd_head", (
-        "Existing callers without the override must see the local-HEAD behavior"
+    assert captured["expected_head_sha"] == "live_pr_head", (
+        "Without an explicit override, CI validation must follow the live PR head "
+        "instead of a stale local worktree HEAD."
     )
+
+
+def test_run_ci_validation_loop_reports_stale_expected_head_override(
+    tmp_path: Path,
+) -> None:
+    stale_check = {
+        "name": "PR head mismatch",
+        "state": (
+            "PR #42 head did not match the expected CI validation head.\n"
+            "- expected head: `expectedsha`\n"
+            "- live PR head: `livesha`\n"
+            "- last known checks:\n- lint: bucket=pass, state=SUCCESS"
+        ),
+        "bucket": "fail",
+        "link": "",
+    }
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation.detect_ci_system", return_value="github_actions"), \
+         patch("pdd.ci_validation._get_head_sha", return_value="local_cwd_head"), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             return_value=("stale_head", [stale_check]),
+         ), \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as mock_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=1,
+            step_template="unused",
+            run_agentic_task_fn=lambda **_: (True, "CI_FIX_APPLIED", 0.0, "mock"),
+            timeout=60.0,
+            quiet=True,
+            expected_head_sha_override="expectedsha",
+        )
+
+    assert success is False
+    assert cost == 0.0
+    assert "expectedsha" in message
+    assert "livesha" in message
+    assert "Timed out waiting for required CI checks" not in message
+    assert mock_comment.call_args.kwargs["attempts"] == 0
 
 
 # ---------------------------------------------------------------------------
