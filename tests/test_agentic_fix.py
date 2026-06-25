@@ -62,7 +62,7 @@ def test_run_agentic_fix_success_via_run_agentic_task(monkeypatch, tmp_path, pat
     # Mock run_agentic_task to return success
     monkeypatch.setattr(
         "pdd.agentic_fix.run_agentic_task",
-        lambda instruction, cwd, verbose, quiet, label, max_retries: (True, "", 0.05, "anthropic")
+        lambda instruction, cwd, verbose, quiet, label, max_retries, timeout=None, **kwargs: (True, "", 0.05, "anthropic")
     )
 
     # Mock verification to pass
@@ -347,7 +347,7 @@ class TestCwdHandling:
         # Mock run_agentic_task to return success
         monkeypatch.setattr(
             "pdd.agentic_fix.run_agentic_task",
-            lambda instruction, cwd, verbose, quiet, label, max_retries: (True, "", 0.05, "anthropic")
+            lambda instruction, cwd, verbose, quiet, label, max_retries, timeout=None, **kwargs: (True, "", 0.05, "anthropic")
         )
         # Mock verification to pass
         monkeypatch.setattr("pdd.agentic_fix._verify_and_log", lambda *a, **k: True)
@@ -413,7 +413,7 @@ class TestCwdHandling:
         # Mock run_agentic_task to return success
         monkeypatch.setattr(
             "pdd.agentic_fix.run_agentic_task",
-            lambda instruction, cwd, verbose, quiet, label, max_retries: (True, "", 0.05, "anthropic")
+            lambda instruction, cwd, verbose, quiet, label, max_retries, timeout=None, **kwargs: (True, "", 0.05, "anthropic")
         )
         # Mock verification to pass
         monkeypatch.setattr("pdd.agentic_fix._verify_and_log", lambda *a, **k: True)
