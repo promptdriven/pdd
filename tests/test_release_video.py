@@ -16,6 +16,10 @@ def release_video_env(extra: dict | None = None) -> dict:
     for key in (
         "CLAUDE_MODEL",
         "CLAUDE_TIMEOUT",
+        "CLAUDE_CODE_OAUTH_TOKEN",
+        "CLAUDE_CODE_OAUTH_TOKEN_1",
+        "CLAUDE_CODE_OAUTH_TOKEN_2",
+        "CLAUDE_CODE_OAUTH_TOKEN_3",
         "RELEASE_VIDEO_ATTEMPT_ID",
         "RELEASE_VIDEO_CLAUDE_TOOLS",
         "RELEASE_VIDEO_IDEMPOTENCY_KEY",
@@ -832,6 +836,66 @@ def test_release_video_claude_generation_prefers_oauth_over_inherited_api_key(
     assert "\nNARRATOR:\n" in script
 
 
+def test_release_video_claude_generation_rotates_oauth_token_slots(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+):
+    release_video = load_release_video_module()
+    prompt_template = tmp_path / "release_video_LLM.prompt"
+    prompt_template.write_text("Context:\n{release_context}\n", encoding="utf8")
+    attempted_tokens: list[str | None] = []
+
+    def fake_run(
+        command,
+        *,
+        cwd: Path,
+        input_text: str | None = None,
+        timeout: float | None = None,
+        env: dict[str, str] | None = None,
+        check: bool = True,
+    ):
+        token = env.get("CLAUDE_CODE_OAUTH_TOKEN") if env else None
+        attempted_tokens.append(token)
+        assert env is not None
+        assert "ANTHROPIC_API_KEY" not in env
+        if token == "limited-token":
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="You've hit your weekly limit; resets tomorrow.",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=reusable_script_text(),
+            stderr="",
+        )
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "stale-depleted-api-key")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_1", "limited-token")
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN_2", "fresh-token")
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN_3", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    monkeypatch.setattr(release_video, "ensure_command_exists", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(release_video, "run", fake_run)
+
+    script = release_video.generate_script_with_claude(
+        context="# PDD release context",
+        claude_cli="claude",
+        claude_model="claude-opus-4-8",
+        claude_tools="",
+        prompt_template=prompt_template,
+        timeout=60,
+        cwd=tmp_path,
+    )
+
+    assert attempted_tokens == ["limited-token", "fresh-token"]
+    assert "\nNARRATOR:\n" in script
+    assert "CLAUDE_CODE_OAUTH_TOKEN_1 failed" in capsys.readouterr().err
+
+
 def test_release_video_env_oauth_strip_does_not_import_pdd(monkeypatch):
     release_video = load_release_video_module()
     env = {
@@ -853,6 +917,19 @@ def test_release_video_env_oauth_strip_does_not_import_pdd(monkeypatch):
     assert "ANTHROPIC_API_KEY" not in env
     assert "ANTHROPIC_AUTH_TOKEN" not in env
     assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token"
+
+
+def test_release_video_env_oauth_strip_recognizes_token_slots(monkeypatch):
+    release_video = load_release_video_module()
+    env = {
+        "ANTHROPIC_API_KEY": "stale-depleted-api-key",
+        "CLAUDE_CODE_OAUTH_TOKEN_2": "oauth-token",
+    }
+
+    assert release_video.strip_anthropic_creds_for_claude_subprocess(env) is True
+
+    assert "ANTHROPIC_API_KEY" not in env
+    assert env["CLAUDE_CODE_OAUTH_TOKEN_2"] == "oauth-token"
 
 
 def test_release_video_strip_missing_optional_pdd_dependency_is_nonfatal(monkeypatch):
