@@ -5332,6 +5332,17 @@ class TestStep11CodeCleanup:
     if tests pass. Reverts all cleanup changes if tests fail.
     """
 
+    def test_step11_cleanup_prompt_forbids_checkup_verifier(self):
+        """Cleanup must not inspect or invoke the explicit checkup verifier path."""
+        template = load_prompt_template("agentic_e2e_fix_step11_code_cleanup_LLM")
+
+        assert "Do NOT run `pdd checkup`" in template
+        assert "`pdd checkup --help`" in template
+        assert "run_agentic_checkup" in template
+        assert "review loop" in template
+        assert "final gate" in template
+        assert "Do not inspect or invoke the PDD checkup verifier" in template
+
     def test_step11_skipped_when_no_files_changed(self, tmp_path):
         """Step 11 should be skipped when no files changed during workflow."""
         from pdd.agentic_e2e_fix_orchestrator import _run_step11_code_cleanup
@@ -10605,6 +10616,19 @@ class TestPushWithRetryNewSignature:
 
 
 class TestPreCheckupGateRemediation:
+    def test_local_gate_remediation_prompt_forbids_checkup_verifier(self):
+        """Local pre-checkup gate fixes must use gate logs, not pdd checkup."""
+        template = load_prompt_template("agentic_e2e_fix_step10_ci_validation_LLM")
+
+        assert "When `ci_system` is `local pre-checkup gate`" in template
+        assert "do not fetch remote logs" in template
+        assert "Do NOT run `pdd checkup`" in template
+        assert "`pdd checkup --help`" in template
+        assert "run_agentic_checkup" in template
+        assert "review loop" in template
+        assert "final gate" in template
+        assert "Do not inspect the broader PDD checkup verifier namespace" in template
+
     def test_local_gate_failure_is_remediated_and_retried(self, tmp_path, monkeypatch):
         from pdd import agentic_e2e_fix_orchestrator as orch
 
