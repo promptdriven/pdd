@@ -65,6 +65,8 @@ Review all code changes produced by the bug + fix workflow and clean them up in 
 - Touch code that existed before the workflow started (only clean up what bug + fix introduced)
 - Add new features, docstrings, or type annotations beyond what was changed
 - Remove intentional debug/logging that is part of the fix's purpose
+- Do NOT run `pdd checkup` in any form, including `pdd checkup --help`
+- Do NOT run `run_agentic_checkup`, a review loop, or a final gate
 
 % Output
 - Apply cleanup edits directly to the files.
@@ -76,3 +78,5 @@ Review all code changes produced by the bug + fix workflow and clean them up in 
 - Be conservative — when in doubt, leave code as-is.
 - Only touch files that appear in the diff above.
 - The safety net will revert all your changes if tests fail afterward.
+- If you need verification, run only targeted format/lint/test commands for the
+  files in the diff. Do not inspect or invoke the PDD checkup verifier.
