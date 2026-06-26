@@ -8220,7 +8220,8 @@
               "without expected_head_sha_override, polls the PR's live head SHA instead of cwd's local HEAD so stale cloud worktrees do not burn the timeout",
               "expected_head_sha_override forces the poll to wait for a specific verified PR head SHA; if GitHub never reports that SHA as live, the loop fails with an explicit stale-head diagnostic",
               "poll timeouts with observed required checks are treated as inconclusive and best-effort instead of driving the fix loop",
-              "required checks whose only terminal non-success state is ACTION_REQUIRED are treated as manual-action inconclusive instead of code failures"
+              "required checks whose only terminal non-success state is ACTION_REQUIRED are treated as manual-action inconclusive instead of code failures",
+              "required check failures whose logs clearly show external CI setup/auth issues such as missing GitHub Actions Google/Firebase secrets are treated as inconclusive instead of driving the CI-fix loop"
             ]
           },
           {
