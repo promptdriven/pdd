@@ -698,16 +698,17 @@ git commit -m "docs: update documentation"
 The version is derived from git tags via setuptools-scm. To release, on `main`:
 
 ```bash
-make release-local             # patch bump with local Infisical PDS token
+make release-local             # patch bump with local SOPS release secrets
 make release-local BUMP=minor  # minor bump
 make release-local BUMP=major  # major bump
 ```
 
-`make release-local` injects the local Infisical `PDS_RELEASE_TOKEN`, tags `HEAD` with the next `vX.Y.Z`, pushes the tag, then runs `make release-video`. The release-video step asks Claude Code to turn the release diff/notes into a short video script and calls the Prompt Driven Studio CLI (`pds release-video create --target publish --platform youtube --privacy unlisted --wait`) to create and upload an unlisted YouTube video. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
+`make release-local` injects release secrets from SOPS, tags `HEAD` with the next `vX.Y.Z`, pushes the tag, then runs `make release-video`. By default it looks for `../secrets/pdd_cloud/shared.prod.sops.env`; set `SOPS_RELEASE_ENV_FILE` if your `pdd_cloud` checkout is elsewhere. The local wrapper maps `CLAUDE_CODE_OAUTH_TOKEN` from `shared.staging.sops.env`, `shared.staging2.sops.env`, and `shared.prod.sops.env` into Claude Code rotation slots `_1`, `_2`, and `_3` at process runtime. The release-video step asks Claude Code to turn the release diff/notes into a short video script and calls the Prompt Driven Studio CLI (`pds release-video create --target publish --platform youtube --privacy unlisted --wait`) to create and upload an unlisted YouTube video. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
 
 Release-video diagnostics and recovery:
 
-- Run `make check-release-video-config` before a local release. If `PDS_TOKEN` is set, local preflight can only confirm that a token exists; it cannot verify scopes or project access unless the PDS server preflight is run.
+- Run `make check-release-video-config-local` before a local release. If `PDS_TOKEN` is set, local preflight can only confirm that a token exists; it cannot verify scopes or project access unless the PDS server preflight is run.
+- Set repo secrets `CLAUDE_CODE_OAUTH_TOKEN_1`, `CLAUDE_CODE_OAUTH_TOKEN_2`, and `CLAUDE_CODE_OAUTH_TOKEN_3` for release-note and release-video CI rotation, using staging, staging2, and prod respectively. `CLAUDE_CODE_OAUTH_TOKEN` is only a fallback compatibility slot.
 - Normal create-mode creates a new per-release PDS project. The token must be able to create that project and continue accessing it afterward; otherwise use a backend fix/wildcard token or set `RELEASE_VIDEO_PROJECT_ID` for an authorized fixed project.
 - If Claude Code quota/auth blocks script generation, reuse a generated script artifact with `RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md make release-video RELEASE_TAG=<tag>`.
 - For selected-project bootstrap recovery, reuse the generated script and run `make release-video RELEASE_TAG=<tag> RELEASE_VIDEO_PROJECT_ID=<project-id> RELEASE_VIDEO_SCRIPT_PATH=.pdd/release-videos/<tag>/release_video_script.md RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT=1 RELEASE_VIDEO_FORCE_REGENERATE=1 RELEASE_VIDEO_ATTEMPT_ID=<timestamp-or-label>`.
