@@ -59,7 +59,8 @@ help:
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make release-video           - Generate and upload a YouTube video for the current release tag"
 	@echo "  make release-video-discord-backfill RELEASE_TAG=vX.Y.Z RELEASE_VIDEO_YOUTUBE_URL=url - Post recovered video follow-up to Discord"
-	@echo "  make release-local           - Run release with local Infisical PDS release token"
+	@echo "  make release-local           - Run release with local SOPS release secrets"
+	@echo "  make check-release-claude-oauth-config-local - Verify local SOPS Claude OAuth rotation slots"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
 	@echo "  make release                 - On main: tag HEAD with next vN.N.N and push (BUMP=patch|minor|major; default patch)"
 	@echo "                                  Actions publishes to PyPI via OIDC after gltanaka approval"
@@ -100,9 +101,11 @@ RELEASE_VIDEO_YOUTUBE_URL ?=
 CLAUDE_CLI ?= claude
 PDS_CLI ?= pds
 PDS_API_URL ?= https://video.promptdriven.ai
-INFISICAL ?= infisical
-INFISICAL_ENV ?= prod
-INFISICAL_PATH ?= /
+SOPS ?= sops
+SOPS_RELEASE_ENV_FILE ?= $(firstword $(wildcard ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.prod.sops.env) ../secrets/pdd_cloud/shared.prod.sops.env)
+SOPS_RELEASE_CLAUDE_ENV_FILES ?= $(wildcard ../secrets/pdd_cloud/shared.staging.sops.env ../secrets/pdd_cloud/shared.staging2.sops.env ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging2.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.staging.sops.env secrets/pdd_cloud/shared.staging2.sops.env secrets/pdd_cloud/shared.prod.sops.env)
+SOPS_RELEASE_ENV_RUNNER := python scripts/sops_release_env.py --sops "$(SOPS)" --release-env-file "$(SOPS_RELEASE_ENV_FILE)" $(foreach file,$(SOPS_RELEASE_CLAUDE_ENV_FILES),--claude-env-file "$(file)")
+REQUIRE_CLAUDE_OAUTH_SLOTS ?= 1
 
 # Python files
 PY_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_python.prompt")
@@ -118,7 +121,7 @@ ifeq ($(CI),true)
 SKIP_MAKEFILE_REGEN := 1
 endif
 
-RELEASE_MAKE_GOALS := release release-video release-video-discord-backfill release-local release-infisical check-release-video-config check-release-video-config-local check-release-video-config-infisical
+RELEASE_MAKE_GOALS := release release-video release-video-discord-backfill release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 ifneq ($(filter $(RELEASE_MAKE_GOALS),$(MAKECMDGOALS)),)
 SKIP_MAKEFILE_REGEN := 1
 endif
@@ -139,7 +142,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-infisical release-video release-video-discord-backfill check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-infisical
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-discord-backfill check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -762,19 +765,69 @@ check-release-video-config:
 		--pds-cli "$(PDS_CLI)" \
 		--project-id "$(RELEASE_VIDEO_PROJECT_ID)"
 
-check-release-video-config-local: check-release-video-config-infisical
+check-release-claude-oauth-config:
+	@if [ "$(RELEASE_VIDEO)" = "0" ]; then \
+		echo "Claude Code OAuth token preflight skipped because RELEASE_VIDEO=0"; \
+		exit 0; \
+	fi; \
+	configured=0; missing=""; \
+	for name in CLAUDE_CODE_OAUTH_TOKEN_1 CLAUDE_CODE_OAUTH_TOKEN_2 CLAUDE_CODE_OAUTH_TOKEN_3; do \
+		if [ -n "$$(printenv "$$name")" ]; then \
+			configured=$$((configured + 1)); \
+		else \
+			missing="$$missing $$name"; \
+		fi; \
+	done; \
+	if [ "$$configured" -eq 3 ]; then \
+		echo "Claude Code OAuth token slots verified: 3/3 numbered slots configured."; \
+		if [ -n "$${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then \
+			echo "Fallback CLAUDE_CODE_OAUTH_TOKEN is also configured."; \
+		fi; \
+	else \
+		echo "Claude Code OAuth token slots configured: $$configured/3. Missing:$$missing"; \
+		if [ -n "$${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then \
+			echo "Fallback CLAUDE_CODE_OAUTH_TOKEN is configured, but numbered slots should be set for rotation."; \
+		fi; \
+		if [ "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" = "1" ]; then exit 1; fi; \
+	fi
+
+check-release-claude-oauth-config-local: check-release-claude-oauth-config-sops
+
+check-release-claude-oauth-config-sops:
+	@command -v "$(SOPS)" >/dev/null 2>&1 || { echo "Error: $(SOPS) CLI is required."; exit 1; }
+	@test -f "$(SOPS_RELEASE_ENV_FILE)" || { echo "Error: SOPS release env file not found: $(SOPS_RELEASE_ENV_FILE)"; echo "Set SOPS_RELEASE_ENV_FILE to the prod SOPS env file."; exit 1; }
+	@$(SOPS_RELEASE_ENV_RUNNER) \
+		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
+		--release-video "$(RELEASE_VIDEO)" \
+		-- $(MAKE) --no-print-directory check-release-claude-oauth-config
+
+check-release-video-config-local: check-release-video-config-sops
+
+check-release-video-config-sops:
+	@command -v "$(SOPS)" >/dev/null 2>&1 || { echo "Error: $(SOPS) CLI is required."; exit 1; }
+	@test -f "$(SOPS_RELEASE_ENV_FILE)" || { echo "Error: SOPS release env file not found: $(SOPS_RELEASE_ENV_FILE)"; echo "Set SOPS_RELEASE_ENV_FILE to the prod SOPS env file."; exit 1; }
+	@$(SOPS_RELEASE_ENV_RUNNER) \
+		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
+		--release-video "$(RELEASE_VIDEO)" \
+		-- $(MAKE) --no-print-directory check-release-claude-oauth-config check-release-video-config
 
 check-release-video-config-infisical:
-	@command -v "$(INFISICAL)" >/dev/null 2>&1 || { echo "Error: $(INFISICAL) CLI is required."; exit 1; }
-	@"$(INFISICAL)" run --env "$(INFISICAL_ENV)" --path "$(INFISICAL_PATH)" --silent -- \
-		$(MAKE) --no-print-directory check-release-video-config
+	@echo "check-release-video-config-infisical is deprecated; use make check-release-video-config-local (SOPS-backed)." >&2
+	@$(MAKE) --no-print-directory check-release-video-config-sops
 
-release-local: release-infisical
+release-local: release-sops
+
+release-sops:
+	@command -v "$(SOPS)" >/dev/null 2>&1 || { echo "Error: $(SOPS) CLI is required."; exit 1; }
+	@test -f "$(SOPS_RELEASE_ENV_FILE)" || { echo "Error: SOPS release env file not found: $(SOPS_RELEASE_ENV_FILE)"; echo "Set SOPS_RELEASE_ENV_FILE to the prod SOPS env file."; exit 1; }
+	@$(SOPS_RELEASE_ENV_RUNNER) \
+		--require-claude-slots "$(REQUIRE_CLAUDE_OAUTH_SLOTS)" \
+		--release-video "$(RELEASE_VIDEO)" \
+		-- $(MAKE) --no-print-directory check-release-claude-oauth-config release
 
 release-infisical:
-	@command -v "$(INFISICAL)" >/dev/null 2>&1 || { echo "Error: $(INFISICAL) CLI is required."; exit 1; }
-	@"$(INFISICAL)" run --env "$(INFISICAL_ENV)" --path "$(INFISICAL_PATH)" --silent -- \
-		$(MAKE) --no-print-directory release
+	@echo "release-infisical is deprecated; use make release-local (SOPS-backed)." >&2
+	@$(MAKE) --no-print-directory release-sops
 
 release-video:
 	@if [ "$(RELEASE_VIDEO)" = "0" ]; then \
