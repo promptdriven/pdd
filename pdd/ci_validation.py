@@ -31,12 +31,19 @@ FAILURE_STATES = {"failure", "failed", "cancelled", "canceled", "timed_out", "st
 KNOWN_CHECK_BUCKETS = PASS_BUCKETS | FAIL_BUCKETS | PENDING_BUCKETS | SKIP_BUCKETS | ACTION_REQUIRED_BUCKETS
 ACTIONABLE_FAILURE_LOG_MARKERS = (
     "assertionerror",
+    "build failed",
+    "can't resolve",
+    "cannot find module",
+    "cannot resolve",
     "compilation failed",
+    "could not resolve",
     "eslint",
+    "failed to compile",
     "flake8",
     "go test",
     "importerror",
     "javac",
+    "module not found",
     "modulenotfounderror",
     "mvn test",
     "mypy",
@@ -51,6 +58,15 @@ ACTIONABLE_FAILURE_LOG_MARKERS = (
     "tsc ",
     "unittest",
     "yarn test",
+)
+GENERIC_CI_CHECK_NAME_MARKERS = (
+    "actions",
+    "build",
+    "check",
+    "ci",
+    "continuous integration",
+    "pipeline",
+    "workflow",
 )
 EXTERNAL_CI_CHECK_NAME_MARKERS = (
     "auth",
@@ -381,7 +397,7 @@ def _classify_external_ci_failure(checks: List[Dict[str, str]], failure_logs: st
 
 
 def _failed_check_set_is_pure_external_setup(checks: List[Dict[str, str]]) -> bool:
-    """True when every failed check name points at external CI setup."""
+    """True when failed check names do not indicate code/test failures."""
     failed_checks = [
         check
         for check in checks
@@ -395,7 +411,10 @@ def _failed_check_set_is_pure_external_setup(checks: List[Dict[str, str]]) -> bo
         name = check.get("name", "").strip().lower()
         if any(marker in name for marker in ACTIONABLE_CHECK_NAME_MARKERS):
             return False
-        if not any(marker in name for marker in EXTERNAL_CI_CHECK_NAME_MARKERS):
+        if not any(
+            marker in name
+            for marker in EXTERNAL_CI_CHECK_NAME_MARKERS + GENERIC_CI_CHECK_NAME_MARKERS
+        ):
             return False
     return True
 
@@ -422,22 +441,36 @@ def _configured_manual_trigger_comments(cwd: Path, checks: List[Dict[str, str]])
     """Return configured manual CI trigger comments for the observed checks."""
     ci_config = _load_ci_config(cwd)
     comments: List[str] = []
+    action_required_checks = [
+        check
+        for check in checks
+        if check.get("state", "").lower() in ACTION_REQUIRED_STATES
+        or check.get("bucket", "").lower() in ACTION_REQUIRED_BUCKETS
+    ]
+    unmatched_action_required_check = False
     manual_triggers = ci_config.get("manual_triggers")
     if isinstance(manual_triggers, dict):
-        for check in checks:
+        for check in action_required_checks:
             check_name = check.get("name", "").strip().lower()
-            if not check_name:
-                continue
-            for pattern, comment in manual_triggers.items():
-                pattern_text = str(pattern).strip().lower()
-                comment_text = str(comment).strip()
-                if pattern_text and pattern_text in check_name and comment_text:
-                    if comment_text not in comments:
-                        comments.append(comment_text)
+            matched_check = False
+            if check_name:
+                for pattern, comment in manual_triggers.items():
+                    pattern_text = str(pattern).strip().lower()
+                    comment_text = str(comment).strip()
+                    if pattern_text and pattern_text in check_name and comment_text:
+                        if comment_text not in comments:
+                            comments.append(comment_text)
+                        matched_check = True
+            if not matched_check:
+                unmatched_action_required_check = True
+    elif action_required_checks:
+        unmatched_action_required_check = True
 
     comment = ci_config.get("manual_trigger_comment")
-    if not comments and isinstance(comment, str) and comment.strip():
-        comments.append(comment.strip())
+    if unmatched_action_required_check and isinstance(comment, str) and comment.strip():
+        fallback_comment = comment.strip()
+        if fallback_comment not in comments:
+            comments.append(fallback_comment)
     return comments
 
 

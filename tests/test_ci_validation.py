@@ -793,6 +793,60 @@ def test_run_ci_validation_loop_inconclusive_for_missing_google_auth_secret(
     info_comment.assert_called_once()
 
 
+def test_run_ci_validation_loop_inconclusive_for_generic_build_auth_failure(
+    tmp_path: Path,
+) -> None:
+    """Generic build/ci names can still be pure external setup failures."""
+    failing_checks = [
+        {
+            "name": "build",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/123",
+        }
+    ]
+    logs = (
+        "Run google-github-actions/auth@v2\n"
+        "Error: google-github-actions/auth failed with: the GitHub Action "
+        "workflow must specify exactly one of \"workload_identity_provider\" "
+        "or \"credentials_json\" because the configured secret is empty."
+    )
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value=logs), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation._commit_ci_fix") as mock_commit, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert "external ci setup" in message.lower()
+    assert cost == 0.0
+    assert not fix_was_called
+    mock_commit.assert_not_called()
+    failure_comment.assert_not_called()
+    info_comment.assert_called_once()
+
+
 def test_run_ci_validation_loop_does_not_hide_mixed_failure_with_external_logs(
     tmp_path: Path,
 ) -> None:
@@ -877,6 +931,76 @@ def test_configured_manual_trigger_comment_matches_check_name(tmp_path: Path) ->
     ]
 
     assert _configured_manual_trigger_comment(tmp_path, checks) == "/gcbrun"
+
+
+def test_run_ci_validation_loop_ignores_passed_check_manual_trigger_for_fallback(
+    tmp_path: Path,
+) -> None:
+    """Passed checks must not consume manual triggers for ACTION_REQUIRED checks."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  manual_trigger_comment: "/gcbrun"\n'
+        '  manual_triggers:\n'
+        '    lint: "/lint-rerun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    checks = [
+        {
+            "name": "lint",
+            "state": "SUCCESS",
+            "bucket": "pass",
+            "link": "https://example.test/lint",
+        },
+        {
+            "name": "manual-ci",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/manual",
+        },
+    ]
+    passing = [
+        {"name": "lint", "state": "SUCCESS", "bucket": "pass", "link": ""},
+        {"name": "manual-ci", "state": "SUCCESS", "bucket": "pass", "link": ""},
+    ]
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             side_effect=[("action_required", checks), ("passed", passing)],
+         ), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1740,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert message == "Required CI checks passed"
+    assert cost == 0.0
+    assert not fix_was_called
+    assert [call.kwargs["body"] for call in info_comment.call_args_list] == ["/gcbrun"]
+    failure_comment.assert_not_called()
 
 
 def test_run_ci_validation_loop_posts_multiple_configured_manual_triggers(
@@ -1218,6 +1342,18 @@ def test_classify_external_ci_failure_from_google_auth_secret_log() -> None:
     assert _classify_external_ci_failure(checks, "flake8: unused import") is None
 
 
+def test_classify_external_ci_failure_accepts_generic_build_check_name() -> None:
+    """Generic build/ci check names do not make missing-secret failures repairable."""
+    checks = [{"name": "build", "state": "FAILURE", "bucket": "fail", "link": ""}]
+    logs = (
+        "google-github-actions/auth failed with: the GitHub Action workflow "
+        "must specify exactly one of workload_identity_provider or "
+        "credentials_json because the secret is empty."
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is not None
+
+
 def test_classify_external_ci_failure_does_not_mask_actionable_logs() -> None:
     """Mixed external setup and code/test failures must remain repairable."""
     checks = [
@@ -1228,6 +1364,17 @@ def test_classify_external_ci_failure_does_not_mask_actionable_logs() -> None:
         "google-github-actions/auth failed because credentials_json is not supplied\n"
         "pytest tests/test_widget.py::test_widget FAILED\n"
         "AssertionError: expected 2 got 1"
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is None
+
+
+def test_classify_external_ci_failure_does_not_mask_frontend_module_error() -> None:
+    """Common frontend module-resolution build errors stay actionable."""
+    checks = [{"name": "deploy preview", "state": "FAILURE", "bucket": "fail", "link": ""}]
+    logs = (
+        "google-github-actions/auth failed with: credentials_json is not supplied\n"
+        "Module not found: Can't resolve '@/components/Button'"
     )
 
     assert _classify_external_ci_failure(checks, logs) is None
