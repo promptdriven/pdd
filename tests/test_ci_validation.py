@@ -11,6 +11,7 @@ import pytest
 
 from pdd.ci_validation import (
     _classify_check_result,
+    _classify_external_ci_failure,
     _collect_failure_logs,
     _poll_check_runs_for_head,
     _poll_required_checks,
@@ -707,6 +708,62 @@ def test_run_ci_validation_loop_requires_ci_fix_marker(tmp_path: Path) -> None:
     mock_comment.assert_called_once()
 
 
+def test_run_ci_validation_loop_inconclusive_for_missing_google_auth_secret(
+    tmp_path: Path,
+) -> None:
+    """CI setup/auth failures are external action, not code-fix failures."""
+    failing_checks = [
+        {
+            "name": "build_and_preview",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/123",
+        }
+    ]
+    logs = (
+        "Run google-github-actions/auth@v2\n"
+        "Error: google-github-actions/auth failed with: the GitHub Action "
+        "workflow must specify exactly one of \"workload_identity_provider\" "
+        "or \"credentials_json\"! If you are specifying input via secrets, "
+        "ensure the secret is being injected into the environment."
+    )
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value=logs), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation._commit_ci_fix") as mock_commit, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert cost == 0.0
+    assert "external ci setup" in message.lower()
+    assert "inconclusive" in message.lower()
+    assert not fix_was_called
+    mock_commit.assert_not_called()
+    failure_comment.assert_not_called()
+    info_comment.assert_called_once()
+
+
 def test_run_ci_validation_loop_returns_failure_summary_after_retry_budget(tmp_path: Path) -> None:
     """Exhausting retries should return the remaining failure summary and comment on the PR."""
     failing_checks = [
@@ -716,6 +773,7 @@ def test_run_ci_validation_loop_returns_failure_summary_after_retry_budget(tmp_p
     with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
          patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
          patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value="flake8: unused import"), \
          patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as mock_comment, \
          patch("pdd.ci_validation.time.sleep", return_value=None):
         success, message, cost = run_ci_validation_loop(
@@ -875,6 +933,19 @@ def test_classify_failed_checks_exit_code_1_returns_failed() -> None:
     """Real failures with a 'fail' bucket must still be detected."""
     checks = [{"name": "lint", "state": "FAILURE", "bucket": "fail", "link": ""}]
     assert _classify_check_result(1, checks) == "failed"
+
+
+def test_classify_external_ci_failure_from_google_auth_secret_log() -> None:
+    """Missing GitHub Actions auth secrets should be classified before LLM repair."""
+    checks = [{"name": "build_and_preview", "state": "FAILURE", "bucket": "fail", "link": ""}]
+    logs = (
+        "google-github-actions/auth failed with: the GitHub Action workflow "
+        "must specify exactly one of workload_identity_provider or "
+        "credentials_json because the secret is empty."
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is not None
+    assert _classify_external_ci_failure(checks, "flake8: unused import") is None
 
 
 def test_classify_action_required_check_is_manual_action() -> None:

@@ -261,6 +261,75 @@ def _render_check_summary(checks: List[Dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+def _classify_external_ci_failure(checks: List[Dict[str, str]], failure_logs: str) -> Optional[str]:
+    """Return a reason when a CI failure is clearly external/manual setup."""
+    haystack = f"{_render_check_summary(checks)}\n{failure_logs or ''}".lower()
+    if not haystack.strip():
+        return None
+
+    google_auth_action = "google-github-actions/auth" in haystack
+    missing_google_auth_inputs = (
+        "credentials_json" in haystack
+        and "workload_identity_provider" in haystack
+        and (
+            "must specify exactly one" in haystack
+            or "not supplied" in haystack
+            or "not provided" in haystack
+            or "not set" in haystack
+            or "secret" in haystack
+        )
+    )
+    if google_auth_action and missing_google_auth_inputs:
+        return (
+            "GitHub Actions Google authentication is missing or empty "
+            "(`credentials_json` / `workload_identity_provider`)."
+        )
+
+    firebase_secret_failure = (
+        ("firebase_service_account" in haystack or "firebase service account" in haystack)
+        and (
+            "secret" in haystack
+            or "secrets." in haystack
+            or "service account" in haystack
+        )
+        and any(
+            marker in haystack
+            for marker in (
+                "not supplied",
+                "not provided",
+                "not configured",
+                "not set",
+                "empty",
+                "unavailable",
+                "not found",
+                "does not exist",
+            )
+        )
+    )
+    if firebase_secret_failure:
+        return "Firebase deployment credentials are missing from the CI environment."
+
+    secrets_unavailable_for_event = (
+        "secrets are not passed" in haystack
+        or "secret is not available" in haystack
+        or "secrets are unavailable" in haystack
+    )
+    if secrets_unavailable_for_event and any(
+        marker in haystack
+        for marker in ("github action", "github actions", "workflow", "fork", "pull request")
+    ):
+        return "GitHub Actions secrets are unavailable for this workflow event."
+
+    integration_permission_failure = (
+        "resource not accessible by integration" in haystack
+        and any(marker in haystack for marker in ("github", "check", "workflow", "pull request"))
+    )
+    if integration_permission_failure:
+        return "The GitHub integration token lacks permission to access this CI resource."
+
+    return None
+
+
 def _render_stale_head_summary(
     *,
     pr_number: int,
@@ -1123,6 +1192,42 @@ def run_ci_validation_loop(
 
         last_failures = checks
         last_summary = _render_check_summary(last_failures)
+        ci_failure_logs = _collect_failure_logs(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            cwd=cwd,
+            head_sha=head_sha,
+            failures=last_failures,
+        )
+        external_reason = _classify_external_ci_failure(last_failures, ci_failure_logs)
+        if external_reason:
+            note = (
+                f"Required CI checks for PR #{pr_number} failed for an external "
+                f"CI setup reason: {external_reason} Treating CI as inconclusive "
+                "and proceeding: this is not a code failure for the automated "
+                "CI-fix loop to repair. Last observed status:\n"
+                f"{last_summary}"
+            )
+            try:
+                post_pr_comment(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    pr_number=pr_number,
+                    body=note,
+                    cwd=cwd,
+                )
+            except Exception:  # noqa: BLE001 — informational note is best-effort
+                pass
+            return (
+                True,
+                (
+                    "Required CI checks failed for an external CI setup reason; "
+                    "proceeding — external CI is best-effort and treated as "
+                    "inconclusive."
+                ),
+                total_cost,
+            )
+
         if fix_attempt >= max_retries:
             post_ci_failure_comment(
                 repo_owner=repo_owner,
@@ -1135,13 +1240,6 @@ def run_ci_validation_loop(
             return False, last_summary, total_cost
 
         fix_attempt += 1
-        ci_failure_logs = _collect_failure_logs(
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            cwd=cwd,
-            head_sha=head_sha,
-            failures=last_failures,
-        )
 
         if not quiet:
             console.print(
