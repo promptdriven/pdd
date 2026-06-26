@@ -24,6 +24,8 @@
 % Context
 You are working on step 10 of 11 in an agentic e2e fix workflow.
 This step fixes CI failures that were detected after pushing code changes.
+When `ci_system` is `local pre-checkup gate`, this prompt is being reused to
+fix the deterministic post-fix gate, not remote CI.
 
 % Inputs
 - GitHub Issue URL: {issue_url}
@@ -48,6 +50,9 @@ This step fixes CI failures that were detected after pushing code changes.
 1. Get the CI failure logs so you can diagnose the root cause.
    - Pre-fetched logs are provided in `ci_failure_logs` above. If they contain
      useful content, use them directly.
+   - If `ci_system` is `local pre-checkup gate`, do not fetch remote logs. The
+     complete actionable gate output is already in `ci_check_results` and
+     `ci_failure_logs`.
    - If the pre-fetched logs are empty or say "No failed run logs were available",
      you MUST fetch the logs yourself using the check URLs from `ci_check_results`.
      Inspect each failing check's link to determine the CI provider and use the
@@ -69,6 +74,13 @@ This step fixes CI failures that were detected after pushing code changes.
    - For test failures: investigate and fix the failing tests.
 4. Run relevant local verification commands (e.g., linter, unit tests) when practical before returning to ensure the fix is likely to pass CI.
 5. Do NOT make unrelated changes — fix only what CI flagged.
+
+% Hard Boundaries
+- Do NOT run `pdd checkup` in any form, including `pdd checkup --help`.
+- Do NOT run `run_agentic_checkup`, a review loop, or a final gate.
+- For `local pre-checkup gate`, stay within the deterministic command family
+  named by the gate output (for example `ruff format` or a targeted pytest).
+  Do not inspect the broader PDD checkup verifier namespace.
 
 % Output
 - List files modified/deleted with `FILES_MODIFIED:` and `FILES_DELETED:` markers.
