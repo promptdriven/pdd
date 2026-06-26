@@ -25,6 +25,9 @@ FAIL_BUCKETS = {"fail", "cancel"}
 PENDING_BUCKETS = {"pending"}
 SKIP_BUCKETS = {"skip", "skipped", "skipping"}
 FINAL_GATE_PASS_BUCKETS = {"pass"}
+ACTION_REQUIRED_STATES = {"action_required"}
+ACTION_REQUIRED_BUCKETS = {"action_required"}
+FAILURE_STATES = {"failure", "failed", "cancelled", "canceled", "timed_out", "startup_failure"}
 
 # Substring gh CLI prints to stderr when no required checks are configured.
 # Centralised so tests can reference the same constant instead of duplicating
@@ -203,11 +206,12 @@ def _check_run_bucket(status: str, conclusion: str) -> str:
         return "pass"
     if normalized_conclusion in {"skipped", "neutral"}:
         return "skipped"
+    if normalized_conclusion in ACTION_REQUIRED_STATES:
+        return "action_required"
     if normalized_conclusion in {
         "failure",
         "cancelled",
         "timed_out",
-        "action_required",
         "startup_failure",
     }:
         return "fail"
@@ -279,13 +283,41 @@ def _render_stale_head_summary(
 def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str:
     """Classify `gh pr checks` output using both exit code and bucket values."""
     buckets = [check.get("bucket", "").lower() for check in checks if check.get("bucket")]
+    pending_checks = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() in PENDING_BUCKETS
+    ]
+    action_required_checks = [
+        check
+        for check in checks
+        if check.get("state", "").lower() in ACTION_REQUIRED_STATES
+        or check.get("bucket", "").lower() in ACTION_REQUIRED_BUCKETS
+    ]
+    real_failures = [
+        check
+        for check in checks
+        if (
+            check.get("bucket", "").lower() in FAIL_BUCKETS
+            and check.get("state", "").lower() not in ACTION_REQUIRED_STATES
+        )
+        or check.get("state", "").lower() in FAILURE_STATES
+    ]
+    non_success_checks = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() not in PASS_BUCKETS
+        and check.get("bucket", "").lower() not in SKIP_BUCKETS
+    ]
 
-    if any(bucket in FAIL_BUCKETS for bucket in buckets):
+    if real_failures:
         return "failed"
+    if pending_checks:
+        return "pending"
+    if action_required_checks and len(action_required_checks) == len(non_success_checks):
+        return "action_required"
     if checks and all(bucket in PASS_BUCKETS for bucket in buckets):
         return "passed"
-    if any(bucket in PENDING_BUCKETS for bucket in buckets):
-        return "pending"
 
     if returncode == 0:
         return "passed"
@@ -387,6 +419,8 @@ def _poll_required_checks(
 
         if status == "failed":
             return status, latest_checks
+        if status == "action_required" and matched_expected_head:
+            return status, latest_checks
         if status == "passed" and matched_expected_head:
             return status, latest_checks
 
@@ -455,7 +489,7 @@ def _poll_check_runs_for_head(
         saw_checks = saw_checks or bool(latest_checks)
         if latest_checks:
             status = _classify_check_result(result.returncode, latest_checks)
-            if status in {"passed", "failed"}:
+            if status in {"passed", "failed", "action_required"}:
                 return status, latest_checks
 
         if result.returncode != 0:
@@ -542,7 +576,11 @@ def run_github_checks_gate(
         check
         for check in checks
         if check.get("bucket", "").lower() not in (
-            FINAL_GATE_PASS_BUCKETS | FAIL_BUCKETS | PENDING_BUCKETS | SKIP_BUCKETS
+            FINAL_GATE_PASS_BUCKETS
+            | FAIL_BUCKETS
+            | PENDING_BUCKETS
+            | SKIP_BUCKETS
+            | ACTION_REQUIRED_BUCKETS
         )
     ]
 
@@ -554,6 +592,12 @@ def run_github_checks_gate(
         return (
             False,
             f"{source_name} included skipped checks on PR head {head_sha[:8]}:\n{summary}",
+            head_sha,
+        )
+    if status == "action_required":
+        return (
+            False,
+            f"{source_name} require manual action on PR head {head_sha[:8]}:\n{summary}",
             head_sha,
         )
     if unknown:
@@ -1032,6 +1076,35 @@ def run_ci_validation_loop(
                     "Could not read required CI checks before the poll window "
                     "elapsed (the PR head never matched the expected SHA, or the "
                     "checks were unreadable); failing closed."
+                ),
+                total_cost,
+            )
+        if status == "action_required":
+            last_failures = checks
+            last_summary = _render_check_summary(checks)
+            note = (
+                f"Required CI checks for PR #{pr_number} require manual action "
+                "or an external trigger before they can complete. Treating CI "
+                "as inconclusive and proceeding: these checks are not code "
+                "failures for the automated CI-fix loop to repair. Last "
+                f"observed status:\n{last_summary}"
+            )
+            try:
+                post_pr_comment(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    pr_number=pr_number,
+                    body=note,
+                    cwd=cwd,
+                )
+            except Exception:  # noqa: BLE001 — informational note is best-effort
+                pass
+            return (
+                True,
+                (
+                    "Required CI checks require manual action or an external "
+                    "trigger; proceeding — external CI is best-effort and "
+                    "treated as inconclusive."
                 ),
                 total_cost,
             )
