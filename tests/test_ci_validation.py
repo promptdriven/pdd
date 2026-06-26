@@ -793,6 +793,66 @@ def test_run_ci_validation_loop_inconclusive_for_missing_google_auth_secret(
     info_comment.assert_called_once()
 
 
+def test_run_ci_validation_loop_does_not_hide_mixed_failure_with_external_logs(
+    tmp_path: Path,
+) -> None:
+    """External setup logs must not mask another failed required check."""
+    failing_checks = [
+        {
+            "name": "deploy preview",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/123",
+        },
+        {
+            "name": "unit tests",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/456",
+        },
+    ]
+    logs = (
+        "Run google-github-actions/auth@v2\n"
+        "Error: google-github-actions/auth failed with: the GitHub Action "
+        "workflow must specify exactly one of \"workload_identity_provider\" "
+        "or \"credentials_json\"."
+    )
+    fix_was_called = False
+
+    def fake_fix(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "No code changes made", 0.1, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value=logs), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation._commit_ci_fix") as mock_commit, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=1,
+            step_template="Checks:\n{ci_check_results}\nLogs:\n{ci_failure_logs}",
+            run_agentic_task_fn=fake_fix,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is False
+    assert message == "CI fix task did not apply an actionable fix"
+    assert cost == pytest.approx(0.1)
+    assert fix_was_called
+    mock_commit.assert_not_called()
+    info_comment.assert_not_called()
+    failure_comment.assert_called_once()
+
+
 def test_configured_manual_trigger_comment_matches_check_name(tmp_path: Path) -> None:
     """Per-check manual triggers should win over the global fallback comment."""
     (tmp_path / ".pddrc").write_text(
@@ -817,6 +877,94 @@ def test_configured_manual_trigger_comment_matches_check_name(tmp_path: Path) ->
     ]
 
     assert _configured_manual_trigger_comment(tmp_path, checks) == "/gcbrun"
+
+
+def test_run_ci_validation_loop_posts_multiple_configured_manual_triggers(
+    tmp_path: Path,
+) -> None:
+    """Multiple ACTION_REQUIRED checks should each get their configured trigger."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  manual_triggers:\n'
+        '    auto-heal-pr: "/gcbrun"\n'
+        '    deploy-preview: "/deployrun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    action_required = [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/manual",
+        },
+        {
+            "name": "deploy-preview",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/deploy",
+        },
+    ]
+    passing = [
+        {
+            "name": "auto-heal-pr",
+            "state": "SUCCESS",
+            "bucket": "pass",
+            "link": "https://example.test/manual",
+        },
+        {
+            "name": "deploy-preview",
+            "state": "SUCCESS",
+            "bucket": "pass",
+            "link": "https://example.test/deploy",
+        },
+    ]
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             side_effect=[
+                 ("action_required", action_required),
+                 ("action_required", action_required),
+                 ("passed", passing),
+             ],
+         ) as poll_checks, \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1740,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert message == "Required CI checks passed"
+    assert cost == 0.0
+    assert not fix_was_called
+    assert poll_checks.call_count == 3
+    assert [call.kwargs["body"] for call in info_comment.call_args_list] == [
+        "/gcbrun",
+        "/deployrun",
+    ]
+    failure_comment.assert_not_called()
 
 
 def test_run_ci_validation_loop_posts_configured_manual_trigger_then_repolls(
@@ -1085,6 +1233,20 @@ def test_classify_external_ci_failure_does_not_mask_actionable_logs() -> None:
     assert _classify_external_ci_failure(checks, logs) is None
 
 
+def test_classify_external_ci_failure_does_not_mask_unlogged_failed_check() -> None:
+    """A second non-external failed check keeps CI fail-closed even if logs are auth-only."""
+    checks = [
+        {"name": "deploy preview", "state": "FAILURE", "bucket": "fail", "link": ""},
+        {"name": "unit tests", "state": "FAILURE", "bucket": "fail", "link": ""},
+    ]
+    logs = (
+        "google-github-actions/auth failed with: the GitHub Action workflow "
+        "must specify exactly one of workload_identity_provider or credentials_json."
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is None
+
+
 def test_classify_action_required_check_is_manual_action() -> None:
     """ACTION_REQUIRED is terminal, but it is not a code failure to repair."""
     checks = [
@@ -1092,6 +1254,19 @@ def test_classify_action_required_check_is_manual_action() -> None:
             "name": "auto-heal-pr",
             "state": "ACTION_REQUIRED",
             "bucket": "fail",
+            "link": "https://example.test/manual-trigger",
+        }
+    ]
+    assert _classify_check_result(1, checks) == "action_required"
+
+
+def test_classify_action_required_state_wins_with_missing_bucket() -> None:
+    """GitHub can report ACTION_REQUIRED with an empty bucket; keep it manual."""
+    checks = [
+        {
+            "name": "auto-heal-pr",
+            "state": "ACTION_REQUIRED",
+            "bucket": "",
             "link": "https://example.test/manual-trigger",
         }
     ]
