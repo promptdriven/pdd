@@ -28,6 +28,30 @@ FINAL_GATE_PASS_BUCKETS = {"pass"}
 ACTION_REQUIRED_STATES = {"action_required"}
 ACTION_REQUIRED_BUCKETS = {"action_required"}
 FAILURE_STATES = {"failure", "failed", "cancelled", "canceled", "timed_out", "startup_failure"}
+KNOWN_CHECK_BUCKETS = PASS_BUCKETS | FAIL_BUCKETS | PENDING_BUCKETS | SKIP_BUCKETS | ACTION_REQUIRED_BUCKETS
+ACTIONABLE_FAILURE_LOG_MARKERS = (
+    "assertionerror",
+    "compilation failed",
+    "eslint",
+    "flake8",
+    "go test",
+    "importerror",
+    "javac",
+    "modulenotfounderror",
+    "mvn test",
+    "mypy",
+    "npm err!",
+    "pnpm test",
+    "pytest",
+    "ruff",
+    "syntaxerror",
+    "test failed",
+    "tests failed",
+    "traceback (most recent call last)",
+    "tsc ",
+    "unittest",
+    "yarn test",
+)
 
 # Substring gh CLI prints to stderr when no required checks are configured.
 # Centralised so tests can reference the same constant instead of duplicating
@@ -266,6 +290,8 @@ def _classify_external_ci_failure(checks: List[Dict[str, str]], failure_logs: st
     haystack = f"{_render_check_summary(checks)}\n{failure_logs or ''}".lower()
     if not haystack.strip():
         return None
+    if any(marker in (failure_logs or "").lower() for marker in ACTIONABLE_FAILURE_LOG_MARKERS):
+        return None
 
     google_auth_action = "google-github-actions/auth" in haystack
     missing_google_auth_inputs = (
@@ -330,6 +356,45 @@ def _classify_external_ci_failure(checks: List[Dict[str, str]], failure_logs: st
     return None
 
 
+def _load_ci_config(cwd: Path) -> Dict[str, Any]:
+    """Load the optional root-level .pddrc CI config."""
+    try:
+        from .construct_paths import _find_pddrc_file, _load_pddrc_config
+
+        pddrc_path = _find_pddrc_file(cwd)
+        if pddrc_path is None:
+            return {}
+        config = _load_pddrc_config(pddrc_path)
+    except Exception:  # noqa: BLE001 — CI config is optional best-effort input
+        return {}
+
+    ci_config = config.get("ci", {})
+    if not isinstance(ci_config, dict):
+        return {}
+    return ci_config
+
+
+def _configured_manual_trigger_comment(cwd: Path, checks: List[Dict[str, str]]) -> Optional[str]:
+    """Return a configured manual CI trigger comment for the observed checks."""
+    ci_config = _load_ci_config(cwd)
+    manual_triggers = ci_config.get("manual_triggers")
+    if isinstance(manual_triggers, dict):
+        for check in checks:
+            check_name = check.get("name", "").strip().lower()
+            if not check_name:
+                continue
+            for pattern, comment in manual_triggers.items():
+                pattern_text = str(pattern).strip().lower()
+                comment_text = str(comment).strip()
+                if pattern_text and pattern_text in check_name and comment_text:
+                    return comment_text
+
+    comment = ci_config.get("manual_trigger_comment")
+    if isinstance(comment, str) and comment.strip():
+        return comment.strip()
+    return None
+
+
 def _render_stale_head_summary(
     *,
     pr_number: int,
@@ -352,6 +417,11 @@ def _render_stale_head_summary(
 def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str:
     """Classify `gh pr checks` output using both exit code and bucket values."""
     buckets = [check.get("bucket", "").lower() for check in checks if check.get("bucket")]
+    unknown_checks = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() not in KNOWN_CHECK_BUCKETS
+    ]
     pending_checks = [
         check
         for check in checks
@@ -380,6 +450,8 @@ def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str
     ]
 
     if real_failures:
+        return "failed"
+    if unknown_checks:
         return "failed"
     if pending_checks:
         return "pending"
@@ -1004,6 +1076,7 @@ def run_ci_validation_loop(
     fix_attempt = 0
     last_failures: List[Dict[str, str]] = []
     last_summary = "No required CI checks were reported."
+    posted_manual_trigger_comments: set[str] = set()
 
     while True:
         head_sha = (
@@ -1149,6 +1222,30 @@ def run_ci_validation_loop(
                 total_cost,
             )
         if status == "action_required":
+            trigger_comment = _configured_manual_trigger_comment(cwd, checks)
+            if trigger_comment and trigger_comment not in posted_manual_trigger_comments:
+                trigger_posted = False
+                try:
+                    trigger_posted = post_pr_comment(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        pr_number=pr_number,
+                        body=trigger_comment,
+                        cwd=cwd,
+                    )
+                except Exception:  # noqa: BLE001 — fall back to inconclusive reporting below
+                    trigger_posted = False
+
+                if trigger_posted:
+                    posted_manual_trigger_comments.add(trigger_comment)
+                    if not quiet:
+                        console.print(
+                            "[yellow]Posted configured manual CI trigger comment; "
+                            "waiting for checks to re-run...[/yellow]"
+                        )
+                    time.sleep(INITIAL_POLL_DELAY_SECONDS)
+                    continue
+
             last_failures = checks
             last_summary = _render_check_summary(checks)
             note = (

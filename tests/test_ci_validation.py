@@ -13,6 +13,7 @@ from pdd.ci_validation import (
     _classify_check_result,
     _classify_external_ci_failure,
     _collect_failure_logs,
+    _configured_manual_trigger_comment,
     _poll_check_runs_for_head,
     _poll_required_checks,
     detect_ci_system,
@@ -574,6 +575,34 @@ def test_poll_check_runs_for_head_action_required_is_manual_action(
     ]
 
 
+def test_poll_check_runs_for_head_fails_unknown_conclusion(tmp_path: Path) -> None:
+    """Unknown completed check conclusions are not passing evidence."""
+    payload = {
+        "check_runs": [
+            {
+                "name": "full-suite",
+                "status": "completed",
+                "conclusion": "unexpected_new_state",
+                "html_url": "https://example.test/check",
+            }
+        ]
+    }
+    result = subprocess.CompletedProcess(args=[], returncode=0, stdout=json.dumps(payload), stderr="")
+
+    with patch("pdd.ci_validation._run_gh_api", return_value=result), \
+         patch("pdd.ci_validation.time.monotonic", side_effect=[0.0, 1.0]):
+        status, checks = _poll_check_runs_for_head(
+            repo_owner="owner",
+            repo_name="repo",
+            cwd=tmp_path,
+            head_sha="sha123",
+            quiet=True,
+        )
+
+    assert status == "failed"
+    assert checks[0]["bucket"] == ""
+
+
 def test_poll_check_runs_for_head_pending_times_out(tmp_path: Path) -> None:
     """Pending check runs fail closed after the polling timeout."""
     payload = {
@@ -764,6 +793,99 @@ def test_run_ci_validation_loop_inconclusive_for_missing_google_auth_secret(
     info_comment.assert_called_once()
 
 
+def test_configured_manual_trigger_comment_matches_check_name(tmp_path: Path) -> None:
+    """Per-check manual triggers should win over the global fallback comment."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  manual_trigger_comment: "/fallback"\n'
+        '  manual_triggers:\n'
+        '    auto-heal-pr: "/gcbrun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    checks = [
+        {
+            "name": "auto-heal-pr (prompt-driven-development-stg)",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "",
+        }
+    ]
+
+    assert _configured_manual_trigger_comment(tmp_path, checks) == "/gcbrun"
+
+
+def test_run_ci_validation_loop_posts_configured_manual_trigger_then_repolls(
+    tmp_path: Path,
+) -> None:
+    """A configured ACTION_REQUIRED trigger should be posted once before repolling."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  manual_trigger_comment: "/gcbrun"\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
+    action_required = [
+        {
+            "name": "auto-heal-pr (prompt-driven-development-stg)",
+            "state": "ACTION_REQUIRED",
+            "bucket": "action_required",
+            "link": "https://example.test/manual",
+        }
+    ]
+    passing = [
+        {
+            "name": "auto-heal-pr (prompt-driven-development-stg)",
+            "state": "SUCCESS",
+            "bucket": "pass",
+            "link": "https://example.test/manual",
+        }
+    ]
+    fix_was_called = False
+
+    def fail_if_called(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "CI_FIX_APPLIED", 0.0, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_pr_head_sha", return_value="sha123"), \
+         patch(
+             "pdd.ci_validation._poll_required_checks",
+             side_effect=[("action_required", action_required), ("passed", passing)],
+         ) as poll_checks, \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1740,
+            max_retries=2,
+            step_template="unused",
+            run_agentic_task_fn=fail_if_called,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is True
+    assert message == "Required CI checks passed"
+    assert cost == 0.0
+    assert not fix_was_called
+    assert poll_checks.call_count == 2
+    assert info_comment.call_args.kwargs["body"] == "/gcbrun"
+    failure_comment.assert_not_called()
+
+
 def test_run_ci_validation_loop_returns_failure_summary_after_retry_budget(tmp_path: Path) -> None:
     """Exhausting retries should return the remaining failure summary and comment on the PR."""
     failing_checks = [
@@ -948,6 +1070,21 @@ def test_classify_external_ci_failure_from_google_auth_secret_log() -> None:
     assert _classify_external_ci_failure(checks, "flake8: unused import") is None
 
 
+def test_classify_external_ci_failure_does_not_mask_actionable_logs() -> None:
+    """Mixed external setup and code/test failures must remain repairable."""
+    checks = [
+        {"name": "deploy", "state": "FAILURE", "bucket": "fail", "link": ""},
+        {"name": "unit tests", "state": "FAILURE", "bucket": "fail", "link": ""},
+    ]
+    logs = (
+        "google-github-actions/auth failed because credentials_json is not supplied\n"
+        "pytest tests/test_widget.py::test_widget FAILED\n"
+        "AssertionError: expected 2 got 1"
+    )
+
+    assert _classify_external_ci_failure(checks, logs) is None
+
+
 def test_classify_action_required_check_is_manual_action() -> None:
     """ACTION_REQUIRED is terminal, but it is not a code failure to repair."""
     checks = [
@@ -1001,6 +1138,12 @@ def test_classify_failure_state_wins_even_with_missing_bucket() -> None:
         {"name": "unit tests", "state": "FAILURE", "bucket": "", "link": ""},
     ]
     assert _classify_check_result(1, checks) == "failed"
+
+
+def test_classify_unknown_bucket_fails_closed() -> None:
+    """A non-empty check set with unknown buckets must not pass via all([])."""
+    checks = [{"name": "full suite", "state": "SUCCESS", "bucket": "", "link": ""}]
+    assert _classify_check_result(0, checks) == "failed"
 
 
 def test_classify_passing_checks_exit_code_0_returns_passed() -> None:
