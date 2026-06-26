@@ -910,9 +910,10 @@ class ReviewLoopState:
     # ``{"blocked": bool, "repair_attempted": bool, "repaired": [...],
     #    "unrepairable": [{"code_path","prompt_path","kind","reason"}],
     #    "offenders": [{"code_path","prompt_path","kind"}]}``.
-    # Surfaced verbatim in the final-gate machine verdict so pdd_cloud can
-    # report exactly which prompt/architecture source files need repair.
-    # Kept in the appended field block so positional construction stays stable.
+    # Surfaced verbatim in the final-gate machine verdict and final-state.json
+    # so pdd_cloud can report exactly which prompt/architecture source files
+    # need repair. Kept in the appended field block so positional construction
+    # stays stable.
     source_of_truth: Optional[Dict[str, Any]] = None
     # Explicit marker for ``--allow-same-reviewer-fixer`` runs. Keeps
     # final-state/report consumers from inferring the legacy independent
@@ -7298,6 +7299,7 @@ def _write_final_state(
             if state.same_role_review_fix
             else "independent-reviewer-fixer"
         ),
+        "source_of_truth": state.source_of_truth,
         # SHA-backed verification trust boundary (issue #1088). Always
         # present so downstream consumers can rely on the schema rather
         # than feature-detecting.

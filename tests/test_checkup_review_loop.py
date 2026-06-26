@@ -8147,6 +8147,16 @@ class TestSourceOfTruthRepairLoop2047:
         assert sot["blocked"] is True
         assert sot["repair_attempted"] is False
         assert sot["unrepairable"][0]["kind"] == "missing_prompt"
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["source_of_truth"] == sot
         assert "pdd/agentic_update.py" in report
 
     def test_drift_repair_unblocks_push(self, monkeypatch: Any, tmp_path: Path) -> None:
