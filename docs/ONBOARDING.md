@@ -118,9 +118,14 @@ ANTHROPIC_API_KEY=sk-ant-your-key-here
 GEMINI_API_KEY=your-google-api-key
 
 # Optional: For Vertex AI (Gemini via GCP)
-VERTEX_CREDENTIALS=/path/to/service-account.json
-VERTEXAI_PROJECT=your-gcp-project-id
-VERTEXAI_LOCATION=us-central1
+# Simplest: use Application Default Credentials (ADC) — run
+#   gcloud auth application-default login
+# and leave GOOGLE_APPLICATION_CREDENTIALS unset, then uncomment and set the project/location:
+# VERTEXAI_PROJECT=your-gcp-project-id
+# VERTEXAI_LOCATION=us-central1
+# Only if NOT using ADC, point this at a REAL local service-account JSON.
+# A placeholder path breaks auth — leave it unset to use ADC:
+# GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/to/service-account.json
 # Legacy aliases also work:
 # VERTEX_PROJECT=your-gcp-project-id
 # VERTEX_LOCATION=us-central1
@@ -132,11 +137,31 @@ login flow once, such as `claude auth login`, `gemini` interactive login, or
 
 **To use Vertex AI (optional):**
 
+The simplest path is Application Default Credentials (ADC). With the [`gcloud`
+CLI](https://cloud.google.com/sdk/docs/install) installed, authenticate it and
+point it at your project:
+
+```bash
+gcloud auth login                              # authenticate the gcloud CLI itself
+gcloud auth application-default login          # create ADC that PDD/libraries use
+gcloud config set project YOUR_GCP_PROJECT_ID  # set your default GCP project
+```
+
+Then:
+
+1. Ensure your Google account (or its service account) has the "Vertex AI User" role on the project
+2. Set `VERTEXAI_PROJECT` / `VERTEXAI_LOCATION` and leave `GOOGLE_APPLICATION_CREDENTIALS` unset — PDD authenticates via ADC
+
+Or, with a service-account key file instead of ADC:
+
 1. Go to [GCP Console &gt; IAM &gt; Service Accounts](https://console.cloud.google.com/iam-admin/serviceaccounts)
 2. Create a service account with the "Vertex AI User" role
 3. Create and download a JSON key file
 4. Save it securely (e.g., `~/.gcp/pdd-service-account.json`)
-5. Set `VERTEX_CREDENTIALS` to the file path in your `.env`
+5. Set `GOOGLE_APPLICATION_CREDENTIALS` to that file path in your `.env`
+
+> Don't set `GOOGLE_APPLICATION_CREDENTIALS` to a placeholder path. Any value there is
+> treated as a real credential and disables the ADC fallback.
 
 See `.env.example` for a complete list of supported environment variables.
 
@@ -145,19 +170,24 @@ See `.env.example` for a complete list of supported environment variables.
 These final steps configure the local repository to ensure the application can find its resources correctly.
 
 **1. Set the `PDD_PATH` Environment Variable:**
-The application needs the absolute path to the `pdd/` source directory to function correctly.
+The application needs the absolute path to the `pdd/` **package** directory — the
+one that contains `cli.py` and the `pdd_completion.*` scripts. Because the
+repository and the package share the name `pdd`, this is the *inner* directory:
+the path ends in `…/pdd/pdd`, **not** the repository root. Pointing `PDD_PATH` at
+the repo root makes `pdd setup` fail with "Completion script not found" because
+the completion installer looks for `pdd_completion.*` under `PDD_PATH`.
 
 - **Step 1: Get the path.**
-  From the project root, run:
+  From the project root (the cloned `pdd` repo), run:
   ```bash
   cd pdd
-  pwd  # Copy the full path output by this command
+  pwd  # Copy the full path — it should end in /pdd/pdd
   cd ..
   ```
 - **Step 2: Create a local `.env` file.**
   ```bash
-  # Replace "/path/to/your/project/pdd" with the path you copied
-  echo "PDD_PATH=/path/to/your/project/pdd" > .env
+  # Replace "/path/to/your/project/pdd/pdd" with the path you copied
+  echo "PDD_PATH=/path/to/your/project/pdd/pdd" > .env
   ```
 - **Step 3: Update `.gitignore`** to ensure this local configuration file is not committed to version control.
   ```bash
@@ -168,10 +198,10 @@ The application needs the absolute path to the `pdd/` source directory to functi
 This is the most robust method to ensure `PDD_PATH` is always set correctly when your Conda environment is active, as it takes precedence over system variables within the Conda shell.
 
 - **Step 1: Set the Conda variable.**
-  Using the same absolute path you copied in Step 2.1 (`/path/to/your/project/pdd`), run the following command from your project root (using pwd):
+  Using the same absolute path you copied in Step 2.1 (`/path/to/your/project/pdd/pdd`), run the following command from your project root (using pwd):
   ```bash
-  # Replace "/path/to/your/project/pdd" with the correct path
-  conda env config vars set PDD_PATH="/path/to/your/project/pdd"
+  # Replace "/path/to/your/project/pdd/pdd" with the correct path
+  conda env config vars set PDD_PATH="/path/to/your/project/pdd/pdd"
   ```
 - **Step 2: Reactivate the environment.**
   The change will only take effect after you deactivate and reactivate your environment.
@@ -180,10 +210,11 @@ This is the most robust method to ensure `PDD_PATH` is always set correctly when
   conda activate pdd
   ```
 - **Step 3: Verify the change.**
-  You can now check if the path is set correctly.
+  Check that the path is set and points at the package directory:
   ```bash
   echo $PDD_PATH
-  # It should print the correct path: /path/to/your/project/pdd
+  # Should end in /pdd/pdd
+  ls "$PDD_PATH/cli.py"   # must exist — confirms PDD_PATH is the package dir, not the repo root
   ```
 
 ---
@@ -786,7 +817,8 @@ ls -la pdd/prompts pdd/data
 
 # 4. Verify PDD_PATH is set
 echo $PDD_PATH
-# Should show: /absolute/path/to/your/pdd
+# Should show: /absolute/path/to/your/pdd/pdd
+ls "$PDD_PATH/cli.py"
 
 # 5. Test Python can import PDD
 python -c "import pdd; print('PDD imports correctly')"
