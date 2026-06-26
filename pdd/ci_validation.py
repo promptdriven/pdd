@@ -52,6 +52,28 @@ ACTIONABLE_FAILURE_LOG_MARKERS = (
     "unittest",
     "yarn test",
 )
+EXTERNAL_CI_CHECK_NAME_MARKERS = (
+    "auth",
+    "auto-heal",
+    "cloud build",
+    "deploy",
+    "firebase",
+    "gcbrun",
+    "google",
+    "preview",
+)
+ACTIONABLE_CHECK_NAME_MARKERS = (
+    "eslint",
+    "flake8",
+    "lint",
+    "mypy",
+    "pytest",
+    "ruff",
+    "test",
+    "tsc",
+    "typecheck",
+    "unit",
+)
 
 # Substring gh CLI prints to stderr when no required checks are configured.
 # Centralised so tests can reference the same constant instead of duplicating
@@ -292,6 +314,8 @@ def _classify_external_ci_failure(checks: List[Dict[str, str]], failure_logs: st
         return None
     if any(marker in (failure_logs or "").lower() for marker in ACTIONABLE_FAILURE_LOG_MARKERS):
         return None
+    if not _failed_check_set_is_pure_external_setup(checks):
+        return None
 
     google_auth_action = "google-github-actions/auth" in haystack
     missing_google_auth_inputs = (
@@ -356,6 +380,26 @@ def _classify_external_ci_failure(checks: List[Dict[str, str]], failure_logs: st
     return None
 
 
+def _failed_check_set_is_pure_external_setup(checks: List[Dict[str, str]]) -> bool:
+    """True when every failed check name points at external CI setup."""
+    failed_checks = [
+        check
+        for check in checks
+        if check.get("bucket", "").lower() in FAIL_BUCKETS
+        or check.get("state", "").lower() in FAILURE_STATES
+    ]
+    if not failed_checks:
+        return False
+
+    for check in failed_checks:
+        name = check.get("name", "").strip().lower()
+        if any(marker in name for marker in ACTIONABLE_CHECK_NAME_MARKERS):
+            return False
+        if not any(marker in name for marker in EXTERNAL_CI_CHECK_NAME_MARKERS):
+            return False
+    return True
+
+
 def _load_ci_config(cwd: Path) -> Dict[str, Any]:
     """Load the optional root-level .pddrc CI config."""
     try:
@@ -374,9 +418,10 @@ def _load_ci_config(cwd: Path) -> Dict[str, Any]:
     return ci_config
 
 
-def _configured_manual_trigger_comment(cwd: Path, checks: List[Dict[str, str]]) -> Optional[str]:
-    """Return a configured manual CI trigger comment for the observed checks."""
+def _configured_manual_trigger_comments(cwd: Path, checks: List[Dict[str, str]]) -> List[str]:
+    """Return configured manual CI trigger comments for the observed checks."""
     ci_config = _load_ci_config(cwd)
+    comments: List[str] = []
     manual_triggers = ci_config.get("manual_triggers")
     if isinstance(manual_triggers, dict):
         for check in checks:
@@ -387,11 +432,30 @@ def _configured_manual_trigger_comment(cwd: Path, checks: List[Dict[str, str]]) 
                 pattern_text = str(pattern).strip().lower()
                 comment_text = str(comment).strip()
                 if pattern_text and pattern_text in check_name and comment_text:
-                    return comment_text
+                    if comment_text not in comments:
+                        comments.append(comment_text)
 
     comment = ci_config.get("manual_trigger_comment")
-    if isinstance(comment, str) and comment.strip():
-        return comment.strip()
+    if not comments and isinstance(comment, str) and comment.strip():
+        comments.append(comment.strip())
+    return comments
+
+
+def _configured_manual_trigger_comment(cwd: Path, checks: List[Dict[str, str]]) -> Optional[str]:
+    """Return the first configured manual CI trigger comment for compatibility."""
+    comments = _configured_manual_trigger_comments(cwd, checks)
+    return comments[0] if comments else None
+
+
+def _next_configured_manual_trigger_comment(
+    cwd: Path,
+    checks: List[Dict[str, str]],
+    posted_comments: set[str],
+) -> Optional[str]:
+    """Return the next configured manual trigger that has not been posted."""
+    for comment in _configured_manual_trigger_comments(cwd, checks):
+        if comment not in posted_comments:
+            return comment
     return None
 
 
@@ -421,6 +485,7 @@ def _classify_check_result(returncode: int, checks: List[Dict[str, str]]) -> str
         check
         for check in checks
         if check.get("bucket", "").lower() not in KNOWN_CHECK_BUCKETS
+        and check.get("state", "").lower() not in ACTION_REQUIRED_STATES
     ]
     pending_checks = [
         check
@@ -1222,8 +1287,12 @@ def run_ci_validation_loop(
                 total_cost,
             )
         if status == "action_required":
-            trigger_comment = _configured_manual_trigger_comment(cwd, checks)
-            if trigger_comment and trigger_comment not in posted_manual_trigger_comments:
+            trigger_comment = _next_configured_manual_trigger_comment(
+                cwd,
+                checks,
+                posted_manual_trigger_comments,
+            )
+            if trigger_comment:
                 trigger_posted = False
                 try:
                     trigger_posted = post_pr_comment(

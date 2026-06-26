@@ -8221,9 +8221,9 @@
               "expected_head_sha_override forces the poll to wait for a specific verified PR head SHA; if GitHub never reports that SHA as live, the loop fails with an explicit stale-head diagnostic",
               "poll timeouts with observed required checks are treated as inconclusive and best-effort instead of driving the fix loop",
               "required checks whose only terminal non-success state is ACTION_REQUIRED are treated as manual-action inconclusive instead of code failures",
-              "when .pddrc ci.manual_trigger_comment or ci.manual_triggers is configured for an ACTION_REQUIRED check, posts that trigger comment once and repolls before falling back to inconclusive",
-              "missing or unknown CI check buckets are treated as failed/unknown rather than passing from a successful gh exit code",
-              "required check failures whose logs clearly show external CI setup/auth issues such as missing GitHub Actions Google/Firebase secrets are treated as inconclusive instead of driving the CI-fix loop only when the logs do not also contain actionable test/lint/import/compile failure signals"
+              "when .pddrc ci.manual_trigger_comment or ci.manual_triggers is configured for ACTION_REQUIRED checks, posts each matching trigger comment once and repolls before falling back to inconclusive",
+              "missing or unknown CI check buckets are treated as failed/unknown rather than passing from a successful gh exit code, except ACTION_REQUIRED state remains manual-action even with a missing bucket",
+              "required check failures whose logs clearly show external CI setup/auth issues such as missing GitHub Actions Google/Firebase secrets are treated as inconclusive instead of driving the CI-fix loop only when every failed check is an external setup-style check and the logs do not also contain actionable test/lint/import/compile failure signals"
             ]
           },
           {
