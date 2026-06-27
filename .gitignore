@@ -37,6 +37,9 @@ deps.csv
 .claude/*
 !.claude/skills/
 
+# Local Codex worktrees
+/.codex-worktrees/
+
 # Test sync folder
 test_sync/
 
