@@ -716,6 +716,7 @@ def test_load_pddrc_ci_manual_trigger_config_no_warnings(tmp_path, recwarn):
     pddrc.write_text(
         'version: "1.0"\n'
         'ci:\n'
+        '  external_setup_fail_open: true\n'
         '  manual_trigger_comment: "/gcbrun"\n'
         '  manual_triggers:\n'
         '    auto-heal-pr: "/gcbrun"\n'

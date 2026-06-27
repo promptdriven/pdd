@@ -130,7 +130,7 @@ def _find_nearest_pddrc_for_file(
 # Unknown keys at any level emit a UserWarning rather than being silently ignored.
 _PDDRC_ROOT_KEYS = {"version", "contexts", "checkup", "ci"}
 _PDDRC_CHECKUP_KEYS = {"prompt_gate"}
-_PDDRC_CI_KEYS = {"manual_trigger_comment", "manual_triggers"}
+_PDDRC_CI_KEYS = {"external_setup_fail_open", "manual_trigger_comment", "manual_triggers"}
 _PDDRC_CONTEXT_KEYS = {"paths", "defaults"}
 _PDDRC_DEFAULTS_KEYS = {
     "generate_output_path",
