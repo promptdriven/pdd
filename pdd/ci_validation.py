@@ -437,6 +437,11 @@ def _load_ci_config(cwd: Path) -> Dict[str, Any]:
     return ci_config
 
 
+def _external_ci_setup_fail_open_enabled(cwd: Path) -> bool:
+    """Return whether failed external setup/auth checks may be inconclusive."""
+    return _load_ci_config(cwd).get("external_setup_fail_open") is True
+
+
 def _configured_manual_trigger_comments(cwd: Path, checks: List[Dict[str, str]]) -> List[str]:
     """Return configured manual CI trigger comments for the observed checks."""
     ci_config = _load_ci_config(cwd)
@@ -1398,7 +1403,9 @@ def run_ci_validation_loop(
             head_sha=head_sha,
             failures=last_failures,
         )
-        external_reason = _classify_external_ci_failure(last_failures, ci_failure_logs)
+        external_reason = None
+        if _external_ci_setup_fail_open_enabled(cwd):
+            external_reason = _classify_external_ci_failure(last_failures, ci_failure_logs)
         if external_reason:
             note = (
                 f"Required CI checks for PR #{pr_number} failed for an external "

@@ -740,7 +740,17 @@ def test_run_ci_validation_loop_requires_ci_fix_marker(tmp_path: Path) -> None:
 def test_run_ci_validation_loop_inconclusive_for_missing_google_auth_secret(
     tmp_path: Path,
 ) -> None:
-    """CI setup/auth failures are external action, not code-fix failures."""
+    """Opted-in CI setup/auth failures are external action, not code-fix failures."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  external_setup_fail_open: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
     failing_checks = [
         {
             "name": "build_and_preview",
@@ -793,10 +803,74 @@ def test_run_ci_validation_loop_inconclusive_for_missing_google_auth_secret(
     info_comment.assert_called_once()
 
 
+def test_run_ci_validation_loop_fail_closed_for_external_setup_without_opt_in(
+    tmp_path: Path,
+) -> None:
+    """External setup/auth failures remain code-fix-loop failures by default."""
+    failing_checks = [
+        {
+            "name": "build_and_preview",
+            "state": "FAILURE",
+            "bucket": "fail",
+            "link": "https://github.com/owner/repo/actions/runs/123",
+        }
+    ]
+    logs = (
+        "Run google-github-actions/auth@v2\n"
+        "Error: google-github-actions/auth failed with: the GitHub Action "
+        "workflow must specify exactly one of \"workload_identity_provider\" "
+        "or \"credentials_json\" because the configured secret is empty."
+    )
+    fix_was_called = False
+
+    def fake_fix(**_kwargs: object) -> tuple[bool, str, float, str]:
+        nonlocal fix_was_called
+        fix_was_called = True
+        return True, "No code changes made", 0.1, "mock-model"
+
+    with patch("pdd.ci_validation._find_open_pr_number", return_value=42), \
+         patch("pdd.ci_validation._get_head_sha", return_value="sha123"), \
+         patch("pdd.ci_validation._poll_required_checks", return_value=("failed", failing_checks)), \
+         patch("pdd.ci_validation._collect_failure_logs", return_value=logs), \
+         patch("pdd.ci_validation.post_pr_comment", return_value=True) as info_comment, \
+         patch("pdd.ci_validation.post_ci_failure_comment", return_value=True) as failure_comment, \
+         patch("pdd.ci_validation._commit_ci_fix") as mock_commit, \
+         patch("pdd.ci_validation.time.sleep", return_value=None):
+        success, message, cost = run_ci_validation_loop(
+            cwd=tmp_path,
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=822,
+            max_retries=1,
+            step_template="Checks:\n{ci_check_results}\nLogs:\n{ci_failure_logs}",
+            run_agentic_task_fn=fake_fix,
+            timeout=120.0,
+            quiet=True,
+        )
+
+    assert success is False
+    assert message == "CI fix task did not apply an actionable fix"
+    assert cost == pytest.approx(0.1)
+    assert fix_was_called
+    mock_commit.assert_not_called()
+    info_comment.assert_not_called()
+    failure_comment.assert_called_once()
+
+
 def test_run_ci_validation_loop_inconclusive_for_generic_build_auth_failure(
     tmp_path: Path,
 ) -> None:
-    """Generic build/ci names can still be pure external setup failures."""
+    """Opted-in generic build/ci names can be pure external setup failures."""
+    (tmp_path / ".pddrc").write_text(
+        'version: "1.0"\n'
+        'ci:\n'
+        '  external_setup_fail_open: true\n'
+        'contexts:\n'
+        '  default:\n'
+        '    paths: ["**"]\n'
+        '    defaults: {}\n',
+        encoding="utf-8",
+    )
     failing_checks = [
         {
             "name": "build",
