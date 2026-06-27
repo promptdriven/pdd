@@ -144,6 +144,13 @@ class ReviewLoopConfig:
     enable_gates: bool = True
     gate_timeout: float = 60.0
     gate_allow: Tuple[str, ...] = ()
+    # Issue #2047 source-of-truth repair. Kept in the appended field block so
+    # positional callers stay stable.
+    enable_source_of_truth_repair: bool = True
+    # Final appended config field: explicit opt-in for single-role review/fix
+    # mode. Off by default so reviewer/fixer independence remains the normal
+    # contract.
+    allow_same_reviewer_fixer: bool = False
 
 
 @dataclass
@@ -220,6 +227,11 @@ class ReviewLoopState:
     verification_status_by_round: Dict[int, str] = field(default_factory=dict)
     reviewed_head_sha: Optional[str] = None
     final_refetch_attempted: bool = False
+    gate_runs: List[Dict[str, Any]] = field(default_factory=list)
+    source_of_truth: Optional[Dict[str, Any]] = None
+    # True only for explicit ``allow_same_reviewer_fixer`` runs where the
+    # resolved reviewer and fixer are the same role.
+    same_role_review_fix: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +280,12 @@ def load_final_state(
     review-loop's verified head SHA after the loop returns; callers MUST treat
     ``None`` as fail-closed, never as a clean result.
     """
-    return {"reviewer_status": {"codex": "clean"}, "fresh_final_status": "clean"}
+    return {
+        "reviewer_status": {"codex": "clean"},
+        "fresh_final_status": "clean",
+        "same_role_review_fix": False,
+        "mode": "independent-reviewer-fixer",
+    }
 
 
 def clear_final_state(cwd: Path, issue_number: int, pr_number: int) -> None:
@@ -374,6 +391,8 @@ EXAMPLE_REVIEWER_STATUS_DETAILS: Dict[str, Dict[str, str]] = {
 EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "reviewer_status": {"codex": "clean", "claude": "fixer"},
     "active_reviewer": "codex",
+    "same_role_review_fix": False,
+    "mode": "independent-reviewer-fixer",
     # Always present in ``final-state.json``. Empty on the happy path;
     # populated for any reviewer that ended in failed/degraded/missing
     # (see ``EXAMPLE_REVIEWER_STATUS_DETAILS`` above for the shape,
@@ -397,6 +416,8 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "remote_pr_head_sha": "0123456789abcdef0123456789abcdef01234567",
     "reviewed_head_sha": "0123456789abcdef0123456789abcdef01234567",
     "verification_status_by_round": {"1": "verified"},
+    "source_of_truth": None,
+    "gates": [],
     "findings": [EXAMPLE_NORMALIZED_FINDING],
     # Each fix entry in ``final-state.json`` carries the structured
     # trust fields so downstream consumers can distinguish "fixer
@@ -434,6 +455,7 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 #   Issue: <issue_url>
 #   issue_aligned: true|false
 #   active-reviewer: <role>
+#   same-role-review-fix: true|false
 #   reviewer-status: <role>=<status> ... fresh-final=<status>
 #   fresh-final-review: clean|findings|failed|degraded|missing
 #   verified-head-sha: <sha>|none
@@ -442,8 +464,12 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 #   max-cost-reached: true|false
 #   max-duration-reached: true|false
 #
-# The active reviewer is the ship gate. The fixer role appears in the status
-# line as `fixer` for traceability but does not independently review the PR.
+# The active reviewer is the ship gate. In the default independent mode the
+# fixer role appears in the status line as `fixer` for traceability but does
+# not independently review the PR. In explicit same-role mode there is no
+# legacy `fixer` sentinel for that role: `reviewer_status[role]` remains the
+# reviewer outcome, `same-role-review-fix: true` is rendered, and
+# `final-state.json` sets `mode` to `single-role-review-fix`.
 # Tokens in {"failed", "degraded", "missing"} mean not-clean for the active
 # reviewer; a superseded primary failure can remain visible after a clean
 # fallback takeover. When that happens, the superseded primary's row in
@@ -484,6 +510,7 @@ EXAMPLE_FINAL_REPORT_HEADER: str = (
     "Issue: https://github.com/owner/repo/issues/2\n"
     "issue_aligned: true\n"
     "active-reviewer: codex\n"
+    "same-role-review-fix: false\n"
     "reviewer-status: codex=clean claude=fixer fresh-final=clean\n"
     "fresh-final-review: clean\n"
     "verified-head-sha: 0123456789abcdef0123456789abcdef01234567\n"

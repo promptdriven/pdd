@@ -1,6 +1,7 @@
 """
 Checkup command — GitHub issue-driven project health check, or local diagnostics.
 """
+
 # pylint: disable=unknown-option-value
 import math
 import sys
@@ -179,7 +180,7 @@ def _forward_subcommand_json(
         "Runs the PR-scoped checkup (Layer 1, no new PR) then the "
         "reviewer/fixer review-loop (Layer 2) on the resulting PR head, and "
         "returns a real ship verdict (exit non-zero unless the PR is "
-        "shippable). This is what \"ready for maintainer review\" means once a "
+        'shippable). This is what "ready for maintainer review" means once a '
         "PR exists. Cannot be combined with --review-loop, --no-fix, "
         "--review-only, --start-step, --no-gates, or --test-scope targeted "
         "unless --full-suite-source github-checks is also set."
@@ -237,6 +238,16 @@ def _forward_subcommand_json(
         "credential exhaustion such as Claude Code 'You've hit your limit "
         "· resets …'). Must differ from --fixer and --reviewer to preserve "
         "reviewer/fixer role independence."
+    ),
+)
+@click.option(
+    "--allow-same-reviewer-fixer",
+    is_flag=True,
+    default=False,
+    help=(
+        "Explicitly allow --reviewer and --fixer to name the same role in "
+        "--review-loop. This opts into single-role review/fix mode; the "
+        "default remains independent reviewer/fixer roles."
     ),
 )
 @click.option(
@@ -513,6 +524,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     fixer: Optional[str],
     reviewer_fallback: Optional[str],
     fixer_fallback: Optional[str],
+    allow_same_reviewer_fixer: bool,
     max_review_rounds: int,
     max_review_cost: float,
     max_review_minutes: float,
@@ -707,7 +719,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     if target == "lint":
         if not ctx.args or show_help:
             click.echo(
-                prompt_lint.get_help(click.Context(prompt_lint, info_name="pdd checkup lint"))
+                prompt_lint.get_help(
+                    click.Context(prompt_lint, info_name="pdd checkup lint")
+                )
             )
             return None
         lint_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
@@ -726,7 +740,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     if target == "coverage":
         if show_help:
             click.echo(
-                coverage_cmd.get_help(click.Context(coverage_cmd, info_name="pdd checkup coverage"))
+                coverage_cmd.get_help(
+                    click.Context(coverage_cmd, info_name="pdd checkup coverage")
+                )
             )
             return None
         exit_code = coverage_cmd.main(
@@ -759,7 +775,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     if target == "drift":
         if not ctx.args or show_help:
             click.echo(
-                drift_cmd.get_help(click.Context(drift_cmd, info_name="pdd checkup drift"))
+                drift_cmd.get_help(
+                    click.Context(drift_cmd, info_name="pdd checkup drift")
+                )
             )
             return None
         drift_args = _forward_subcommand_json(list(ctx.args), as_json=as_json)
@@ -789,16 +807,24 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 param_hint="'TARGET'",
             )
         root = project_root if project_root is not None else Path.cwd()
-        from ..architecture_include_validation import run_validate_arch_includes_cli  # pylint: disable=import-outside-toplevel
+        from ..architecture_include_validation import (
+            run_validate_arch_includes_cli,
+        )  # pylint: disable=import-outside-toplevel
 
-        run_validate_arch_includes_cli(root, strict=strict, quiet=ctx.obj.get("quiet", False))
+        run_validate_arch_includes_cli(
+            root, strict=strict, quiet=ctx.obj.get("quiet", False)
+        )
         return "validate-arch-includes: ok", 0.0, ""
 
     target_kind = classify_checkup_target(target, project_root=project_root)
 
-    if interactive and target is not None and not is_prompt_shaped_target(
-        target,
-        project_root=project_root,
+    if (
+        interactive
+        and target is not None
+        and not is_prompt_shaped_target(
+            target,
+            project_root=project_root,
+        )
     ):
         raise click.UsageError(
             "--interactive is only supported for prompt-shaped checkup targets."
@@ -835,8 +861,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
         # issue #1423 interactive repair flow only runs after explicit intent.
         _single_prompt_file = target_kind == CheckupTargetKind.PROMPT_FILE
         _agent_requested = (
-            _single_prompt_file
-            and (interactive or planner is not None or auto_mode)
+            _single_prompt_file and (interactive or planner is not None or auto_mode)
         ) and not _machine_output
         if _agent_requested:
             from ..checkup_agent import (  # pylint: disable=import-outside-toplevel
@@ -846,7 +871,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 CheckupAgent,
                 TerminalCheckupSession,
             )
-            from ..checkup_planner import make_planner  # pylint: disable=import-outside-toplevel
+            from ..checkup_planner import (
+                make_planner,
+            )  # pylint: disable=import-outside-toplevel
 
             _effective_planner = planner or "deterministic"
             if interactive and auto_mode:
@@ -893,7 +920,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                 discover_prompt_files,
                 run_checkup_directory,
             )
-            from ..checkup_planner import make_planner  # pylint: disable=import-outside-toplevel
+            from ..checkup_planner import (
+                make_planner,
+            )  # pylint: disable=import-outside-toplevel
 
             _root = (project_root if project_root is not None else Path.cwd()).resolve()
             _raw_dir = Path(target)
@@ -938,15 +967,18 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             _repair_cfg = PromptRepairConfig(
                 mode=_effective_repair,
                 max_rounds=(
-                    max_prompt_repair_rounds if max_prompt_repair_rounds is not None
+                    max_prompt_repair_rounds
+                    if max_prompt_repair_rounds is not None
                     else _repair_defaults.max_rounds
                 ),
                 max_token_growth=(
-                    max_prompt_token_growth if max_prompt_token_growth is not None
+                    max_prompt_token_growth
+                    if max_prompt_token_growth is not None
                     else _repair_defaults.max_token_growth
                 ),
                 max_seconds=(
-                    max_prompt_repair_seconds if max_prompt_repair_seconds is not None
+                    max_prompt_repair_seconds
+                    if max_prompt_repair_seconds is not None
                     else _repair_defaults.max_seconds
                 ),
             )
@@ -982,8 +1014,12 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
                     "recommended_actions": "\n".join(_report.recommended_actions()),
                 }
                 _rr = run_prompt_repair_loop(
-                    _pp, _repair_cfg, context=_repair_context, cwd=_root,
-                    verbose=ctx.obj.get("verbose", False), quiet=quiet,
+                    _pp,
+                    _repair_cfg,
+                    context=_repair_context,
+                    cwd=_root,
+                    verbose=ctx.obj.get("verbose", False),
+                    quiet=quiet,
                     strict=strict,
                 )
                 if not quiet:
@@ -1206,7 +1242,9 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             no_fix=no_fix,
             timeout_adder=timeout_adder,
             use_github_state=not no_github_state,
-            reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
+            reasoning_time=(
+                ctx.obj.get("time") if ctx.obj.get("time_explicit") else None
+            ),
             pr_url=pr_url,
             test_scope=test_scope,
             full_suite_source=full_suite_source,
@@ -1219,6 +1257,7 @@ def checkup(  # pylint: disable=too-many-arguments,too-many-positional-arguments
             fixer=fixer,
             reviewer_fallback=reviewer_fallback,
             fixer_fallback=fixer_fallback,
+            allow_same_reviewer_fixer=allow_same_reviewer_fixer,
             max_review_rounds=max_review_rounds,
             max_review_cost=max_review_cost,
             max_review_minutes=max_review_minutes,
