@@ -91,10 +91,10 @@ class ReleaseVideoError(RuntimeError):
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        validate_release_video_idempotency_options(args)
         repo = Path(args.repo).resolve()
         if args.status:
             return print_release_video_status(args, repo)
+        validate_release_video_idempotency_options(args)
         if args.preflight:
             return preflight_release_video(args)
 
@@ -295,7 +295,7 @@ def validate_release_video_idempotency_options(args: argparse.Namespace) -> None
 
 def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
     """Print the locally persisted PDS run handle for a release tag."""
-    tag = resolve_release_tag(repo, args.tag or os.environ.get("RELEASE_TAG"))
+    tag = resolve_status_release_tag(repo, args.tag or os.environ.get("RELEASE_TAG"))
     run_metadata_path = Path(args.output_dir) / safe_path_part(tag) / "pds_run.json"
     try:
         raw = run_metadata_path.read_text(encoding="utf8")
@@ -330,6 +330,16 @@ def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
     return 0
 
 
+def resolve_status_release_tag(repo: Path, explicit_tag: str | None) -> str:
+    if explicit_tag:
+        if not SEMVER_TAG_RE.match(explicit_tag):
+            raise ReleaseVideoError(
+                f"Release tag must look like vN.N.N, got {explicit_tag!r}."
+            )
+        return explicit_tag
+    return resolve_release_tag(repo, None)
+
+
 def query_pds_release_video_status(
     args: argparse.Namespace,
     repo: Path,
@@ -340,6 +350,9 @@ def query_pds_release_video_status(
         raise ReleaseVideoError("Persisted PDS run metadata does not include runId.")
     command = split_command(args.pds_cli)
     ensure_command_exists(command[0], "PDS CLI")
+    project_id = str(metadata.get("projectId") or "").strip()
+    if project_id:
+        command.extend(["--project", project_id])
     completed = run(
         [*command, "release-video", "status", "--run-id", run_id, "--json"],
         cwd=repo,
@@ -973,6 +986,7 @@ def create_release_video(
         idempotency_key=idempotency_key,
         attempt_id=args.idempotency_attempt_id,
         provenance=release_video_idempotency_provenance(args.idempotency_provenance),
+        project_id=project_id,
     )
     if persisted_run_metadata_path:
         print(
@@ -1031,9 +1045,9 @@ def release_video_idempotency_key(
 def release_video_idempotency_provenance(explicit_provenance: str | None) -> str:
     provenance = str(explicit_provenance or "").strip()
     if not provenance:
-        if os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true":
+        if env_flag("GITHUB_ACTIONS"):
             provenance = "github-actions"
-        elif os.environ.get("CI", "").strip():
+        elif env_flag("CI"):
             provenance = "ci"
         else:
             provenance = "local"
@@ -1050,6 +1064,7 @@ def persist_pds_run_metadata_from_output(
     idempotency_key: str,
     attempt_id: str | None,
     provenance: str,
+    project_id: str | None,
 ) -> Path | None:
     metadata = extract_pds_run_metadata(completed.stdout, completed.stderr)
     if not metadata:
@@ -1061,6 +1076,7 @@ def persist_pds_run_metadata_from_output(
         idempotency_key=idempotency_key,
         attempt_id=attempt_id,
         provenance=provenance,
+        project_id=project_id,
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf8")
@@ -1190,6 +1206,7 @@ def enrich_pds_run_metadata(
     idempotency_key: str,
     attempt_id: str | None,
     provenance: str,
+    project_id: str | None,
 ) -> dict[str, str]:
     enriched = {
         key: str(value).strip()
@@ -1202,17 +1219,43 @@ def enrich_pds_run_metadata(
     enriched.setdefault("tag", tag)
     enriched.setdefault("idempotencyKey", idempotency_key)
     enriched.setdefault("idempotencyProvenance", provenance)
+    if str(project_id or "").strip() and "projectId" not in enriched:
+        enriched["projectId"] = str(project_id).strip()
     if run_id:
-        pds_base = shlex.join(split_command(pds_cli))
-        enriched.setdefault(
-            "recoverCommand",
-            f"{pds_base} release-video status --run-id {shlex.quote(run_id)} --json",
+        pds_command = split_command(pds_cli)
+        if enriched.get("projectId"):
+            pds_command.extend(["--project", enriched["projectId"]])
+        pds_base = shlex.join(pds_command)
+        recover_command = (
+            f"{pds_base} release-video status --run-id {shlex.quote(run_id)} --json"
         )
-        enriched.setdefault(
-            "watchCommand",
-            f"{pds_base} jobs watch --run-id {shlex.quote(run_id)} --jsonl",
-        )
+        watch_command = f"{pds_base} jobs watch --run-id {shlex.quote(run_id)} --jsonl"
+        if should_replace_recovery_command(
+            enriched.get("recoverCommand", ""),
+            enriched.get("projectId", ""),
+        ):
+            enriched["recoverCommand"] = recover_command
+        if should_replace_recovery_command(
+            enriched.get("watchCommand", ""),
+            enriched.get("projectId", ""),
+        ):
+            enriched["watchCommand"] = watch_command
     return enriched
+
+
+def should_replace_recovery_command(command: str, project_id: str) -> bool:
+    if not command:
+        return True
+    if not project_id:
+        return False
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return True
+    return not any(
+        part == "--project" and index + 1 < len(parts) and parts[index + 1] == project_id
+        for index, part in enumerate(parts)
+    )
 
 
 def pds_failure_hint(completed: subprocess.CompletedProcess[str]) -> str:

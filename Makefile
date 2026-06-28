@@ -99,6 +99,7 @@ RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE ?=
 RELEASE_VIDEO_ATTEMPT_ID ?=
 RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0
 RELEASE_VIDEO_FORCE_REGENERATE ?= 0
+RELEASE_VIDEO_STATUS_QUERY ?= 0
 RELEASE_VIDEO_YOUTUBE_URL ?=
 CLAUDE_CLI ?= claude
 PDS_CLI ?= pds
@@ -108,6 +109,11 @@ SOPS_RELEASE_ENV_FILE ?= $(firstword $(wildcard ../secrets/pdd_cloud/shared.prod
 SOPS_RELEASE_CLAUDE_ENV_FILES ?= $(wildcard ../secrets/pdd_cloud/shared.staging.sops.env ../secrets/pdd_cloud/shared.staging2.sops.env ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging2.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.staging.sops.env secrets/pdd_cloud/shared.staging2.sops.env secrets/pdd_cloud/shared.prod.sops.env)
 SOPS_RELEASE_ENV_RUNNER := python scripts/sops_release_env.py --sops "$(SOPS)" --release-env-file "$(SOPS_RELEASE_ENV_FILE)" $(foreach file,$(SOPS_RELEASE_CLAUDE_ENV_FILES),--claude-env-file "$(file)")
 REQUIRE_CLAUDE_OAUTH_SLOTS ?= 1
+
+RELEASE_VIDEO_STATUS_QUERY_FLAG :=
+ifeq ($(RELEASE_VIDEO_STATUS_QUERY),1)
+RELEASE_VIDEO_STATUS_QUERY_FLAG := --status-query
+endif
 
 # Python files
 PY_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_python.prompt")
@@ -865,16 +871,19 @@ release-video-status:
 		echo "RELEASE_TAG is required, for example make release-video-status RELEASE_TAG=vX.Y.Z" >&2; \
 		exit 1; \
 	fi; \
-	RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
-	if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
-	if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
-	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
+	if [ "$(RELEASE_VIDEO_STATUS_QUERY)" = "1" ]; then \
+		RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
+		if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
+		if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
+		export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
+	fi; \
+	STATUS_QUERY_ARGS="$(RELEASE_VIDEO_STATUS_QUERY_FLAG)"; \
 	python scripts/release_video.py \
 		--status \
-		--status-query \
 		--tag "$(RELEASE_TAG)" \
 		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
-		--pds-cli "$(PDS_CLI)"
+		--pds-cli "$(PDS_CLI)" \
+		$$STATUS_QUERY_ARGS
 
 release-video-discord-backfill:
 	@python scripts/backfill_release_video_discord.py \
