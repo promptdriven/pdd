@@ -58,6 +58,7 @@ help:
 	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make release-video           - Generate and upload a YouTube video for the current release tag"
+	@echo "  make release-video-status RELEASE_TAG=vX.Y.Z - Show persisted PDS release-video run metadata"
 	@echo "  make release-video-discord-backfill RELEASE_TAG=vX.Y.Z RELEASE_VIDEO_YOUTUBE_URL=url - Post recovered video follow-up to Discord"
 	@echo "  make release-local           - Run release with local SOPS release secrets"
 	@echo "  make check-release-claude-oauth-config-local - Verify local SOPS Claude OAuth rotation slots"
@@ -94,9 +95,11 @@ RELEASE_VIDEO_DRY_RUN ?= 0
 RELEASE_VIDEO_PROJECT_ID ?=
 RELEASE_VIDEO_SCRIPT_PATH ?=
 RELEASE_VIDEO_IDEMPOTENCY_KEY ?=
+RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE ?=
 RELEASE_VIDEO_ATTEMPT_ID ?=
 RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0
 RELEASE_VIDEO_FORCE_REGENERATE ?= 0
+RELEASE_VIDEO_STATUS_QUERY ?= 0
 RELEASE_VIDEO_YOUTUBE_URL ?=
 CLAUDE_CLI ?= claude
 PDS_CLI ?= pds
@@ -106,6 +109,11 @@ SOPS_RELEASE_ENV_FILE ?= $(firstword $(wildcard ../secrets/pdd_cloud/shared.prod
 SOPS_RELEASE_CLAUDE_ENV_FILES ?= $(wildcard ../secrets/pdd_cloud/shared.staging.sops.env ../secrets/pdd_cloud/shared.staging2.sops.env ../secrets/pdd_cloud/shared.prod.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.staging2.sops.env ../pdd_cloud/secrets/pdd_cloud/shared.prod.sops.env secrets/pdd_cloud/shared.staging.sops.env secrets/pdd_cloud/shared.staging2.sops.env secrets/pdd_cloud/shared.prod.sops.env)
 SOPS_RELEASE_ENV_RUNNER := python scripts/sops_release_env.py --sops "$(SOPS)" --release-env-file "$(SOPS_RELEASE_ENV_FILE)" $(foreach file,$(SOPS_RELEASE_CLAUDE_ENV_FILES),--claude-env-file "$(file)")
 REQUIRE_CLAUDE_OAUTH_SLOTS ?= 1
+
+RELEASE_VIDEO_STATUS_QUERY_FLAG :=
+ifeq ($(RELEASE_VIDEO_STATUS_QUERY),1)
+RELEASE_VIDEO_STATUS_QUERY_FLAG := --status-query
+endif
 
 # Python files
 PY_PROMPTS := $(shell find $(PROMPTS_DIR) -name "*_python.prompt")
@@ -121,7 +129,7 @@ ifeq ($(CI),true)
 SKIP_MAKEFILE_REGEN := 1
 endif
 
-RELEASE_MAKE_GOALS := release release-video release-video-discord-backfill release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+RELEASE_MAKE_GOALS := release release-video release-video-status release-video-discord-backfill release-local release-sops release-infisical check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 ifneq ($(filter $(RELEASE_MAKE_GOALS),$(MAKECMDGOALS)),)
 SKIP_MAKEFILE_REGEN := 1
 endif
@@ -142,7 +150,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-discord-backfill check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local release-sops release-infisical release-video release-video-status release-video-discord-backfill check-release-remote check-release-branch check-release-clean check-release-video-config check-release-video-config-local check-release-video-config-sops check-release-video-config-infisical check-release-claude-oauth-config check-release-claude-oauth-config-local check-release-claude-oauth-config-sops
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -842,6 +850,7 @@ release-video:
 	export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
 	RELEASE_TAG="$(RELEASE_TAG)" RELEASE_GIT_SHA="$(RELEASE_GIT_SHA)" \
 	RELEASE_VIDEO_IDEMPOTENCY_KEY="$(RELEASE_VIDEO_IDEMPOTENCY_KEY)" \
+	RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE="$(RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE)" \
 	RELEASE_VIDEO_ATTEMPT_ID="$(RELEASE_VIDEO_ATTEMPT_ID)" \
 	RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)" \
 	RELEASE_VIDEO_FORCE_REGENERATE="$(RELEASE_VIDEO_FORCE_REGENERATE)" \
@@ -856,6 +865,25 @@ release-video:
 		--platform "$(RELEASE_VIDEO_PLATFORM)" \
 		--privacy "$(RELEASE_VIDEO_PRIVACY)" \
 		$$DRY_RUN_FLAG
+
+release-video-status:
+	@if [ -z "$(RELEASE_TAG)" ]; then \
+		echo "RELEASE_TAG is required, for example make release-video-status RELEASE_TAG=vX.Y.Z" >&2; \
+		exit 1; \
+	fi; \
+	if [ "$(RELEASE_VIDEO_STATUS_QUERY)" = "1" ]; then \
+		RELEASE_PDS_TOKEN="$${PDS_TOKEN:-}"; \
+		if [ -z "$$RELEASE_PDS_TOKEN" ]; then RELEASE_PDS_TOKEN="$${PDS_RELEASE_TOKEN:-}"; fi; \
+		if [ -n "$$RELEASE_PDS_TOKEN" ]; then export PDS_TOKEN="$$RELEASE_PDS_TOKEN"; export PDS_PROFILE=; fi; \
+		export PDS_API_URL="$${PDS_API_URL:-$(PDS_API_URL)}"; \
+	fi; \
+	STATUS_QUERY_ARGS="$(RELEASE_VIDEO_STATUS_QUERY_FLAG)"; \
+	python scripts/release_video.py \
+		--status \
+		--tag "$(RELEASE_TAG)" \
+		--output-dir "$(RELEASE_VIDEO_OUTPUT_DIR)" \
+		--pds-cli "$(PDS_CLI)" \
+		$$STATUS_QUERY_ARGS
 
 release-video-discord-backfill:
 	@python scripts/backfill_release_video_discord.py \
