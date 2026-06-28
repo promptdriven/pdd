@@ -222,7 +222,10 @@ def run_release_video_with_existing_script(
             str(
                 pds_stub(
                     tmp_path,
-                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/recovery"}},
+                    {
+                        "ok": True,
+                        "summary": {"youtubeUrl": "https://youtu.be/recovery"},
+                    },
                 )
             ),
             "--output-dir",
