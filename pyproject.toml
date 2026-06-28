@@ -53,7 +53,7 @@ dependencies = [
     "pandas==3.0.3",
     "psutil>=7.0.0",
     "pydantic==2.13.4",
-    "litellm[caching]>=1.84.0,<2.0",
+    "litellm[caching]>=1.84.0,<1.85",
     "lxml>=5.0.0",
     "rich==15.0.0",
     "semver==3.0.4",
