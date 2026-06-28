@@ -17,6 +17,14 @@ from typing import Any
 
 SEMVER_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 YOUTUBE_URL_RE = re.compile(r"https?://(?:www\.)?(?:youtube\.com|youtu\.be)/[^\s\"'<>]+")
+IDEMPOTENCY_PROVENANCE_RE = re.compile(r"[^a-z0-9._-]+")
+PDS_RUN_HANDLE_LINE_RE = re.compile(
+    r"^\[pds\]\s+release-video run handle:\s+(?P<fields>.+)$",
+    flags=re.IGNORECASE | re.MULTILINE,
+)
+PDS_RUN_HANDLE_FIELD_RE = re.compile(
+    r"\b(?P<key>runId|projectId|status|attemptId)=(?P<value>[^\s]+)"
+)
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
@@ -84,10 +92,12 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         validate_release_video_idempotency_options(args)
+        repo = Path(args.repo).resolve()
+        if args.status:
+            return print_release_video_status(args, repo)
         if args.preflight:
             return preflight_release_video(args)
 
-        repo = Path(args.repo).resolve()
         tag = resolve_release_tag(repo, args.tag or os.environ.get("RELEASE_TAG"))
         git_sha = args.git_sha or os.environ.get("RELEASE_GIT_SHA") or git(
             repo,
@@ -116,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         release_notes_path = output_dir / "release_notes.md"
         script_path = output_dir / "release_video_script.md"
         response_path = output_dir / "pds_response.json"
+        run_metadata_path = output_dir / "pds_run.json"
 
         context_path.write_text(context, encoding="utf8")
         release_notes_path.write_text(release_notes_from_context(context), encoding="utf8")
@@ -147,6 +158,7 @@ def main(argv: list[str] | None = None) -> int:
             script_path=script_path,
             release_notes_path=release_notes_path,
             changelog_path=Path(args.changelog),
+            run_metadata_path=run_metadata_path,
         )
         response_path.write_text(json.dumps(response, indent=2, sort_keys=True) + "\n", encoding="utf8")
 
@@ -233,6 +245,15 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="Full PDS idempotency key. Defaults to RELEASE_VIDEO_IDEMPOTENCY_KEY.",
     )
     parser.add_argument(
+        "--idempotency-provenance",
+        default=os.environ.get("RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE", ""),
+        help=(
+            "Execution provenance namespace for default PDS idempotency keys. "
+            "Defaults to github-actions on GitHub Actions, ci on generic CI, "
+            "and local otherwise."
+        ),
+    )
+    parser.add_argument(
         "--idempotency-attempt-id",
         default=os.environ.get("RELEASE_VIDEO_ATTEMPT_ID", ""),
         help=(
@@ -245,6 +266,16 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--preflight",
         action="store_true",
         help="Check local release-video configuration without creating artifacts.",
+    )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Print persisted PDS release-video run metadata for the release tag.",
+    )
+    parser.add_argument(
+        "--status-query",
+        action="store_true",
+        help="With --status, query PDS status using the persisted run id.",
     )
     return parser.parse_args(argv)
 
@@ -259,6 +290,69 @@ def validate_release_video_idempotency_options(args: argparse.Namespace) -> None
     if full_key and attempt_id:
         raise ReleaseVideoError(
             "Use either a full release-video idempotency key or an attempt id, not both."
+        )
+
+
+def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
+    """Print the locally persisted PDS run handle for a release tag."""
+    tag = resolve_release_tag(repo, args.tag or os.environ.get("RELEASE_TAG"))
+    run_metadata_path = Path(args.output_dir) / safe_path_part(tag) / "pds_run.json"
+    try:
+        raw = run_metadata_path.read_text(encoding="utf8")
+    except OSError as exc:
+        raise ReleaseVideoError(
+            f"No persisted PDS run metadata found for {tag}: {run_metadata_path}"
+        ) from exc
+    if not raw.strip():
+        raise ReleaseVideoError(
+            f"Persisted PDS run metadata is empty for {tag}: {run_metadata_path}"
+        )
+    try:
+        metadata = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ReleaseVideoError(
+            f"Persisted PDS run metadata is not valid JSON: {run_metadata_path}: {exc}"
+        ) from exc
+    if not isinstance(metadata, dict):
+        raise ReleaseVideoError(
+            f"Persisted PDS run metadata is not a JSON object: {run_metadata_path}"
+        )
+
+    print(json.dumps(metadata, indent=2, sort_keys=True))
+    recover_command = str(metadata.get("recoverCommand") or "").strip()
+    watch_command = str(metadata.get("watchCommand") or "").strip()
+    if recover_command:
+        print(f"recover: {recover_command}")
+    if watch_command:
+        print(f"watch: {watch_command}")
+    if args.status_query:
+        query_pds_release_video_status(args, repo, metadata)
+    return 0
+
+
+def query_pds_release_video_status(
+    args: argparse.Namespace,
+    repo: Path,
+    metadata: dict[str, Any],
+) -> None:
+    run_id = str(metadata.get("runId") or "").strip()
+    if not run_id:
+        raise ReleaseVideoError("Persisted PDS run metadata does not include runId.")
+    command = split_command(args.pds_cli)
+    ensure_command_exists(command[0], "PDS CLI")
+    completed = run(
+        [*command, "release-video", "status", "--run-id", run_id, "--json"],
+        cwd=repo,
+        timeout=None,
+        check=False,
+    )
+    if completed.stdout.strip():
+        print(completed.stdout.rstrip())
+    if completed.stderr.strip():
+        print(completed.stderr.rstrip(), file=sys.stderr)
+    if completed.returncode != 0:
+        raise ReleaseVideoError(
+            f"PDS release-video status failed: {process_details(completed)}"
         )
 
 
@@ -815,6 +909,7 @@ def create_release_video(
     script_path: Path,
     release_notes_path: Path,
     changelog_path: Path,
+    run_metadata_path: Path,
 ) -> dict[str, Any]:
     command = split_command(args.pds_cli)
     ensure_command_exists(command[0], "PDS CLI")
@@ -827,6 +922,7 @@ def create_release_video(
         git_sha=git_sha,
         full_key=args.idempotency_key,
         attempt_id=args.idempotency_attempt_id,
+        provenance=args.idempotency_provenance,
     )
     pds_args = [
         "release-video",
@@ -868,13 +964,39 @@ def create_release_video(
     if args.dry_run:
         pds_args.append("--dry-run")
 
-    completed = run(command + pds_args, cwd=repo, timeout=None)
+    completed = run(command + pds_args, cwd=repo, timeout=None, check=False)
+    persisted_run_metadata_path = persist_pds_run_metadata_from_output(
+        completed=completed,
+        path=run_metadata_path,
+        pds_cli=args.pds_cli,
+        tag=tag,
+        idempotency_key=idempotency_key,
+        attempt_id=args.idempotency_attempt_id,
+        provenance=release_video_idempotency_provenance(args.idempotency_provenance),
+    )
+    if persisted_run_metadata_path:
+        print(
+            f"release-video: persisted PDS run metadata to {persisted_run_metadata_path}",
+            file=sys.stderr,
+        )
+    if completed.returncode != 0:
+        message = (
+            f"{shlex.join(command + pds_args)} failed: "
+            f"{process_details(completed)}"
+        )
+        hint = pds_failure_hint(completed)
+        if hint:
+            message += f" {hint}"
+        if persisted_run_metadata_path:
+            message += f" PDS run metadata saved to {persisted_run_metadata_path}."
+        raise ReleaseVideoError(message)
     try:
         parsed = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
-        raise ReleaseVideoError(
-            f"PDS CLI did not return JSON: {exc}. Output: {completed.stdout[:2000]}"
-        ) from exc
+        message = f"PDS CLI did not return JSON: {exc}. Output: {completed.stdout[:2000]}"
+        if persisted_run_metadata_path:
+            message += f" PDS run metadata saved to {persisted_run_metadata_path}."
+        raise ReleaseVideoError(message) from exc
     if not isinstance(parsed, dict):
         raise ReleaseVideoError("PDS CLI returned JSON that was not an object.")
     return parsed
@@ -886,6 +1008,7 @@ def release_video_idempotency_key(
     git_sha: str,
     full_key: str | None,
     attempt_id: str | None,
+    provenance: str | None,
 ) -> str:
     full_key = str(full_key or "").strip()
     attempt_id = str(attempt_id or "").strip()
@@ -894,12 +1017,214 @@ def release_video_idempotency_key(
             "Use either a full release-video idempotency key or an attempt id, not both."
         )
 
-    default_key = f"pdd-release-video:{tag}:{git_sha}"
     if full_key:
         return full_key
+    default_key = (
+        f"pdd-release-video:{tag}:{git_sha}:"
+        f"{release_video_idempotency_provenance(provenance)}"
+    )
     if attempt_id:
         return f"{default_key}:retry-{attempt_id}"
     return default_key
+
+
+def release_video_idempotency_provenance(explicit_provenance: str | None) -> str:
+    provenance = str(explicit_provenance or "").strip()
+    if not provenance:
+        if os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true":
+            provenance = "github-actions"
+        elif os.environ.get("CI", "").strip():
+            provenance = "ci"
+        else:
+            provenance = "local"
+    sanitized = IDEMPOTENCY_PROVENANCE_RE.sub("-", provenance.lower()).strip("-._")
+    return sanitized or "local"
+
+
+def persist_pds_run_metadata_from_output(
+    *,
+    completed: subprocess.CompletedProcess[str],
+    path: Path,
+    pds_cli: str,
+    tag: str,
+    idempotency_key: str,
+    attempt_id: str | None,
+    provenance: str,
+) -> Path | None:
+    metadata = extract_pds_run_metadata(completed.stdout, completed.stderr)
+    if not metadata:
+        return None
+    metadata = enrich_pds_run_metadata(
+        metadata,
+        pds_cli=pds_cli,
+        tag=tag,
+        idempotency_key=idempotency_key,
+        attempt_id=attempt_id,
+        provenance=provenance,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n", encoding="utf8")
+    return path
+
+
+def extract_pds_run_metadata(*texts: str) -> dict[str, str] | None:
+    for text in texts:
+        metadata = extract_pds_run_metadata_from_json_text(text)
+        if metadata:
+            return metadata
+    for text in texts:
+        metadata = extract_pds_run_metadata_from_compat_lines(text)
+        if metadata:
+            return metadata
+    return None
+
+
+def extract_pds_run_metadata_from_json_text(text: str) -> dict[str, str] | None:
+    for value in iter_json_values(text):
+        metadata = extract_pds_run_metadata_from_json_value(value)
+        if metadata:
+            return metadata
+    return None
+
+
+def iter_json_values(text: str):
+    decoder = json.JSONDecoder()
+    index = 0
+    while index < len(text):
+        json_starts = (
+            text.find("{", index),
+            text.find("[", index),
+        )
+        next_object = min(
+            (position for position in json_starts if position >= 0),
+            default=-1,
+        )
+        if next_object < 0:
+            return
+        try:
+            value, end = decoder.raw_decode(text[next_object:])
+        except json.JSONDecodeError:
+            index = next_object + 1
+            continue
+        yield value
+        index = next_object + end
+
+
+def extract_pds_run_metadata_from_json_value(value: Any) -> dict[str, str] | None:
+    if isinstance(value, dict):
+        metadata = pds_run_metadata_from_mapping(value)
+        if metadata:
+            return metadata
+        for nested in value.values():
+            metadata = extract_pds_run_metadata_from_json_value(nested)
+            if metadata:
+                return metadata
+    elif isinstance(value, list):
+        for nested in value:
+            metadata = extract_pds_run_metadata_from_json_value(nested)
+            if metadata:
+                return metadata
+    return None
+
+
+def pds_run_metadata_from_mapping(mapping: dict[str, Any]) -> dict[str, str] | None:
+    run_value = mapping.get("run")
+    project_value = mapping.get("project")
+    run = run_value if isinstance(run_value, dict) else {}
+    project = project_value if isinstance(project_value, dict) else {}
+    metadata = {
+        "runId": first_string(mapping, "runId", "run_id")
+        or first_string(run, "runId", "run_id", "id"),
+        "projectId": first_string(mapping, "projectId", "project_id")
+        or first_string(project, "projectId", "project_id", "id"),
+        "status": first_string(mapping, "status", "state")
+        or first_string(run, "status", "state"),
+        "attemptId": first_string(mapping, "attemptId", "attempt_id"),
+        "recoverCommand": first_string(mapping, "recoverCommand", "recover_command"),
+        "watchCommand": first_string(mapping, "watchCommand", "watch_command"),
+    }
+    if not metadata["runId"]:
+        return None
+    return {key: value for key, value in metadata.items() if value}
+
+
+def first_string(mapping: dict[str, Any], *keys: str) -> str | None:
+    for key in keys:
+        value = mapping.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def extract_pds_run_metadata_from_compat_lines(text: str) -> dict[str, str] | None:
+    match = PDS_RUN_HANDLE_LINE_RE.search(text)
+    if not match:
+        return None
+    metadata = {
+        field_match.group("key"): field_match.group("value")
+        for field_match in PDS_RUN_HANDLE_FIELD_RE.finditer(match.group("fields"))
+    }
+    recover_command = extract_pds_command_line(text, "[pds] recover:")
+    watch_command = extract_pds_command_line(text, "[pds] watch:")
+    if recover_command:
+        metadata["recoverCommand"] = recover_command
+    if watch_command:
+        metadata["watchCommand"] = watch_command
+    return metadata if metadata.get("runId") else None
+
+
+def extract_pds_command_line(text: str, prefix: str) -> str | None:
+    for line in text.splitlines():
+        if line.startswith(prefix):
+            command = line.removeprefix(prefix).strip()
+            if command:
+                return command
+    return None
+
+
+def enrich_pds_run_metadata(
+    metadata: dict[str, str],
+    *,
+    pds_cli: str,
+    tag: str,
+    idempotency_key: str,
+    attempt_id: str | None,
+    provenance: str,
+) -> dict[str, str]:
+    enriched = {
+        key: str(value).strip()
+        for key, value in metadata.items()
+        if str(value).strip()
+    }
+    run_id = enriched.get("runId", "")
+    if str(attempt_id or "").strip() and "attemptId" not in enriched:
+        enriched["attemptId"] = str(attempt_id).strip()
+    enriched.setdefault("tag", tag)
+    enriched.setdefault("idempotencyKey", idempotency_key)
+    enriched.setdefault("idempotencyProvenance", provenance)
+    if run_id:
+        pds_base = shlex.join(split_command(pds_cli))
+        enriched.setdefault(
+            "recoverCommand",
+            f"{pds_base} release-video status --run-id {shlex.quote(run_id)} --json",
+        )
+        enriched.setdefault(
+            "watchCommand",
+            f"{pds_base} jobs watch --run-id {shlex.quote(run_id)} --jsonl",
+        )
+    return enriched
+
+
+def pds_failure_hint(completed: subprocess.CompletedProcess[str]) -> str:
+    combined = f"{completed.stderr}\n{completed.stdout}".lower()
+    if "request_hash_mismatch" not in combined:
+        return ""
+    return (
+        "PDS reported request_hash_mismatch: the same idempotency key was "
+        "reused with a different request body. Retry with a distinct "
+        "RELEASE_VIDEO_ATTEMPT_ID, RELEASE_VIDEO_IDEMPOTENCY_PROVENANCE, or "
+        "explicit RELEASE_VIDEO_IDEMPOTENCY_KEY."
+    )
 
 
 def find_youtube_url(value: Any) -> str | None:
