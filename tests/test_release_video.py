@@ -27,6 +27,7 @@ def release_video_env(extra: dict | None = None) -> dict:
         "RELEASE_VIDEO_PROMPT_TEMPLATE",
         "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT",
         "RELEASE_VIDEO_FORCE_REGENERATE",
+        "RELEASE_VIDEO_METADATA_CONFLICT",
         "RELEASE_VIDEO_SCRIPT_PATH",
         "CI",
         "GITHUB_ACTIONS",
@@ -221,7 +222,10 @@ def run_release_video_with_existing_script(
             str(
                 pds_stub(
                     tmp_path,
-                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/recovery"}},
+                    {
+                        "ok": True,
+                        "summary": {"youtubeUrl": "https://youtu.be/recovery"},
+                    },
                 )
             ),
             "--output-dir",
@@ -725,12 +729,86 @@ def test_release_video_env_can_force_regenerate(tmp_path: Path):
     assert "--force-regenerate" in pds_capture_argv(capture)
 
 
+def test_release_video_cli_can_set_metadata_conflict_use_existing(tmp_path: Path):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        extra_args=["--metadata-conflict", "use-existing"],
+    )
+
+    pds_call = pds_capture_argv(capture)
+    assert pds_call[pds_call.index("--metadata-conflict") + 1] == "use-existing"
+
+
+def test_release_video_env_can_set_metadata_conflict_replace_with_force(
+    tmp_path: Path,
+):
+    _result, capture = run_release_video_with_existing_script(
+        tmp_path,
+        env_extra={
+            "RELEASE_VIDEO_METADATA_CONFLICT": "replace",
+            "RELEASE_VIDEO_FORCE_REGENERATE": "1",
+        },
+    )
+
+    pds_call = pds_capture_argv(capture)
+    assert pds_call[pds_call.index("--metadata-conflict") + 1] == "replace"
+    assert "--force-regenerate" in pds_call
+
+
+def test_release_video_metadata_conflict_replace_requires_force_regenerate(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    existing_script = tmp_path / "existing_release_video_script.md"
+    existing_script.write_text(reusable_script_text(), encoding="utf8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--script-path",
+            str(existing_script),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/recovery"}},
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+            "--metadata-conflict",
+            "replace",
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "--metadata-conflict replace requires --force-regenerate"
+        in result.stderr
+    )
+    assert not capture.exists()
+
+
 def test_release_video_recovery_flags_default_to_disabled(tmp_path: Path):
     _result, capture = run_release_video_with_existing_script(tmp_path)
 
     pds_call = pds_capture_argv(capture)
     assert "--bootstrap-selected-project" not in pds_call
     assert "--force-regenerate" not in pds_call
+    assert "--metadata-conflict" not in pds_call
 
 
 def test_release_video_makefile_passes_idempotency_env_vars():
@@ -759,6 +837,7 @@ def test_release_video_makefile_passes_recovery_env_vars():
 
     assert "RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT ?= 0" in makefile_text
     assert "RELEASE_VIDEO_FORCE_REGENERATE ?= 0" in makefile_text
+    assert "RELEASE_VIDEO_METADATA_CONFLICT ?=" in makefile_text
     assert (
         'RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT="$(RELEASE_VIDEO_BOOTSTRAP_SELECTED_PROJECT)"'
         in makefile_text
@@ -767,6 +846,20 @@ def test_release_video_makefile_passes_recovery_env_vars():
         'RELEASE_VIDEO_FORCE_REGENERATE="$(RELEASE_VIDEO_FORCE_REGENERATE)"'
         in makefile_text
     )
+    assert (
+        'RELEASE_VIDEO_METADATA_CONFLICT="$(RELEASE_VIDEO_METADATA_CONFLICT)"'
+        in makefile_text
+    )
+
+
+def test_release_video_metadata_conflict_recovery_is_documented():
+    doc_text = (
+        ROOT / "docs" / "contributors" / "pdd-cli-release-process.md"
+    ).read_text(encoding="utf8")
+
+    assert "RELEASE_VIDEO_METADATA_CONFLICT=replace" in doc_text
+    assert "RELEASE_VIDEO_FORCE_REGENERATE=1" in doc_text
+    assert "--metadata-conflict replace --force-regenerate" in doc_text
 
 
 def test_release_video_makefile_has_status_target():

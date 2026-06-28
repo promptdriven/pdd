@@ -25,6 +25,7 @@ PDS_RUN_HANDLE_LINE_RE = re.compile(
 PDS_RUN_HANDLE_FIELD_RE = re.compile(
     r"\b(?P<key>runId|projectId|status|attemptId)=(?P<value>[^\s]+)"
 )
+METADATA_CONFLICT_MODES = {"replace", "use-existing"}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
@@ -94,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         repo = Path(args.repo).resolve()
         if args.status:
             return print_release_video_status(args, repo)
-        validate_release_video_idempotency_options(args)
+        validate_release_video_create_options(args)
         if args.preflight:
             return preflight_release_video(args)
 
@@ -234,6 +235,14 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
         default=env_flag("RELEASE_VIDEO_FORCE_REGENERATE"),
         help="Pass --force-regenerate to PDS for release-video recovery.",
     )
+    parser.add_argument(
+        "--metadata-conflict",
+        default=os.environ.get("RELEASE_VIDEO_METADATA_CONFLICT", ""),
+        help=(
+            "Pass --metadata-conflict use-existing|replace to PDS for "
+            "release-video project metadata recovery."
+        ),
+    )
     parser.add_argument("--project-name", help="PDS project name. Defaults to 'PDD <tag> release'.")
     parser.add_argument("--preset", default=os.environ.get("RELEASE_VIDEO_PRESET", "release-notes"))
     parser.add_argument("--target", default=os.environ.get("RELEASE_VIDEO_TARGET", "publish"))
@@ -284,6 +293,12 @@ def env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def validate_release_video_create_options(args: argparse.Namespace) -> None:
+    """Validate options that only apply to PDS release-video creation."""
+    validate_release_video_idempotency_options(args)
+    validate_release_video_metadata_conflict_options(args)
+
+
 def validate_release_video_idempotency_options(args: argparse.Namespace) -> None:
     full_key = str(args.idempotency_key or "").strip()
     attempt_id = str(args.idempotency_attempt_id or "").strip()
@@ -291,6 +306,28 @@ def validate_release_video_idempotency_options(args: argparse.Namespace) -> None
         raise ReleaseVideoError(
             "Use either a full release-video idempotency key or an attempt id, not both."
         )
+
+
+def validate_release_video_metadata_conflict_options(args: argparse.Namespace) -> None:
+    """Validate PDS project metadata conflict recovery options."""
+    mode = release_video_metadata_conflict(args)
+    if not mode:
+        return
+    if mode not in METADATA_CONFLICT_MODES:
+        allowed = ", ".join(sorted(METADATA_CONFLICT_MODES))
+        raise ReleaseVideoError(
+            f"Release-video metadata conflict must be one of: {allowed}."
+        )
+    if mode == "replace" and not args.force_regenerate:
+        raise ReleaseVideoError(
+            "--metadata-conflict replace requires --force-regenerate "
+            "or RELEASE_VIDEO_FORCE_REGENERATE=1."
+        )
+
+
+def release_video_metadata_conflict(args: argparse.Namespace) -> str:
+    """Return the normalized PDS metadata-conflict recovery mode."""
+    return str(args.metadata_conflict or "").strip()
 
 
 def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
@@ -972,6 +1009,9 @@ def create_release_video(
         pds_args.extend(["--changelog", str(changelog_full_path)])
     if args.bootstrap_selected_project:
         pds_args.append("--bootstrap-selected-project")
+    metadata_conflict = release_video_metadata_conflict(args)
+    if metadata_conflict:
+        pds_args.extend(["--metadata-conflict", metadata_conflict])
     if args.force_regenerate:
         pds_args.append("--force-regenerate")
     if args.dry_run:
