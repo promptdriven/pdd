@@ -19,7 +19,7 @@ langchain-community>=0.3.25,<0.4
 langchain-core>=0.3.56,<0.4
 langchain-mcp-adapters>=0.1.0,<0.2
 langgraph>=0.3.0,<0.4
-litellm[caching]>=1.80.0,<=1.82.6
+litellm[caching]>=1.84.0,<1.85
 lxml>=5.0.0
 nest_asyncio==1.6.0
 numpy>=1.26.0
