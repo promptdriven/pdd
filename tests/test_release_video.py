@@ -580,6 +580,63 @@ def test_release_video_preserves_blank_after_label_trailing_here_is_narration():
     assert artifacts["validation"]["errors"] == []
 
 
+def test_release_video_preserves_multiparagraph_trailing_here_is_narration():
+    release_video = load_release_video_module()
+    script = "\n".join(
+        [
+            "# PDD v1.1.0 Release Video",
+            "",
+            "## Opening",
+            "",
+            "NARRATOR:",
+            "PDD v1.1.0 keeps release recovery visible with durable scripts and",
+            "status evidence for maintainers who need to debug failed video publishes.",
+            "",
+            "VISUAL: show the release context, normalized script, and pds_run.json.",
+            "",
+            "## Close",
+            "",
+            "NARRATOR:",
+            "The closing paragraph summarizes the publish recovery path and why the",
+            "generated assets matter to maintainers during a release incident.",
+            "",
+            (
+                "Here is the takeaway: v1.1.0 gives maintainers a recoverable "
+                "release-video path with clear artifacts, validation evidence, "
+                "and durable PDS status after a failed PDS publish."
+            ),
+        ]
+    )
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "The closing paragraph summarizes" in artifacts["script"]
+    assert "Here is the takeaway" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_preserves_plain_narration_before_first_visual():
+    release_video = load_release_video_module()
+    script = """Hook: PDD v1.1.0 turns release-video recovery into an operator-visible
+path instead of a best-effort publish step that can fail without enough context.
+
+Narration: The release wrapper now keeps generated scripts, validation evidence,
+PDS run handles, status query diagnostics, and recovery commands together before
+the publish request reaches PDS. Maintainers can reattach to the same run, see
+whether a running sidecar is stale, and retry with a stable idempotency key
+without regenerating the release story or losing the incident trail.
+
+Visual direction: show the changelog, generated script, pds_run.json, status
+query output, and final YouTube receipt side by side.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Hook: PDD v1.1.0 turns release-video recovery" in artifacts["script"]
+    assert "Narration: The release wrapper now keeps generated scripts" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
 def test_release_video_collapses_empty_duplicate_narrator_label():
     release_video = load_release_video_module()
     script = """# PDD v1.1.0 Release Video
@@ -2711,6 +2768,74 @@ def test_release_video_status_query_keeps_sidecar_when_only_unrelated_run_return
     assert refreshed["statusStale"] is True
     assert refreshed["lastStatusQuery"]["runId"] == "agent_run_current"
     assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
+def test_release_video_status_query_keeps_sidecar_stale_for_unmatched_success(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps({"ok": True}) + "\n",
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is True
+    assert refreshed["lastStatusQuery"]["ok"] is True
+    assert refreshed["lastStatusQuery"]["response"] == {"ok": True}
+
+
+def test_release_video_status_note_warns_when_stale_flag_survives_success():
+    release_video = load_release_video_module()
+    note = release_video.release_video_status_note(
+        {
+            "runId": "agent_run_current",
+            "status": "running",
+            "statusStale": True,
+            "lastStatusQuery": {"ok": True},
+        }
+    )
+
+    assert "create-time run metadata may be stale" in note
 
 
 def test_release_video_status_query_failure_records_diagnostic_without_refreshing(
