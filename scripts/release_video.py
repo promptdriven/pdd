@@ -487,9 +487,13 @@ def persist_status_query_success(
             value = response.get(source_key)
             if isinstance(value, str) and value.strip():
                 refreshed[target_key] = value.strip()
+    refreshed_status = bool(status_metadata) or status_response_has_refresh_data(
+        response,
+        persisted_run_id,
+    )
     refreshed["statusStale"] = (
         False
-        if status_metadata or response is not None
+        if refreshed_status
         else release_video_status_is_running(refreshed.get("status"))
     )
     refreshed["pdsContext"] = pds_context(pds_cli)
@@ -540,6 +544,11 @@ def persist_status_query_failure(
 def release_video_status_note(metadata: dict[str, Any]) -> str:
     if not release_video_status_is_running(metadata.get("status")):
         return ""
+    if metadata.get("statusStale") is True:
+        return (
+            "create-time run metadata may be stale; refresh with "
+            "make release-video-status RELEASE_TAG=<tag> RELEASE_VIDEO_STATUS_QUERY=1."
+        )
     last_query = metadata.get("lastStatusQuery")
     if isinstance(last_query, dict) and last_query.get("ok") is True:
         return ""
@@ -587,6 +596,15 @@ def status_response_matches_run_id(value: Any, run_id: str) -> bool:
 def response_pds_run_id(value: dict[str, Any]) -> str:
     metadata = pds_run_metadata_from_mapping(value)
     return str((metadata or {}).get("runId") or "").strip()
+
+
+def status_response_has_refresh_data(response: Any, persisted_run_id: str) -> bool:
+    if not isinstance(response, dict):
+        return False
+    response_run_id = response_pds_run_id(response)
+    if response_run_id and persisted_run_id and response_run_id != persisted_run_id:
+        return False
+    return bool(first_nonempty_string(response.get("status"), response.get("state")))
 
 
 def status_value_is_terminal(status: Any) -> bool:
@@ -1772,18 +1790,12 @@ def write_release_video_script_artifacts(
 
 def strip_model_wrapper_text(script: str) -> tuple[str, bool]:
     lines = script.splitlines()
-    first_script_line = next(
-        (
-            index
-            for index, line in enumerate(lines)
-            if is_release_video_script_line(line)
-        ),
-        0,
-    )
+    lines, changed = strip_leading_model_wrapper_lines(lines)
+    first_script_line = release_video_script_start_index(lines)
     if first_script_line:
         lines = lines[first_script_line:]
 
-    changed = first_script_line > 0
+    changed = changed or first_script_line > 0
     while lines and not lines[-1].strip():
         lines.pop()
     while (
@@ -1796,6 +1808,47 @@ def strip_model_wrapper_text(script: str) -> tuple[str, bool]:
         while lines and not lines[-1].strip():
             lines.pop()
     return "\n".join(lines).strip(), changed
+
+
+def strip_leading_model_wrapper_lines(lines: list[str]) -> tuple[list[str], bool]:
+    changed = False
+    while lines and not lines[0].strip():
+        lines.pop(0)
+        changed = True
+    while lines and is_model_wrapper_line(lines[0]):
+        lines.pop(0)
+        changed = True
+        while lines and not lines[0].strip():
+            lines.pop(0)
+            changed = True
+    return lines, changed
+
+
+def release_video_script_start_index(lines: list[str]) -> int:
+    for index, line in enumerate(lines):
+        if not is_release_video_script_line(line):
+            continue
+        if visual_cue_text(line) and has_non_wrapper_content_before(lines, index):
+            return 0
+        if has_markdown_fence_before(lines, index):
+            return 0
+        return index
+    return 0
+
+
+def has_non_wrapper_content_before(lines: list[str], end_index: int) -> bool:
+    return any(
+        line.strip() and not is_model_wrapper_line(line) and not is_markdown_fence_line(line)
+        for line in lines[:end_index]
+    )
+
+
+def has_markdown_fence_before(lines: list[str], end_index: int) -> bool:
+    return any(is_markdown_fence_line(line) for line in lines[:end_index])
+
+
+def is_markdown_fence_line(line: str) -> bool:
+    return bool(re.match(r"^\s*```(?:markdown|md)?\s*$", line, flags=re.IGNORECASE))
 
 
 def strip_outer_markdown_fence_lines(script: str) -> tuple[str, bool]:
@@ -1815,16 +1868,12 @@ def strip_outer_markdown_fence_lines(script: str) -> tuple[str, bool]:
 
 
 def line_is_inside_narrator_block(lines: list[str], line_index: int) -> bool:
-    crossed_blank = False
     for index in range(line_index - 1, -1, -1):
         line = lines[index]
         if not line.strip():
-            crossed_blank = True
             continue
-        if is_narrator_label(line):
+        if is_narrator_label(line) or inline_narrator_label_body(line) is not None:
             return True
-        if crossed_blank:
-            return False
         if visual_cue_text(line) or re.match(r"^#{1,2}\s+\S", line.strip()):
             return False
     return False
@@ -1834,9 +1883,17 @@ def is_model_wrapper_line(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
+    if re.match(r"^here(?:'s| is)\b", stripped, flags=re.IGNORECASE):
+        return bool(
+            re.search(
+                r"\b(?:release[- ]video\s+)?script\b",
+                stripped,
+                flags=re.IGNORECASE,
+            )
+        )
     return bool(
         re.match(
-            r"^(?:here(?:'s| is)|sure[,!]?|certainly[,!]?|of course[,!]?|"
+            r"^(?:sure[,!]?|certainly[,!]?|of course[,!]?|"
             r"let me know|i can also|i hope this helps)\b",
             stripped,
             flags=re.IGNORECASE,
