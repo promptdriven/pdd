@@ -871,6 +871,62 @@ def test_correct_prompt_path_resolution_integration(mock_change_fixture, tmp_pat
     assert "Inferred language from filename: Python" in captured.out
     assert "Overall Success Status: True" in captured.out
 
+def test_csv_change_resolves_code_path_from_prompt_subdirectory(
+    mock_change_fixture,
+    tmp_path,
+    capsys,
+):
+    """
+    CSV change should preserve the prompt's relative subdirectory when locating
+    the paired code file under code_directory.
+    """
+    prompts_dir = tmp_path / "prompts" / "pkg"
+    code_dir = tmp_path / "code"
+    nested_code_dir = code_dir / "prompts" / "pkg"
+    prompts_dir.mkdir(parents=True)
+    nested_code_dir.mkdir(parents=True)
+
+    prompt_rel = Path("prompts") / "pkg" / "widget_python.prompt"
+    prompt_path = tmp_path / prompt_rel
+    code_path = nested_code_dir / "widget.py"
+    csv_path = tmp_path / "changes.csv"
+
+    prompt_path.write_text("Original prompt content", encoding="utf-8")
+    code_path.write_text("def widget():\n    return 1\n", encoding="utf-8")
+    csv_path.write_text(
+        f"prompt_name,change_instructions\n{prompt_rel.as_posix()},Do the change\n",
+        encoding="utf-8",
+    )
+
+    mock_change_fixture.return_value = ("Modified prompt", 0.01, "test_model")
+
+    with patch("pdd.process_csv_change.get_extension", return_value=".py"):
+        success, list_of_jsons, total_cost, model_name = process_csv_change(
+            csv_file=str(csv_path),
+            strength=0.5,
+            temperature=0.5,
+            code_directory=str(code_dir),
+            language="python",
+            extension=".py",
+            budget=1.0,
+        )
+
+    assert success
+    assert list_of_jsons == [
+        {
+            "file_name": prompt_rel.as_posix(),
+            "modified_prompt": "Modified prompt",
+        }
+    ]
+    assert total_cost == 0.01
+    assert model_name == "test_model"
+    assert mock_change_fixture.call_args.kwargs["input_code"] == code_path.read_text(
+        encoding="utf-8"
+    )
+
+    captured = capsys.readouterr()
+    assert "Overall Success Status: True" in captured.out
+
 def test_extension_fallback_bug(mock_change_fixture, capsys):
     """
     Test the scenario where prompt suffix indicates Python, but get_extension fails,
