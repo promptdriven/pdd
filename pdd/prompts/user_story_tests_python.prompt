@@ -1,3 +1,31 @@
+<pdd-reason>Validates, generates, and fixes user stories linked to PDD prompt files, with cross-unit story traceability.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "constants": [
+      {"name": "STORY_DEV_UNITS_METADATA_KEY", "value": "pdd-story-dev-units"}
+    ],
+    "functions": [
+      {"name": "run_user_story_tests", "signature": "(story_dir=None, prompt_dir=None, ...) -> Tuple[bool, List[Dict], float, str]", "returns": "Tuple[bool, List[Dict], float, str]"},
+      {"name": "run_user_story_fix", "signature": "(story_file, ...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "generate_user_story", "signature": "(prompt_files, issue, ...) -> Tuple[bool, str, float, str, str, List[str]]", "returns": "Tuple[bool, str, float, str, str, List[str]]"},
+      {"name": "cache_story_prompt_links", "signature": "(...) -> Tuple[bool, str, float, str, List[str]]", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "parse_story_dev_unit_metadata", "signature": "(story_text: str) -> list[str]", "returns": "list[str]"},
+      {"name": "story_is_cross_unit", "signature": "(story_text: str) -> bool", "returns": "bool"},
+      {"name": "get_cross_unit_stories_for_prompt", "signature": "(prompt_name: str, stories_dir: Path | str) -> list[dict]", "returns": "list[dict]"},
+      {"name": "get_all_dev_units_for_story", "signature": "(story_text: str) -> list[str]", "returns": "list[str]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+<pdd-dependency>detect_change_python.prompt</pdd-dependency>
+<pdd-dependency>change_main_python.prompt</pdd-dependency>
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to implement and maintain
 % `pdd/user_story_tests.py`, which provides user story validation, story generation,
 % and user story-driven prompt fixing for PDD.

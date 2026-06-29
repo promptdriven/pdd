@@ -1,3 +1,24 @@
+<pdd-reason>Builds deterministic contract coverage matrix for prompt rules against story and test evidence.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {"name": "RuleCoverage", "kind": "dataclass"},
+      {"name": "CoverageResult", "kind": "dataclass"}
+    ],
+    "functions": [
+      {"name": "build_coverage", "signature": "(path: Path, stories_dir=None, tests_dir=None, global_story_registry=None) -> CoverageResult", "returns": "CoverageResult"},
+      {"name": "build_coverage_directory", "signature": "(directory: Path, stories_dir=None, tests_dir=None) -> list[CoverageResult]", "returns": "list[CoverageResult]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>contract_ir_python.prompt</pdd-dependency>
+<pdd-dependency>user_story_tests_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer implementing deterministic contract coverage analysis for PDD.
 % The generated module is pdd/coverage_contracts.py and is exposed through `pdd checkup coverage`.
 
