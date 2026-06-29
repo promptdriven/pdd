@@ -454,23 +454,36 @@ def persist_status_query_success(
     completed: subprocess.CompletedProcess[str],
     pds_cli: str,
 ) -> None:
-    response = extract_status_response(completed.stdout, completed.stderr)
+    persisted_run_id = str(metadata.get("runId") or "").strip()
+    response = extract_status_response(
+        completed.stdout,
+        completed.stderr,
+        preferred_run_id=persisted_run_id or None,
+    )
     refreshed = dict(metadata)
     status_metadata = extract_pds_run_metadata(
         completed.stdout,
         completed.stderr,
-        preferred_run_id=str(metadata.get("runId") or "").strip() or None,
+        preferred_run_id=persisted_run_id or None,
     ) or {}
     for key in ("runId", "projectId", "status", "attemptId"):
         if status_metadata.get(key):
             refreshed[key] = status_metadata[key]
     if isinstance(response, dict):
+        response_run_id = response_pds_run_id(response)
         for source_key, target_key in (
             ("runId", "runId"),
             ("projectId", "projectId"),
             ("status", "status"),
             ("state", "status"),
         ):
+            if (
+                target_key in {"runId", "status"}
+                and response_run_id
+                and persisted_run_id
+                and response_run_id != persisted_run_id
+            ):
+                continue
             value = response.get(source_key)
             if isinstance(value, str) and value.strip():
                 refreshed[target_key] = value.strip()
@@ -536,10 +549,19 @@ def release_video_status_is_running(status: Any) -> bool:
     return str(status or "").strip().lower() in RUNNING_PDS_STATUSES
 
 
-def extract_status_response(*texts: str) -> Any:
+def extract_status_response(
+    *texts: str,
+    preferred_run_id: str | None = None,
+) -> Any:
     candidates: list[Any] = []
     for text in texts:
         candidates.extend(iter_json_values(text))
+    if preferred_run_id:
+        candidates = [
+            value
+            for value in candidates
+            if status_response_matches_run_id(value, preferred_run_id)
+        ]
     if not candidates:
         return None
     terminal_candidates = [
@@ -549,6 +571,18 @@ def extract_status_response(*texts: str) -> Any:
         and status_value_is_terminal(value.get("status") or value.get("state"))
     ]
     return (terminal_candidates or candidates)[-1]
+
+
+def status_response_matches_run_id(value: Any, run_id: str) -> bool:
+    if not isinstance(value, dict):
+        return True
+    response_run_id = response_pds_run_id(value)
+    return not response_run_id or response_run_id == run_id
+
+
+def response_pds_run_id(value: dict[str, Any]) -> str:
+    metadata = pds_run_metadata_from_mapping(value)
+    return str((metadata or {}).get("runId") or "").strip()
 
 
 def status_value_is_terminal(status: Any) -> bool:
@@ -1363,30 +1397,72 @@ def extract_pds_run_metadata(
     *texts: str,
     preferred_run_id: str | None = None,
 ) -> dict[str, str] | None:
+    primary_metadata: list[dict[str, str]] = []
     json_metadata: list[dict[str, str]] = []
     for text in texts:
+        primary_metadata.extend(extract_primary_pds_run_metadata_from_json_text(text))
         json_metadata.extend(extract_all_pds_run_metadata_from_json_text(text))
-    if json_metadata:
-        json_metadata = merge_pds_run_metadata_candidates(json_metadata)
-        if preferred_run_id:
-            preferred = [
-                metadata
-                for metadata in json_metadata
-                if metadata.get("runId") == preferred_run_id
-            ]
-            if preferred:
-                json_metadata = preferred
-        terminal = [
+    if preferred_run_id and json_metadata:
+        preferred = [
             metadata
-            for metadata in json_metadata
-            if status_value_is_terminal(metadata.get("status"))
+            for metadata in merge_pds_run_metadata_candidates(json_metadata)
+            if metadata.get("runId") == preferred_run_id
         ]
-        return (terminal or json_metadata)[-1]
+        if preferred:
+            return select_pds_run_metadata(preferred, distinct_run_policy="last")
+        json_metadata = []
+    if primary_metadata:
+        return select_pds_run_metadata(primary_metadata, distinct_run_policy="last")
+    if json_metadata:
+        return select_pds_run_metadata(json_metadata, distinct_run_policy="first")
     for text in texts:
         metadata = extract_pds_run_metadata_from_compat_lines(text)
         if metadata:
             return metadata
     return None
+
+
+def extract_primary_pds_run_metadata_from_json_text(text: str) -> list[dict[str, str]]:
+    values: list[dict[str, str]] = []
+    for value in iter_json_values(text):
+        values.extend(extract_primary_pds_run_metadata_from_json_value(value))
+    return values
+
+
+def extract_primary_pds_run_metadata_from_json_value(value: Any) -> list[dict[str, str]]:
+    if isinstance(value, dict):
+        metadata = pds_run_metadata_from_mapping(value)
+        return [metadata] if metadata else []
+    if isinstance(value, list):
+        values: list[dict[str, str]] = []
+        for nested in value:
+            if isinstance(nested, dict):
+                metadata = pds_run_metadata_from_mapping(nested)
+                if metadata:
+                    values.append(metadata)
+        return values
+    return []
+
+
+def select_pds_run_metadata(
+    candidates: list[dict[str, str]],
+    *,
+    distinct_run_policy: str,
+) -> dict[str, str] | None:
+    merged = merge_pds_run_metadata_candidates(candidates)
+    if not merged:
+        return None
+    run_ids = {metadata.get("runId", "") for metadata in merged if metadata.get("runId")}
+    if len(run_ids) <= 1:
+        terminal = [
+            metadata
+            for metadata in merged
+            if status_value_is_terminal(metadata.get("status"))
+        ]
+        return (terminal or merged)[-1]
+    if distinct_run_policy == "first":
+        return merged[0]
+    return merged[-1]
 
 
 def extract_pds_run_metadata_from_json_text(text: str) -> dict[str, str] | None:
@@ -1762,6 +1838,16 @@ def collapse_duplicate_narrator_labels(script: str) -> tuple[str, bool]:
             changed = True
             continue
 
+        inline_match = inline_narrator_label_line(line)
+        if inline_match:
+            if not pending_label:
+                append_spaced(normalized, "NARRATOR:")
+            normalized.append(inline_match.group("body").strip())
+            pending_label = False
+            blank_after_pending_label = False
+            changed = True
+            continue
+
         if is_narrator_label(line):
             if pending_label:
                 while normalized and not normalized[-1].strip():
@@ -1824,6 +1910,8 @@ def has_duplicate_narrator_labels(script: str) -> bool:
     for line in script.splitlines():
         if duplicate_narrator_label_line(line):
             return True
+        if inline_narrator_label_line(line):
+            return True
         if is_narrator_label(line):
             if previous_pending_label:
                 return True
@@ -1861,6 +1949,14 @@ def duplicate_narrator_label_line(line: str) -> re.Match[str] | None:
         r"^\s*(?:\*\*)?NARRATOR:\s*(?:\*\*)?\s*"
         r"(?:(?:\*\*)?NARRATOR:\s*(?:\*\*)?\s*)+"
         r"(?P<body>.*)$",
+        line,
+        flags=re.IGNORECASE,
+    )
+
+
+def inline_narrator_label_line(line: str) -> re.Match[str] | None:
+    return re.match(
+        r"^\s*(?:\*\*)?NARRATOR:\s*(?:\*\*)?\s*(?P<body>\S.*)$",
         line,
         flags=re.IGNORECASE,
     )
@@ -1943,15 +2039,23 @@ def format_timestamp(total_seconds: int) -> str:
 
 def ensure_narrator_blocks(script: str) -> str:
     lines = script.splitlines()
-    has_narrator = any(is_narrator_label(line) for line in lines)
+    has_narrator = any(
+        is_narrator_label(line) or inline_narrator_label_line(line)
+        for line in lines
+    )
     normalized: list[str] = []
     in_narrator = False
 
     for line in lines:
         stripped = line.strip()
         visual = visual_cue_text(line)
+        inline_narrator = inline_narrator_label_line(line)
         if is_narrator_label(line):
             append_spaced(normalized, "NARRATOR:")
+            in_narrator = True
+        elif inline_narrator:
+            append_spaced(normalized, "NARRATOR:")
+            normalized.append(inline_narrator.group("body").strip())
             in_narrator = True
         elif visual:
             append_spaced(normalized, f"VISUAL: {visual}")
