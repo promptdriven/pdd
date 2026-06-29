@@ -12,6 +12,7 @@
   - `iter_covers_refs(story_text)` for story `## Covers` references.
 - Define `COVERAGE_REF_RE` that matches only leading coverage entries (not incidental mentions in prose).
 - Keep parsing deterministic and side-effect free.
+- **Cross-dev-unit support (issue #1769):** Extend `CoversRef` with `dev_units: list[str] = field(default_factory=list)`. Reflect this field in `as_dict()` when the list is non-empty (omit the key when empty for backward compatibility). `iter_covers_refs` itself does NOT populate `dev_units`; the field is populated by the coverage engine (`coverage_contracts.py`) after calling `get_all_dev_units_for_story` from `pdd.user_story_tests`. Required tests: `test_covers_ref_dev_units_default_empty`, `test_covers_ref_dev_units_populated`.
 
 % Deliverables
 - Code: `pdd/contract_ir.py`
