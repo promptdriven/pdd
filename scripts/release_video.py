@@ -788,7 +788,11 @@ def redact_secret_text(text: str) -> str:
         redacted,
     )
     redacted = re.sub(
-        r"(?i)([\"']?\bauthorization[\"']?\s*:\s*[\"']?bearer\s+)[^\s\"'\\,;]+",
+        (
+            r"(?i)([\"']?\bauthorization[\"']?\s*[:=]\s*[\"']?"
+            r"(?:(?:bearer|basic|token)\s+)?)"
+            r"[^\"'\s,;}]+"
+        ),
         r"\1[redacted]",
         redacted,
     )
@@ -831,14 +835,6 @@ def redact_secret_text(text: str) -> str:
             r"auth[_-]?token|client[_-]?secret|"
             r"credential|password|refresh[_-]?token|secret|"
             r"signed[_-]?url|token)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;}]+"
-        ),
-        r"\1[redacted]",
-        redacted,
-    )
-    redacted = re.sub(
-        (
-            r"(?i)([\"']?authorization[\"']?\s*[:=]\s*[\"']?)"
-            r"(?!bearer\b)[^\"'\s,;}]+"
         ),
         r"\1[redacted]",
         redacted,
@@ -2123,23 +2119,37 @@ def is_model_wrapper_line(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
+    normalized = stripped.replace("\u2019", "'")
     if re.match(
-        r"^(?:here(?:'s| is)|below is|the following is)\b",
-        stripped,
+        r"^(?:(?:absolutely|sure|certainly|of course)[,!]?\s+)?"
+        r"(?:here(?:'s| is)|below is|the following is|"
+        r"below you(?:'ll| will) find)\b",
+        normalized,
         flags=re.IGNORECASE,
     ):
-        return bool(
-            re.search(
-                r"\b(?:release[- ]video\s+)?script\b",
-                stripped,
-                flags=re.IGNORECASE,
-            )
-        )
+        return mentions_release_video_script(normalized)
+    if re.match(
+        r"^i(?:'ve| have)\s+"
+        r"(?:drafted|prepared|created|written|generated|put together)\b",
+        normalized,
+        flags=re.IGNORECASE,
+    ):
+        return mentions_release_video_script(normalized)
     return bool(
         re.match(
             r"^(?:sure[,!]?|certainly[,!]?|of course[,!]?|"
             r"let me know|i can also|i hope this helps)\b",
             stripped,
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def mentions_release_video_script(text: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:release[- ]video\s+)?script\b",
+            text,
             flags=re.IGNORECASE,
         )
     )
