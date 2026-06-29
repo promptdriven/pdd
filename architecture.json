@@ -8335,7 +8335,8 @@
     "description": "Aggregates command functions from sibling modules in pdd/commands and registers them with the Click CLI group. Keeps the main cli.py clean and pins the registration order required by `pdd --help`.",
     "dependencies": [
       "commands/replay_python.prompt",
-      "commands/context_python.prompt"
+      "commands/context_python.prompt",
+      "commands/story_python.prompt"
     ],
     "priority": 70,
     "filename": "commands/__init___python.prompt",
@@ -10379,7 +10380,7 @@
   },
   {
     "reason": "Shared blocking quality gate that drift-syncs and build/smoke-verifies a PR for pre-checkup or fix-final validation.",
-    "description": "A blocking quality gate shared by PR-producing orchestrators. The change/feature orchestrator runs it immediately before handing off to `pdd checkup --pr`; the fix/bug e2e orchestrator runs it as the final deterministic verification before returning success. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block checkup handoff for change callers or success return for fix callers. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it \u2014 the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate \u2014 so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. For checkup-bound callers it prepares the PR for cross-model review; for `pdd fix`, `pdd checkup --pr --issue --final-gate` remains a separate explicit command. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
+    "description": "A blocking quality gate shared by PR-producing orchestrators. The change/feature orchestrator runs it immediately before handing off to `pdd checkup --pr`; the fix/bug e2e orchestrator runs it as the final deterministic verification before returning success. Runs two ordered phases against the PR worktree and returns a single hard pass/fail the caller uses to block checkup handoff for change callers or success return for fix callers. Phase 1 (drift-sync) brings code, prompt, architecture.json and .pdd/meta into sync in the worktree via run_metadata_sync / sync_all_prompts_to_architecture / detect_drift+heal_module, then re-detects to confirm. .pdd/meta fingerprints written here via run_metadata_sync cover prompt+code only (example/test hashes are null), so canonical fingerprint finalization belongs to the post-merge sync (#1317): BOTH orchestrator paths defer it — the fix path filters .pdd/** from its commit, the change path restores tracked .pdd/meta after the gate — so the PR tree may still show fingerprint drift until the post-merge sync completes it. Phase 2 (build/smoke) runs deterministic per-file checks (py_compile/ruff/tsc) plus a project smoke layer (import changed modules, route/router-object probe, caller-compatibility sweep over both from-import and alias-import call sites, git-diff-targeted unit tests including directly-changed test files) and hard-blocks on any red result. Closes the vacuous-pass hole in run_ci_validation_loop by running its own checks rather than only polling GitHub required checks; preserves the fork-PR-RCE constraint by delegating to checkup_gates._script_is_acceptable, which runs only validated, safe package.json scripts (never build scripts) and skips the npm-family path entirely when the PR touches package.json / a package-manager config; the gate adds no command execution of its own beyond that allowlist. For checkup-bound callers it prepares the PR for cross-model review; for `pdd fix`, `pdd checkup --pr --issue --final-gate` remains a separate explicit command. Docs-only diffs short-circuit; strict mode reuses PDD_STRICT_DOC_SYNC (issue #1293).",
     "dependencies": [
       "checkup_gates_python.prompt",
       "ci_drift_heal_python.prompt",
@@ -10807,6 +10808,199 @@
             "returns": "None"
           }
         ]
+      }
+    }
+  },
+  {
+    "reason": "Implements the `pdd story` CLI group (add, list, link) as thin wrappers over pdd.user_story_tests.",
+    "description": "Implements pdd story add (create user story from issue/file/text), pdd story list (show stories with regression status), and pdd story link (add prompt link to existing story) as a @click.group wrapping pdd.user_story_tests.",
+    "dependencies": [
+      "user_story_tests_python.prompt"
+    ],
+    "priority": 241,
+    "filename": "commands/story_python.prompt",
+    "filepath": "pdd/commands/story.py",
+    "tags": [
+      "module",
+      "python",
+      "commands",
+      "story"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "story add",
+            "description": "Create a user story file from an issue URL, number, or local file, linked to one or more dev units or prompts"
+          },
+          {
+            "name": "story list",
+            "description": "List all user stories with their linked prompts and regression status"
+          },
+          {
+            "name": "story link",
+            "description": "Add a prompt link to an existing story file without regenerating the story body"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    },
+    "contract_summary": {
+      "rules": [
+        "R1",
+        "R2",
+        "R3",
+        "R4",
+        "R5",
+        "R6",
+        "R7",
+        "R8",
+        "R9",
+        "R10"
+      ],
+      "critical": [],
+      "stories": [],
+      "capabilities": [],
+      "coverage_status": "partial",
+      "evidence_status": "missing",
+      "waived": [],
+      "unchecked": [
+        "R10"
+      ],
+      "rules_detail": {
+        "R1": {
+          "rule_id": "R1",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R1_rejects_zero_refund",
+            "test_R1_rejects_negative_refund",
+            "test_cross_module_known_id_no_issue",
+            "test_r1_is_checked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R2": {
+          "rule_id": "R2",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_multiple_rules_from_one_function",
+            "test_r2_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R3": {
+          "rule_id": "R3",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_R3_no_provider_call_invalid",
+            "test_cross_module_refs_matching_prompt",
+            "test_cross_module_refs_other_prompt_excluded",
+            "test_comment_heuristic",
+            "test_r3_is_test_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R4": {
+          "rule_id": "R4",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r4_is_story_only"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R5": {
+          "rule_id": "R5",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r5_is_unchecked"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R6": {
+          "rule_id": "R6",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_r6_is_waived"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R7": {
+          "rule_id": "R7",
+          "status": "failed",
+          "stories": [],
+          "tests": [
+            "test_R7_broken_syntax"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": [
+            "test_receipt_failed.py: syntax error on line 4"
+          ]
+        },
+        "R8": {
+          "rule_id": "R8",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_covers_comment_style"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R9": {
+          "rule_id": "R9",
+          "status": "test-only",
+          "stories": [],
+          "tests": [
+            "test_guard_refuses_uppercase_pdd_prefix_bypass",
+            "test_rule_comment_style"
+          ],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        },
+        "R10": {
+          "rule_id": "R10",
+          "status": "unchecked",
+          "stories": [],
+          "tests": [],
+          "waiver": null,
+          "waiver_status": null,
+          "waiver_expires": null,
+          "failures": []
+        }
       }
     }
   }

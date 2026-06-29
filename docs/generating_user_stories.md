@@ -51,7 +51,7 @@ tracks alignment.
 
 ```mermaid
 flowchart TD
-    A[GitHub issue] --> B["pdd test --issue ISSUE prompts/module_lang.prompt"]
+    A[GitHub issue] --> B["pdd story add &lt;issue&gt; --devunit &lt;name&gt;<br/>(recommended)<br/>or: pdd test --issue ISSUE prompts/module_lang.prompt"]
     B --> C["story__slug.md<br/>(human-verified Story)"]
     B --> D["contracts/slug.contract.md<br/>(generated)"]
     C --> E{"Human review:<br/>is this the behavior I want?"}
@@ -85,6 +85,38 @@ Markdown file and passing that path.
 > the contract's `## Acceptance Criteria` and `## Negative Cases`.
 
 ## Step 2 — Generate the story
+
+### Using `pdd story add` (recommended)
+
+`pdd story add` is the first-class CLI for creating a story. It resolves the issue, generates the story + contract, and links the target prompts in a single command. Identify the target dev unit(s) with `--devunit` (resolved the same way as `pdd checkup <devunit>`) or pass prompt paths directly with `--prompt`:
+
+```bash
+# From a GitHub issue URL — link via dev unit name
+pdd story add https://github.com/myorg/myrepo/issues/1454 \
+  --devunit commands/generate
+
+# From an issue number (repo inferred from git remote)
+pdd story add 1454 --devunit commands/generate --devunit commands/test
+
+# From a local issue file (offline / deterministic)
+pdd story add ./issue-1454.md --prompt prompts/commands/generate_python.prompt
+
+# Cross-devunit story — both dev-unit links are preserved in metadata
+pdd story add 1454 --devunit commands/generate --devunit commands/test
+
+# From inline text (use --text to avoid ambiguity with URLs/paths)
+pdd story add --text "As a developer, I want to validate coupon codes at checkout" \
+  --title "Coupon validation" --devunit commands/validate_coupon
+
+# Dry-run: print the proposed story path and linked prompts without writing
+pdd story add 1454 --devunit commands/generate --dry-run
+```
+
+Pass `--update` to merge prompt links into an existing story file rather than erroring on a slug collision.
+
+### Using `pdd test --issue` (underlying mechanism / direct form)
+
+`pdd story add` calls the same library as `pdd test --issue` internally. You may still use `pdd test --issue` directly when you need to select specific prompt files manually.
 
 Run `pdd test` with `--issue` and one or more `.prompt` files. The prompt files
 are the **validation targets** the story will be linked to — they are *not* shown
@@ -340,7 +372,14 @@ coverage matrix ([`docs/coverage_contracts.md`](coverage_contracts.md)).
 
 | Goal | Command |
 | --- | --- |
-| Generate a story + contract from an issue | `pdd test --issue <url\|number\|file> prompts/<module>_<lang>.prompt` |
+| Add a story from an issue (recommended) | `pdd story add <issue-url\|number\|file> --devunit <name>` |
+| Add a story from inline text | `pdd story add --text "As a user..." --devunit <name>` |
+| Add a cross-devunit story | `pdd story add <issue-source> --devunit a --devunit b` |
+| Preview without writing (dry-run) | `pdd story add <issue-source> --devunit <name> --dry-run` |
+| Merge prompts into an existing story | `pdd story add <issue-source> --devunit <name> --update` |
+| List stories with regression status | `pdd story list --with-regression-status` |
+| Link a prompt to an existing story | `pdd story link user_stories/story__<slug>.md --prompt prompts/<module>_<lang>.prompt` |
+| Generate a story + contract (direct form) | `pdd test --issue <url\|number\|file> prompts/<module>_<lang>.prompt` |
 | Refresh prompt-link metadata only | `pdd test user_stories/story__<slug>.md` |
 | Validate all stories against their prompts | `pdd detect --stories` |
 | Apply a story back to its prompts | `pdd fix user_stories/story__<slug>.md` |
