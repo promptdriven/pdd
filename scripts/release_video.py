@@ -456,7 +456,11 @@ def persist_status_query_success(
 ) -> None:
     response = extract_status_response(completed.stdout, completed.stderr)
     refreshed = dict(metadata)
-    status_metadata = extract_pds_run_metadata(completed.stdout, completed.stderr) or {}
+    status_metadata = extract_pds_run_metadata(
+        completed.stdout,
+        completed.stderr,
+        preferred_run_id=str(metadata.get("runId") or "").strip() or None,
+    ) or {}
     for key in ("runId", "projectId", "status", "attemptId"):
         if status_metadata.get(key):
             refreshed[key] = status_metadata[key]
@@ -1355,12 +1359,23 @@ def persist_pds_run_metadata_from_output(
     return path
 
 
-def extract_pds_run_metadata(*texts: str) -> dict[str, str] | None:
+def extract_pds_run_metadata(
+    *texts: str,
+    preferred_run_id: str | None = None,
+) -> dict[str, str] | None:
     json_metadata: list[dict[str, str]] = []
     for text in texts:
         json_metadata.extend(extract_all_pds_run_metadata_from_json_text(text))
     if json_metadata:
         json_metadata = merge_pds_run_metadata_candidates(json_metadata)
+        if preferred_run_id:
+            preferred = [
+                metadata
+                for metadata in json_metadata
+                if metadata.get("runId") == preferred_run_id
+            ]
+            if preferred:
+                json_metadata = preferred
         terminal = [
             metadata
             for metadata in json_metadata
@@ -1687,12 +1702,28 @@ def strip_model_wrapper_text(script: str) -> tuple[str, bool]:
     changed = first_script_line > 0
     while lines and not lines[-1].strip():
         lines.pop()
-    while lines and is_model_wrapper_line(lines[-1]):
+    while (
+        lines
+        and is_model_wrapper_line(lines[-1])
+        and not line_is_inside_narrator_block(lines, len(lines) - 1)
+    ):
         lines.pop()
         changed = True
         while lines and not lines[-1].strip():
             lines.pop()
     return "\n".join(lines).strip(), changed
+
+
+def line_is_inside_narrator_block(lines: list[str], line_index: int) -> bool:
+    for index in range(line_index - 1, -1, -1):
+        line = lines[index]
+        if not line.strip():
+            return False
+        if is_narrator_label(line):
+            return True
+        if visual_cue_text(line) or re.match(r"^#{1,2}\s+\S", line.strip()):
+            return False
+    return False
 
 
 def is_model_wrapper_line(line: str) -> bool:
@@ -1804,10 +1835,25 @@ def has_duplicate_narrator_labels(script: str) -> bool:
 
 
 def has_unstripped_model_wrapper_text(script: str) -> bool:
-    lines = [line for line in script.splitlines() if line.strip()]
+    lines = script.splitlines()
     if not lines:
         return False
-    return is_model_wrapper_line(lines[0]) or is_model_wrapper_line(lines[-1])
+    first_nonblank = next(
+        (index for index, line in enumerate(lines) if line.strip()),
+        None,
+    )
+    last_nonblank = next(
+        (index for index in range(len(lines) - 1, -1, -1) if lines[index].strip()),
+        None,
+    )
+    if first_nonblank is None or last_nonblank is None:
+        return False
+    if is_model_wrapper_line(lines[first_nonblank]):
+        return True
+    return is_model_wrapper_line(lines[last_nonblank]) and not line_is_inside_narrator_block(
+        lines,
+        last_nonblank,
+    )
 
 
 def duplicate_narrator_label_line(line: str) -> re.Match[str] | None:
