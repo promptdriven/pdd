@@ -392,6 +392,126 @@ Let me know if you want a punchier version.
     assert validation["errors"] == []
 
 
+def test_release_video_preserves_exact_raw_claude_output_artifact(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    capture = tmp_path / "pds-capture.json"
+    raw_script = """```markdown
+# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps exact raw script diagnostics while sending a normalized script
+to PDS, so release recovery can compare the generated content with the content
+that downstream systems received.
+
+VISUAL: show raw and normalized script artifacts side by side.
+
+## Recovery
+
+NARRATOR:
+Operators can inspect the raw Claude output, the final script, and validation
+metadata without guessing which transformation happened before PDS create.
+
+VISUAL: show the validation JSON and PDS create command.
+```
+"""
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--git-sha",
+            "abc123def456",
+            "--claude-cli",
+            str(claude_output_stub(tmp_path, raw_script)),
+            "--pds-cli",
+            str(
+                pds_stub(
+                    tmp_path,
+                    {"ok": True, "summary": {"youtubeUrl": "https://youtu.be/raw"}},
+                )
+            ),
+            "--output-dir",
+            str(tmp_path / "videos"),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    output_dir = tmp_path / "videos" / "v1.1.0"
+    assert (output_dir / "release_video_script.raw.md").read_text(encoding="utf8") == raw_script
+    normalized = (output_dir / "release_video_script.md").read_text(encoding="utf8")
+    assert not normalized.startswith("```")
+    assert "PDD v1.1.0 keeps exact raw script diagnostics" in normalized
+
+
+def test_release_video_preserves_valid_here_is_narration_line():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+Here is the command maintainers run after tagging a release, and the reason it
+matters for recovery: the release-video wrapper keeps PDS status, scripts, and
+validation evidence together.
+
+VISUAL: show make release-video-status output beside pds_run.json.
+
+## Close
+
+NARRATOR:
+The recovery artifacts stay readable and complete, so operators can reattach to
+the release run without depending on stale local profile state.
+
+VISUAL: show the refreshed terminal status and YouTube URL.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Here is the command maintainers run" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_collapses_empty_duplicate_narrator_label():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+NARRATOR: NARRATOR:
+The wrapper should collapse duplicate speaker labels even when the duplicated
+label line has no narration body, because the final script is what PDS receives
+for section specification and rendering.
+
+VISUAL: show a cleaned narrator block in the script artifact.
+
+## Recovery
+
+NARRATOR:
+The validation artifact records the normalization and the script stays free of
+duplicated speaker labels before the create command runs.
+
+VISUAL: show release_video_script_validation.json with no errors.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "NARRATOR: NARRATOR:" not in artifacts["script"]
+    assert "collapsed_duplicate_narrator_labels" in artifacts["validation"]["changes"]
+    assert artifacts["validation"]["checks"]["hasNoDuplicateNarratorLabels"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
 def test_release_video_rejects_malformed_script_before_invoking_pds(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
@@ -1809,6 +1929,25 @@ def test_release_video_pds_metadata_prefers_terminal_json_status():
         "runId": "agent_run_multi",
         "projectId": "pdd-v1-1-0-release",
         "status": "failed",
+    }
+
+
+def test_release_video_pds_metadata_keeps_nested_project_context():
+    release_video = load_release_video_module()
+
+    metadata = release_video.extract_pds_run_metadata(
+        json.dumps(
+            {
+                "run": {"runId": "agent_run_nested", "status": "running"},
+                "project": {"projectId": "pdd-v1-1-0-release"},
+            }
+        )
+    )
+
+    assert metadata == {
+        "runId": "agent_run_nested",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
     }
 
 
