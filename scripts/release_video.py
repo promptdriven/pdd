@@ -418,7 +418,10 @@ def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
             f"Persisted PDS run metadata is not a JSON object: {run_metadata_path}"
         )
 
-    display_metadata = redact_status_artifact_value(metadata)
+    if args.status_query:
+        metadata = query_pds_release_video_status(args, repo, metadata, run_metadata_path)
+
+    display_metadata = release_video_status_display_metadata(metadata, args.pds_cli)
     print(json.dumps(display_metadata, indent=2, sort_keys=True))
     recover_command = str(display_metadata.get("recoverCommand") or "").strip()
     watch_command = str(display_metadata.get("watchCommand") or "").strip()
@@ -429,9 +432,18 @@ def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
     status_note = release_video_status_note(metadata)
     if status_note:
         print(f"status-note: {status_note}")
-    if args.status_query:
-        query_pds_release_video_status(args, repo, metadata, run_metadata_path)
     return 0
+
+
+def release_video_status_display_metadata(
+    metadata: dict[str, Any],
+    pds_cli: str,
+) -> dict[str, Any]:
+    """Return persisted run metadata safe to print as status output."""
+    display_source = dict(metadata)
+    refresh_pds_recovery_commands(display_source, pds_cli)
+    display_metadata = redact_status_artifact_value(display_source)
+    return display_metadata if isinstance(display_metadata, dict) else {}
 
 
 def resolve_status_release_tag(repo: Path, explicit_tag: str | None) -> str:
@@ -449,7 +461,7 @@ def query_pds_release_video_status(
     repo: Path,
     metadata: dict[str, Any],
     run_metadata_path: Path,
-) -> None:
+) -> dict[str, Any]:
     run_id = str(metadata.get("runId") or "").strip()
     if not run_id:
         raise ReleaseVideoError("Persisted PDS run metadata does not include runId.")
@@ -465,9 +477,9 @@ def query_pds_release_video_status(
         check=False,
     )
     if completed.stdout.strip():
-        print(redact_secret_text(completed.stdout.rstrip()))
+        print(redact_status_output_text(completed.stdout.rstrip()))
     if completed.stderr.strip():
-        print(redact_secret_text(completed.stderr.rstrip()), file=sys.stderr)
+        print(redact_status_output_text(completed.stderr.rstrip()), file=sys.stderr)
     if completed.returncode != 0:
         persist_status_query_failure(
             metadata=metadata,
@@ -476,14 +488,30 @@ def query_pds_release_video_status(
             pds_cli=args.pds_cli,
         )
         raise ReleaseVideoError(
-            f"PDS release-video status failed: {process_details(completed)}"
+            f"PDS release-video status failed: {redacted_process_details(completed)}"
         )
-    persist_status_query_success(
+    return persist_status_query_success(
         metadata=metadata,
         path=run_metadata_path,
         completed=completed,
         pds_cli=args.pds_cli,
     )
+
+
+def redact_status_output_text(text: str) -> str:
+    """Redact PDS status output before it is shown in logs."""
+    stripped = str(text or "").rstrip()
+    if not stripped:
+        return ""
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return redact_secret_text(stripped)
+    return json.dumps(redact_status_artifact_value(parsed), sort_keys=True)
+
+
+def redacted_process_details(completed: subprocess.CompletedProcess[str]) -> str:
+    return redact_secret_text(process_details(completed))
 
 
 def persist_status_query_success(
@@ -492,7 +520,7 @@ def persist_status_query_success(
     path: Path,
     completed: subprocess.CompletedProcess[str],
     pds_cli: str,
-) -> None:
+) -> dict[str, Any]:
     persisted_run_id = str(metadata.get("runId") or "").strip()
     response = extract_status_response(
         completed.stdout,
@@ -512,35 +540,9 @@ def persist_status_query_success(
     for key in ("runId", "projectId", "status", "attemptId"):
         if status_metadata.get(key):
             refreshed[key] = status_metadata[key]
-    if isinstance(response, dict):
-        response_run_id = response_pds_run_id(response)
-        for source_key, target_key in (
-            ("runId", "runId"),
-            ("projectId", "projectId"),
-            ("status", "status"),
-            ("state", "status"),
-        ):
-            if (
-                target_key in {"runId", "status"}
-                and response_run_id
-                and persisted_run_id
-                and response_run_id != persisted_run_id
-            ):
-                continue
-            if target_key == "status" and metadata_refreshed_status:
-                continue
-            if target_key == "status" and persisted_run_id and not response_run_id:
-                continue
-            value = response.get(source_key)
-            if isinstance(value, str) and value.strip():
-                refreshed[target_key] = value.strip()
-    refreshed_status = metadata_refreshed_status or status_response_has_refresh_data(
-        response,
-        persisted_run_id,
-    )
     refreshed["statusStale"] = (
         False
-        if refreshed_status
+        if metadata_refreshed_status
         else release_video_status_is_running(refreshed.get("status"))
     )
     refreshed["pdsContext"] = pds_context(pds_cli)
@@ -555,7 +557,9 @@ def persist_status_query_success(
             response if response is not None else completed.stdout.strip()
         ),
     }
+    refreshed = persistable_status_metadata(refreshed, pds_cli)
     write_json_file(path, refreshed)
+    return refreshed
 
 
 def persist_status_query_failure(
@@ -564,7 +568,7 @@ def persist_status_query_failure(
     path: Path,
     completed: subprocess.CompletedProcess[str],
     pds_cli: str,
-) -> None:
+) -> dict[str, Any]:
     response = extract_status_response(completed.stdout, completed.stderr)
     error = response.get("error") if isinstance(response, dict) else {}
     error = error if isinstance(error, dict) else {}
@@ -572,6 +576,7 @@ def persist_status_query_failure(
     refreshed = dict(metadata)
     refreshed["statusStale"] = release_video_status_is_running(refreshed.get("status"))
     refreshed["pdsContext"] = pds_ctx
+    refresh_pds_recovery_commands(refreshed, pds_cli)
     refreshed["lastStatusQuery"] = {
         "ok": False,
         "queriedAt": utc_now_iso(),
@@ -590,9 +595,22 @@ def persist_status_query_failure(
         "response": redact_status_artifact_value(
             response if response is not None else completed.stdout.strip()
         ),
-        "details": process_details(completed),
+        "details": redacted_process_details(completed),
     }
+    refreshed = persistable_status_metadata(refreshed, pds_cli)
     write_json_file(path, refreshed)
+    return refreshed
+
+
+def persistable_status_metadata(
+    metadata: dict[str, Any],
+    pds_cli: str,
+) -> dict[str, Any]:
+    """Return a redacted sidecar with locally generated recovery commands."""
+    refreshed = dict(metadata)
+    refresh_pds_recovery_commands(refreshed, pds_cli)
+    redacted = redact_status_artifact_value(refreshed)
+    return redacted if isinstance(redacted, dict) else {}
 
 
 def release_video_status_note(metadata: dict[str, Any]) -> str:
@@ -674,17 +692,6 @@ def status_metadata_has_refresh_data(
     if run_id and persisted_run_id and run_id != persisted_run_id:
         return False
     return bool(str(metadata.get("status") or "").strip())
-
-
-def status_response_has_refresh_data(response: Any, persisted_run_id: str) -> bool:
-    if not isinstance(response, dict):
-        return False
-    response_run_id = response_pds_run_id(response)
-    if response_run_id and persisted_run_id and response_run_id != persisted_run_id:
-        return False
-    if persisted_run_id and not response_run_id:
-        return False
-    return bool(first_nonempty_string(response.get("status"), response.get("state")))
 
 
 def status_value_is_terminal(status: Any) -> bool:
@@ -781,7 +788,7 @@ def redact_secret_text(text: str) -> str:
         redacted,
     )
     redacted = re.sub(
-        r"(?i)(\bauthorization\s*:\s*bearer\s+)[^\s\"'\\,;]+",
+        r"(?i)([\"']?\bauthorization[\"']?\s*:\s*[\"']?bearer\s+)[^\s\"'\\,;]+",
         r"\1[redacted]",
         redacted,
     )
@@ -820,10 +827,24 @@ def redact_secret_text(text: str) -> str:
     )
     redacted = re.sub(
         (
-            r"(?i)([\"']?(?:access[_-]?token|api[_-]?key|auth[_-]?token|"
-            r"client[_-]?secret|password|refresh[_-]?token|"
-            r"secret|signed[_-]?url|token)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;}]+"
+            r"(?i)([\"']?(?:access[_-]?token|api[_-]?key|"
+            r"auth[_-]?token|client[_-]?secret|"
+            r"credential|password|refresh[_-]?token|secret|"
+            r"signed[_-]?url|token)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,;}]+"
         ),
+        r"\1[redacted]",
+        redacted,
+    )
+    redacted = re.sub(
+        (
+            r"(?i)([\"']?authorization[\"']?\s*[:=]\s*[\"']?)"
+            r"(?!bearer\b)[^\"'\s,;}]+"
+        ),
+        r"\1[redacted]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(\b(?:authorization|credential)\s+)[^\s\"'\\,;]+",
         r"\1[redacted]",
         redacted,
     )
@@ -1908,7 +1929,6 @@ def refresh_pds_recovery_commands(metadata: dict[str, Any], pds_cli: str) -> Non
     run_id = str(metadata.get("runId") or "").strip()
     if not run_id:
         return
-    sanitize_pds_recovery_commands(metadata)
     pds_command = split_command(redact_command_text(pds_cli))
     project_id = str(metadata.get("projectId") or "").strip()
     if project_id:
@@ -1918,42 +1938,8 @@ def refresh_pds_recovery_commands(metadata: dict[str, Any], pds_cli: str) -> Non
         f"{pds_base} release-video status --run-id {shlex.quote(run_id)} --json"
     )
     watch_command = f"{pds_base} jobs watch --run-id {shlex.quote(run_id)} --jsonl"
-    if should_replace_recovery_command(
-        str(metadata.get("recoverCommand") or ""),
-        project_id,
-        run_id,
-    ):
-        metadata["recoverCommand"] = recover_command
-    if should_replace_recovery_command(
-        str(metadata.get("watchCommand") or ""),
-        project_id,
-        run_id,
-    ):
-        metadata["watchCommand"] = watch_command
-
-
-def should_replace_recovery_command(command: str, project_id: str, run_id: str = "") -> bool:
-    if not command:
-        return True
-    try:
-        parts = shlex.split(command)
-    except ValueError:
-        return True
-    if run_id and command_option_value(parts, "--run-id") != run_id:
-        return True
-    if project_id and command_option_value(parts, "--project") != project_id:
-        return True
-    return False
-
-
-def command_option_value(parts: list[str], option: str) -> str:
-    for index, part in enumerate(parts):
-        if part == option and index + 1 < len(parts):
-            return parts[index + 1]
-        prefix = f"{option}="
-        if part.startswith(prefix):
-            return part.removeprefix(prefix)
-    return ""
+    metadata["recoverCommand"] = recover_command
+    metadata["watchCommand"] = watch_command
 
 
 def pds_failure_hint(completed: subprocess.CompletedProcess[str]) -> str:
@@ -2133,23 +2119,15 @@ def strip_outer_markdown_fence_lines(script: str) -> tuple[str, bool]:
     return "\n".join(lines).strip(), changed
 
 
-def line_is_inside_narrator_block(lines: list[str], line_index: int) -> bool:
-    for index in range(line_index - 1, -1, -1):
-        line = lines[index]
-        if not line.strip():
-            continue
-        if is_narrator_label(line) or inline_narrator_label_body(line) is not None:
-            return True
-        if visual_cue_text(line) or re.match(r"^#{1,2}\s+\S", line.strip()):
-            return False
-    return False
-
-
 def is_model_wrapper_line(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return False
-    if re.match(r"^here(?:'s| is)\b", stripped, flags=re.IGNORECASE):
+    if re.match(
+        r"^(?:here(?:'s| is)|below is|the following is)\b",
+        stripped,
+        flags=re.IGNORECASE,
+    ):
         return bool(
             re.search(
                 r"\b(?:release[- ]video\s+)?script\b",
@@ -2278,12 +2256,7 @@ def has_markdown_fence_line(script: str) -> bool:
 
 
 def has_unstripped_model_wrapper_text(script: str) -> bool:
-    lines = script.splitlines()
-    return any(
-        is_model_wrapper_line(line)
-        and not line_is_inside_narrator_block(lines, index)
-        for index, line in enumerate(lines)
-    )
+    return any(is_model_wrapper_line(line) for line in script.splitlines())
 
 
 def duplicate_narrator_label_body(line: str) -> str | None:

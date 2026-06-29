@@ -2426,8 +2426,12 @@ def test_release_video_redacts_pds_supplied_recovery_commands(tmp_path: Path):
     assert result.returncode == 1
     assert "secret-recover-token" not in sidecar_text
     assert "secret-watch-token" not in sidecar_text
-    assert "[redacted]" in persisted["recoverCommand"]
-    assert "[redacted]" in persisted["watchCommand"]
+    assert "--token" not in persisted["recoverCommand"]
+    assert "--pds-token" not in persisted["watchCommand"]
+    assert "release-video status --run-id agent_run_secret_line --json" in persisted[
+        "recoverCommand"
+    ]
+    assert "jobs watch --run-id agent_run_secret_line --jsonl" in persisted["watchCommand"]
 
 
 def test_release_video_pds_metadata_prefers_terminal_json_status():
@@ -2557,7 +2561,8 @@ def test_release_video_status_prints_persisted_run_sidecar(tmp_path: Path):
 
     assert "agent_run_status789" in result.stdout
     assert (
-        "recover: pds release-video status --run-id agent_run_status789 --json"
+        "recover: pds --project pdd-v1-1-0-release release-video status "
+        "--run-id agent_run_status789 --json"
         in result.stdout
     )
     assert result.stderr == ""
@@ -3370,7 +3375,8 @@ def test_release_video_status_query_keeps_project_for_unscoped_project_response(
     assert refreshed["status"] == "running"
     assert refreshed["statusStale"] is True
     assert "--project pdd-v1-1-0-release" in refreshed["recoverCommand"]
-    assert "wrong-project" not in sidecar.read_text(encoding="utf8")
+    assert "wrong-project" not in refreshed["recoverCommand"]
+    assert "wrong-project" not in refreshed["watchCommand"]
 
 
 def test_release_video_status_query_prefers_nested_run_status_over_wrapper_status(
@@ -3655,12 +3661,12 @@ def test_release_video_status_query_regenerates_matching_unsafe_recovery_command
     )
 
     refreshed = json.loads(sidecar.read_text(encoding="utf8"))
-    assert refreshed["recoverCommand"] == (
-        "pds --project pdd-v1-1-0-release release-video status "
+    assert refreshed["recoverCommand"].endswith(
+        " --project pdd-v1-1-0-release release-video status "
         "--run-id agent_run_current --json"
     )
-    assert refreshed["watchCommand"] == (
-        "pds --project pdd-v1-1-0-release jobs watch "
+    assert refreshed["watchCommand"].endswith(
+        " --project pdd-v1-1-0-release jobs watch "
         "--run-id agent_run_current --jsonl"
     )
     assert "bash" not in sidecar.read_text(encoding="utf8")
@@ -3911,12 +3917,14 @@ def test_release_video_status_query_prints_refreshed_recovery_commands(tmp_path:
     )
 
     assert "agent_run_old" not in result.stdout
+    assert "recover: " in result.stdout
     assert (
-        "recover: pds --project pdd-v1-1-0-release release-video status "
+        "--project pdd-v1-1-0-release release-video status "
         "--run-id agent_run_current --json"
     ) in result.stdout
+    assert "watch: " in result.stdout
     assert (
-        "watch: pds --project pdd-v1-1-0-release jobs watch "
+        "--project pdd-v1-1-0-release jobs watch "
         "--run-id agent_run_current --jsonl"
     ) in result.stdout
 
@@ -3977,8 +3985,8 @@ def test_release_video_status_query_success_redacts_legacy_sidecar_secrets(
     assert "secret-persisted-token" not in sidecar_text
     assert "secret-command-token" not in sidecar_text
     assert persisted["token"] == "[redacted]"
-    assert persisted["recoverCommand"] == (
-        "pds --project pdd-v1-1-0-release release-video status "
+    assert persisted["recoverCommand"].endswith(
+        " --project pdd-v1-1-0-release release-video status "
         "--run-id agent_run_current --json"
     )
 
