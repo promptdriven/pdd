@@ -671,6 +671,36 @@ VISUAL: show the final YouTube receipt and validation file.
     assert artifacts["validation"]["errors"] == []
 
 
+def test_release_video_normalizes_spaced_standalone_bold_narrator_labels():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+**NARRATOR: **
+Opening narration should follow the narrator label without a literal markdown
+marker in the spoken body, even when generated scripts put whitespace before
+the closing bold marker.
+
+VISUAL: show the release artifacts beside the PDS status JSON.
+
+## Close
+
+**NARRATOR: **
+The workflow stores raw output, normalized narration, and validation evidence
+before publish, keeping the release story auditable through recovery.
+
+VISUAL: show the final YouTube receipt and validation file.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Opening narration should follow the narrator label" in artifacts["script"]
+    assert "\n**\n" not in artifacts["script"]
+    assert "\n** The workflow" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
 def test_release_video_preserves_wrapped_script_with_bold_narrator_labels():
     release_video = load_release_video_module()
     script = """Here is the release video script you asked for:
@@ -693,6 +723,35 @@ VISUAL: show the final YouTube receipt and validation file.
     assert "Here is the release video script" not in artifacts["script"]
     assert "Opening narration should be preserved" in artifacts["script"]
     assert "\n**\n" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_normalizes_spaced_inline_bold_narrator_labels():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+**NARRATOR: ** PDD v1.1.0 turns release-video recovery into a visible operator
+path, with generated scripts, validation artifacts, and PDS run metadata
+preserved before the publish step is allowed to continue.
+
+VISUAL: show the normalized script beside the raw Claude output artifact.
+
+## Recovery
+
+**NARRATOR: ** The wrapper keeps narration labels out of the spoken body while
+still providing the standalone narrator blocks PDS expects for scene generation
+and video rendering.
+
+VISUAL: show clean narrator blocks in the final script.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "\nNARRATOR:\nPDD v1.1.0 turns release-video recovery" in artifacts["script"]
+    assert "\n** PDD v1.1.0 turns release-video recovery" not in artifacts["script"]
+    assert "\n** The wrapper keeps narration labels" not in artifacts["script"]
     assert artifacts["validation"]["errors"] == []
 
 
