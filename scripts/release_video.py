@@ -34,6 +34,21 @@ RUNNING_PDS_STATUSES = {
     "in_progress",
     "in-progress",
 }
+TERMINAL_PDS_STATUSES = {
+    "canceled",
+    "cancelled",
+    "complete",
+    "completed",
+    "done",
+    "error",
+    "errored",
+    "failed",
+    "failure",
+    "succeeded",
+    "success",
+    "timed_out",
+    "timeout",
+}
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RELEASE_VIDEO_PROMPT = REPO_ROOT / "pdd" / "prompts" / "release_video_script_LLM.prompt"
 DEFAULT_CLAUDE_MODEL = "claude-opus-4-8"
@@ -562,7 +577,10 @@ def release_video_status_note(metadata: dict[str, Any]) -> str:
 
 
 def release_video_status_is_running(status: Any) -> bool:
-    return str(status or "").strip().lower() in RUNNING_PDS_STATUSES
+    value = str(status or "").strip().lower()
+    return value in RUNNING_PDS_STATUSES or (
+        bool(value) and value not in TERMINAL_PDS_STATUSES
+    )
 
 
 def extract_status_response(
@@ -630,7 +648,7 @@ def status_response_has_refresh_data(response: Any, persisted_run_id: str) -> bo
 
 def status_value_is_terminal(status: Any) -> bool:
     value = str(status or "").strip().lower()
-    return bool(value) and value not in RUNNING_PDS_STATUSES
+    return value in TERMINAL_PDS_STATUSES
 
 
 def pds_context(pds_cli: str) -> dict[str, str]:
@@ -1847,7 +1865,6 @@ def strip_model_wrapper_text(script: str) -> tuple[str, bool]:
     while (
         lines
         and is_model_wrapper_line(lines[-1])
-        and not line_is_inside_narrator_block(lines, len(lines) - 1)
     ):
         lines.pop()
         changed = True
@@ -1874,7 +1891,7 @@ def release_video_script_start_index(lines: list[str]) -> int:
     for index, line in enumerate(lines):
         if not is_release_video_script_line(line):
             continue
-        if visual_cue_text(line) and has_non_wrapper_content_before(lines, index):
+        if has_non_wrapper_content_before(lines, index):
             return 0
         if has_markdown_fence_before(lines, index):
             return 0
@@ -2073,10 +2090,7 @@ def has_unstripped_model_wrapper_text(script: str) -> bool:
         return False
     if is_model_wrapper_line(lines[first_nonblank]):
         return True
-    return is_model_wrapper_line(lines[last_nonblank]) and not line_is_inside_narrator_block(
-        lines,
-        last_nonblank,
-    )
+    return is_model_wrapper_line(lines[last_nonblank])
 
 
 def duplicate_narrator_label_body(line: str) -> str | None:
