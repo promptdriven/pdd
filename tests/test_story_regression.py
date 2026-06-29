@@ -71,6 +71,10 @@ SAMPLE = "\n".join(
         "def test_e():",
         "    assert True",
         "",
+        '@pytest.mark.story("user_stories/story__path_marked_flow.md")',
+        "def test_path_marked():",
+        "    assert True",
+        "",
         "def test_unmarked():",
         "    assert True",
         "",
@@ -134,6 +138,13 @@ class TestBuildStoryMap:
             _node(tests_dir, "test_d"),
         }
 
+    def test_tests_for_story_accepts_story_file_path(self, smap, tests_dir):
+        assert smap.tests_for_story("user_stories/story__checkout_flow.md") == {
+            _node(tests_dir, "test_a"),
+            _node(tests_dir, "test_b"),
+            _node(tests_dir, "test_d"),
+        }
+
     def test_unmarked_test_absent_from_map(self, smap, tests_dir):
         assert smap.story_for_test(_node(tests_dir, "test_unmarked")) is None
 
@@ -158,6 +169,9 @@ class TestMarkerForms:
             args = (123,)
             kwargs: dict = {}
         assert story_regression._story_id_from_mark(_Mark()) == "123"
+
+    def test_marker_story_file_path_normalized(self, smap, tests_dir):
+        assert smap.story_for_test(_node(tests_dir, "test_path_marked")) == "path_marked_flow"
 
 
 # --- R4: bidirectional, one map ------------------------------------------------
@@ -206,7 +220,7 @@ class TestOrphanDetection:
         d.mkdir()
         # checkout_flow + refund_flow have tests; lonely_flow has NO test.
         # ghost_flow is referenced by a marker but has NO story file.
-        for slug in ("checkout_flow", "refund_flow", "lonely_flow"):
+        for slug in ("checkout_flow", "refund_flow", "path_marked_flow", "lonely_flow"):
             (d / f"story__{slug}.md").write_text("## Story\n", encoding="utf-8")
         return d
 
@@ -214,6 +228,7 @@ class TestOrphanDetection:
         assert discover_story_ids(str(stories_dir)) == {
             "checkout_flow",
             "refund_flow",
+            "path_marked_flow",
             "lonely_flow",
         }
 
@@ -235,6 +250,9 @@ class TestOrphanDetection:
 class TestHasRegressionTest:
     def test_true_when_claimed(self, smap):
         assert smap.has_regression_test("checkout_flow") is True
+
+    def test_true_when_path_is_claimed(self, smap):
+        assert smap.has_regression_test(Path("user_stories/story__checkout_flow.md")) is True
 
     def test_false_when_unclaimed(self, smap):
         assert smap.has_regression_test("never_referenced") is False
@@ -336,7 +354,14 @@ class TestMarkerSelection:
             plugins=[counter],
         )
         # Exactly the story-marked tests, and nothing unmarked.
-        assert set(counter.selected) == {"test_a", "test_b", "test_c", "test_d", "test_e"}
+        assert set(counter.selected) == {
+            "test_a",
+            "test_b",
+            "test_c",
+            "test_d",
+            "test_e",
+            "test_path_marked",
+        }
         assert "test_unmarked" not in counter.selected
 
 

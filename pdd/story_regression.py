@@ -56,6 +56,15 @@ def _default_tests_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "tests"
 
 
+def _normalize_story_ref(value: object) -> str:
+    """Return the canonical story id for either an id or story file path."""
+    text = str(value)
+    name = Path(text).name
+    if name.startswith("story__") or name.endswith(".md"):
+        return story_id(text)
+    return text
+
+
 def _story_id_from_mark(mark: pytest.Mark) -> Optional[str]:
     """Resolve a single ``story_id`` from one ``@pytest.mark.story`` application.
 
@@ -71,7 +80,21 @@ def _story_id_from_mark(mark: pytest.Mark) -> Optional[str]:
         return None
     if value is None:
         return None
-    return str(value)
+    return _normalize_story_ref(value)
+
+
+def _relative_nodeid(item: pytest.Item, root: Path) -> str:
+    """Return a stable node id relative to the collected tests root."""
+    suffix = ""
+    if "::" in item.nodeid:
+        suffix = "::" + item.nodeid.split("::", 1)[1]
+    try:
+        test_path = Path(str(item.path)).resolve().relative_to(root.resolve())
+        return test_path.as_posix() + suffix
+    except (AttributeError, ValueError, OSError):
+        # Fall back to pytest's nodeid, but strip a leading slash so absolute
+        # temp paths do not vary across machines.
+        return item.nodeid.lstrip("/")
 
 
 @dataclass
@@ -85,9 +108,13 @@ class StoryTestMap:
     story_to_tests: Dict[str, Set[str]] = field(default_factory=dict)
     test_to_stories: Dict[str, Set[str]] = field(default_factory=dict)
 
-    def tests_for_story(self, story_id_value: str) -> Set[str]:
-        """Return the node ids that claim *story_id_value* (a fresh copy)."""
-        return set(self.story_to_tests.get(story_id_value, ()))
+    def tests_for_story(self, story_ref: PathLike) -> Set[str]:
+        """Return the node ids that claim *story_ref* (a fresh copy).
+
+        ``story_ref`` may be either a canonical story id (``checkout_flow``) or a
+        story file path such as ``user_stories/story__checkout_flow.md``.
+        """
+        return set(self.story_to_tests.get(_normalize_story_ref(story_ref), ()))
 
     def story_for_test(self, nodeid: str) -> Union[str, Set[str], None]:
         """Return the owning story id(s) for *nodeid*.
@@ -102,9 +129,9 @@ class StoryTestMap:
             return next(iter(stories))
         return set(stories)
 
-    def has_regression_test(self, story_id_value: str) -> bool:
-        """Return ``True`` when at least one collected test claims *story_id_value*."""
-        return bool(self.story_to_tests.get(story_id_value))
+    def has_regression_test(self, story_ref: PathLike) -> bool:
+        """Return ``True`` when at least one collected test claims *story_ref*."""
+        return bool(self.story_to_tests.get(_normalize_story_ref(story_ref)))
 
     @property
     def referenced_story_ids(self) -> Set[str]:
@@ -115,7 +142,8 @@ class StoryTestMap:
 class _StoryCollector:
     """A ``--collect-only`` plugin that records the story<->test relation."""
 
-    def __init__(self) -> None:
+    def __init__(self, root: Path) -> None:
+        self.root = root
         self.story_to_tests: Dict[str, Set[str]] = {}
         self.test_to_stories: Dict[str, Set[str]] = {}
 
@@ -136,7 +164,7 @@ class _StoryCollector:
                     story_ids.add(resolved)
             if not story_ids:
                 continue
-            nodeid = item.nodeid
+            nodeid = _relative_nodeid(item, self.root)
             self.test_to_stories.setdefault(nodeid, set()).update(story_ids)
             for sid in story_ids:
                 self.story_to_tests.setdefault(sid, set()).add(nodeid)
@@ -152,7 +180,7 @@ def build_story_map(tests_dir: Optional[PathLike] = None) -> StoryTestMap:
     ``--continue-on-collection-errors``) rather than crashing the build.
     """
     resolved_dir = Path(tests_dir) if tests_dir is not None else _default_tests_dir()
-    collector = _StoryCollector()
+    collector = _StoryCollector(resolved_dir)
     if not resolved_dir.exists():
         return StoryTestMap({}, {})
 
@@ -208,9 +236,9 @@ def reset_default_map() -> None:
     _DEFAULT_MAP = None
 
 
-def tests_for_story(story_id_value: str) -> Set[str]:
-    """Return the set of test node ids that claim *story_id_value*."""
-    return _get_default_map().tests_for_story(story_id_value)
+def tests_for_story(story_ref: PathLike) -> Set[str]:
+    """Return the set of test node ids that claim *story_ref*."""
+    return _get_default_map().tests_for_story(story_ref)
 
 
 def story_for_test(nodeid: str) -> Union[str, Set[str], None]:
@@ -218,9 +246,9 @@ def story_for_test(nodeid: str) -> Union[str, Set[str], None]:
     return _get_default_map().story_for_test(nodeid)
 
 
-def has_regression_test(story_id_value: str) -> bool:
-    """Return ``True`` when >=1 collected regression test claims *story_id_value*."""
-    return _get_default_map().has_regression_test(story_id_value)
+def has_regression_test(story_ref: PathLike) -> bool:
+    """Return ``True`` when >=1 collected regression test claims *story_ref*."""
+    return _get_default_map().has_regression_test(story_ref)
 
 
 # --- Orphan detection (both directions) ----------------------------------------

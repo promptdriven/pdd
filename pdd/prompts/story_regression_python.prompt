@@ -5,9 +5,9 @@
   "module": {
     "functions": [
       {"name": "story_id", "signature": "(path: str | Path)", "returns": "str"},
-      {"name": "tests_for_story", "signature": "(story_id: str)", "returns": "set[str]"},
+      {"name": "tests_for_story", "signature": "(story_ref: str | Path)", "returns": "set[str]"},
       {"name": "story_for_test", "signature": "(nodeid: str)", "returns": "str | set[str] | None"},
-      {"name": "has_regression_test", "signature": "(story_id: str)", "returns": "bool"}
+      {"name": "has_regression_test", "signature": "(story_ref: str | Path)", "returns": "bool"}
     ]
   }
 }
@@ -44,7 +44,9 @@ public `story_id` helper so both systems share one identity space.
    the `tests/` tree.
 3. **Accept both marker forms.** Normalize `@pytest.mark.story(story_id="x")`
    (keyword) and `@pytest.mark.story("x")` (positional `args[0]`) to one resolved
-   `story_id`.
+   `story_id`. Marker values may be either canonical ids (`foo_flow`) or story
+   file references (`user_stories/story__foo_flow.md`); both normalize through
+   the shared `story_id` helper.
 4. **Two resolvers over one map.** Expose `tests_for_story(story_id) -> set[str]`
    (node ids that claim the story) and `story_for_test(nodeid)` returning the
    owning story id(s) (a test may claim more than one story). Both directions MUST
@@ -65,9 +67,13 @@ public `story_id` helper so both systems share one identity space.
 
 % Inputs and Outputs
 - `story_id(path) -> str` — re-exported/reused from `.user_story_tests`.
-- `tests_for_story(story_id: str) -> set[str]` — node ids claiming the story.
+- `tests_for_story(story_ref: str | Path) -> set[str]` — node ids claiming the
+  story; accepts either a canonical id or a `story__*.md` path.
 - `story_for_test(nodeid: str) -> str | set[str] | None` — owning story id(s).
-- `has_regression_test(story_id: str) -> bool` — convenience predicate.
+- `has_regression_test(story_ref: str | Path) -> bool` — convenience predicate.
+- Node ids emitted by the map MUST be stable relative ids under the collected
+  tests root (for example `test_story.py::test_case`), not machine-specific
+  absolute temp paths.
 - Orphan diagnostics (stories with no test; markers naming a nonexistent story).
 
 % Dependencies
