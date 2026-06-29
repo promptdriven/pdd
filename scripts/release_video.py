@@ -994,7 +994,7 @@ def generate_raw_script_with_claude(
             "RELEASE_VIDEO_SCRIPT_PATH pointing at a previously generated script."
         )
 
-    return strip_markdown_fence(completed.stdout.strip())
+    return completed.stdout
 
 
 def generate_script_with_claude(
@@ -1133,7 +1133,7 @@ def load_release_video_script_raw(script_path: Path, cwd: Path) -> tuple[str, Pa
         raw_script = path.read_text(encoding="utf8")
     except OSError as exc:
         raise ReleaseVideoError(f"Could not read release-video script {path}: {exc}") from exc
-    return strip_markdown_fence(raw_script.strip()), path
+    return raw_script, path
 
 
 def resolve_release_video_script_path(script_path: Path, cwd: Path) -> Path:
@@ -1360,6 +1360,7 @@ def extract_pds_run_metadata(*texts: str) -> dict[str, str] | None:
     for text in texts:
         json_metadata.extend(extract_all_pds_run_metadata_from_json_text(text))
     if json_metadata:
+        json_metadata = merge_pds_run_metadata_candidates(json_metadata)
         terminal = [
             metadata
             for metadata in json_metadata
@@ -1397,6 +1398,25 @@ def extract_all_pds_run_metadata_from_json_value(value: Any) -> list[dict[str, s
         for nested in value:
             values.extend(extract_all_pds_run_metadata_from_json_value(nested))
     return values
+
+
+def merge_pds_run_metadata_candidates(
+    candidates: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = []
+    run_indexes: dict[str, int] = {}
+    for candidate in candidates:
+        run_id = candidate.get("runId", "")
+        if run_id and run_id in run_indexes:
+            existing = merged[run_indexes[run_id]]
+            for key, value in candidate.items():
+                if value:
+                    existing[key] = value
+            continue
+        merged.append(dict(candidate))
+        if run_id:
+            run_indexes[run_id] = len(merged) - 1
+    return merged
 
 
 def iter_json_values(text: str):
@@ -1612,8 +1632,9 @@ def strip_markdown_fence(text: str) -> str:
 
 
 def prepare_release_video_script(raw_script: str, *, source: str) -> dict[str, Any]:
-    raw = strip_markdown_fence(str(raw_script or "").strip())
-    candidate, wrapper_changed = strip_model_wrapper_text(raw)
+    raw = str(raw_script or "")
+    candidate = strip_markdown_fence(raw.strip())
+    candidate, wrapper_changed = strip_model_wrapper_text(candidate)
     changes: list[str] = []
     if wrapper_changed:
         changes.append("stripped_model_wrapper_text")
@@ -1632,7 +1653,7 @@ def prepare_release_video_script(raw_script: str, *, source: str) -> dict[str, A
         changes=changes,
     )
     return {
-        "raw": raw.rstrip() + "\n",
+        "raw": raw,
         "script": normalized,
         "validation": validation,
     }
@@ -1663,9 +1684,15 @@ def strip_model_wrapper_text(script: str) -> tuple[str, bool]:
     if first_script_line:
         lines = lines[first_script_line:]
 
-    filtered = [line for line in lines if not is_model_wrapper_line(line)]
-    changed = first_script_line > 0 or filtered != lines
-    return "\n".join(filtered).strip(), changed
+    changed = first_script_line > 0
+    while lines and not lines[-1].strip():
+        lines.pop()
+    while lines and is_model_wrapper_line(lines[-1]):
+        lines.pop()
+        changed = True
+        while lines and not lines[-1].strip():
+            lines.pop()
+    return "\n".join(lines).strip(), changed
 
 
 def is_model_wrapper_line(line: str) -> bool:
@@ -1690,16 +1717,16 @@ def collapse_duplicate_narrator_labels(script: str) -> tuple[str, bool]:
     blank_after_pending_label = False
 
     for line in lines:
-        inline_match = re.match(
-            r"^\s*(?:\*\*)?NARRATOR:\s*(?:\*\*)?\s*(?:NARRATOR:\s*)+(?P<body>.+)$",
-            line,
-            flags=re.IGNORECASE,
-        )
+        inline_match = duplicate_narrator_label_line(line)
         if inline_match:
             if not pending_label:
                 append_spaced(normalized, "NARRATOR:")
-            normalized.append(inline_match.group("body").strip())
-            pending_label = False
+            body = inline_match.group("body").strip()
+            if body:
+                normalized.append(body)
+                pending_label = False
+            else:
+                pending_label = True
             blank_after_pending_label = False
             changed = True
             continue
@@ -1747,9 +1774,7 @@ def validate_release_video_script(
         "hasSection": bool(re.search(r"(?m)^##\s+\S", script)),
         "hasNarrator": any(is_narrator_label(line) for line in script.splitlines()),
         "hasVisual": any(visual_cue_text(line) for line in script.splitlines()),
-        "hasNoModelWrapperText": not any(
-            is_model_wrapper_line(line) for line in script.splitlines()
-        ),
+        "hasNoModelWrapperText": not has_unstripped_model_wrapper_text(script),
         "hasNoDuplicateNarratorLabels": not has_duplicate_narrator_labels(script),
     }
     errors = [name for name, passed in checks.items() if not passed]
@@ -1766,7 +1791,7 @@ def validate_release_video_script(
 def has_duplicate_narrator_labels(script: str) -> bool:
     previous_pending_label = False
     for line in script.splitlines():
-        if re.match(r"^\s*NARRATOR:\s+NARRATOR:\b", line, flags=re.IGNORECASE):
+        if duplicate_narrator_label_line(line):
             return True
         if is_narrator_label(line):
             if previous_pending_label:
@@ -1776,6 +1801,23 @@ def has_duplicate_narrator_labels(script: str) -> bool:
         if line.strip():
             previous_pending_label = False
     return False
+
+
+def has_unstripped_model_wrapper_text(script: str) -> bool:
+    lines = [line for line in script.splitlines() if line.strip()]
+    if not lines:
+        return False
+    return is_model_wrapper_line(lines[0]) or is_model_wrapper_line(lines[-1])
+
+
+def duplicate_narrator_label_line(line: str) -> re.Match[str] | None:
+    return re.match(
+        r"^\s*(?:\*\*)?NARRATOR:\s*(?:\*\*)?\s*"
+        r"(?:(?:\*\*)?NARRATOR:\s*(?:\*\*)?\s*)+"
+        r"(?P<body>.*)$",
+        line,
+        flags=re.IGNORECASE,
+    )
 
 
 def normalize_release_video_script(script: str) -> str:
