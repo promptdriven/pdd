@@ -637,6 +637,54 @@ query output, and final YouTube receipt side by side.
     assert artifacts["validation"]["errors"] == []
 
 
+def test_release_video_preserves_plain_preamble_before_first_narrator_label():
+    release_video = load_release_video_module()
+    script = """Hook: PDD v1.1.0 makes release-video recovery explicit for
+maintainers before the first formal narrator block appears.
+
+NARRATOR:
+The release-video workflow now preserves enough diagnostics for operators to
+recover a failed publish without guessing. Generated scripts, validation
+evidence, PDS run handles, and status query diagnostics stay attached to the
+release attempt so maintainers can continue recovery with a stable audit trail.
+
+VISUAL: show release artifacts, pds_run.json, and a terminal status query.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Hook: PDD v1.1.0 makes release-video recovery explicit" in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_strips_final_assistant_footer_after_narrator_block():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR:
+PDD v1.1.0 keeps release recovery visible with durable scripts and status
+evidence for maintainers who need to debug failed video publishes.
+
+VISUAL: show the release context, normalized script, and pds_run.json.
+
+## Close
+
+NARRATOR:
+The closing paragraph summarizes the publish recovery path and why generated
+assets matter to maintainers during a release incident.
+
+Let me know if you want a punchier version.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "The closing paragraph summarizes" in artifacts["script"]
+    assert "Let me know if you want" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
 def test_release_video_collapses_empty_duplicate_narrator_label():
     release_video = load_release_video_module()
     script = """# PDD v1.1.0 Release Video
@@ -2962,6 +3010,18 @@ def test_release_video_status_query_keeps_sidecar_stale_for_run_id_only_success(
     assert refreshed["statusStale"] is True
     assert refreshed["lastStatusQuery"]["ok"] is True
     assert refreshed["lastStatusQuery"]["response"] == {"runId": "agent_run_current"}
+
+
+def test_release_video_treats_unknown_pds_status_as_active_not_terminal():
+    release_video = load_release_video_module()
+
+    for status in ("processing", "rendering", "uploading", "starting"):
+        assert release_video.release_video_status_is_running(status) is True
+        assert release_video.status_value_is_terminal(status) is False
+
+    for status in ("succeeded", "completed", "failed", "cancelled"):
+        assert release_video.release_video_status_is_running(status) is False
+        assert release_video.status_value_is_terminal(status) is True
 
 
 def test_release_video_status_note_warns_when_stale_flag_survives_success():
