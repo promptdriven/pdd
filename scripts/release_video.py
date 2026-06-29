@@ -522,6 +522,7 @@ def persist_status_query_success(
     pds_cli: str,
 ) -> dict[str, Any]:
     persisted_run_id = str(metadata.get("runId") or "").strip()
+    persisted_project_id = str(metadata.get("projectId") or "").strip()
     response = extract_status_response(
         completed.stdout,
         completed.stderr,
@@ -538,8 +539,16 @@ def persist_status_query_success(
         persisted_run_id,
     )
     for key in ("runId", "projectId", "status", "attemptId"):
-        if status_metadata.get(key):
-            refreshed[key] = status_metadata[key]
+        value = status_metadata.get(key)
+        if (
+            key == "projectId"
+            and persisted_project_id
+            and value
+            and value != persisted_project_id
+        ):
+            continue
+        if value:
+            refreshed[key] = value
     refreshed["statusStale"] = (
         False
         if metadata_refreshed_status
@@ -788,11 +797,12 @@ def redact_secret_text(text: str) -> str:
         redacted,
     )
     redacted = re.sub(
-        (
-            r"(?i)([\"']?\bauthorization[\"']?\s*[:=]\s*[\"']?"
-            r"(?:(?:bearer|basic|token)\s+)?)"
-            r"[^\"'\s,;}]+"
-        ),
+        r"(?im)^([ \t]*authorization\s*:\s*).+$",
+        r"\1[redacted]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)([\"']?\bauthorization[\"']?\s*[:=]\s*[\"']?)[^\"'\n;}]+",
         r"\1[redacted]",
         redacted,
     )
@@ -1706,7 +1716,8 @@ def add_parent_pds_context(
         "project_id",
         "id",
     )
-    if project_id and "projectId" not in enriched:
+    parent_run_id = first_string(parent, "runId", "run_id")
+    if project_id and parent_run_id and "projectId" not in enriched:
         enriched["projectId"] = project_id
     return enriched
 
@@ -1822,18 +1833,22 @@ def pds_run_metadata_from_mapping(mapping: dict[str, Any]) -> dict[str, str] | N
     project_value = mapping.get("project")
     run = run_value if isinstance(run_value, dict) else {}
     project = project_value if isinstance(project_value, dict) else {}
-    run_id = first_string(mapping, "runId", "run_id") or first_string(
+    mapping_run_id = first_string(mapping, "runId", "run_id")
+    nested_run_id = first_string(
         run,
         "runId",
         "run_id",
         "id",
     )
-    project_id = first_string(mapping, "projectId", "project_id") or first_string(
+    run_id = mapping_run_id or nested_run_id
+    project_id = first_string(
         project,
         "projectId",
         "project_id",
         "id",
     )
+    if not project_id and mapping_run_id:
+        project_id = first_string(mapping, "projectId", "project_id")
     run_status = first_string(run, "status", "state")
     mapping_status = first_string(mapping, "status", "state")
     run_has_identity = bool(first_string(run, "runId", "run_id", "id"))
@@ -2129,8 +2144,8 @@ def is_model_wrapper_line(line: str) -> bool:
     ):
         return mentions_release_video_script(normalized)
     if re.match(
-        r"^i(?:'ve| have)\s+"
-        r"(?:drafted|prepared|created|written|generated|put together)\b",
+        r"^i(?:'ve| have)?\s+"
+        r"(?:drafted|prepared|created|written|wrote|generated|put together)\b",
         normalized,
         flags=re.IGNORECASE,
     ):

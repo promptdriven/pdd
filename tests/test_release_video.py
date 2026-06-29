@@ -2929,7 +2929,7 @@ def test_release_video_status_query_redacts_secret_diagnostics(tmp_path: Path):
     assert "secret-stderr-token" not in persisted_text
     assert "secret-url-token" not in persisted_text
     assert "[redacted]" in persisted_text
-    assert persisted["lastStatusQuery"]["errorMessage"] == "Authorization: Bearer [redacted]"
+    assert persisted["lastStatusQuery"]["errorMessage"] == "Authorization: [redacted]"
     assert "auth_required" in result.stderr
 
 
@@ -4346,8 +4346,8 @@ def test_release_video_status_query_failure_redacts_basic_authorization_details(
     combined_output = result.stdout + result.stderr + sidecar_text
     assert result.returncode == 1
     assert "secret-basic-token" not in combined_output
-    assert "Authorization: Basic [redacted]" in result.stderr
-    assert "Authorization: Basic [redacted]" in persisted["lastStatusQuery"]["details"]
+    assert "Authorization: [redacted]" in result.stderr
+    assert "Authorization: [redacted]" in persisted["lastStatusQuery"]["details"]
 
 
 def test_release_video_status_query_failure_redacts_arbitrary_authorization_details(
