@@ -1994,10 +1994,41 @@ def duplicate_narrator_label_body(line: str) -> str | None:
 
 def consume_narrator_label_prefix(text: str) -> str | None:
     stripped = text.lstrip()
-    for label in ("**NARRATOR:**", "**NARRATOR:", "NARRATOR:**", "NARRATOR:"):
-        if stripped.upper().startswith(label):
-            return stripped[len(label):].lstrip()
-    return None
+    upper = stripped.upper()
+    index = 0
+    has_opening_bold = upper.startswith("**")
+    if has_opening_bold:
+        index = 2
+    if not upper[index:].startswith("NARRATOR:"):
+        return None
+    index += len("NARRATOR:")
+    whitespace_start = index
+    while index < len(stripped) and stripped[index].isspace():
+        index += 1
+    has_spacing_before_close = index > whitespace_start
+    if stripped[index : index + 2] == "**" and should_consume_label_close_marker(
+        stripped,
+        index,
+        has_opening_bold=has_opening_bold,
+        has_spacing_before_close=has_spacing_before_close,
+    ):
+        index += 2
+    return stripped[index:].lstrip()
+
+
+def should_consume_label_close_marker(
+    text: str,
+    marker_index: int,
+    *,
+    has_opening_bold: bool,
+    has_spacing_before_close: bool,
+) -> bool:
+    after_marker = marker_index + 2
+    if has_opening_bold or after_marker >= len(text):
+        return True
+    if not has_spacing_before_close:
+        return True
+    return text[after_marker].isspace()
 
 
 def inline_narrator_label_body(line: str) -> str | None:
@@ -2123,7 +2154,8 @@ def ensure_narrator_blocks(script: str) -> str:
 
 
 def is_narrator_label(line: str) -> bool:
-    return bool(re.match(r"^\s*(?:\*\*)?NARRATOR:(?:\*\*)?\s*$", line, flags=re.IGNORECASE))
+    remainder = consume_narrator_label_prefix(line)
+    return remainder is not None and not remainder.strip()
 
 
 def is_release_video_script_line(line: str) -> bool:
