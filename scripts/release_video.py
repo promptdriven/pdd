@@ -487,7 +487,10 @@ def persist_status_query_success(
             value = response.get(source_key)
             if isinstance(value, str) and value.strip():
                 refreshed[target_key] = value.strip()
-    refreshed_status = bool(status_metadata) or status_response_has_refresh_data(
+    refreshed_status = status_metadata_has_refresh_data(
+        status_metadata,
+        persisted_run_id,
+    ) or status_response_has_refresh_data(
         response,
         persisted_run_id,
     )
@@ -570,7 +573,13 @@ def extract_status_response(
     for text in texts:
         candidates.extend(iter_json_values(text))
     if preferred_run_id:
-        candidates = [
+        explicit_matches = [
+            value
+            for value in candidates
+            if isinstance(value, dict)
+            and response_pds_run_id(value) == preferred_run_id
+        ]
+        candidates = explicit_matches or [
             value
             for value in candidates
             if status_response_matches_run_id(value, preferred_run_id)
@@ -596,6 +605,18 @@ def status_response_matches_run_id(value: Any, run_id: str) -> bool:
 def response_pds_run_id(value: dict[str, Any]) -> str:
     metadata = pds_run_metadata_from_mapping(value)
     return str((metadata or {}).get("runId") or "").strip()
+
+
+def status_metadata_has_refresh_data(
+    metadata: dict[str, str],
+    persisted_run_id: str,
+) -> bool:
+    if not metadata:
+        return False
+    run_id = str(metadata.get("runId") or "").strip()
+    if run_id and persisted_run_id and run_id != persisted_run_id:
+        return False
+    return bool(str(metadata.get("status") or "").strip())
 
 
 def status_response_has_refresh_data(response: Any, persisted_run_id: str) -> bool:
@@ -1455,7 +1476,14 @@ def extract_primary_pds_run_metadata_from_json_text(text: str) -> list[dict[str,
 def extract_primary_pds_run_metadata_from_json_value(value: Any) -> list[dict[str, str]]:
     if isinstance(value, dict):
         metadata = pds_run_metadata_from_mapping(value)
-        return [metadata] if metadata else []
+        if metadata:
+            return [metadata]
+        values: list[dict[str, str]] = []
+        for key in ("result", "current", "currentRun", "latest", "data"):
+            nested = value.get(key)
+            for nested_metadata in extract_primary_pds_run_metadata_from_json_value(nested):
+                values.append(add_parent_pds_context(nested_metadata, value))
+        return values
     if isinstance(value, list):
         values: list[dict[str, str]] = []
         for nested in value:
@@ -1465,6 +1493,24 @@ def extract_primary_pds_run_metadata_from_json_value(value: Any) -> list[dict[st
                     values.append(metadata)
         return values
     return []
+
+
+def add_parent_pds_context(
+    metadata: dict[str, str],
+    parent: dict[str, Any],
+) -> dict[str, str]:
+    enriched = dict(metadata)
+    project_value = parent.get("project")
+    project = project_value if isinstance(project_value, dict) else {}
+    project_id = first_string(parent, "projectId", "project_id") or first_string(
+        project,
+        "projectId",
+        "project_id",
+        "id",
+    )
+    if project_id and "projectId" not in enriched:
+        enriched["projectId"] = project_id
+    return enriched
 
 
 def select_pds_run_metadata(
