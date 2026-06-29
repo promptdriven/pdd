@@ -373,5 +373,87 @@ def test_z3_blacklist_matching():
     
     s.add(is_blacklisted)
     s.add(z3.Not(rejected))
-    
+
     assert s.check() == z3.unsat
+
+
+# --- Issue #652: CORS must support production origins ---
+
+def test_configure_cors_includes_production_origin():
+    """Test that default CORS config includes the production origin (https://promptdriven.ai).
+
+    Issue #652: The purchase flow on promptdriven.ai fails with a CORS violation because
+    the CORS middleware only allows localhost origins by default, blocking requests from
+    the production domain.
+
+    This test fails on the buggy code because configure_cors() defaults to only
+    localhost:3000 and localhost:5173 origins.
+    """
+    app = MagicMock(spec=FastAPI)
+    configure_cors(app)
+
+    call_args = app.add_middleware.call_args
+    kwargs = call_args[1]
+    origins = kwargs["allow_origins"]
+
+    assert "https://promptdriven.ai" in origins, (
+        f"Production origin 'https://promptdriven.ai' must be in default CORS origins. "
+        f"Got: {origins}"
+    )
+
+
+def test_configure_cors_allows_production_https():
+    """Test that CORS configuration supports HTTPS production origins.
+
+    Issue #652: Browser preflight requests from https://promptdriven.ai are blocked
+    because Access-Control-Allow-Origin header doesn't include the production domain.
+    """
+    app = MagicMock(spec=FastAPI)
+    configure_cors(app)
+
+    call_args = app.add_middleware.call_args
+    kwargs = call_args[1]
+    origins = kwargs["allow_origins"]
+
+    has_production = any(
+        origin.startswith("https://") and "promptdriven" in origin
+        for origin in origins
+    )
+    assert has_production, (
+        f"CORS config must include at least one production HTTPS origin for promptdriven.ai. "
+        f"Got only: {origins}"
+    )
+
+
+def test_configure_cors_localhost_still_present():
+    """Test that localhost origins remain after adding production origins.
+
+    Ensures backward compatibility: adding production origins should not remove
+    the existing localhost development origins.
+    """
+    app = MagicMock(spec=FastAPI)
+    configure_cors(app)
+
+    call_args = app.add_middleware.call_args
+    kwargs = call_args[1]
+    origins = kwargs["allow_origins"]
+
+    assert "http://localhost:3000" in origins
+    assert "http://localhost:5173" in origins or "http://127.0.0.1:5173" in origins
+
+
+def test_configure_cors_rejects_unconfigured_origin():
+    """Test that CORS does not use a wildcard (*) that would allow any origin.
+
+    Security: CORS should explicitly list allowed origins, not use '*'.
+    """
+    app = MagicMock(spec=FastAPI)
+    configure_cors(app)
+
+    call_args = app.add_middleware.call_args
+    kwargs = call_args[1]
+    origins = kwargs["allow_origins"]
+
+    assert "*" not in origins, (
+        "CORS should not use wildcard '*' — explicit origins are required for security."
+    )
