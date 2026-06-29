@@ -20,6 +20,7 @@ from pdd.agentic_checkup_orchestrator import (
     _format_pr_changed_files_for_prompt,
     _format_step_abort_message,
     _get_state_dir,
+    _is_provider_failure,
     _is_step_timeout_failure,
     _load_step5_shell_evidence_from_memory,
     _next_step,
@@ -7286,3 +7287,191 @@ class TestCompanionSourceOfTruthPaths2047:
 
         monkeypatch.setattr(orch, "_load_prompt_source_map", lambda _wt: None)
         assert orch._companion_source_of_truth_paths(Path("/x"), {"pdd/foo.py"}) == set()
+
+
+# ---------------------------------------------------------------------------
+# Issue #1728: credential-limit must not be treated as a generic provider failure
+# ---------------------------------------------------------------------------
+
+# The exact credential-limit message emitted by _interactive_credential_limit_message
+# in agentic_common.py when a Claude Code interactive session hits its subscription cap.
+# Also the exact string from the production incident (job xS9G6DdGEMXyaNuZ6xzE).
+_CRED_LIMIT_DETAIL_ORCH = (
+    "Claude Code interactive session reached its Claude subscription cap — "
+    "you've hit your limit · resets at a provider-set time (PDD credential-limit). "
+    "PDD detected a synthetic credential-limit turn in the session transcript with no "
+    "usable reply; fast-failing so the caller rotates to the next OAuth credential "
+    "instead of waiting for the full interactive step timeout."
+)
+_ALL_PROVIDERS_FAILED_CRED_LIMIT_ORCH = (
+    f"All agent providers failed: anthropic: {_CRED_LIMIT_DETAIL_ORCH}"
+)
+
+
+class TestIsProviderFailureCredentialLimit:
+    """Issue #1728 defect 1: _is_provider_failure must return False for a
+    credential-limit message so that the 3-consecutive-failure counter does not
+    apply to rotate events.
+
+    The stable discriminator is the 'PDD credential-limit' token embedded by
+    _interactive_credential_limit_message in agentic_common.py.  That token is
+    PDD-owned (not echoed from provider text) and is already used by pdd_cloud's
+    waterfall for force-rotation.  _is_provider_failure must exclude it so the
+    orchestrator can rotate on the first marker rather than burning 3 steps.
+    """
+
+    def test_is_provider_failure_returns_false_for_credential_limit_message(self) -> None:
+        """_is_provider_failure must return False for a credential-limit message.
+
+        Current (buggy) behavior: the function does a bare 'All agent providers failed'
+        substring check, which matches both genuine all-provider exhaustion AND
+        single-credential rate-limits. Both carry the same prefix, but only the
+        credential-limit message carries the stable 'PDD credential-limit' token.
+
+        The fix should make _is_provider_failure exclude messages that contain
+        'PDD credential-limit', so the 3-consecutive-failure counter does not
+        increment for rotate events.
+        """
+        # Reproduction test from Step 5 (incorporated into canonical file)
+        result = _is_provider_failure(_ALL_PROVIDERS_FAILED_CRED_LIMIT_ORCH)
+        assert result is False, (
+            "_is_provider_failure should return False for a credential-limit "
+            "message ('PDD credential-limit' token present), but returned True. "
+            "This causes the orchestrator to burn 3 consecutive steps instead of "
+            "rotating immediately on the first credential-limit marker."
+        )
+
+    def test_is_provider_failure_still_matches_genuine_all_provider_failure(self) -> None:
+        """_is_provider_failure must still return True for genuine all-provider failures.
+
+        A genuine all-provider failure has no 'PDD credential-limit' token — it
+        represents real provider exhaustion, not a rotate-to-next-lane signal.
+        This test is a regression guard: the fix must not over-exclude.
+        """
+        # Regression guard: this must remain True before and after the fix
+        genuine_failure = (
+            "All agent providers failed: anthropic: 500 Internal Server Error; "
+            "openai: connection refused; google: quota exceeded"
+        )
+        assert _is_provider_failure(genuine_failure) is True, (
+            "_is_provider_failure must still match genuine (non-credential-limit) "
+            "all-provider exhaustion."
+        )
+
+    def test_orchestrator_aborts_on_first_credential_limit_step_not_third(
+        self, tmp_path: Path
+    ) -> None:
+        """When every step fails with a credential-limit message, the orchestrator
+        must abort after the FIRST step, not after three.
+
+        Current (buggy) behavior: run_agentic_task is called 3 times before the
+        3-consecutive-failure counter fires. The fix should detect the credential-limit
+        marker on the first step and rotate immediately (call_count == 1).
+
+        Real incident: only lane 1 was capped (job xS9G6DdGEMXyaNuZ6xzE) but the
+        orchestrator ran three steps — all returning the same credential-limit error —
+        before posting the terminal blocker comment.
+        """
+        # Reproduction test from Step 5 (incorporated into canonical file)
+        with patch("pdd.agentic_checkup_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_checkup_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_checkup_orchestrator.console"), \
+             patch("pdd.agentic_checkup_orchestrator._setup_worktree") as mock_wt, \
+             patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None):
+
+            mock_load.return_value = "Prompt for {issue_number}"
+            mock_wt.return_value = (tmp_path, None)
+            mock_run.return_value = (False, _ALL_PROVIDERS_FAILED_CRED_LIMIT_ORCH, 0.0, "")
+
+            success, msg, cost, model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/owner/repo/issues/1",
+                issue_content="Run full checkup",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_title="Check CRM",
+                architecture_json="[]",
+                pddrc_content="project: test",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        assert success is False
+        assert mock_run.call_count == 1, (
+            f"Expected orchestrator to abort on the 1st credential-limit step "
+            f"(rotate signal), but run_agentic_task was called "
+            f"{mock_run.call_count} time(s). The 3-strikes counter must not "
+            "apply to credential-limit events."
+        )
+
+    def test_credential_limit_abort_message_carries_credential_limit_token(
+        self, tmp_path: Path
+    ) -> None:
+        """When aborting on a credential-limit, the abort message must identify
+        the cause as a credential-limit (rotate signal), not 'agent providers unavailable'.
+
+        'agent providers unavailable' is factually incorrect when only one of six
+        waterfall lanes was tried. Other lanes (including the metered API key that
+        'essentially cannot run out') were never attempted.
+        """
+        # Reproduction test from Step 5 (incorporated into canonical file)
+        with patch("pdd.agentic_checkup_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_checkup_orchestrator.load_prompt_template") as mock_load, \
+             patch("pdd.agentic_checkup_orchestrator.console"), \
+             patch("pdd.agentic_checkup_orchestrator._setup_worktree") as mock_wt, \
+             patch("pdd.agentic_checkup_orchestrator.save_workflow_state", return_value=None):
+
+            mock_load.return_value = "Prompt for {issue_number}"
+            mock_wt.return_value = (tmp_path, None)
+            mock_run.return_value = (False, _ALL_PROVIDERS_FAILED_CRED_LIMIT_ORCH, 0.0, "")
+
+            success, msg, cost, model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/owner/repo/issues/1",
+                issue_content="Run full checkup",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_title="Check CRM",
+                architecture_json="[]",
+                pddrc_content="project: test",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+            )
+
+        assert success is False
+        assert "agent providers unavailable" not in msg, (
+            f"Abort message wrongly says 'agent providers unavailable' for a "
+            f"single-credential rate-limit abort: {msg!r}. "
+            "Factually: other lanes (including metered API key) were untried."
+        )
+        assert "credential" in msg.lower(), (
+            f"Abort message must identify the cause as a credential-limit "
+            f"(rotate signal), got: {msg!r}."
+        )
+
+    def test_format_step_abort_message_excludes_credential_limit_from_providers_unavailable(
+        self,
+    ) -> None:
+        """_format_step_abort_message must not emit 'agent providers unavailable'
+        for a credential-limit abort.
+
+        _format_step_abort_message calls _is_provider_failure(output) at line 3963.
+        If _is_provider_failure returns True for credential-limit messages (current
+        buggy behavior), the function returns 'Aborting after Step N: agent providers
+        unavailable' — factually wrong for a single rate-limited credential.
+
+        After the fix: _is_provider_failure returns False for credential-limit
+        messages, so _format_step_abort_message returns the generic
+        'Aborting after Step N: step failed' — correct for a rotate event.
+        """
+        # Scope addition: covers secondary _is_provider_failure use at line 3963
+        # (single-step hard-abort gate) — expansion item identified by Step 6.
+        result = _format_step_abort_message(5, _ALL_PROVIDERS_FAILED_CRED_LIMIT_ORCH)
+        assert "agent providers unavailable" not in result, (
+            f"_format_step_abort_message must not classify a credential-limit "
+            f"message as 'agent providers unavailable'; got: {result!r}. "
+            "The secondary _is_provider_failure call at the single-step "
+            "hard-abort gate must also exclude credential-limit events."
+        )

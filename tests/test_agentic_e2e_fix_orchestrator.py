@@ -10711,3 +10711,66 @@ class TestPreCheckupGateRemediation:
         assert cost == 0.0
         assert changed_files == ["app/foo.py"]
         assert agent_calls == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #1728 sibling: agentic_e2e_fix_orchestrator inline credential-limit check
+# Scope addition: covers expansion item
+#   "pdd/agentic_e2e_fix_orchestrator.py:3104 inline 'All agent providers failed'
+#    check burns 3 strikes on credential-limit steps instead of rotating immediately"
+# identified by Step 6 but absent from Step 8's original plan.
+# ---------------------------------------------------------------------------
+
+# Exact credential-limit message emitted by _interactive_credential_limit_message
+# in agentic_common.py — also the string from the prod incident (job xS9G6DdGEMXyaNuZ6xzE).
+_CRED_LIMIT_DETAIL_E2E = (
+    "Claude Code interactive session reached its Claude subscription cap — "
+    "you've hit your limit · resets at a provider-set time (PDD credential-limit). "
+    "PDD detected a synthetic credential-limit turn in the session transcript with no "
+    "usable reply; fast-failing so the caller rotates to the next OAuth credential "
+    "instead of waiting for the full interactive step timeout."
+)
+_ALL_PROVIDERS_FAILED_CRED_LIMIT_E2E = (
+    f"All agent providers failed: anthropic: {_CRED_LIMIT_DETAIL_E2E}"
+)
+
+
+def test_e2e_fix_orchestrator_rotates_on_first_credential_limit_not_third(
+    e2e_fix_mock_dependencies, e2e_fix_default_args
+):
+    """When every step fails with a credential-limit message, the e2e fix orchestrator
+    must abort after the FIRST step, not after three.
+
+    Current (buggy) behavior: the inline 'All agent providers failed' check at
+    agentic_e2e_fix_orchestrator.py:3104 increments consecutive_provider_failures for
+    credential-limit events — burning 3 steps before the abort fires.
+    run_agentic_task is called 3 times.
+
+    After the fix: the credential-limit guard detects the 'PDD credential-limit' token
+    on the first step and rotates immediately (call_count == 1).
+
+    Sibling bug location: pdd/agentic_e2e_fix_orchestrator.py:3104 — inline
+    'All agent providers failed' check without credential-limit exclusion.
+
+    Note: mock_pre_checkup_gate_default autouse fixture from this file stubs the
+    pre-checkup gate check; e2e_fix_mock_dependencies stubs run_agentic_task and
+    all other external dependencies.
+    """
+    mock_run, mock_load, _ = e2e_fix_mock_dependencies
+    mock_run.return_value = (False, _ALL_PROVIDERS_FAILED_CRED_LIMIT_E2E, 0.0, "claude")
+
+    success, msg, cost, model, files = run_agentic_e2e_fix_orchestrator(
+        **e2e_fix_default_args
+    )
+
+    assert success is False
+    assert mock_run.call_count == 1, (
+        f"E2E fix orchestrator must abort on the FIRST credential-limit step "
+        f"(rotate signal), but run_agentic_task was called {mock_run.call_count} "
+        "time(s). The 3-strikes counter at agentic_e2e_fix_orchestrator.py:3104 "
+        "must not apply to credential-limit events."
+    )
+    assert "agent providers unavailable" not in msg, (
+        f"E2E fix orchestrator abort message must not say 'agent providers unavailable' "
+        f"for a single rate-limited credential; got: {msg!r}."
+    )

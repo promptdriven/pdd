@@ -1029,3 +1029,220 @@ class TestLayer1FailureCategory2047:
         block = report.split("```json", 1)[1].split("```", 1)[0]
         payload = json.loads(block)
         assert payload["failure_category"] == "github_checks_failed"
+
+    # --- Issue #1728: credential-limit classification and formatting tests ---
+    # (Reproduction tests from Step 5, incorporated into canonical test file)
+
+    def test_credential_limit_is_classified_as_credential_limit(self) -> None:
+        """The stable 'PDD credential-limit' token must route to a 'credential_limit'
+        category, not the code-defect catch-all 'layer1_failed'.
+
+        Current (buggy) behavior: _classify_layer1_failure_category has no
+        credential-limit branch → falls through to FINAL_GATE_CATEGORY_LAYER1
+        ("layer1_failed"), which causes _format_layer1_failure_report to render
+        severity: "blocker" + author-actionable wording. This directly contradicts
+        the README spec for PDD_PROVIDER_LIMIT (a rotate/scheduling signal, not
+        a terminal verdict).
+
+        Real incident: job xS9G6DdGEMXyaNuZ6xzE — only lane 1 was capped but a
+        blocker comment was posted; five executor lanes were never tried.
+        """
+        result = _classify_layer1_failure_category(_ALL_PROVIDERS_FAILED_CRED_LIMIT_1728)
+        assert result == "credential_limit", (
+            f"Expected 'credential_limit' for a PDD-credential-limit abort, "
+            f"got {result!r}. This falls through to severity: blocker downstream."
+        )
+
+    def test_credential_limit_does_not_fall_through_to_layer1_failed(self) -> None:
+        """A credential-limit abort must NOT fall through to the generic 'layer1_failed'
+        catch-all category.
+
+        'layer1_failed' triggers severity: blocker + 'Resolve… re-run the final gate'
+        wording — wrong for an infra/availability condition where no PR changes are needed.
+        pdd_cloud keys off failure_category to decide the terminal outcome (ref: req 11e).
+        """
+        result = _classify_layer1_failure_category(_ALL_PROVIDERS_FAILED_CRED_LIMIT_1728)
+        assert result != "layer1_failed", (
+            f"Credential-limit abort must not fall through to the code-defect "
+            f"catch-all 'layer1_failed'; got {result!r}. Other executor lanes were untried."
+        )
+
+    def test_credential_limit_report_severity_is_not_blocker(self) -> None:
+        """_format_layer1_failure_report must not emit severity: 'blocker' for a
+        credential-limit abort.
+
+        A rate-limited credential is an infra/availability condition — no PR changes
+        needed, the executor will rotate to the next lane. Current (buggy) behavior:
+        severity is hardcoded to 'blocker' for all Layer 1 failures regardless of
+        whether the failure is a code defect or an infra/credential event.
+        """
+        report = _format_layer1_failure_report(
+            pr_url=PR_URL,
+            issue_url=ISSUE_URL,
+            layer1_message=_ALL_PROVIDERS_FAILED_CRED_LIMIT_1728,
+            full_suite_source="local",
+        )
+        block = report.split("```json", 1)[1].split("```", 1)[0]
+        payload = json.loads(block)
+        findings = payload.get("findings", [])
+        assert findings, "Expected at least one finding in the report."
+        severity = findings[0].get("severity", "")
+        assert severity != "blocker", (
+            f"Credential-limit abort must not render severity='blocker'; got {severity!r}. "
+            "A rate-limited credential is infra/availability — no PR changes needed."
+        )
+
+    def test_credential_limit_report_required_fix_is_retryable(self) -> None:
+        """The 'required_fix' text for a credential-limit failure must NOT instruct
+        the author to 'Resolve the Layer 1 checkup failure'.
+
+        The hardcoded 'Resolve… re-run the final gate' wording is only correct for
+        genuine code-defect failures where author action is needed. For a credential-limit
+        abort, the correct signal is 'Re-run — no PR changes needed; a credential
+        rotation is in progress.' (ref: pdd#1617 — provider outage is infra/retryable).
+        """
+        report = _format_layer1_failure_report(
+            pr_url=PR_URL,
+            issue_url=ISSUE_URL,
+            layer1_message=_ALL_PROVIDERS_FAILED_CRED_LIMIT_1728,
+            full_suite_source="local",
+        )
+        block = report.split("```json", 1)[1].split("```", 1)[0]
+        payload = json.loads(block)
+        findings = payload.get("findings", [])
+        assert findings, "Expected at least one finding in the report."
+        required_fix = findings[0].get("required_fix", "")
+        assert "Resolve the Layer 1 checkup failure" not in required_fix, (
+            f"'Resolve…' wording is wrong for a rate-limited credential; "
+            f"got: {required_fix!r}. No author action is required for an infra event."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1728 shared constants — used by credential-limit tests above and below
+# ---------------------------------------------------------------------------
+
+_CRED_LIMIT_DETAIL_1728 = (
+    "Claude Code interactive session reached its Claude subscription cap — "
+    "you've hit your limit · resets at a provider-set time (PDD credential-limit). "
+    "PDD detected a synthetic credential-limit turn in the session transcript with no "
+    "usable reply; fast-failing so the caller rotates to the next OAuth credential "
+    "instead of waiting for the full interactive step timeout."
+)
+# The full "All agent providers failed: …" string emitted when the single injected
+# credential (e.g. claude-oauth-v9) hits its subscription cap.  This is the exact
+# string from the production incident (job xS9G6DdGEMXyaNuZ6xzE, PR #2328).
+_ALL_PROVIDERS_FAILED_CRED_LIMIT_1728 = (
+    f"All agent providers failed: anthropic: {_CRED_LIMIT_DETAIL_1728}"
+)
+
+
+class TestCredentialLimitFinalGateGuard:
+    """Issue #1728 defect 1: _post_final_gate_report must NOT be called when the
+    Layer 1 orchestrator aborts due to a single rate-limited credential.
+
+    A credential-limit is a rotate/scheduling signal for the executor — not a
+    terminal checkup verdict.  The CLI must not post the terminal outcome while
+    the executor waterfall has untried lanes.
+
+    Real incident: job xS9G6DdGEMXyaNuZ6xzE, PR #2328 / issue #2244.
+    Waterfall ['claude-oauth-v9', 'claude-oauth-v8', 'claude-oauth-v6',
+    'anthropic-api-key', 'gemini-vertexai', 'openai-codex']. Only lane 1 was
+    capped when the CLI posted a severity: blocker blocker comment; five lanes
+    were never tried.
+    """
+
+    def _fake_gh(self, cmd, *_a, **_kw):
+        if len(cmd) >= 2 and cmd[0] == "api" and "/issues/" in cmd[1]:
+            return (True, '{"title": "stub", "body": "stub", "comments_url": ""}')
+        return (True, "[]")
+
+    def test_no_final_gate_report_posted_on_credential_limit_abort(
+        self, tmp_path: Path
+    ) -> None:
+        """When the orchestrator returns a credential-limit abort message,
+        _post_final_gate_report must NOT be called.
+
+        Before the fix: _post_final_gate_report is called unconditionally for any
+        Layer 1 failure, posting a severity: blocker GitHub comment while 5 executor
+        lanes remain untried. After the fix: a credential-limit guard in the
+        run_agentic_checkup call site skips _post_final_gate_report entirely.
+
+        Reproduces the core defect from the production incident:
+        job xS9G6DdGEMXyaNuZ6xzE / PR #2328.
+        """
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), \
+             patch("pdd.agentic_checkup._run_gh_command", side_effect=self._fake_gh), \
+             patch("pdd.agentic_checkup._fetch_comments", return_value=""), \
+             patch("pdd.agentic_checkup._find_project_root", return_value=tmp_path), \
+             patch("pdd.agentic_checkup._load_architecture_json", return_value=({}, None)), \
+             patch("pdd.agentic_checkup._load_pddrc_content", return_value=""), \
+             patch("pdd.agentic_checkup._fetch_pr_context", return_value=""), \
+             patch(
+                 "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+                 return_value=(False, _ALL_PROVIDERS_FAILED_CRED_LIMIT_1728, 0.0, ""),
+             ), \
+             patch("pdd.agentic_checkup._post_final_gate_report") as mock_post_report:
+
+            run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                no_fix=False,
+                use_github_state=True,
+                pr_url=PR_URL,
+                final_gate=True,
+                test_scope="full",
+                full_suite_source="local",
+            )
+
+        assert not mock_post_report.called, (
+            "_post_final_gate_report must NOT be called for a credential-limit "
+            "abort — the executor waterfall still has untried lanes. "
+            f"It was called {mock_post_report.call_count} time(s). "
+            "Real incident: job xS9G6DdGEMXyaNuZ6xzE — 5 lanes were never tried."
+        )
+
+    def test_no_final_gate_report_posted_on_single_credential_all_providers_failed(
+        self, tmp_path: Path
+    ) -> None:
+        """When 'All agent providers failed' contains the 'PDD credential-limit' token,
+        no terminal blocker comment should be posted.
+
+        This mirrors the exact orchestrator abort message from the production incident
+        where steps 1-3 all failed with the credential-limit error before posting.
+        use_github_state=True is required so the guard actually matters.
+        """
+        # Simulate the 3-strikes orchestrator abort message (current buggy code).
+        # After the fix the orchestrator aborts on step 1, but _post_final_gate_report
+        # must not fire regardless of which message the orchestrator returns.
+        orch_abort_msg = _ALL_PROVIDERS_FAILED_CRED_LIMIT_1728
+
+        with patch("pdd.agentic_checkup._check_gh_cli", return_value=True), \
+             patch("pdd.agentic_checkup._run_gh_command", side_effect=self._fake_gh), \
+             patch("pdd.agentic_checkup._fetch_comments", return_value=""), \
+             patch("pdd.agentic_checkup._find_project_root", return_value=tmp_path), \
+             patch("pdd.agentic_checkup._load_architecture_json", return_value=({}, None)), \
+             patch("pdd.agentic_checkup._load_pddrc_content", return_value=""), \
+             patch("pdd.agentic_checkup._fetch_pr_context", return_value=""), \
+             patch(
+                 "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+                 return_value=(False, orch_abort_msg, 0.0, ""),
+             ), \
+             patch("pdd.agentic_checkup._post_final_gate_report") as mock_post_report:
+
+            run_agentic_checkup(
+                issue_url=ISSUE_URL,
+                quiet=True,
+                no_fix=False,
+                use_github_state=True,
+                pr_url=PR_URL,
+                final_gate=True,
+                test_scope="full",
+                full_suite_source="local",
+            )
+
+        assert not mock_post_report.called, (
+            "_post_final_gate_report must NOT be called when the single injected "
+            "credential hits its rate limit (PDD credential-limit token present). "
+            f"Got {mock_post_report.call_count} call(s)."
+        )

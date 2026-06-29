@@ -8271,3 +8271,61 @@ class TestStep6ScopeEndToEndPropagation:
             f"alongside legacy entries; got: {step8_instr!r}"
         )
         assert "Scope: SIBLING_PATTERN" in step8_instr
+
+
+# ---------------------------------------------------------------------------
+# Issue #1728 sibling: agentic_bug_orchestrator inline credential-limit check
+# Scope addition: covers expansion item
+#   "pdd/agentic_bug_orchestrator.py:2638 inline 'All agent providers failed'
+#    check burns 3 strikes on credential-limit steps instead of rotating immediately"
+# identified by Step 6 but absent from Step 8's original plan.
+# ---------------------------------------------------------------------------
+
+# Exact credential-limit message emitted by _interactive_credential_limit_message
+# in agentic_common.py — also the string from the prod incident (job xS9G6DdGEMXyaNuZ6xzE).
+_CRED_LIMIT_DETAIL_BUG = (
+    "Claude Code interactive session reached its Claude subscription cap — "
+    "you've hit your limit · resets at a provider-set time (PDD credential-limit). "
+    "PDD detected a synthetic credential-limit turn in the session transcript with no "
+    "usable reply; fast-failing so the caller rotates to the next OAuth credential "
+    "instead of waiting for the full interactive step timeout."
+)
+_ALL_PROVIDERS_FAILED_CRED_LIMIT_BUG = (
+    f"All agent providers failed: anthropic: {_CRED_LIMIT_DETAIL_BUG}"
+)
+
+
+def test_bug_orchestrator_rotates_on_first_credential_limit_not_third(
+    mock_dependencies, default_args
+):
+    """When every step fails with a credential-limit message, the bug orchestrator
+    must abort after the FIRST step, not after three.
+
+    Current (buggy) behavior: the inline 'All agent providers failed' check at
+    agentic_bug_orchestrator.py:2638 increments consecutive_failures for credential-limit
+    events — just like the checkup orchestrator's 3-strikes counter. run_agentic_task
+    is called 3 times before consecutive_failures >= 3 fires.
+
+    After the fix: the credential-limit guard detects the 'PDD credential-limit' token
+    on the first step and aborts immediately (call_count == 1), surfacing a rotate signal
+    rather than an 'agent providers unavailable' verdict.
+
+    Sibling bug location: pdd/agentic_bug_orchestrator.py:2638 — inline
+    'All agent providers failed' check without credential-limit exclusion.
+    """
+    mock_run, mock_load, _ = mock_dependencies
+    mock_run.return_value = (False, _ALL_PROVIDERS_FAILED_CRED_LIMIT_BUG, 0.0, "claude")
+
+    success, msg, cost, model, files = run_agentic_bug_orchestrator(**default_args)
+
+    assert success is False
+    assert mock_run.call_count == 1, (
+        f"Bug orchestrator must abort on the FIRST credential-limit step "
+        f"(rotate signal), but run_agentic_task was called {mock_run.call_count} "
+        "time(s). The 3-strikes counter at agentic_bug_orchestrator.py:2638 must "
+        "not apply to credential-limit events — use call_count == 1 after the fix."
+    )
+    assert "agent providers unavailable" not in msg, (
+        f"Bug orchestrator abort message must not say 'agent providers unavailable' "
+        f"for a single rate-limited credential; got: {msg!r}."
+    )
