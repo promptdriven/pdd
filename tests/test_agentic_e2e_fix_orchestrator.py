@@ -10711,3 +10711,280 @@ class TestPreCheckupGateRemediation:
         assert cost == 0.0
         assert changed_files == ["app/foo.py"]
         assert agent_calls == []
+
+
+# The scoped terminal-stop message the orchestrator must emit when the E2E-fix
+# workflow is running on a repo with no E2E harness and Step 3 returns
+# NOT_A_BUG (issue #1776). Asserted as a substring so trailing punctuation /
+# wording variants downstream of the colon don't break the contract.
+_E2E_SKIP_STOP_SUBSTR = "E2E fix stopped: no E2E test suite/failure exists"
+
+
+class TestE2ESkipNotABugTerminalStop:
+    """Regression tests for issue #1776: when Step 2 is skipped as ``E2E_SKIP``
+    (no Playwright/E2E harness exists) and Step 3 classifies the remaining E2E
+    work as ``NOT_A_BUG``, the E2E-fix workflow must stop cleanly BEFORE the
+    ``has_fixed_units``/``has_direct_edits`` suppression fires, with a scoped
+    message, and must NOT fall through to Step 8 (which launches a nested
+    ``pdd fix`` and looped until the 14,400 s Cloud Run timeout in #1738).
+
+    The fix must be strictly scoped to the E2E_SKIP precondition so it does
+    NOT falsely mark a broken code fix as verified/successful, and it must
+    apply symmetrically on resume.
+
+    These tests assert observable behavior only: the called ``run_agentic_task``
+    step labels (control flow — was Step 8 invoked?) and the returned
+    ``final_message`` (the scoped stop string + absence of a false success
+    claim). They fail on the current buggy code because NOT_A_BUG is suppressed
+    and the workflow continues into Step 8.
+    """
+
+    def test_e2e_skip_direct_edits_not_a_bug_stops_without_step8(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 1 (primary #1738 first-run repro, ``has_direct_edits`` channel).
+
+        Setup: no E2E harness (``_check_e2e_environment`` -> ``(False, ...)``)
+        so Step 2 pre-flight-skips as ``E2E_SKIP``; prior direct edits exist
+        (``_detect_meaningful_changes`` -> non-empty, the suppression channel
+        that fired in #1738); Step 1 is generic (no ALL_TESTS_PASS, so the
+        Step-2-skip early exit does not pre-empt the Step 3 check); Step 3
+        returns ``NOT_A_BUG``.
+
+        After fix: the workflow stops cleanly at Step 3 — no called label
+        contains ``step8`` — and the returned message is the scoped E2E stop
+        and does NOT claim verified success.
+
+        Before fix: the ``has_direct_edits`` suppression fires, ``NOT_A_BUG``
+        is ignored, and execution falls through into Step 8 (a ``step8`` label
+        is invoked), so this test fails.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "There is no E2E/browser failure here — no Playwright "
+                        "suite exists and the issue belongs to the Python "
+                        "unit-test/code-fix path.\n"
+                        "**Status:** NOT_A_BUG"
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # Control-flow channel: Step 8 (nested pdd fix) must NOT be invoked.
+        assert not step8_calls, (
+            "Issue #1776: when Step 2 is E2E_SKIP (no E2E harness) and Step 3 "
+            "returns NOT_A_BUG, the E2E-fix workflow must stop cleanly and must "
+            "NOT fall through to Step 8. But Step 8 was invoked: "
+            f"{step8_calls}. All called labels: {called_labels}"
+        )
+
+        # Message channel: the scoped stop reason must be reported.
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or ""), (
+            "Issue #1776: expected the scoped E2E stop message "
+            f"({_E2E_SKIP_STOP_SUBSTR!r}) but got msg={msg!r}"
+        )
+
+        # Safety channel: the stop must NOT falsely claim verified success —
+        # preserve the #779/#1206 intent of never declaring a broken code fix
+        # successful merely because Step 3 said NOT_A_BUG.
+        assert "All tests passed" not in (msg or ""), (
+            f"Issue #1776: scoped E2E stop must not claim tests passed. msg={msg!r}"
+        )
+        assert "verified" not in (msg or "").lower(), (
+            f"Issue #1776: scoped E2E stop must not claim verified success. msg={msg!r}"
+        )
+
+    def test_e2e_harness_present_not_a_bug_suppression_preserved(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 2 (scope guard): the new stop must NOT over-fire when a real
+        E2E harness exists.
+
+        Setup: identical to Test 1 except ``_check_e2e_environment`` ->
+        ``(True, "")`` (Step 2 runs normally — no E2E_SKIP), direct edits
+        still present, Step 3 returns ``NOT_A_BUG``.
+
+        Expected (both before and after the fix): with no E2E_SKIP
+        precondition, the original #779/#1206 suppression still fires — the
+        workflow continues into Step 8 and the scoped E2E stop message is NOT
+        emitted. This proves the #1776 fix is scoped strictly to the
+        E2E_SKIP case and would catch an unconditional implementation that
+        stops the workflow whenever Step 3 returns NOT_A_BUG.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "**Status:** NOT_A_BUG — already fixed."
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            # Avoid Step 2 ALL_TESTS_PASS so the Step-2 early exit doesn't fire;
+            # generic output keeps the cycle progressing into Step 3.
+            if "step9" in label:
+                return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(True, ""),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # No E2E_SKIP precondition => original suppression preserved => the
+        # workflow continues into Step 8 (the #779 behavior is intact).
+        assert step8_calls, (
+            "Issue #1776 (scope guard): with a real E2E harness present (NOT "
+            "E2E_SKIP), the original NOT_A_BUG suppression must still fire and "
+            "the workflow must continue into Step 8. But Step 8 was never "
+            f"invoked. Called labels: {called_labels}. This indicates the "
+            "E2E_SKIP-scoped stop is firing unconditionally."
+        )
+
+        # And the scoped E2E stop message must NOT be emitted when no E2E_SKIP.
+        assert _E2E_SKIP_STOP_SUBSTR not in (msg or ""), (
+            "Issue #1776 (scope guard): the E2E_SKIP-scoped stop message must "
+            "NOT appear when a real E2E harness exists. The new stop is "
+            f"over-firing. msg={msg!r}"
+        )
+
+    def test_resume_e2e_skip_fixed_units_not_a_bug_stops_without_step8(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Test 3 (resume path + ``has_fixed_units`` channel).
+
+        Setup: ``resume=True`` with saved state representing a run that was
+        interrupted right after Step 2 was skipped as ``E2E_SKIP`` — the
+        persisted ``skipped_steps``/``step_outputs["2"]`` carry the E2E_SKIP
+        signal, ``last_completed_step=2`` (so Step 3 reruns fresh),
+        ``dev_unit_states`` has a FIXED unit (the ``has_fixed_units``
+        suppression channel), ``current_cycle=1``. On rerun Step 3 returns
+        ``NOT_A_BUG``.
+
+        After fix: the resumed run reaches the same scoped clean stop — no
+        ``step8`` label is invoked and the scoped stop message is returned.
+
+        Before fix: the resume restores ``has_fixed_units`` (FIXED dev unit),
+        the inline guard suppresses ``NOT_A_BUG``, and the workflow falls
+        through into Step 8 — so this test fails.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 2,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "E2E_SKIP: no playwright config found in project",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {"u1": {"fixed": True}},
+            "skipped_steps": {"2": "no playwright config found in project"},
+            "initial_file_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "cycle_start_hashes": {"pdd/agentic_common.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step3" in label:
+                return (
+                    True,
+                    (
+                        "## Root Cause Analysis\n"
+                        "No E2E/browser failure exists; this is the unit/code-fix "
+                        "path.\n"
+                        "**Status:** NOT_A_BUG"
+                    ),
+                    0.1,
+                    "gpt-4",
+                )
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._check_e2e_environment",
+            return_value=(False, "no playwright config found in project"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["pdd/agentic_common.py"],
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        step8_calls = [l for l in called_labels if "step8" in l]
+
+        # Sanity: Step 3 must actually have run on resume (otherwise the test
+        # would be vacuous — it must reach the NOT_A_BUG decision point).
+        assert step3_calls, (
+            "Issue #1776 (resume): Step 3 must rerun on resume to reach the "
+            f"NOT_A_BUG decision. Called labels: {called_labels}"
+        )
+
+        # Control-flow channel: the resumed run must also stop before Step 8.
+        assert not step8_calls, (
+            "Issue #1776 (resume): a resumed run with persisted E2E_SKIP and a "
+            "FIXED dev unit must also stop cleanly at Step 3 NOT_A_BUG and must "
+            f"NOT fall through to Step 8. But Step 8 was invoked: {step8_calls}. "
+            f"All called labels: {called_labels}"
+        )
+
+        # Message channel: the scoped stop reason must be reported on resume too.
+        assert _E2E_SKIP_STOP_SUBSTR in (msg or ""), (
+            "Issue #1776 (resume): expected the scoped E2E stop message "
+            f"({_E2E_SKIP_STOP_SUBSTR!r}) on resume but got msg={msg!r}"
+        )
