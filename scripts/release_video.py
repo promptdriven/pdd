@@ -418,9 +418,10 @@ def print_release_video_status(args: argparse.Namespace, repo: Path) -> int:
             f"Persisted PDS run metadata is not a JSON object: {run_metadata_path}"
         )
 
-    print(json.dumps(metadata, indent=2, sort_keys=True))
-    recover_command = str(metadata.get("recoverCommand") or "").strip()
-    watch_command = str(metadata.get("watchCommand") or "").strip()
+    display_metadata = redact_status_artifact_value(metadata)
+    print(json.dumps(display_metadata, indent=2, sort_keys=True))
+    recover_command = str(display_metadata.get("recoverCommand") or "").strip()
+    watch_command = str(display_metadata.get("watchCommand") or "").strip()
     if recover_command:
         print(f"recover: {recover_command}")
     if watch_command:
@@ -464,9 +465,9 @@ def query_pds_release_video_status(
         check=False,
     )
     if completed.stdout.strip():
-        print(completed.stdout.rstrip())
+        print(redact_secret_text(completed.stdout.rstrip()))
     if completed.stderr.strip():
-        print(completed.stderr.rstrip(), file=sys.stderr)
+        print(redact_secret_text(completed.stderr.rstrip()), file=sys.stderr)
     if completed.returncode != 0:
         persist_status_query_failure(
             metadata=metadata,
@@ -526,11 +527,9 @@ def persist_status_query_success(
                 and response_run_id != persisted_run_id
             ):
                 continue
-            if (
-                target_key == "status"
-                and not response_run_id
-                and metadata_refreshed_status
-            ):
+            if target_key == "status" and metadata_refreshed_status:
+                continue
+            if target_key == "status" and persisted_run_id and not response_run_id:
                 continue
             value = response.get(source_key)
             if isinstance(value, str) and value.strip():
@@ -683,6 +682,8 @@ def status_response_has_refresh_data(response: Any, persisted_run_id: str) -> bo
     response_run_id = response_pds_run_id(response)
     if response_run_id and persisted_run_id and response_run_id != persisted_run_id:
         return False
+    if persisted_run_id and not response_run_id:
+        return False
     return bool(first_nonempty_string(response.get("status"), response.get("state")))
 
 
@@ -695,7 +696,7 @@ def pds_context(pds_cli: str) -> dict[str, str]:
     context: dict[str, str] = {"pdsCli": redact_command_text(pds_cli)}
     api_url = os.environ.get("PDS_API_URL", "").strip()
     if api_url:
-        context["apiUrl"] = api_url
+        context["apiUrl"] = redact_secret_text(api_url)
         context["apiUrlSource"] = "PDS_API_URL"
     else:
         context["apiUrlSource"] = "pds-default"
@@ -775,6 +776,11 @@ def is_sensitive_artifact_field(key: Any) -> bool:
 def redact_secret_text(text: str) -> str:
     redacted = str(text or "")
     redacted = re.sub(
+        r"(?i)\b(https?://)[^/\s:@]+:[^/\s@]+@",
+        r"\1[redacted]@",
+        redacted,
+    )
+    redacted = re.sub(
         r"(?i)(\bauthorization\s*:\s*bearer\s+)[^\s\"'\\,;]+",
         r"\1[redacted]",
         redacted,
@@ -786,10 +792,30 @@ def redact_secret_text(text: str) -> str:
     )
     redacted = re.sub(
         (
-            r"(?i)([?&](?:access_token|token|api_key|secret|signature|sig)=)"
+            r"(?i)([?&](?:access[_-]?token|token|api[_-]?key|secret|"
+            r"signature|sig|x-amz-credential|x-amz-security-token|"
+            r"x-amz-signature)=)"
             r"[^&\s\"'<>]+"
         ),
         r"\1[redacted]",
+        redacted,
+    )
+    redacted = re.sub(
+        (
+            r"(?i)(^|\s)(--(?:[a-z0-9-]*token|[a-z0-9-]*secret|"
+            r"[a-z0-9-]*api-key|authorization|password))(\s+)"
+            r"[^\s\"'\\,;]+"
+        ),
+        r"\1\2\3[redacted]",
+        redacted,
+    )
+    redacted = re.sub(
+        (
+            r"(?i)(^|\s)(--(?:[a-z0-9-]*token|[a-z0-9-]*secret|"
+            r"[a-z0-9-]*api-key|authorization|password)=)"
+            r"[^\s\"'\\,;]+"
+        ),
+        r"\1\2[redacted]",
         redacted,
     )
     redacted = re.sub(
@@ -802,6 +828,18 @@ def redact_secret_text(text: str) -> str:
         redacted,
     )
     return redacted
+
+
+def is_sensitive_command_option(option: str) -> bool:
+    normalized = option.lstrip("-").replace("_", "-").lower()
+    return (
+        normalized in {"authorization", "password"}
+        or normalized.endswith("token")
+        or normalized.endswith("-token")
+        or normalized.endswith("secret")
+        or normalized.endswith("-secret")
+        or normalized.endswith("api-key")
+    )
 
 
 def redact_command_text(command: str) -> str:
@@ -819,11 +857,14 @@ def redact_command_text(command: str) -> str:
             redacted.append("[redacted]")
             redact_next = False
             continue
-        if option.lower() in SENSITIVE_COMMAND_OPTIONS and has_equals:
+        if (
+            option.lower() in SENSITIVE_COMMAND_OPTIONS
+            or is_sensitive_command_option(option)
+        ) and has_equals:
             redacted.append(f"{option}=[redacted]")
             continue
         redacted.append(part)
-        if part.lower() in SENSITIVE_COMMAND_OPTIONS:
+        if part.lower() in SENSITIVE_COMMAND_OPTIONS or is_sensitive_command_option(part):
             redact_next = True
     return redact_secret_text(shlex.join(redacted))
 
@@ -1764,13 +1805,25 @@ def pds_run_metadata_from_mapping(mapping: dict[str, Any]) -> dict[str, str] | N
     project_value = mapping.get("project")
     run = run_value if isinstance(run_value, dict) else {}
     project = project_value if isinstance(project_value, dict) else {}
+    run_id = first_string(mapping, "runId", "run_id") or first_string(
+        run,
+        "runId",
+        "run_id",
+        "id",
+    )
+    project_id = first_string(mapping, "projectId", "project_id") or first_string(
+        project,
+        "projectId",
+        "project_id",
+        "id",
+    )
+    run_status = first_string(run, "status", "state")
+    mapping_status = first_string(mapping, "status", "state")
+    run_has_identity = bool(first_string(run, "runId", "run_id", "id"))
     metadata = {
-        "runId": first_string(mapping, "runId", "run_id")
-        or first_string(run, "runId", "run_id", "id"),
-        "projectId": first_string(mapping, "projectId", "project_id")
-        or first_string(project, "projectId", "project_id", "id"),
-        "status": first_string(mapping, "status", "state")
-        or first_string(run, "status", "state"),
+        "runId": run_id,
+        "projectId": project_id,
+        "status": run_status or (None if run_has_identity else mapping_status),
         "attemptId": first_string(mapping, "attemptId", "attempt_id"),
         "recoverCommand": first_string(mapping, "recoverCommand", "recover_command"),
         "watchCommand": first_string(mapping, "watchCommand", "watch_command"),
@@ -1837,16 +1890,25 @@ def enrich_pds_run_metadata(
     enriched.setdefault("idempotencyProvenance", provenance)
     if str(project_id or "").strip() and "projectId" not in enriched:
         enriched["projectId"] = str(project_id).strip()
+    sanitize_pds_recovery_commands(enriched)
     enriched.setdefault("pdsContext", pds_context(pds_cli))
     if run_id:
         refresh_pds_recovery_commands(enriched, pds_cli)
     return enriched
 
 
+def sanitize_pds_recovery_commands(metadata: dict[str, Any]) -> None:
+    for key in ("recoverCommand", "watchCommand"):
+        command = str(metadata.get(key) or "").strip()
+        if command:
+            metadata[key] = redact_command_text(command)
+
+
 def refresh_pds_recovery_commands(metadata: dict[str, Any], pds_cli: str) -> None:
     run_id = str(metadata.get("runId") or "").strip()
     if not run_id:
         return
+    sanitize_pds_recovery_commands(metadata)
     pds_command = split_command(redact_command_text(pds_cli))
     project_id = str(metadata.get("projectId") or "").strip()
     if project_id:
@@ -1859,28 +1921,39 @@ def refresh_pds_recovery_commands(metadata: dict[str, Any], pds_cli: str) -> Non
     if should_replace_recovery_command(
         str(metadata.get("recoverCommand") or ""),
         project_id,
+        run_id,
     ):
         metadata["recoverCommand"] = recover_command
     if should_replace_recovery_command(
         str(metadata.get("watchCommand") or ""),
         project_id,
+        run_id,
     ):
         metadata["watchCommand"] = watch_command
 
 
-def should_replace_recovery_command(command: str, project_id: str) -> bool:
+def should_replace_recovery_command(command: str, project_id: str, run_id: str = "") -> bool:
     if not command:
         return True
-    if not project_id:
-        return False
     try:
         parts = shlex.split(command)
     except ValueError:
         return True
-    return not any(
-        part == "--project" and index + 1 < len(parts) and parts[index + 1] == project_id
-        for index, part in enumerate(parts)
-    )
+    if run_id and command_option_value(parts, "--run-id") != run_id:
+        return True
+    if project_id and command_option_value(parts, "--project") != project_id:
+        return True
+    return False
+
+
+def command_option_value(parts: list[str], option: str) -> str:
+    for index, part in enumerate(parts):
+        if part == option and index + 1 < len(parts):
+            return parts[index + 1]
+        prefix = f"{option}="
+        if part.startswith(prefix):
+            return part.removeprefix(prefix)
+    return ""
 
 
 def pds_failure_hint(completed: subprocess.CompletedProcess[str]) -> str:
