@@ -487,7 +487,11 @@ def persist_status_query_success(
             value = response.get(source_key)
             if isinstance(value, str) and value.strip():
                 refreshed[target_key] = value.strip()
-    refreshed["statusStale"] = False
+    refreshed["statusStale"] = (
+        False
+        if status_metadata or response is not None
+        else release_video_status_is_running(refreshed.get("status"))
+    )
     refreshed["pdsContext"] = pds_context(pds_cli)
     refreshed["lastStatusQuery"] = {
         "ok": True,
@@ -1410,6 +1414,7 @@ def extract_pds_run_metadata(
         ]
         if preferred:
             return select_pds_run_metadata(preferred, distinct_run_policy="last")
+        primary_metadata = []
         json_metadata = []
     if primary_metadata:
         return select_pds_run_metadata(primary_metadata, distinct_run_policy="last")
@@ -1729,6 +1734,9 @@ def prepare_release_video_script(raw_script: str, *, source: str) -> dict[str, A
     changes: list[str] = []
     if wrapper_changed:
         changes.append("stripped_model_wrapper_text")
+    candidate, fence_changed = strip_outer_markdown_fence_lines(candidate)
+    if fence_changed:
+        changes.append("stripped_markdown_fence")
     candidate, duplicate_changed = collapse_duplicate_narrator_labels(candidate)
     if duplicate_changed:
         changes.append("collapsed_duplicate_narrator_labels")
@@ -1790,13 +1798,33 @@ def strip_model_wrapper_text(script: str) -> tuple[str, bool]:
     return "\n".join(lines).strip(), changed
 
 
+def strip_outer_markdown_fence_lines(script: str) -> tuple[str, bool]:
+    lines = script.splitlines()
+    changed = False
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if lines and re.match(r"^```(?:markdown|md)?\s*$", lines[0].strip(), flags=re.IGNORECASE):
+        lines.pop(0)
+        changed = True
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if lines and lines[-1].strip() == "```":
+        lines.pop()
+        changed = True
+    return "\n".join(lines).strip(), changed
+
+
 def line_is_inside_narrator_block(lines: list[str], line_index: int) -> bool:
+    crossed_blank = False
     for index in range(line_index - 1, -1, -1):
         line = lines[index]
         if not line.strip():
-            return False
+            crossed_blank = True
+            continue
         if is_narrator_label(line):
             return True
+        if crossed_blank:
+            return False
         if visual_cue_text(line) or re.match(r"^#{1,2}\s+\S", line.strip()):
             return False
     return False
@@ -1893,6 +1921,7 @@ def validate_release_video_script(
         "hasVisual": any(visual_cue_text(line) for line in script.splitlines()),
         "hasNoModelWrapperText": not has_unstripped_model_wrapper_text(script),
         "hasNoDuplicateNarratorLabels": not has_duplicate_narrator_labels(script),
+        "hasNoMarkdownFences": not has_markdown_fence_line(script),
     }
     errors = [name for name, passed in checks.items() if not passed]
     return {
@@ -1920,6 +1949,10 @@ def has_duplicate_narrator_labels(script: str) -> bool:
         if line.strip():
             previous_pending_label = False
     return False
+
+
+def has_markdown_fence_line(script: str) -> bool:
+    return any(re.match(r"^\s*```", line) for line in script.splitlines())
 
 
 def has_unstripped_model_wrapper_text(script: str) -> bool:
