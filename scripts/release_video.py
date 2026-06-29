@@ -1852,13 +1852,12 @@ def collapse_duplicate_narrator_labels(script: str) -> tuple[str, bool]:
     blank_after_pending_label = False
 
     for line in lines:
-        inline_match = duplicate_narrator_label_line(line)
-        if inline_match:
+        duplicate_body = duplicate_narrator_label_body(line)
+        if duplicate_body is not None:
             if not pending_label:
                 append_spaced(normalized, "NARRATOR:")
-            body = inline_match.group("body").strip()
-            if body:
-                normalized.append(body)
+            if duplicate_body:
+                normalized.append(duplicate_body)
                 pending_label = False
             else:
                 pending_label = True
@@ -1937,7 +1936,7 @@ def validate_release_video_script(
 def has_duplicate_narrator_labels(script: str) -> bool:
     previous_pending_label = False
     for line in script.splitlines():
-        if duplicate_narrator_label_line(line):
+        if duplicate_narrator_label_body(line) is not None:
             return True
         if inline_narrator_label_line(line):
             return True
@@ -1977,14 +1976,28 @@ def has_unstripped_model_wrapper_text(script: str) -> bool:
     )
 
 
-def duplicate_narrator_label_line(line: str) -> re.Match[str] | None:
-    return re.match(
-        r"^\s*(?:\*\*)?NARRATOR:\s*(?:\*\*)?\s*"
-        r"(?:(?:\*\*)?NARRATOR:\s*(?:\*\*)?\s*)+"
-        r"(?P<body>.*)$",
-        line,
-        flags=re.IGNORECASE,
-    )
+def duplicate_narrator_label_body(line: str) -> str | None:
+    remainder = consume_narrator_label_prefix(line)
+    if remainder is None:
+        return None
+    duplicate_count = 0
+    while True:
+        next_remainder = consume_narrator_label_prefix(remainder)
+        if next_remainder is None:
+            break
+        duplicate_count += 1
+        remainder = next_remainder
+    if duplicate_count == 0:
+        return None
+    return remainder.strip()
+
+
+def consume_narrator_label_prefix(text: str) -> str | None:
+    stripped = text.lstrip()
+    for label in ("NARRATOR:", "**NARRATOR:**", "**NARRATOR:", "NARRATOR:**"):
+        if stripped.upper().startswith(label):
+            return stripped[len(label):].lstrip()
+    return None
 
 
 def inline_narrator_label_line(line: str) -> re.Match[str] | None:
