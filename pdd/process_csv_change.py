@@ -116,11 +116,22 @@ def resolve_code_path(
 
     candidate_dirs.append(abs_code_directory)
 
+    def _inside_code_directory(path: str) -> bool:
+        try:
+            return (
+                os.path.commonpath([abs_code_directory, os.path.abspath(path)])
+                == abs_code_directory
+            )
+        except ValueError:
+            return False
+
     checked_dirs = set()
     fallback_path = os.path.join(abs_code_directory, input_code_filename)
     for directory in candidate_dirs:
         normalized_dir = os.path.abspath(directory)
         if normalized_dir in checked_dirs:
+            continue
+        if not _inside_code_directory(normalized_dir):
             continue
         checked_dirs.add(normalized_dir)
         candidate = os.path.join(normalized_dir, input_code_filename)

@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch, mock_open, MagicMock, call
 
 # Assuming the package is named 'pdd' and the module is 'process_csv_change.py'
-from pdd.process_csv_change import process_csv_change, resolve_prompt_path
+from pdd.process_csv_change import process_csv_change, resolve_code_path, resolve_prompt_path
 
 # Add the helper function for the open side effect (place it at module level):
 def create_open_side_effect(file_map):
@@ -926,6 +926,35 @@ def test_csv_change_resolves_code_path_from_prompt_subdirectory(
 
     captured = capsys.readouterr()
     assert "Overall Success Status: True" in captured.out
+
+def test_csv_change_does_not_resolve_code_outside_code_directory(
+    tmp_path,
+):
+    """
+    CSV prompt paths with parent-directory components must not let paired code
+    resolution escape code_directory.
+    """
+    code_dir = tmp_path / "code"
+    outside_dir = tmp_path / "outside"
+    code_dir.mkdir()
+    outside_dir.mkdir()
+
+    resolved_prompt_path = outside_dir / "widget_python.prompt"
+    resolved_prompt_path.write_text("Prompt", encoding="utf-8")
+    unsafe_code_path = outside_dir / "widget.py"
+    unsafe_code_path.write_text("def widget(): return 'unsafe'\n", encoding="utf-8")
+    safe_code_path = code_dir / "widget.py"
+    safe_code_path.write_text("def widget(): return 'safe'\n", encoding="utf-8")
+
+    resolved_code_path = resolve_code_path(
+        prompt_name="../outside/widget_python.prompt",
+        resolved_prompt_path=str(resolved_prompt_path),
+        csv_file=str(tmp_path / "changes.csv"),
+        code_directory=str(code_dir),
+        input_code_filename="widget.py",
+    )
+
+    assert resolved_code_path == str(safe_code_path)
 
 def test_extension_fallback_bug(mock_change_fixture, capsys):
     """
