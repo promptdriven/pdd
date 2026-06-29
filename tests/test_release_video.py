@@ -611,6 +611,37 @@ VISUAL: show release_video_script_validation.json with no errors.
     assert artifacts["validation"]["errors"] == []
 
 
+def test_release_video_collapses_many_duplicate_narrator_labels():
+    release_video = load_release_video_module()
+    duplicated_labels = "NARRATOR:" + "\tNARRATOR:" * 40
+    script = f"""# PDD v1.1.0 Release Video
+
+## Opening
+
+{duplicated_labels}
+The wrapper should collapse a long repeated speaker-label run without relying
+on a backtracking-heavy regular expression, because generated scripts can echo
+speaker labels many times after a model formatting failure.
+
+VISUAL: show the duplicate labels collapsed into one narrator block.
+
+## Recovery
+
+NARRATOR:
+The final script remains readable, validation stays clean, and PDS receives one
+stable narrator block instead of repeated labels.
+
+VISUAL: show the validation JSON with no duplicate-label errors.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "\tNARRATOR:" not in artifacts["script"]
+    assert "collapsed_duplicate_narrator_labels" in artifacts["validation"]["changes"]
+    assert artifacts["validation"]["checks"]["hasNoDuplicateNarratorLabels"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
 def test_release_video_normalizes_inline_narrator_labels():
     release_video = load_release_video_module()
     script = """# PDD v1.1.0 Release Video
