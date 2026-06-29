@@ -403,12 +403,18 @@ def test_release_video_rejects_malformed_script_before_invoking_pds(tmp_path: Pa
 ## Opening
 
 NARRATOR:
-This script is long enough to pass the old length check, but it never gives PDS any visual direction. That means the wrapper should stop before create rather than handing downstream systems an ambiguous narration-only artifact that an operator must diagnose during release recovery.
+This script is long enough to pass the old length check, but it never gives PDS
+any visual direction. That means the wrapper should stop before create rather
+than handing downstream systems an ambiguous narration-only artifact that an
+operator must diagnose during release recovery.
 
 ## Details
 
 NARRATOR:
-The second section repeats the same problem with more words so the script remains realistic, but it still lacks any visual cue or storyboard line. The release-video wrapper must explain the missing contract field and keep diagnostics on disk.
+The second section repeats the same problem with more words so the script
+remains realistic, but it still lacks any visual cue or storyboard line. The
+release-video wrapper must explain the missing contract field and keep
+diagnostics on disk.
 """,
         encoding="utf8",
     )
@@ -1779,6 +1785,31 @@ def test_release_video_persists_compatibility_run_handle_sidecar(tmp_path: Path)
     assert persisted["status"] == "running"
     assert "jobs watch --run-id agent_run_line456 --jsonl" in persisted["watchCommand"]
     assert str(sidecar) in result.stderr
+
+
+def test_release_video_pds_metadata_prefers_terminal_json_status():
+    release_video = load_release_video_module()
+
+    metadata = release_video.extract_pds_run_metadata(
+        "\n".join(
+            [
+                json.dumps({"runId": "agent_run_multi", "status": "running"}),
+                json.dumps(
+                    {
+                        "runId": "agent_run_multi",
+                        "projectId": "pdd-v1-1-0-release",
+                        "status": "failed",
+                    }
+                ),
+            ]
+        )
+    )
+
+    assert metadata == {
+        "runId": "agent_run_multi",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "failed",
+    }
 
 
 def test_release_video_status_prints_persisted_run_sidecar(tmp_path: Path):
