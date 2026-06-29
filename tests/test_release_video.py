@@ -542,6 +542,37 @@ VISUAL: show release_video_script_validation.json with no errors.
     assert artifacts["validation"]["errors"] == []
 
 
+def test_release_video_normalizes_inline_narrator_labels():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+NARRATOR: PDD v1.1.0 turns release-video recovery into a visible operator path,
+with generated scripts, validation artifacts, and PDS run metadata preserved
+before the publish step is allowed to continue.
+
+VISUAL: show the normalized script beside the raw Claude output artifact.
+
+## Recovery
+
+NARRATOR: The wrapper keeps narration labels out of the spoken body while still
+providing the standalone narrator blocks PDS expects for scene generation and
+video rendering.
+
+VISUAL: show clean narrator blocks in the final script.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "\nNARRATOR:\nPDD v1.1.0 turns release-video recovery" in artifacts["script"]
+    assert "\nNARRATOR: PDD v1.1.0 turns release-video recovery" not in artifacts["script"]
+    assert "\nNARRATOR: The wrapper keeps narration labels" not in artifacts["script"]
+    assert "collapsed_duplicate_narrator_labels" in artifacts["validation"]["changes"]
+    assert artifacts["validation"]["checks"]["hasNoDuplicateNarratorLabels"] is True
+    assert artifacts["validation"]["errors"] == []
+
+
 def test_release_video_rejects_malformed_script_before_invoking_pds(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     capture = tmp_path / "pds-capture.json"
@@ -1981,6 +2012,26 @@ def test_release_video_pds_metadata_keeps_nested_project_context():
     }
 
 
+def test_release_video_pds_metadata_keeps_current_run_over_nested_history():
+    release_video = load_release_video_module()
+
+    metadata = release_video.extract_pds_run_metadata(
+        json.dumps(
+            {
+                "run": {"runId": "agent_run_current", "status": "running"},
+                "project": {"projectId": "pdd-v1-1-0-release"},
+                "history": [{"runId": "agent_run_old", "status": "failed"}],
+            }
+        )
+    )
+
+    assert metadata == {
+        "runId": "agent_run_current",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+
 def test_release_video_status_prints_persisted_run_sidecar(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     output_dir = tmp_path / "videos"
@@ -2318,6 +2369,65 @@ def test_release_video_status_query_ignores_historical_terminal_runs(tmp_path: P
             "--status-query",
             "--pds-cli",
             str(pds_output_stub(tmp_path, stdout=json.dumps(status_response) + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "running"
+    assert refreshed["lastStatusQuery"]["runId"] == "agent_run_current"
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
+def test_release_video_status_query_ignores_unrelated_terminal_json_values(tmp_path: Path):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_stdout = "\n".join(
+        [
+            json.dumps({"runId": "agent_run_old", "status": "failed"}),
+            json.dumps(
+                {
+                    "runId": "agent_run_current",
+                    "projectId": "pdd-v1-1-0-release",
+                    "status": "running",
+                }
+            ),
+        ]
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=status_stdout + "\n")),
         ],
         cwd=repo,
         text=True,
