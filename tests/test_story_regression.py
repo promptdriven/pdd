@@ -286,6 +286,38 @@ class TestNoExecution:
         assert not sentinel.exists()
 
 
+class TestStaticFallback:
+    def test_literal_story_markers_survive_empty_pytest_collection(self, tmp_path: Path, monkeypatch):
+        d = tmp_path / "tests"
+        d.mkdir()
+        sentinel = tmp_path / "executed.flag"
+        (d / "test_static.py").write_text(
+            "\n".join(
+                [
+                    "import pytest",
+                    "from pathlib import Path",
+                    f"SENTINEL = Path({str(sentinel)!r})",
+                    '@pytest.mark.story("checkout_flow")',
+                    '@pytest.mark.story(story_id="refund_flow")',
+                    "def test_literal_story_marker():",
+                    "    SENTINEL.write_text('ran')",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        def _empty_collect(*_args, **_kwargs):
+            return 0
+
+        monkeypatch.setattr(story_regression.pytest, "main", _empty_collect)
+        smap = build_story_map(d)
+
+        assert smap.tests_for_story("checkout_flow") == {"test_static.py::test_literal_story_marker"}
+        assert smap.tests_for_story("refund_flow") == {"test_static.py::test_literal_story_marker"}
+        assert not sentinel.exists()
+
+
 # --- R9: graceful degradation --------------------------------------------------
 
 class TestGracefulDegradation:

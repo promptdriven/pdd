@@ -14,6 +14,7 @@ helper, re-exported here so both systems live in one identity space.
 """
 from __future__ import annotations
 
+import ast
 import contextlib
 import io
 import logging
@@ -95,6 +96,78 @@ def _relative_nodeid(item: pytest.Item, root: Path) -> str:
         # Fall back to pytest's nodeid, but strip a leading slash so absolute
         # temp paths do not vary across machines.
         return item.nodeid.lstrip("/")
+
+
+def _literal_story_id(node: ast.AST) -> Optional[str]:
+    """Return a story id from a literal decorator argument, if present."""
+    if isinstance(node, ast.Constant) and node.value is not None:
+        return _normalize_story_ref(node.value)
+    return None
+
+
+def _story_id_from_decorator(decorator: ast.AST) -> Optional[str]:
+    """Resolve ``@pytest.mark.story`` decorator literals without executing code."""
+    if not isinstance(decorator, ast.Call):
+        return None
+
+    func = decorator.func
+    is_story_mark = (
+        isinstance(func, ast.Attribute)
+        and func.attr == STORY_MARKER
+        and isinstance(func.value, ast.Attribute)
+        and func.value.attr == "mark"
+        and isinstance(func.value.value, ast.Name)
+        and func.value.value.id == "pytest"
+    )
+    if not is_story_mark:
+        return None
+
+    for keyword in decorator.keywords:
+        if keyword.arg == "story_id":
+            return _literal_story_id(keyword.value)
+
+    if decorator.args:
+        return _literal_story_id(decorator.args[0])
+
+    return None
+
+
+def _scan_story_markers_static(tests_dir: Path) -> StoryTestMap:
+    """Best-effort static fallback for literal ``@pytest.mark.story`` decorators."""
+    story_to_tests: Dict[str, Set[str]] = {}
+    test_to_stories: Dict[str, Set[str]] = {}
+    root = tests_dir.resolve()
+
+    for path in sorted(tests_dir.rglob("test*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            continue
+
+        try:
+            rel_path = path.resolve().relative_to(root).as_posix()
+        except (ValueError, OSError):
+            rel_path = path.name
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if not node.name.startswith("test"):
+                continue
+            story_ids = {
+                sid
+                for decorator in node.decorator_list
+                for sid in [_story_id_from_decorator(decorator)]
+                if sid
+            }
+            if not story_ids:
+                continue
+            nodeid = f"{rel_path}::{node.name}"
+            test_to_stories.setdefault(nodeid, set()).update(story_ids)
+            for sid in story_ids:
+                story_to_tests.setdefault(sid, set()).add(nodeid)
+
+    return StoryTestMap(story_to_tests=story_to_tests, test_to_stories=test_to_stories)
 
 
 @dataclass
@@ -205,6 +278,9 @@ def build_story_map(tests_dir: Optional[PathLike] = None) -> StoryTestMap:
     except Exception:  # pylint: disable=broad-except
         # Graceful degradation: never let a collection failure crash a caller.
         logger.warning("story collection over %s failed; returning partial map", resolved_dir)
+
+    if not collector.story_to_tests:
+        return _scan_story_markers_static(resolved_dir)
 
     return StoryTestMap(
         story_to_tests=collector.story_to_tests,
