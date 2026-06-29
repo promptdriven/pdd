@@ -642,6 +642,60 @@ VISUAL: show the validation JSON with no duplicate-label errors.
     assert artifacts["validation"]["errors"] == []
 
 
+def test_release_video_normalizes_standalone_bold_narrator_labels():
+    release_video = load_release_video_module()
+    script = """# PDD v1.1.0 Release Video
+
+## Opening
+
+**NARRATOR:**
+Opening narration should follow the narrator label without an extra markdown
+marker in the spoken body, because generated scripts sometimes bold speaker
+labels while keeping them on their own line.
+
+VISUAL: show the release artifacts beside the PDS status JSON.
+
+## Close
+
+**NARRATOR:**
+The workflow stores raw output, normalized narration, and validation evidence
+before publish, keeping the release story auditable through recovery.
+
+VISUAL: show the final YouTube receipt and validation file.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Opening narration should follow the narrator label" in artifacts["script"]
+    assert "\n**\n" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
+def test_release_video_preserves_wrapped_script_with_bold_narrator_labels():
+    release_video = load_release_video_module()
+    script = """Here is the release video script you asked for:
+
+**NARRATOR:**
+Opening narration should be preserved because it explains the release value and
+recovery path for maintainers before the first visual direction appears.
+
+VISUAL: show the release artifacts beside the PDS status JSON.
+
+**NARRATOR:**
+The workflow stores raw output, normalized narration, and validation evidence
+before publish, keeping the release story auditable through recovery.
+
+VISUAL: show the final YouTube receipt and validation file.
+"""
+
+    artifacts = release_video.prepare_release_video_script(script, source="test")
+
+    assert "Here is the release video script" not in artifacts["script"]
+    assert "Opening narration should be preserved" in artifacts["script"]
+    assert "\n**\n" not in artifacts["script"]
+    assert artifacts["validation"]["errors"] == []
+
+
 def test_release_video_normalizes_inline_narrator_labels():
     release_video = load_release_video_module()
     script = """# PDD v1.1.0 Release Video
