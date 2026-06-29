@@ -2302,6 +2302,29 @@ def test_release_video_pds_metadata_keeps_current_run_over_nested_history():
     }
 
 
+def test_release_video_pds_metadata_prefers_result_over_history():
+    release_video = load_release_video_module()
+
+    metadata = release_video.extract_pds_run_metadata(
+        json.dumps(
+            {
+                "history": [{"runId": "agent_run_old", "status": "failed"}],
+                "result": {
+                    "runId": "agent_run_current",
+                    "projectId": "pdd-v1-1-0-release",
+                    "status": "running",
+                },
+            }
+        )
+    )
+
+    assert metadata == {
+        "runId": "agent_run_current",
+        "projectId": "pdd-v1-1-0-release",
+        "status": "running",
+    }
+
+
 def test_release_video_status_prints_persisted_run_sidecar(tmp_path: Path):
     repo = init_release_repo(tmp_path)
     output_dir = tmp_path / "videos"
@@ -2714,6 +2737,68 @@ def test_release_video_status_query_ignores_unrelated_terminal_json_values(tmp_p
     assert refreshed["lastStatusQuery"]["runStatus"] == "running"
 
 
+def test_release_video_status_query_ignores_unscoped_terminal_json_after_current_run(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+            }
+        ),
+        encoding="utf8",
+    )
+    status_stdout = "\n".join(
+        [
+            json.dumps(
+                {
+                    "runId": "agent_run_current",
+                    "projectId": "pdd-v1-1-0-release",
+                    "status": "running",
+                }
+            ),
+            json.dumps({"status": "failed", "message": "old unrelated terminal event"}),
+        ]
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(pds_output_stub(tmp_path, stdout=status_stdout + "\n")),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["projectId"] == "pdd-v1-1-0-release"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is False
+    assert refreshed["lastStatusQuery"]["response"]["runId"] == "agent_run_current"
+    assert refreshed["lastStatusQuery"]["runStatus"] == "running"
+
+
 def test_release_video_status_query_keeps_sidecar_when_only_unrelated_run_returns(
     tmp_path: Path,
 ):
@@ -2822,6 +2907,61 @@ def test_release_video_status_query_keeps_sidecar_stale_for_unmatched_success(
     assert refreshed["statusStale"] is True
     assert refreshed["lastStatusQuery"]["ok"] is True
     assert refreshed["lastStatusQuery"]["response"] == {"ok": True}
+
+
+def test_release_video_status_query_keeps_sidecar_stale_for_run_id_only_success(
+    tmp_path: Path,
+):
+    repo = init_release_repo(tmp_path)
+    output_dir = tmp_path / "videos"
+    capture = tmp_path / "pds-status-capture.json"
+    sidecar = output_dir / "v1.1.0" / "pds_run.json"
+    sidecar.parent.mkdir(parents=True)
+    sidecar.write_text(
+        json.dumps(
+            {
+                "runId": "agent_run_current",
+                "projectId": "pdd-v1-1-0-release",
+                "status": "running",
+                "statusStale": True,
+            }
+        ),
+        encoding="utf8",
+    )
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--repo",
+            str(repo),
+            "--tag",
+            "v1.1.0",
+            "--output-dir",
+            str(output_dir),
+            "--status",
+            "--status-query",
+            "--pds-cli",
+            str(
+                pds_output_stub(
+                    tmp_path,
+                    stdout=json.dumps({"runId": "agent_run_current"}) + "\n",
+                )
+            ),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        env=release_video_env({"PDS_STUB_CAPTURE": str(capture)}),
+        check=True,
+    )
+
+    refreshed = json.loads(sidecar.read_text(encoding="utf8"))
+    assert refreshed["runId"] == "agent_run_current"
+    assert refreshed["status"] == "running"
+    assert refreshed["statusStale"] is True
+    assert refreshed["lastStatusQuery"]["ok"] is True
+    assert refreshed["lastStatusQuery"]["response"] == {"runId": "agent_run_current"}
 
 
 def test_release_video_status_note_warns_when_stale_flag_survives_success():
