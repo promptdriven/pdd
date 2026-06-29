@@ -1,0 +1,10 @@
+timestamp,model,command,cost,input_files,output_files
+2026-02-04T19:22:25.225,error,generate,0.0,large_test.prompt,test.py
+2026-02-04T19:37:42.729,error,generate,0.0,/tmp/pytest-of-ubuntu/pytest-0/test_generate_preprocessing_sh0/test_prompt_2000.prompt,/tmp/pytest-of-ubuntu/pytest-0/test_generate_preprocessing_sh0/output_2000.py
+2026-02-04T19:37:42.739,error,generate,0.0,/tmp/pytest-of-ubuntu/pytest-0/test_generate_preprocessing_sh0/test_prompt_4000.prompt,/tmp/pytest-of-ubuntu/pytest-0/test_generate_preprocessing_sh0/output_4000.py
+2026-02-04T19:37:42.751,error,generate,0.0,/tmp/pytest-of-ubuntu/pytest-0/test_generate_preprocessing_sh0/test_prompt_8000.prompt,/tmp/pytest-of-ubuntu/pytest-0/test_generate_preprocessing_sh0/output_8000.py
+2026-02-04T19:39:46.494,error,generate,0.0,/tmp/pytest-of-ubuntu/pytest-1/test_generate_completes_on_lar0/large_architecture.prompt,/tmp/pytest-of-ubuntu/pytest-1/test_generate_completes_on_lar0/output.py
+2026-02-04T19:40:16.017,error,generate,0.0,/tmp/pytest-of-ubuntu/pytest-2/test_generate_completes_on_lar0/large_architecture.prompt,/tmp/pytest-of-ubuntu/pytest-2/test_generate_completes_on_lar0/output.py
+2026-02-04T19:40:31.956,error,generate,0.0,/tmp/pytest-of-ubuntu/pytest-3/test_generate_completes_on_lar0/large_architecture.prompt,/tmp/pytest-of-ubuntu/pytest-3/test_generate_completes_on_lar0/output.py
+2026-02-04T19:41:13.577,error,generate,0.0,/tmp/pytest-of-ubuntu/pytest-4/test_generate_completes_on_lar0/large_architecture.prompt,/tmp/pytest-of-ubuntu/pytest-4/test_generate_completes_on_lar0/output.py
+2026-02-04T19:18:10.503,anthropic,bug,5.202139299999999,,
