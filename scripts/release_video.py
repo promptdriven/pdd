@@ -1776,7 +1776,7 @@ def strip_model_wrapper_text(script: str) -> tuple[str, bool]:
         (
             index
             for index, line in enumerate(lines)
-            if re.match(r"^\s*(?:#{1,2}\s+\S|NARRATOR:|VISUAL:)", line, flags=re.IGNORECASE)
+            if is_release_video_script_line(line)
         ),
         0,
     )
@@ -1865,16 +1865,6 @@ def collapse_duplicate_narrator_labels(script: str) -> tuple[str, bool]:
             changed = True
             continue
 
-        inline_match = inline_narrator_label_line(line)
-        if inline_match:
-            if not pending_label:
-                append_spaced(normalized, "NARRATOR:")
-            normalized.append(inline_match.group("body").strip())
-            pending_label = False
-            blank_after_pending_label = False
-            changed = True
-            continue
-
         if is_narrator_label(line):
             if pending_label:
                 while normalized and not normalized[-1].strip():
@@ -1886,6 +1876,16 @@ def collapse_duplicate_narrator_labels(script: str) -> tuple[str, bool]:
             blank_after_pending_label = False
             if line.strip() != "NARRATOR:":
                 changed = True
+            continue
+
+        inline_body = inline_narrator_label_body(line)
+        if inline_body is not None:
+            if not pending_label:
+                append_spaced(normalized, "NARRATOR:")
+            normalized.append(inline_body)
+            pending_label = False
+            blank_after_pending_label = False
+            changed = True
             continue
 
         if not line.strip():
@@ -1938,13 +1938,13 @@ def has_duplicate_narrator_labels(script: str) -> bool:
     for line in script.splitlines():
         if duplicate_narrator_label_body(line) is not None:
             return True
-        if inline_narrator_label_line(line):
-            return True
         if is_narrator_label(line):
             if previous_pending_label:
                 return True
             previous_pending_label = True
             continue
+        if inline_narrator_label_body(line) is not None:
+            return True
         if line.strip():
             previous_pending_label = False
     return False
@@ -1994,18 +1994,18 @@ def duplicate_narrator_label_body(line: str) -> str | None:
 
 def consume_narrator_label_prefix(text: str) -> str | None:
     stripped = text.lstrip()
-    for label in ("NARRATOR:", "**NARRATOR:**", "**NARRATOR:", "NARRATOR:**"):
+    for label in ("**NARRATOR:**", "**NARRATOR:", "NARRATOR:**", "NARRATOR:"):
         if stripped.upper().startswith(label):
             return stripped[len(label):].lstrip()
     return None
 
 
-def inline_narrator_label_line(line: str) -> re.Match[str] | None:
-    return re.match(
-        r"^\s*(?:\*\*)?NARRATOR:\s*(?:\*\*)?\s*(?P<body>\S.*)$",
-        line,
-        flags=re.IGNORECASE,
-    )
+def inline_narrator_label_body(line: str) -> str | None:
+    remainder = consume_narrator_label_prefix(line)
+    if remainder is None:
+        return None
+    body = remainder.strip()
+    return body or None
 
 
 def normalize_release_video_script(script: str) -> str:
@@ -2086,7 +2086,7 @@ def format_timestamp(total_seconds: int) -> str:
 def ensure_narrator_blocks(script: str) -> str:
     lines = script.splitlines()
     has_narrator = any(
-        is_narrator_label(line) or inline_narrator_label_line(line)
+        is_narrator_label(line) or inline_narrator_label_body(line) is not None
         for line in lines
     )
     normalized: list[str] = []
@@ -2095,13 +2095,13 @@ def ensure_narrator_blocks(script: str) -> str:
     for line in lines:
         stripped = line.strip()
         visual = visual_cue_text(line)
-        inline_narrator = inline_narrator_label_line(line)
+        inline_narrator = inline_narrator_label_body(line)
         if is_narrator_label(line):
             append_spaced(normalized, "NARRATOR:")
             in_narrator = True
         elif inline_narrator:
             append_spaced(normalized, "NARRATOR:")
-            normalized.append(inline_narrator.group("body").strip())
+            normalized.append(inline_narrator)
             in_narrator = True
         elif visual:
             append_spaced(normalized, f"VISUAL: {visual}")
@@ -2124,6 +2124,16 @@ def ensure_narrator_blocks(script: str) -> str:
 
 def is_narrator_label(line: str) -> bool:
     return bool(re.match(r"^\s*(?:\*\*)?NARRATOR:(?:\*\*)?\s*$", line, flags=re.IGNORECASE))
+
+
+def is_release_video_script_line(line: str) -> bool:
+    stripped = line.strip()
+    return bool(
+        re.match(r"^#{1,2}\s+\S", stripped)
+        or is_narrator_label(line)
+        or inline_narrator_label_body(line) is not None
+        or visual_cue_text(line)
+    )
 
 
 def visual_cue_text(line: str) -> str | None:
