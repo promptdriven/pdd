@@ -791,6 +791,15 @@ def is_sensitive_artifact_field(key: Any) -> bool:
 
 def redact_secret_text(text: str) -> str:
     redacted = str(text or "")
+    stripped = redacted.strip()
+    if stripped.startswith(("{", "[")):
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+        else:
+            if isinstance(parsed, (dict, list)):
+                return json.dumps(redact_status_artifact_value(parsed), sort_keys=True)
     redacted = re.sub(
         r"(?i)\b(https?://)[^/\s:@]+:[^/\s@]+@",
         r"\1[redacted]@",
